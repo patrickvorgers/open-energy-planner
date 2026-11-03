@@ -45,6 +45,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f8aeaebfe2122c46654ee3547d3f09749dc85667
+          persist-credentials: false
       - name: Read API status and quota without provider values or credentials
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -100,4 +104,32 @@ jobs:
               result = subprocess.run(['curl', '--silent', '--max-time', '20', '--config', '-', '--output', str(Path(directory) / 'response.json'), '--write-out', '%{http_code}', 'https://api.github.com/repos/patrickvorgers/open-energy-planner/pulls/5'], input=config, text=True, capture_output=True)
               status = result.stdout.strip()
               print(json.dumps({'transport': 'curl', 'exit_code': result.returncode, 'status': status if re.fullmatch(r'\d{3}', status) else 'invalid'}))
+
+          from urllib.parse import urlsplit
+          from script.ci.check_commit_signatures import GitHub
+          from script.ci.review_preflight import preflight
+
+          client = GitHub(token)
+          original_open = client._opener.open
+
+          def traced_open(request, *args, **kwargs):
+              """Locate a failed endpoint without logging authorization, bodies or exception text."""
+              path = urlsplit(request.full_url).path
+              try:
+                  response = original_open(request, *args, **kwargs)
+                  print(json.dumps({'preflight_path': path, 'status': response.status, 'remaining': response.headers.get('X-RateLimit-Remaining')}))
+                  return response
+              except HTTPError as error:
+                  print(json.dumps({'preflight_path': path, 'http_error': error.code, 'remaining': error.headers.get('X-RateLimit-Remaining'), 'reset': error.headers.get('X-RateLimit-Reset')}))
+                  raise
+              except URLError as error:
+                  print(json.dumps({'preflight_path': path, 'error_class': type(error.reason).__name__, 'verify_code': getattr(error.reason, 'verify_code', None)}))
+                  raise
+
+          client._opener.open = traced_open
+          try:
+              result = preflight('patrickvorgers/open-energy-planner', 5, '8cdf7f71d37af81930371e023563efcad47a17dc', 'f8aeaebfe2122c46654ee3547d3f09749dc85667', 'fa902487a57e69d5382a2340d7f70a24a1f0d380', client)
+              print(json.dumps({'diagnostic_preflight': 'passed', 'hosted_gate': 'NOT replaced', 'summary_lines': len(result.splitlines())}))
+          except Exception as error:
+              print(json.dumps({'diagnostic_preflight': 'failed', 'error_type': type(error).__name__}))
           PY
