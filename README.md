@@ -25,7 +25,7 @@ Local energy optimization for Home Assistant. The current installation path conn
 
 The tested path is: **immutable input snapshot → isolated solver worker → independent physical/cost validation → stored complete plan → authenticated local HTTP → HA virtual commands**. The app runs separately from HA. Native solver packages are not required by the HA integration.
 
-The full Linux AMD64 acceptance suite covers native planning and app behavior, real Home Assistant integration, SQLite/PostgreSQL/MariaDB/MySQL storage contracts, and desktop/mobile browser flows. Ruff, formatting, documentation and immutable provenance checks run alongside the behavioral tests. Exact test totals and reports belong to each [GitHub Actions run](https://github.com/patrickvorgers/open-energy-planner/actions), rather than a fixed milestone count.
+The full Linux AMD64 acceptance suite covers native planning and app behavior, real Home Assistant integration, SQLite/PostgreSQL/MariaDB/MySQL storage contracts, and desktop/mobile browser flows. Ruff, formatting and documentation checks run alongside the behavioral tests. CI binds its results and artifacts to the exact tested Git tree. Exact test totals and reports belong to each [GitHub Actions run](https://github.com/patrickvorgers/open-energy-planner/actions), rather than a fixed milestone count.
 
 See [development and onboarding](docs/development/README.md), [installation planning](docs/development/INSTALLATION-PLANNING.md), [release scope](design/FIRST-RELEASE-SCOPE.md) and [technical design](design/TECHNICAL-DESIGN.md).
 

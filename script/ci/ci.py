@@ -73,7 +73,6 @@ if arguments.stage != "preflight":
     for reports in completion.junit_reports(profile).values():
         for report in reports:
             report.unlink(missing_ok=True)
-subprocess.run([sys.executable, "script/ci/check_provenance.py"], check=True)
 compose = ["docker", "compose", "-p", project, "-f", "compose.yaml"]
 
 

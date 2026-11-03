@@ -30,7 +30,7 @@ production boundaries.
 Ruff 0.17.1 uses its default lint rules plus the explicitly agreed D100-D107/D419 missing/empty-docstring rules from the central `pyproject.toml`. These rules also cover tests/browser tests without path exemptions. Existing code and tests have no legacy baseline. `EXE002` is the sole global exception: Windows Docker Desktop bind mounts and build contexts report ordinary Python files as executable. Targeted `TRY004` suppressions retain existing `ValueError` validation contracts. Their reasons are documented at each raise site. The project retains its 100-character formatter width and Python 3.12 target. The Dev Container installs Ruff and its VS Code extension. The editor explicitly uses `/opt/oep-dev/bin/ruff`. The same pinned version runs lint and formatting checks through `script/ci/check_native.py` for explicit local checks and GitHub Actions. The `dev` extra and Ruff's required-version setting enforce the same version outside the container. A future Ruff upgrade is a tested dependency change.
 
 PR revisions run **Quick checks** before any candidate is requested. The shared
-`python script/ci/check_native.py --quick` entry point verifies provenance, lint and
+`python script/ci/check_native.py --quick` entry point runs lint and
 formatting without Docker or app dependencies. The requested quality job repeats
 these checks before image builds. Its native stage retains full-scope lint and
 format checks. Build and review in Draft, then choose Ready for review to request
@@ -54,7 +54,7 @@ verified commits and compatibility/regression assessment still required. See
 
 | Stage | Checks |
 |---|---|
-| Provenance | Original/translated documentation provenance against immutable Git objects |
+| Source identity | GitHub-verified commits and CI results bound to the exact tested Git tree |
 | Container builds | App, native tests, HA framework tests, provisioning and browser runtimes |
 | Native quality | Pinned Ruff lint and format checks. Native pytest, including independent solver scenarios, physics/economics validation, contracts, app HTTP tests, failure cases and documentation links |
 | Process and solver smoke | Separate app process, authentication, pause/resume, fresh resume plan and independently checked debug planning scenario |
@@ -121,7 +121,7 @@ artifacts remain available.
 `script/ci/ci.py --prebuilt` requires that exact project namespace and runs every
 selected gate with image rebuilding disabled. Missing images fail the run.
 The ordinary local command remains `python script/ci/ci.py`, which builds normally
-and creates its own unique project. Both paths retain provenance, Ruff, all four
+and creates its own unique project. Both paths retain exact tested-tree identity, Ruff, all four
 database backends, HA, onboarding, desktop/mobile tests, artifacts and failure
 cleanup. Documentation-only routing and the trusted signature workflow remain
 unchanged. No test-result cache, private registry, paid service or secrets are
@@ -158,7 +158,6 @@ control, not an adversarial boundary against same-repository workflow writers.
 Focused runs build only the existing pinned native runtime. They retain:
 
 - Ruff lint and format checks over all maintained Python code.
-- Immutable Git provenance verification and its regression tests.
 - Requirements inventory, local documentation links and database dictionary
   table/column coverage tests. Meaning, completeness and examples remain review
   obligations. Coverage does not prove semantic accuracy.

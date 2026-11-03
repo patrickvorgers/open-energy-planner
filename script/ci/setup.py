@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 
-subprocess.run([sys.executable, "script/ci/check_provenance.py"], check=True)
 subprocess.run([sys.executable, "script/ci/check_native.py"], check=True)
 subprocess.run([sys.executable, "-m", "pytest", "-q", "tests/frontend"], check=True)
 if os.environ.get("OEP_DEV_HA_URL"):

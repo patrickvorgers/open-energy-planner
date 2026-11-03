@@ -114,7 +114,6 @@ PROOF_CI_FILES = frozenset(
         "check_commit_signatures",
         "check_main_ci_reuse",
         "check_suite_completion",
-        "check_provenance",
         "scope_report",
         "ci_scope",
         "ci_groups",

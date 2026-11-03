@@ -19,7 +19,7 @@ parser.add_argument(
 parser.add_argument(
     "--quick",
     action="store_true",
-    help="Run provenance, Ruff and formatting without Docker or app dependencies.",
+    help="Run Ruff and formatting without Docker or app dependencies.",
 )
 parser.add_argument(
     "--without-database-contracts",
@@ -29,7 +29,7 @@ parser.add_argument(
 parser.add_argument(
     "--documentation-only",
     action="store_true",
-    help="Keep lint, formatting and focused documentation/provenance/routing regressions.",
+    help="Keep lint, formatting and focused documentation/routing regressions.",
 )
 arguments = parser.parse_args()
 documentation_only = arguments.documentation_only
@@ -69,7 +69,7 @@ commands = (
     ["script/app/debug_scenario.py"],
 )
 if arguments.quick:
-    commands = (["script/ci/check_provenance.py"], *commands[:2])
+    commands = commands[:2]
 elif documentation_only:
     commands = commands[:2] + (pytest_arguments("documentation"),)
 elif arguments.ci_only:
