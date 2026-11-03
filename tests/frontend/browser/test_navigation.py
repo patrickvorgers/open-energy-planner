@@ -86,6 +86,7 @@ def test_storage_navigation_authentication_refresh_and_warning(app_page, monkeyp
         "/ev",
         "/thermal",
         "/quality",
+        "/planning-performance",
         "/setup",
         "/contract",
         "/data-storage",
@@ -476,7 +477,7 @@ def test_grouped_navigation_is_consistent_accessible_with_courtyard_theme(app_pa
     page, url = app_page
     groups = {
         "Energy": ["Planning", "Appliances", "EV charging", "Thermal storage", "Savings"],
-        "Insights": ["Forecast quality"],
+        "Insights": ["Forecast quality", "Planning performance"],
         "Settings": ["Installation", "Appliances", "Contract", "Data storage"],
     }
     destinations = (
@@ -487,6 +488,7 @@ def test_grouped_navigation_is_consistent_accessible_with_courtyard_theme(app_pa
         ("/ev", "EV charging"),
         ("/thermal", "Thermal storage"),
         ("/quality", "Forecast quality"),
+        ("/planning-performance", "Planning performance"),
         ("/contract", "Contract"),
         ("/setup", "Installation"),
         ("/data-storage", "Data storage"),

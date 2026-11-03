@@ -104,11 +104,16 @@ def test_terminal_side_power_applies_converter_and_cell_losses_once():
 
 @pytest.mark.parametrize("mutation", ["cost", "state", "no_candidate", "infeasible"])
 def test_invalid_or_missing_candidates_never_reach_publication(mutation):
-    """Forge costs/state or return no feasible candidate. Require independent rejection and zero publication calls."""
+    """Reject invalid/missing commands, while retaining their solver outcome for optional calculation history."""
 
     async def scenario():
+        """Keep the independent rejection checks and observe the completed round after its disposition."""
+
         class FaultySolver:
+            """Produce invalid economics/state or an explicitly absent feasible candidate."""
+
             async def solve(self, problem):
+                """Preserve the literal fault values instead of weakening the independent validator."""
                 result = HighsSolver().solve(problem)
                 if mutation == "cost":
                     return replace(
@@ -140,16 +145,28 @@ def test_invalid_or_missing_candidates_never_reach_publication(mutation):
                     None,
                 )
 
-        published = []
+        published, observed = [], []
 
         async def publish(document):
+            """Expose any incorrectly accepted document to the independent zero-publication assertion."""
             published.append(document)
 
-        coordinator = PlanningCoordinator(service(FaultySolver()), publish)
+        async def record(*arguments):
+            """Observe the same result that must remain available even when publication is rejected."""
+            observed.append(arguments)
+
+        coordinator = PlanningCoordinator(
+            service(FaultySolver()), publish, record_calculation=record
+        )
         coordinator.submit(capture(NOW))
         await coordinator.wait()
         assert coordinator.status == "failed"
         assert published == []
+        assert len(observed) == 1
+        assert observed[0][1].document is None and observed[0][1].result is not None
+        assert observed[0][-1] == (
+            "candidate_rejected" if mutation in {"cost", "state"} else mutation
+        )
 
     asyncio.run(scenario())
 

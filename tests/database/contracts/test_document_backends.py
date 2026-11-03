@@ -683,3 +683,89 @@ def test_detected_appliance_profiles_restore_and_deduplicate_on_every_backend(ar
     assert row["profile_kind"] == "Learned" and row["profile"]["samples"] == 2
     assert row["manual_profile"] == {"duration_minutes": 90, "energy_kwh": 0.6}
     assert [cycle["energy_kwh"] for cycle in row["recent_cycles"]] == pytest.approx([0.5, 0.5])
+
+
+def test_calculation_history_survives_restart_and_selects_dst_day(archive):
+    """Both 02:30 occurrences belong to Amsterdam's 25-hour day, with no next-day leakage."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.optimization.domain import SolveResult, SolveSample, Status
+    from open_energy_planner.optimization.performance import CalculationHistory
+    from open_energy_planner.planning import PlanningOutcome
+    from open_energy_planner.synthetic import capture
+
+    engine, _ = archive
+    store = CalculationHistory(SqlDocuments(engine, "planning"))
+    snapshot = capture(datetime(2026, 10, 25, tzinfo=UTC))
+    result = SolveResult(
+        Status.OPTIMAL,
+        None,
+        "optimal",
+        1,
+        3,
+        -1,
+        progress=(SolveSample(2, 0, -1), SolveSample(4, -0.5, -1)),
+        first_candidate_seconds=2,
+        time_limit_seconds=120,
+    )
+    for hour in (0, 1, 23):
+        started = datetime(2026, 10, 25, hour, 30, tzinfo=UTC)
+        store.record(
+            snapshot,
+            PlanningOutcome(None, "candidate_rejected", result),
+            started,
+            started + timedelta(seconds=4),
+            "candidate_rejected",
+        )
+    restored = CalculationHistory(SqlDocuments(engine, "planning"))
+    rows = restored.day("2026-10-25", "Europe/Amsterdam")
+    assert len(rows) == 2
+    assert [row["started_at"] for row in rows] == [
+        "2026-10-25T00:30:00+00:00",
+        "2026-10-25T01:30:00+00:00",
+    ]
+    assert "progress" not in rows[0]
+    assert restored.detail(rows[0]["id"])["progress"][0]["objective"] == 0
+    assert rows[0]["first_candidate_seconds"] == 2
+    assert rows[0]["plan_id"] is None
+    assert len(restored.day("2026-10-26", "Europe/Amsterdam")) == 1
+    with pytest.raises(ValueError):
+        restored.day("2026-02-30", "Europe/Amsterdam")
+
+
+def test_calculation_index_and_progress_rollback_as_one_write(archive, monkeypatch):
+    """A failed daily index cannot leave orphan progress, and daily reads never load detail curves."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.optimization.performance import CalculationHistory
+    from open_energy_planner.synthetic import capture
+
+    engine, _ = archive
+    documents = SqlDocuments(engine, "planning")
+    history = CalculationHistory(documents)
+    started = datetime(2026, 10, 25, tzinfo=UTC)
+    write = documents.write
+
+    def fail_index(name, value):
+        """Reject the second write after progress was inserted within the shared transaction."""
+        if name.startswith("calculations-"):
+            raise OSError("Simulated daily index failure")
+        write(name, value)
+
+    monkeypatch.setattr(documents, "write", fail_index)
+    with pytest.raises(OSError):
+        history.record(capture(started), None, started, started, "planning_error")
+    assert list(documents.iter_prefix("calculation-")) == []
+    assert history.day("2026-10-25", "Europe/Amsterdam") == []
+    monkeypatch.setattr(documents, "write", write)
+    history.record(capture(started), None, started, started, "planning_error")
+    reads, read = [], documents.read
+
+    def observe_read(name):
+        """Track actual database document reads instead of inspecting implementation source."""
+        reads.append(name)
+        return read(name)
+
+    monkeypatch.setattr(documents, "read", observe_read)
+    assert len(history.day("2026-10-25", "Europe/Amsterdam")) == 1
+    assert not any(name.startswith("calculation-") for name in reads)

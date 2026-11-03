@@ -263,6 +263,8 @@ def create_app(
             live, reason, setup_catalogue.value
         ) or explain_planning_problem(reason)
 
+    from .optimization.performance import register as register_performance
+
     planner = PlanningCoordinator(
         PlanningService(solver or ProcessSolver()), publish, explain=explain_problem
     )
@@ -398,6 +400,15 @@ def create_app(
                 await asyncio.to_thread(repository.close)
 
     app.cleanup_ctx.append(archive_lifecycle)
+
+    planner.record_calculation = register_performance(
+        app,
+        SqlDocuments(repository.engine, "planning"),
+        lambda: (
+            (setup_catalogue.value or {}).get("timezone")
+            or ("UTC" if source == "synthetic" else None)
+        ),
+    )
 
     pairing = Pairing(directory, repository.state["instance_id"])
     register_pairing(app, pairing)

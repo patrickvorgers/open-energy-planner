@@ -134,6 +134,21 @@ class Status(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class SolveSample:
+    """Observe a finite incumbent in the final financial search.
+
+    Elapsed seconds count from the worker solve start. Objective and lower bound
+    use contract currency, including terminal inventory valuation. A missing
+    finite native bound stays None. An incumbent may be retained from an earlier
+    service stage, now observed under the final financial objective.
+    """
+
+    elapsed_seconds: float
+    objective: float
+    best_bound: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class SolveResult:
     """Return an optional candidate, termination reason, timings and objective bound.
 
@@ -143,6 +158,14 @@ class SolveResult:
     of equality between the financial candidate and its best bound.
     consumption_optimum_kwh is the proved grid-side corrected-import optimum,
     or None when no consumption optimum is reported. It is not a monetary bound.
+
+    Progress and financial_started_seconds use seconds from the worker solve
+    start. first_candidate_seconds is None unless a callback observed a finite
+    incumbent in the financial stage. It does not establish when that incumbent
+    was originally discovered or independently validated. time_limit_seconds is
+    the shared preparation/service/search budget, not a per-stage allocation.
+    started_at is the UTC solve-start instant. CalculationHistory adds the
+    coordinator-to-worker start offset to progress and first-candidate times.
     """
 
     status: Status
@@ -152,6 +175,11 @@ class SolveResult:
     solve_seconds: float
     best_bound: float | None
     consumption_optimum_kwh: float | None = None
+    progress: tuple[SolveSample, ...] = ()
+    financial_started_seconds: float | None = None
+    first_candidate_seconds: float | None = None
+    time_limit_seconds: float | None = None
+    started_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
