@@ -26,10 +26,30 @@ from a checkout. Personal HA OS machines are not required development or merge g
 
 During development, run `python script/ci/check_native.py --quick` and affected
 regression tests before each push. Group related review corrections into one
-tested push. Build and review in Draft. While the repository has fewer than 10
-GitHub stars, request CodeRabbit manually with `@coderabbitai review` after every
-new PR head. Retain the Dependabot exception above. Always verify that a review
-actually completed on the current head instead of assuming automatic execution.
+tested push. Build and review in Draft. Keep each PR within 150 changed files,
+including binary, removed and renamed files. Split a larger PR before review.
+First wait for current-head Quick, verified commits and CodeQL to pass and
+evaluate their findings. Then use one independent local Codex context to review
+the Draft. Record the reviewed commit SHA and finding dispositions in the PR.
+Batch corrections and retest instead of restarting independent review on every
+push. This local review is distinct from the optional Codex Cloud service above.
+
+Develop Drafts and run independent local Codex reviews in parallel, but request
+final CodeRabbit reviews in the intended merge order. Wait for the preceding PR
+to merge and finish its required main checks. Include that actual main in this
+PR, resolve conflicts, retest affected behavior and wait for current-head Quick,
+signature and CodeQL checks. Reassess material changes before final review.
+Only after that work is complete, freeze the final head and base. Run the
+**Manual CodeRabbit review preflight** workflow from `main`, with those SHAs,
+the independent Codex review SHA and affirmative review/disposition attestations.
+Follow its job summary to request one manual CodeRabbit review. Automatic,
+incremental, label and description-keyword review triggers are disabled regardless
+of star count or paid plan. Retain the Dependabot exception above. All chats share
+one coordinated review queue. Respect actual provider limits and never retry
+automatically. The read-only preflight neither spends nor reserves review quota.
+Always verify actual completed current-head analysis, not merely a green provider
+status. See [review and CI stages](docs/development/CI-STAGES.md) for the procedure
+and its limits.
 After latest-head review and disposition of every finding, resolve the evaluated
 threads and choose **Ready for review** to start one selected candidate automatically.
 A PR returns to Draft when opened, reopened, given a new commit or retargeted.

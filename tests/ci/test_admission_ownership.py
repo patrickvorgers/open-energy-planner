@@ -97,6 +97,12 @@ jobs:
         run: python3 -m script.ci.review_preflight"""
 
 
+def test_review_preflight_owns_only_trusted_main_metadata_reads():
+    """The declared preflight has no automatic trigger, contributor execution or write permissions."""
+    path = Path(__file__).resolve().parents[2] / ".github/workflows/review-preflight.yaml"
+    assert not admission_violations(path.read_text(), REVIEW_PREFLIGHT_PROTOCOL)
+
+
 @pytest.mark.parametrize(
     "before,after",
     [

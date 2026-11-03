@@ -16,7 +16,10 @@ reviews:
     docstrings:
       mode: 'off'
   auto_review:
-    enabled: true
+    enabled: false
+    auto_incremental_review: false
+    labels: []
+    description_keyword: ""
     drafts: true
     auto_pause_after_reviewed_commits: 0
     ignore_usernames:

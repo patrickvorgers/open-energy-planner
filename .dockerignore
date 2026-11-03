@@ -29,6 +29,7 @@
 !.devcontainer/**
 !.github/
 !.github/**
+!.coderabbit.yaml
 results/ci/
 .git/
 .local/
