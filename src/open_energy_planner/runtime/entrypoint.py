@@ -11,6 +11,7 @@ from ..app import create_app
 from .maintenance import create_managed_app
 
 DEFAULT_APP_PORT = 8099
+HTTP_SHUTDOWN_TIMEOUT_SECONDS = 60
 # Supervisor forwards authenticated ingress requests from this bridge peer.
 SUPERVISOR_INGRESS_PEER = "172.30.32.2"
 
@@ -72,5 +73,6 @@ def main():
         ),
         host=args.host,
         port=args.port,
+        shutdown_timeout=HTTP_SHUTDOWN_TIMEOUT_SECONDS,
         print=None,
     )
