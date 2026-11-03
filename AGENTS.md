@@ -4,6 +4,8 @@ These instructions apply to the entire repository. Read the requirements, releas
 
 ## Language and architecture
 
+- This repository is public. Never commit or attach private or personal data, passwords, access tokens, private keys, real Home Assistant configurations, personal measurements, production database files or sensitive logs and screenshots. This also applies to branches, pull requests, issues and CI artifacts. Use independently generated synthetic examples and test fixtures. Review new files and changes for sensitive content before every push. Follow [the security policy](SECURITY.md). Removing an exposed file from the latest commit does not remove it from Git history. Stop publication of suspected sensitive content and notify the owner. Revoke or rotate exposed credentials.
+
 - Use English for documentation, file and directory names, code, comments, tests and UI text.
 - Use complete sentences instead of em dashes or semicolons in prose. This includes documentation, comments, docstrings, UI text and logs. Keep punctuation required by programming languages, queries, protocols and literal technical examples. Preserve vendored code and licence text verbatim.
 - Short headings, field labels and structured data summaries may remain phrases. The punctuation rule does not require expanding concise labels into verbose narrative.
