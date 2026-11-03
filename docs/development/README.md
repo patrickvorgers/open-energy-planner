@@ -103,11 +103,9 @@ regression checks this invariant on every full and documentation-only run.
 Update both pins together. The persistent real-Supervisor developer installation has
 its own upgrade lifecycle and is not upgraded by the ephemeral CI recipe.
 Existing daemon settings are retained when enabling the feature. Local Docker
-settings are never changed. Optional personal Windows/Linux runners use a
-separate Buildx container instead of changing or restarting the host daemon.
-The workflow keeps the same test selection and artifacts. See
-[personal runner execution](CI-STAGES.md#personal-runner-execution) for owner-only
-labels, availability fallback and setup. Separate scopes hold the app, native,
+settings are never changed. All CI jobs use
+[GitHub-hosted execution](CI-STAGES.md#github-hosted-execution).
+Separate scopes hold the app, native,
 Home Assistant and browser layers. The native recipe builds once with three tags
 for the native, provisioning and database suites, avoiding duplicate image exports.
 Dependency/base-image layers can survive source changes. Docker still hashes

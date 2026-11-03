@@ -47,15 +47,9 @@ Those suites include native/planner, database, app smoke, Home Assistant handoff
 and desktop/mobile browser checks when required by the matrix. CodeRabbit
 supplements executable checks and requires the GitHub App to have repository access.
 
-GitHub-hosted execution is the default and requires no developer-owned runner.
-Only the personal repository owner can apply `ci-runner: prefer-local` before
-choosing Ready to use their Linux x64 runner in Docker
-when it is online and idle. Other contributors always use GitHub, even with
-that preference label. The runner label is the generic `oep-ci-local`. Missing, offline,
-busy or unreadable capacity automatically falls back to GitHub. Both routes run
-the same workflow, suite selection, reports and installation packaging. See
-[personal runner setup and limits](docs/development/CI-STAGES.md#personal-runner-execution)
-for the one-time registration, read-only availability credential and location labels.
+All candidate jobs use GitHub-hosted Ubuntu runners. No developer-owned runner,
+runner preference label or availability credential is needed. See
+[GitHub-hosted execution](docs/development/CI-STAGES.md#github-hosted-execution).
 
 Contributors need no CI labels for the normal GitHub-hosted route. Ready attests
 that all findings, including outside-diff comments, were evaluated and addressed.

@@ -158,22 +158,6 @@ def test_exact_tested_merge_reuses_original_attempt_and_bundle(evidence):
     assert evidence.run_reads == 2
 
 
-@pytest.mark.parametrize("operating_system", ["Windows", "Linux"])
-def test_personal_candidate_reuses_exact_proof_without_repeating_on_main(
-    evidence, operating_system
-):
-    """A personal runner changes execution location, never artifact or source-tree requirements."""
-    evidence.quality["runner_name"] = "personal-fixture"
-    evidence.quality["labels"] = ["self-hosted", "X64", "oep-ci-local", operating_system]
-    result = check(evidence.event, REPOSITORY, MERGE, TREE, evidence, NOW)
-    assert result["reuse"] == "true"
-    assert result["installation_artifact_id"] == "120"
-    assert result["tested_tree"] == TREE
-    evidence.commit["tree"]["sha"] = "5" * 40
-    with pytest.raises(VerificationError):
-        check(evidence.event, REPOSITORY, MERGE, TREE, evidence, NOW)
-
-
 @pytest.fixture
 def focused_product_evidence(evidence, monkeypatch):
     """Describe a product candidate with exact browser coverage and both original artifact kinds."""
