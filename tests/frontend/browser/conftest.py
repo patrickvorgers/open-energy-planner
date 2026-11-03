@@ -139,6 +139,10 @@ def app_site(request):
                 if str(getattr(request, "param", "")).startswith("prices")
                 else None,
             )
+            if getattr(request, "param", None) == "planning_performance":
+                from tests.frontend.browser.performance_fixture import seed
+
+                seed(Path(directory))
             if ingress:
                 pairing = application[PAIRING_KEY]
                 pairing.supervisor_secret = "browser-supervisor-private-proof"
