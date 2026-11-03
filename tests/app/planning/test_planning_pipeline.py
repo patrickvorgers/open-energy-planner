@@ -391,6 +391,38 @@ def test_current_publication_failure_remains_a_planning_error(caplog):
     failures = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert len(failures) == 1
     assert failures[0].exc_info[0] is OSError
+    assert not any("Plan published" in message for message in caplog.messages)
+
+
+def test_publication_success_is_logged_only_after_acknowledgement(caplog):
+    """Hold a valid plan at persistence. Announce success only after that write is acknowledged."""
+
+    async def scenario():
+        """Exercise real solving while delaying only the publication acknowledgement."""
+        entered, accepted = asyncio.Event(), asyncio.Event()
+
+        async def publish(document):
+            """Keep the complete validated document pending until persistence accepts it."""
+            assert document["steps"]
+            entered.set()
+            await accepted.wait()
+
+        coordinator = PlanningCoordinator(service(), publish)
+        coordinator.submit(capture(NOW))
+        await asyncio.wait_for(entered.wait(), 5)
+        try:
+            assert coordinator.published is None
+            assert not any("Plan published" in message for message in caplog.messages)
+        finally:
+            accepted.set()
+            await coordinator.wait()
+        assert coordinator.status == "ready"
+        messages = [message for message in caplog.messages if "Plan published" in message]
+        assert len(messages) == 1
+        assert "Validated forecast intervals: 120" in messages[0]
+
+    with caplog.at_level(logging.INFO, logger="open_energy_planner.planning"):
+        asyncio.run(scenario())
 
 
 def test_native_worker_deadline_does_not_prevent_a_later_successful_worker():

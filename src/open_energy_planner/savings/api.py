@@ -10,6 +10,7 @@ from aiohttp import web
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import display_plan
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
 from ..storage.adapters.documents import SqlDocuments
 from ..storage.writes import complete_write
@@ -230,6 +231,8 @@ def register(
 
     async def worker():
         """Advance at most one day per round. Keep errors visible without stopping planning."""
+        settlement_logger = BackgroundLog(_LOGGER, "Settlement processing")
+        last_state = None
         while True:
             try:
                 async with lock:
@@ -245,10 +248,33 @@ def register(
                     )
                     if cancelled:
                         raise cancelled
+                state = runtime.issue, runtime.attention
+                if state != last_state:
+                    if runtime.issue:
+                        _LOGGER.log(
+                            logging.WARNING if runtime.attention else logging.INFO,
+                            "Settlement %s: %s. Planning continues independently. Next check in %d seconds.",
+                            "needs attention" if runtime.attention else "waiting",
+                            runtime.issue,
+                            SAVINGS_WORKER_SECONDS,
+                        )
+                    elif last_state is not None and last_state[0] is not None:
+                        _LOGGER.info(
+                            "Settlement evidence is usable again. Chronological processing continues."
+                        )
+                    last_state = state
+                if runtime.issue is None:
+                    settlement_logger.success(
+                        "Measured settlement processing is running independently of planning."
+                    )
             except Exception:
                 runtime.issue = "Settlement processing failed. Inspect application logs"
                 runtime.attention = True
-                _LOGGER.exception("Settlement processing failed. Planning remains independent")
+                last_state = runtime.issue, runtime.attention
+                settlement_logger.exception(
+                    "The last successful financial results are retained. Planning continues independently. Check settlement and storage diagnostics.",
+                    retry_seconds=SAVINGS_WORKER_SECONDS,
+                )
             await asyncio.sleep(SAVINGS_WORKER_SECONDS)
 
     async def evaluations(request):

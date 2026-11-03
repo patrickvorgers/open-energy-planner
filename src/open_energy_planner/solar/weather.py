@@ -1,6 +1,7 @@
 """Bounded Open-Meteo solar-weather adapter with explicit interval and knowledge semantics."""
 
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from math import ceil, isfinite
@@ -8,6 +9,7 @@ from math import ceil, isfinite
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from open_energy_planner.core.units import BYTES_PER_KIB, HOURS_PER_DAY
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 from open_energy_planner.solar.calculation.model import SolarWeatherHour
 
 from ..planning_policy import PLANNING_HORIZON_HOURS
@@ -29,6 +31,8 @@ FIELDS = (
     "wind_speed_10m",
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class OpenMeteoSolarSource:
     """Fetch common weather once per site, not once per inverter, with daily historical caching."""
@@ -37,6 +41,7 @@ class OpenMeteoSolarSource:
         """Borrow an app-owned session without API keys or HA credentials."""
         self.session = session
         self.past_key, self.past = None, ()
+        self.archive_status = BackgroundLog(_LOGGER, "Historical solar weather refresh")
 
     async def read(self, location, now):
         """Return historical and future hours. Newly received history is not an old issued forecast."""
@@ -76,10 +81,18 @@ class OpenMeteoSolarSource:
                     },
                     now,
                 )
-            except (ClientError, OSError, ValueError, TimeoutError):
+            except (ClientError, OSError, ValueError, TimeoutError) as error:
                 past = ()
+                self.archive_status.exception(
+                    "Current weather is retained. Historical model training has less evidence. Retrying on the next weather refresh.",
+                    expected=True,
+                    reason="invalid historical weather" if isinstance(error, ValueError) else None,
+                )
             else:
                 self.past_key = key
+                self.archive_status.success(
+                    "Historical weather is available for solar model training."
+                )
             self.past = past
         return tuple(
             sorted(

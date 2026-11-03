@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from aiohttp import web
 
 from open_energy_planner.forecast_quality.policy import FORECAST_MODELS
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
 from ..storage.adapters.documents import SqlDocuments
 from ..storage.writes import complete_write
@@ -138,6 +139,7 @@ def register(
 
     async def worker():
         """Coalesce numerical evidence work. Ordinary measurements never cancel a captured pair."""
+        comparison_logger = BackgroundLog(logging.getLogger(__name__), "Forecast model comparison")
         while True:
             try:
                 async with lock:
@@ -152,9 +154,13 @@ def register(
                         raise cancelled
                     async with lock:
                         apply_preferences()
+                    comparison_logger.success(
+                        "Shadow comparison processing is running. Models change only after checked decision evidence."
+                    )
             except Exception:
-                logging.getLogger(__name__).exception(
-                    "Forecast model comparison failed. Baseline retained"
+                comparison_logger.exception(
+                    "Baseline models are retained. Planning continues independently. Check comparison and storage diagnostics.",
+                    retry_seconds=MODEL_WORKER_POLL_SECONDS,
                 )
                 runtime.preferences = {}
                 runtime.issue = "Model comparison unavailable. Inspect application logs"

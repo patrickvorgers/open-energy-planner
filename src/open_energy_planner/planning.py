@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from math import isfinite
+from time import monotonic
 from typing import Protocol
 
 from open_energy_planner.core.units import FULL_SOC_PERCENT, SECONDS_PER_MINUTE
@@ -230,7 +231,16 @@ class PlanningService:
                     "terminal_method": "initial_stock_grid_replacement",
                 }
             return PlanningOutcome(document, "validated")
-        except (ValueError, TypeError, RuntimeError, IndexError, KeyError):
+        except ValueError:
+            _LOGGER.warning(
+                "Calculated plan failed validation. No partial plan will be published. Check the input and solver diagnostics."
+            )
+            _LOGGER.debug("Rejected planning candidate diagnostics", exc_info=True)
+            return PlanningOutcome(None, "candidate_rejected")
+        except (TypeError, RuntimeError, IndexError, KeyError):
+            _LOGGER.exception(
+                "Plan calculation failed unexpectedly. No partial plan will be published. Check the solver diagnostics."
+            )
             return PlanningOutcome(None, "candidate_rejected")
 
 
@@ -410,6 +420,13 @@ class PlanningCoordinator:
             snapshot = self.latest
             self.active = snapshot
             self._set_status("calculating")
+            started = monotonic()
+            _LOGGER.debug(
+                "Planning calculation started. Snapshot: %s. Strategy: %s. Intervals: %d.",
+                snapshot.snapshot_id,
+                snapshot.strategy,
+                len(snapshot.problem.intervals),
+            )
             try:
                 outcome = await self.service.calculate(snapshot)
                 if self.closed:
@@ -422,6 +439,18 @@ class PlanningCoordinator:
                         raise PublicationSuperseded(reason)
                     await self.publish(outcome.document)
                     self.published = (snapshot, outcome.document)
+                    _LOGGER.info(
+                        "Plan published in %.2f seconds. Strategy: %s. Validated forecast intervals: %d.",
+                        monotonic() - started,
+                        snapshot.strategy,
+                        len(snapshot.problem.intervals),
+                    )
+                    _LOGGER.debug(
+                        "Published plan %s from input snapshot %s. Valid until %s.",
+                        outcome.document.get("plan_id"),
+                        snapshot.snapshot_id,
+                        outcome.document.get("valid_until"),
+                    )
                     if self.closed or self.latest is None:
                         continue
                     self._set_status("ready", outcome.reason)
@@ -431,7 +460,8 @@ class PlanningCoordinator:
                     self._set_status("failed", outcome.reason or "no_usable_plan")
             except PublicationSuperseded as error:
                 _LOGGER.info(
-                    "Plan discarded before publication (%s)", str(error) or "inputs_changed"
+                    "Plan discarded before publication (%s). No partial plan was activated. Rechecking the latest inputs.",
+                    str(error) or "inputs_changed",
                 )
                 if snapshot is self.latest:
                     self.invalidate(str(error) or "publication_inputs_expired")

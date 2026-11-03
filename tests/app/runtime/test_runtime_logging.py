@@ -9,16 +9,21 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientResponseError, web
 from aiohttp.test_utils import TestServer
 
 from open_energy_planner.app import create_app
 from open_energy_planner.planning import PlanningCoordinator
-from open_energy_planner.runtime.diagnostics.logging import UTCFormatter, register_lifecycle
+from open_energy_planner.runtime.diagnostics.logging import (
+    BackgroundLog,
+    UTCFormatter,
+    register_lifecycle,
+)
 
 
 def test_lifecycle_messages_bracket_resources_and_graceful_stop(caplog):
@@ -159,6 +164,86 @@ def test_empty_message_is_supported():
     """An empty message with a message-only format remains a valid empty diagnostic."""
     record = logging.LogRecord("test", logging.INFO, "", 0, "", (), None)
     assert UTCFormatter("%(message)s").format(record) == ""
+
+
+def test_expected_background_failure_retry_recovery_levels_and_privacy(caplog):
+    """One outage warns once, repeated attempts stay debug, recovery is visible and URLs never escape."""
+    logger = logging.getLogger("open_energy_planner.background_test")
+    status = BackgroundLog(logger, "Solar weather refresh")
+    error = ClientResponseError(
+        SimpleNamespace(real_url="https://weather.invalid/?latitude=PRIVATE_SITE&token=SECRET"),
+        (),
+        status=503,
+        message="SECRET provider body",
+    )
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        for _ in range(2):
+            try:
+                raise error
+            except ClientResponseError:
+                status.exception(
+                    "Valid forecasts retain their original expiry.", retry_seconds=1800
+                )
+        status.success("Fresh weather is available.")
+        status.success("Fresh weather is available.")
+    assert [record.levelno for record in caplog.records] == [
+        logging.WARNING,
+        logging.DEBUG,
+        logging.INFO,
+        logging.DEBUG,
+    ]
+    assert "HTTP 503" in caplog.messages[0]
+    assert "Retrying in 30 minutes." in caplog.messages[0]
+    assert "recovered" in caplog.messages[2]
+    assert all(record.exc_info is None for record in caplog.records)
+    assert "SECRET" not in caplog.text and "PRIVATE_SITE" not in caplog.text
+
+
+def test_unexpected_background_defects_keep_tracebacks_without_poll_spam(caplog):
+    """Unexpected software failures retain stack evidence and repeats move below the normal log level."""
+    logger = logging.getLogger("open_energy_planner.background_test")
+    status = BackgroundLog(logger, "Forecast update")
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        for _ in range(2):
+            try:
+                raise RuntimeError("controlled defect")
+            except RuntimeError:
+                status.exception("The previous valid forecast is retained.", retry_seconds=5)
+    assert [record.levelno for record in caplog.records] == [logging.ERROR, logging.DEBUG]
+    assert all(record.exc_info and record.exc_info[0] is RuntimeError for record in caplog.records)
+    assert "Retrying in 5 seconds." in caplog.messages[0]
+
+
+def test_expected_waiting_is_informational_and_build_identity_is_logged(monkeypatch, caplog):
+    """Normal waiting is not a warning, and numbered startup reports the actual packaged identity."""
+    from open_energy_planner.build_info import BUILD_INFO
+
+    monkeypatch.setitem(BUILD_INFO, "build", "999.2")
+    monkeypatch.setitem(BUILD_INFO, "revision", "test-revision")
+
+    async def scenario():
+        """Start and close a real app lifecycle while recording immutable build metadata."""
+        app = web.Application()
+        register_lifecycle(app, "test-release", "synthetic")
+        async with TestServer(app):
+            pass
+
+    logger = logging.getLogger("open_energy_planner.background_test")
+    with caplog.at_level(logging.INFO, logger="open_energy_planner"):
+        try:
+            raise ValueError("prices not final")
+        except ValueError:
+            BackgroundLog(logger, "Published market prices").exception(
+                "Waiting for the provider's complete delivery day.",
+                retry_seconds=1800,
+                expected=True,
+                reason="prices not final",
+                waiting=True,
+            )
+        asyncio.run(scenario())
+    assert all(record.levelno == logging.INFO for record in caplog.records)
+    assert "pending" in caplog.messages[0]
+    assert "Application build: 999.2. Source revision: test-revision." in caplog.messages
 
 
 @pytest.mark.skipif(

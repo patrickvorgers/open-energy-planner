@@ -10,6 +10,7 @@ from aiohttp import web
 from open_energy_planner.forecast_quality.bindings import bindings
 from open_energy_planner.forecast_quality.history import HistoryArchive
 from open_energy_planner.home_assistant.names import display_plan, energy_source_names, source_names
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
 from ..storage.adapters.documents import SqlDocuments
 from ..storage.writes import complete_write
@@ -80,6 +81,7 @@ def register(app, plans, demand, solar, catalogue, lock):
 
     async def capture_lifecycle(_app):
         """Observe midnight independently of solver success and finish durable writes before shutdown."""
+        capture_logger = BackgroundLog(logging.getLogger(__name__), "Daily forecast capture")
 
         async def capture():
             """Retain the last pre-midnight reference set, with failures isolated from planning."""
@@ -96,8 +98,14 @@ def register(app, plans, demand, solar, catalogue, lock):
                         cancellation = await complete_write(daily.observe, now, zone, context)
                         if cancellation:
                             raise cancellation
+                        capture_logger.success(
+                            "The daily forecast watcher is running. Baselines are archived only at an observed midnight."
+                        )
                 except Exception:
-                    logging.getLogger(__name__).exception("Daily forecast capture failed")
+                    capture_logger.exception(
+                        "Daily forecast retention is delayed. Planning continues. Check archive storage if this persists.",
+                        retry_seconds=DAILY_CAPTURE_POLL_SECONDS,
+                    )
                 await asyncio.sleep(DAILY_CAPTURE_POLL_SECONDS)
 
         task = asyncio.create_task(capture())

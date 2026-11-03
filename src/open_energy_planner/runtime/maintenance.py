@@ -111,6 +111,7 @@ class MaintenanceHost:
         """Replace private recovery evidence before crossing any externally meaningful boundary."""
         if self.bootstrap_error:
             raise OSError("Private recovery state needs repair before further writes")
+        previous_phase = (self.journal or {}).get("phase")
         journal = {**(self.journal or {}), **changes}
         try:
             write_private(self.root, JOURNAL_FILE, journal)
@@ -119,8 +120,25 @@ class MaintenanceHost:
             self.journal = journal
             self.bootstrap_error = self.durability_error = True
             self.accepting = False
+            logging.getLogger(__name__).error(
+                "Database recovery metadata could not be confirmed durable. Runtime admission is closed. Check OEP storage and restart before retrying recovery."
+            )
             raise
         self.journal = journal
+        if journal.get("phase") != previous_phase:
+            phase = journal.get("phase")
+            logging.getLogger(__name__).log(
+                logging.WARNING
+                if phase in {MigrationPhase.FAILED, MigrationPhase.INTERRUPTED}
+                else logging.INFO,
+                "Database maintenance phase: %s. %s",
+                phase,
+                "Review database recovery options before retrying. Normal operation remains paused."
+                if phase in {MigrationPhase.FAILED, MigrationPhase.INTERRUPTED}
+                else "The selected database is verified and the runtime has started."
+                if phase in {MigrationPhase.COMPLETED, MigrationPhase.RESTORED}
+                else "Normal operation resumes only after database verification and runtime startup.",
+            )
 
     def record_failure(self, message):
         """Keep recovery reachable when recording a failure itself encounters a storage error."""

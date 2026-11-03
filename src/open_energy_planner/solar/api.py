@@ -7,9 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
-from open_energy_planner.core.units import BYTES_PER_KIB
+from open_energy_planner.core.units import BYTES_PER_KIB, MINUTES_PER_HOUR, SECONDS_PER_MINUTE
 from open_energy_planner.history.wire import parse_history
 from open_energy_planner.notifications.api import NOTIFICATIONS
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
 from .ha_forecasts import parse_ha_predictions
 from .notifications import explain_solar_problem, solar_forecast_notifications
@@ -17,6 +18,7 @@ from .wire import parse_configuration
 
 SOLAR_WORKER_POLL_SECONDS = 5
 WEATHER_RETRY_MINUTES = 30
+WEATHER_REFRESH_HOURS = 1
 MAX_HA_FORECAST_BODY_BYTES = 32 * BYTES_PER_KIB * BYTES_PER_KIB
 
 _LOGGER = logging.getLogger(__name__)
@@ -146,6 +148,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
 
     async def lifecycle(_app):
         """Keep network waits and numerical work outside the shared app state lock."""
+        forecast_logger = BackgroundLog(_LOGGER, "Solar forecast update")
 
         async def update():
             """Install only results matching current immutable inputs, with bounded retry on failure."""
@@ -157,13 +160,24 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                     if job:
                         result = await worker(runtime, job)
                         async with lock:
-                            if runtime.install(result, datetime.now(UTC)) and live:
-                                live.refresh()
+                            if runtime.install(result, datetime.now(UTC)):
+                                if runtime.forecast is not None:
+                                    forecast_logger.success("A new solar forecast is available.")
+                                if live:
+                                    live.refresh()
                 except Exception:
-                    _LOGGER.exception("Solar forecast update failed")
                     async with lock:
                         if job:
                             runtime.failed(job, datetime.now(UTC))
+                        retry_seconds = (
+                            (runtime.retry_after - datetime.now(UTC)).total_seconds()
+                            if runtime.retry_after and runtime.retry_after > datetime.now(UTC)
+                            else SOLAR_WORKER_POLL_SECONDS
+                        )
+                    forecast_logger.exception(
+                        "Retaining only valid forecasts. Planning still requires usable solar data.",
+                        retry_seconds=max(SOLAR_WORKER_POLL_SECONDS, round(retry_seconds)),
+                    )
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
         task = asyncio.create_task(update())
@@ -180,6 +194,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
         async def weather_lifecycle(_app):
             """Refresh common solar weather hourly. Retry failures after 30 minutes and detect site changes."""
             async with weather_factory() as source:
+                weather_logger = BackgroundLog(_LOGGER, "Solar weather refresh")
 
                 async def update_weather():
                     """Fetch only for configured PV and the latest HA location, independent of solver cadence."""
@@ -201,11 +216,18 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                 async with lock:
                                     if live.report and live.report.location == location:
                                         runtime.set_weather(location, weather)
-                                due = now + timedelta(hours=1)
-                            except Exception:
-                                _LOGGER.warning(
-                                    "Solar weather unavailable. Retaining only valid forecasts",
-                                    exc_info=True,
+                                        weather_logger.success(
+                                            f"Received {len(weather)} weather hours. Next refresh in {WEATHER_REFRESH_HOURS * MINUTES_PER_HOUR:g} minutes."
+                                        )
+                                due = now + timedelta(hours=WEATHER_REFRESH_HOURS)
+                            except Exception as error:
+                                weather_logger.exception(
+                                    "Retaining only valid forecasts. Planning still requires usable solar data.",
+                                    retry_seconds=WEATHER_RETRY_MINUTES * SECONDS_PER_MINUTE,
+                                    expected=isinstance(error, ValueError),
+                                    reason="invalid weather data"
+                                    if isinstance(error, ValueError)
+                                    else None,
                                 )
                         await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
