@@ -1,0 +1,111 @@
+blueprint:
+  name: Open Energy Planner appliance execution
+  description: >-
+    Execute one current OEP request and report reliable physical outcomes without helpers.
+    Sending a command is not proof of starting. A timeout never means not started.
+    Readiness and its deadline are submitted separately with OEP Appliance ready.
+    Cycle learning uses the power and energy sensors configured in Home Assistant
+    Energy automatically. The app preserves correlation across restarts.
+  domain: automation
+  source_url: https://github.com/patrickvorgers/open-energy-planner/blob/main/custom_components/open_energy_planner/blueprints/appliance.yaml
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    appliance:
+      name: Virtual OEP appliance
+      selector:
+        device:
+          integration: open_energy_planner
+    start_action:
+      name: Physical start action
+      description: Use an immediate, non-queued action without intervening waits. Cancellation remains your responsibility.
+      selector:
+        action:
+    started_trigger:
+      name: Actual execution started
+      description: A reliable running state or sustained power. Not an acknowledgement of sending a command.
+      selector:
+        trigger:
+    completed_trigger:
+      name: Actual execution completed
+      description: A reliable complete state. A temporary zero-power pause is insufficient.
+      selector:
+        trigger:
+    cancellation:
+      name: Optional confirmed cancellation
+      collapsed: true
+      input:
+        cancel_action:
+          name: Cancel a delayed unconfirmed attempt
+          description: Must invalidate queued execution. Do not stop an actually running cycle.
+          default: []
+          selector:
+            action:
+        cancelled_trigger:
+          name: Positive confirmation that the attempt cannot execute later
+          default: []
+          selector:
+            trigger:
+mode: parallel
+max: 8
+variables:
+  oep_device: !input appliance
+  start_triggers: !input started_trigger
+  complete_triggers: !input completed_trigger
+triggers:
+  - trigger: event
+    event_type: open_energy_planner_appliance_request
+    event_data:
+      device_id: !input appliance
+  - triggers: !input started_trigger
+  - triggers: !input completed_trigger
+  - triggers: !input cancelled_trigger
+  - trigger: event
+    event_type: open_energy_planner_appliance_expired
+    event_data:
+      device_id: !input appliance
+actions:
+  - choose:
+      - conditions: "{{ trigger.idx | int == 0 }}"
+        sequence:
+          - action: open_energy_planner.appliance_claim
+            data:
+              device_id: !input appliance
+              task_id: "{{ trigger.event.data.task_id }}"
+              attempt_id: "{{ trigger.event.data.attempt_id }}"
+            response_variable: execution
+          - condition: template
+            value_template: >-
+              {{ execution is mapping
+                 and execution.result is mapping
+                 and execution.result.authorized is sameas true
+                 and execution.result.task_id == trigger.event.data.task_id
+                 and execution.result.attempt_id == trigger.event.data.attempt_id
+                 and as_timestamp(execution.result.expires_at | default(none), 0)
+                     > as_timestamp(now()) }}
+          - sequence: !input start_action
+      - conditions: "{{ trigger.platform == 'event' and trigger.event.event_type == 'open_energy_planner_appliance_expired' }}"
+        sequence:
+          - action: open_energy_planner.appliance_context
+            data:
+              device_id: !input appliance
+            response_variable: execution
+          - condition: template
+            value_template: "{{ execution.task_id == trigger.event.data.task_id and execution.attempt_id == trigger.event.data.attempt_id and execution.status == 'unknown' }}"
+          - sequence: !input cancel_action
+    default:
+      - action: open_energy_planner.appliance_context
+        data:
+          device_id: !input appliance
+        response_variable: execution
+      - variables:
+          outcome: "{{ 'started' if trigger.idx | int <= start_triggers | length else 'completed' if trigger.idx | int <= (start_triggers | length + complete_triggers | length) else 'not_started' }}"
+          observed_at: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is defined else trigger.event.time_fired.isoformat() if trigger.event is defined else now().isoformat() }}"
+      - action: open_energy_planner.appliance_feedback
+        data:
+          device_id: !input appliance
+          task_id: "{{ execution.task_id }}"
+          attempt_id: "{{ execution.attempt_id }}"
+          event: "{{ outcome }}"
+          at: "{{ observed_at }}"
+          cancelled: "{{ outcome == 'not_started' }}"

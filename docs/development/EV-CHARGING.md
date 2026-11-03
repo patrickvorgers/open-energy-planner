@@ -1,0 +1,258 @@
+# EV charging
+
+## Ownership and setup
+
+The app owns settings, charging-loss assumptions, departure calculation, durable
+intent and joint optimization. The integration reads HA state and exposes virtual
+controls. Physical actions belong to user-owned HA automations. The supplied
+**Open Energy Planner EV charging** blueprint wires permission, power and stop
+actions without helpers. Neither app nor integration calls a vehicle vendor.
+
+The existing pinned-TLS HA connection carries EV observations, explicit vehicle
+assignments and charging/departure intent. Its peer credential cannot read admin
+archives or change vehicle/charge-point configuration. Those settings remain in
+the authenticated app UI.
+
+**Settings > Appliances > EV charging** separates vehicles from charge points.
+This shares the Appliances category navigation with consumption/cycle devices
+and electric boilers. Dirty settings block category changes. Existing versioned
+configuration APIs, save safeguards, identities and stored values are retained.
+Removing the only allowed vehicle of a charge point is blocked without changing
+the draft. The message identifies dependent charge points. Edit their allowed
+vehicles or remove those points first. Other vehicle removals delete the removed
+vehicle's ID from each charge point's allowed-vehicle list. Charge-point IDs and
+all other settings remain unchanged. Server-side validation remains authoritative.
+**Energy > EV charging** contains sessions and daily target/departure requests.
+Each explicit action uses `/v1/ev/intent` for just that vehicle and field. It never
+replaces the full technical configuration. Original measurements, expected
+departure results and physical execution remain separate. Failed requests retain
+input. Evidence refresh preserves unapplied requests. One-off departures use
+Home Assistant's timezone and reject nonexistent daylight-saving wall times.
+Saved one-off departures remain visible after reload. Reset restores the saved
+local value. Applying an unchanged local value retains the exact saved instant,
+including the second occurrence of a daylight-saving clock fold. Only Use daily
+departure clears the stored override.
+The bounded first implementation supports sixteen vehicle records and four points. Multiple cars
+may use one point. Stable opaque IDs identify records. HA device names identify
+them visually. Each vehicle links its own percentage SoC sensor, usable capacity
+in kWh and maximum AC power in W. Capacity is usable energy, not gross pack size.
+It also has a desired SoC and daily departure clock.
+
+Each point links its Energy Dashboard consumption meter, measured AC power and
+vehicle-connected binary sensor. Its minimum/maximum active power and capability
+are explicit: **Measurement only**, **On/off at fixed power** or **Variable power**.
+The lower of vehicle/point maxima applies. Off remains available. The meter cannot
+also be a shiftable cycle appliance or overlap another selected Energy consumer.
+The app selects each charger's individual forecast automatically. Missing
+component forecasts block replacement of its household contribution. They never
+cause double counting or silently remove expected load.
+Removing a point's consumer from Energy withdraws its EV scheduling eligibility
+and marks the missing dashboard source. Restore or correct that source in Home
+Assistant. Saved intent and historical evidence remain available.
+
+## Identity and departures
+
+A connected sensor proves presence, not identity. OEP never chooses the first car,
+even if only one is allowed. Select **Connected vehicle** on the virtual point,
+manually or using a HA automation that reliably knows the car. The selection is
+bound to that connection nonce. Disconnect, unknown connection or an integration
+restart creates a new nonce. An old assignment never authorizes another session.
+Missing identity/SoC and ambiguous assignment block EV scheduling. Measurement-only
+points remain ordinary measured household consumption.
+
+Native vehicle controls are **Target state of charge**, **Daily departure time**,
+**One-off departure date**, **One-off departure time** and **Use daily departure**.
+The override expires at its instant, then the daily clock resumes. No readiness
+button or extra helpers are needed. A connected, identified car is eligible
+automatically. Each new plan recalculates useful kWh from current measured SoC:
+
+`max(0, target_soc - actual_soc) / 100 * usable_capacity_kwh`
+
+HA's installation timezone is authoritative. There is no OEP timezone setting.
+Daily departure skips nonexistent spring-forward times. The repeated autumn hour
+has one daily departure, its first occurrence. Explicit nonexistent override wall
+times are rejected. One-off departures are bounded to the next thirty days.
+
+## Joint model and execution
+
+EV AC intake joins the existing bus exactly once, jointly with PV, stationary
+storage and cycle appliances. V2G is excluded. Negative prices do not authorize
+charging beyond the requested target. Existing reserve recovery and admitted
+cycle service retain priority. Next, earliest-departure cohorts maximize useful
+EV charge. Equal-departure cars maximize combined useful kWh without a separate
+fairness preference. The configured consumption/cost strategy follows. All stages
+share the existing solver budget. An unproved primary stage publishes no new plan.
+
+EV starts use UTC quarters throughout the horizon, independently of coarser
+stationary control groups. Arrival/departure clip edge windows. Full variable-power
+windows use continuous AC-watt setpoints. The existing whole-watt stationary
+battery contract is unchanged. HA displays watts without decimals, while the
+automation receives calculation precision. Physical charger rounding remains in
+the user's action and measured SoC corrects the next plan. On/off uses the
+applicable maximum. One final partial
+window may stop early at a lower- or upper-limit power from a finite stop
+catalogue. Other device commands keep their original groups when billing segments
+split. Every segment checks actual active power. A short high-power pulse is
+never averaged into a below-minimum setpoint or hidden grid peak. Optimality and
+shortfall refer to these modeled controls, not arbitrary continuous-time switching.
+
+Live work reserves up to 130 seconds for calculation and handover, derived from the
+125-second worker deadline plus five seconds for HA. The worker deadline includes
+the shared 120-second solver budget plus five seconds for process overhead.
+When departure is sooner, readiness is clamped to one microsecond before departure.
+A late result cannot publish after its first usable segment. New ordinary valid SoC readings wait for
+the next throttled round. Settings, session, identity, departure and measurement
+availability changes block publication. New SoC also blocks a candidate exceeding
+physical capacity. The quarter/five-minute planning cadence is unchanged.
+
+Independent validation checks identity, timing, no discharge, physical power,
+AC energy, conversion, target bounds and bus conservation. Original plans retain
+their own inputs and per-interval useful/AC energy. New readings do not rewrite
+them. The app and native sensors show predicted departure SoC and shortfall
+separately from measured SoC. These are expectations, not proof of physical charging.
+
+Native extraction rounds each binary off-control selection to zero power and
+energy. This removes numerical leakage from integer tolerances, which can
+otherwise appear as a few microwatts of forbidden below-minimum charging.
+Selected controls retain their actual values. Independent bus, power and energy
+validation still rejects inconsistent candidates before publication.
+
+**Charging requested** and **Requested charging power** are virtual permissions.
+Local unknown identity, unplugging, reached measured target, pause or expiry
+withdraw them even during an app outage. The blueprint uses the stop action for
+unavailable permission/power. Choose immediate idempotent actions, never queued
+delayed starts. Relevant capacities and limits have separate native sensors.
+The blueprint also rejects permission and power entities from different virtual
+points. A five-percentage-point vehicle SoC deviation from the published trajectory
+requests a new round behind the normal five-minute throttle.
+
+The balance chart includes EV AC consumption and predicted vehicle SoC. Charging
+losses are already in AC intake, not added as stationary converter losses. Both
+stationary-battery references retain identical planned EV service/timing. Their
+savings do not claim a separately measured EV scheduling benefit.
+
+## Default charging losses
+
+No mandatory loss setting or manufacturer catalogue is introduced. Versioned
+planning defaults assume 20% AC loss at 2.3 kW, 15% at 4.1 kW and 10% at 11 kW and
+above. Delivered watts are interpolated between anchors. Below 2.3 kW the first
+segment assumes 80% efficiency. These are planning assumptions, not accuracy or
+manufacturer guarantees. Temperature and battery conditioning can change losses.
+
+The basis is [ADAC's measurements published on 6 August 2026](https://www.adac.de/rund-ums-fahrzeug/elektromobilitaet/laden/ladeverluste-elektroauto-studie/).
+Observed ranges across five cars were 12.7-24.2% at 2.3 kW, 8.0-12.8% at 4.1 kW
+and 5.1-7.0% at 11 kW in warm conditions. Higher-power defaults are conservatively
+rounded. Automatic efficiency learning and paid vehicle APIs are outside this step.
+
+## Storage and laboratories
+
+EV settings/intent use the shared SQLAlchemy `planning` document namespace. State
+versions and current pointer commit atomically and join full cross-backend
+transfer. No separate database/configuration file is created. Fresh HA telemetry
+is mandatory after app restart. Credentials remain outside these documents.
+
+SoC reports retain separate sample/report timestamps and timestamp provenance.
+The app accepts up to five seconds of future clock skew between hosts. The
+120-second report-capture expiry is independent of the original sample age.
+An optional **SoC timestamp attribute** preserves the original device-sample
+timestamp as provenance. Without that attribute, the original HA report time is
+labelled `ha_report`. Neither timestamp proves that the vehicle is communicating.
+A valid current capture is not rejected solely because its sample timestamp is
+old. Expired captures are unavailable, including in native sensors.
+A local connection listener
+rotates nonces independently of HTTP, including off/on transitions between polls.
+
+The native execution response omits archived physics/financial arrays. Adjacent
+identical command segments coalesce, while the original fine physical intervals
+remain in the immutable plan archive and browser evidence. This keeps HA packets
+bounded without averaging away EV stops or losing validation evidence.
+
+New financial model-selection comparisons pause when the original plan contains
+controlled EV or cycle work. The current replay evaluator lacks the matching
+realized controlled-load boundary, so using it would fabricate comparable scores.
+Existing valid completed evidence and preferred models remain available. The
+model overview exposes this reason instead of silently promoting a candidate.
+
+Both laboratories have two simulated cars and two wallboxes. Their new Energy
+meters receive clearly synthetic zero-use history before their first connection,
+not invented charging sessions. Subsequent AC energy and SoC persist. Fixture
+actions affect simulated devices only. The main simulated grid includes new EV
+AC consumption once, preserving monotonic import/export counters. Existing
+installation, contract, history and pairing configuration remain intact.
+
+Persistent lab startup runs Recorder-dependent initialization after HA has started.
+Restored unavailable placeholders for fixture-owned energy meters recover the
+fixture's known units and classes. External Energy meters still require their own
+original units. Reload retains numeric counters, imported history and Energy
+preferences. Independent native tests cover absent and restored placeholders with
+both grid-power configuration forms and reject missing external meter units.
+
+### Repairing inconsistent laboratory evidence
+
+The simulated heat pump uses a share of uncontrolled household demand. Its
+historical reconstruction subtracts measured dishwasher and EV consumption
+before taking that share. Its live quarter profile excludes the seeded historic
+dishwasher cycle. If existing grid evidence cannot support that separation, the
+fixture retains the entire previous consumer archive until the evidence is repaired.
+
+The laboratory-only admin action `oep_test_fixture.repair_energy_balance` previews
+complete hours where measured controlled consumers exceed reconstructed household
+energy, and detects discontinuities in the simulated grid sum origins. The Energy
+source list must exactly match the channels actively claimed by this fixture's
+setup. Newly added or foreign Energy sources stop repair before reading or writing
+statistics. Existing-energy mode explicitly claims the inherited test-VM entities
+that it simulates. Their original entity registry platforms remain unchanged.
+The derived
+heat-pump archive is rebuilt after repairing its raw inputs. It is not treated as
+independent evidence for grid repair. The action requires
+complete five-minute evidence for each affected hour. A missing non-grid meter
+point or span can establish zero energy only when its two bounding cumulative readings
+are equal within counter precision. The preview identifies these proven constant
+spans. The missing source row remains missing. Other gaps stop the repair.
+Each step uses the known
+simulated baseload plus measured controlled consumption, PV and battery flows.
+Import/export is then derived from that step's signed balance. Hourly totals are
+the sum of the twelve resulting five-minute flows. Unrelated deltas remain intact.
+Recorder normalizes source units to kWh. Replacement imports convert back to each
+original unit and preserve counter states, entity
+identities, Energy preferences and app configuration. Controlled-device resets and missing
+fine evidence stop the repair instead of inventing source measurements. The fine
+grid sum origin is aligned with the last common completed hour. Home Assistant
+copies the last five-minute sum when compiling an hour. Keeping those origins
+aligned prevents a new discontinuity during the next compilation.
+
+The earlier simulator upgrade could also leave a PV or stationary-battery sum
+origin drop within a retained five-minute hour. These test sources have a known
+canonical profile. At an adjacent negative transition the repair reconstructs
+the source's complete affected hour from this simulator profile, shifts subsequent
+sums and aligns the fine origin with the hourly origin. Reconstructing the complete
+hour removes both sides of a false positive-then-negative spike. Correcting only
+the negative side would invent production. The preview identifies each source,
+affected hour and expected energy. Recorded counter states are retained.
+This reconstruction is only for the lab's synthetic PV and battery channels.
+It must never be applied to production measurements or controlled EV/appliance
+meters, whose recorded consumption remains the independent evidence.
+The owning fixture supplies its original quarter-kWh sampler. Default mode keeps
+the roof and garage profiles distinct. Existing-energy mode uses the same share
+allocation as its original seed. Recorder reads and reconstruction are normalized
+to kWh. Only replacement serialization converts back to the original Wh/kWh/MWh
+unit. The sampler must not apply that unit conversion a second time.
+
+Read the preview before applying it. Supply `apply: true` and its exact
+`expected_revision`. A durable journal is written before queued corrections.
+Original affected rows are retained in that journal. Apply avoids the twenty
+seconds around a Recorder compilation boundary. Ambiguous interrupted operations
+require inspection and are never replayed automatically. Successful readback must
+match every queued replacement and find no remaining impossible hours or negative
+fine grid deltas.
+Repeating a completed repair does not apply the adjustment again. No physical
+household measurements or production integrations should use this synthetic
+baseline reconstruction. Original plan and forecast archives remain unchanged.
+
+All payload conversions are checked before marking the journal as applying. To
+resolve an interrupted operation, call the same admin action with
+`resolve_ambiguous_revision` set to the journal's exact proposal revision. Do not
+combine this with `apply`. Recovery only closes the journal when every affected
+row still equals its journalled original, or every row equals its intended
+replacement. Mixed, expired or unverifiable outcomes remain blocked. This action
+never requeues replacements or edits Home Assistant storage files manually.

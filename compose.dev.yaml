@@ -1,0 +1,31 @@
+# Actual Supervisor and Core run inside this separate Docker engine.
+# Never mount the host Docker socket into this privileged development container.
+name: oep-dev
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile.supervisor
+    privileged: true
+    working_dir: /workspace
+    environment:
+      OEP_DEVELOPER_ENVIRONMENT: '1'
+      SUPERVISOR_CHANNEL: stable
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: /workspace/src
+    extra_hosts:
+      - homeassistant:127.0.0.1
+    ports:
+      - '127.0.0.1:7123:80'
+      - '127.0.0.1:7357:4357'
+    volumes:
+      - .:/workspace
+      - docker-data:/var/lib/docker
+      - containerd-data:/var/lib/containerd
+      - supervisor-data:/mnt/supervisor
+    tmpfs: [/tmp]
+    stop_grace_period: 60s
+volumes:
+  docker-data:
+  containerd-data:
+  supervisor-data:

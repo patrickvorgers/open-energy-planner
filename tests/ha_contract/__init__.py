@@ -1,0 +1,1 @@
+"""HA contract test responsibilities."""

@@ -1,0 +1,1483 @@
+{
+  "original_revision": "3a851b1a8e8bf3ebfc883b1cc413bd7884e31a46",
+  "purpose": "English migration provenance anchored to immutable original and translated Git revisions. Retrieve exact content with git cat-file using the blob IDs. Later edits do not alter either historical revision.",
+  "requirement_identifiers_preserved": 254,
+  "records": [
+    {
+      "current_path": ".devcontainer/Dockerfile",
+      "original_git_blob": "88469293b2010a5ffa7670cd72c11c51f36b0590",
+      "translated_git_blob": "c42c1fb084249634959cfb969bf54aa221152847"
+    },
+    {
+      "current_path": ".dockerignore",
+      "original_git_blob": "b6848a0e9e7ebc640bbe7fb56453b5e74f0d8e11",
+      "translated_git_blob": "f701b725b1d76b1c70b6464cc47618f21f3c2627"
+    },
+    {
+      "current_path": ".gitattributes",
+      "original_git_blob": "fd96ae35fc1fec035bd1348d3d39382d4fb3a4de",
+      "translated_git_blob": "42d7d3d59882eca0a5842bec6d47259eb78286df"
+    },
+    {
+      "current_path": "CONTRIBUTING.md",
+      "original_git_blob": "1e75cd771977ac16ffa2c01ae55e5aaa10a5d637",
+      "translated_git_blob": "17a6d00cb35ae6b1019ede4775c33000241f43b6"
+    },
+    {
+      "current_path": "DEVELOPMENT.md",
+      "original_git_blob": "ea7a29e1483f33c22a17a83b31aa7b3c5d6ede04",
+      "translated_git_blob": "60745f2975db6b2729d4b3bd991cad9db2c8f924"
+    },
+    {
+      "current_path": "Dockerfile.native-test",
+      "original_git_blob": "c774d27d4147fb7e206bc41b3defc4ba9494ecd2",
+      "translated_git_blob": "09307a809e04e9f9cb37de990a9e91ec5e775538"
+    },
+    {
+      "current_path": "PIPELINE-PROOF.md",
+      "original_git_blob": "3bd93ddb8f1855f3c00e88a56578594a196b7bec",
+      "translated_git_blob": "d9cd12e6622f5a99d17b8296d1e6bfc2e149f763"
+    },
+    {
+      "current_path": "README.md",
+      "original_git_blob": "a263d55e77e794c70ebcdfb974665921c1aad3f0",
+      "translated_git_blob": "bc6c36c6b704cdc11165d19d969fb2251c1dda52"
+    },
+    {
+      "current_path": "SETUP-VERIFICATION.md",
+      "original_git_blob": "bc8d8cf08806aedc04b6d5ee331713a0d8b3a511",
+      "translated_git_blob": "a53455182f1d628f9ccb0889fc6d9cb505b5fa1c"
+    },
+    {
+      "current_path": "compose.yaml",
+      "original_git_blob": "30ebab85154276e517bea70473d2505c27b9c0ed",
+      "translated_git_blob": "2e05625411b09eeae2ff11647b9e1fcb790ecc12"
+    },
+    {
+      "current_path": "design/DEVICE-SETTINGS-PROPOSAL.md",
+      "original_git_blob": "cb5c06c16e8f79f59fb0afea76d97c52b168cf21",
+      "translated_git_blob": "3811c6e968d13fcff4c4a8f05e2448f9d9d5386a"
+    },
+    {
+      "current_path": "design/DESIGN-INPUT-REVIEW-2026-10-19.md",
+      "original_git_blob": "bd161e986d4490bd3fa0860768c4a95480d091f0",
+      "translated_git_blob": "bac46a94f7a78309221af4c27abc1b92218068df"
+    },
+    {
+      "current_path": "design/DEVELOPMENT-FOUNDATION.md",
+      "original_git_blob": "d7a9661c0190168abd3225027cb208747a96b417",
+      "translated_git_blob": "d7a9661c0190168abd3225027cb208747a96b417"
+    },
+    {
+      "current_path": "design/FIRST-RELEASE-SCOPE.md",
+      "original_git_blob": "f9aa8b22b90cf3cbcbe329e85ec11b6a7bfda204",
+      "translated_git_blob": "10b2596b3eff24d99794d02774d5ae3a06f3595e"
+    },
+    {
+      "current_path": "design/PLANNER-SCENARIOS.md",
+      "original_git_blob": "42966b0dd59a93e1cc89d3f09c4c62311cd12ddc",
+      "translated_git_blob": "9b34c85074ccfb91c38a4baa8c56837a5dc2006d"
+    },
+    {
+      "current_path": "design/REQUIREMENTS.md",
+      "original_git_blob": "e5f1359d39f817e07fd81322c5547f1f88045c7e",
+      "translated_git_blob": "00c8534c00716ecf88845dd29bf8dec1939c1583"
+    },
+    {
+      "current_path": "design/TECHNICAL-DESIGN.md",
+      "original_git_blob": "b6acfddedb9ad1585815932393765101c14d3c15",
+      "translated_git_blob": "93d80a9996c86af0a9cba4d6769675b0288f353b"
+    },
+    {
+      "current_path": "design/TEST-COVERAGE.md",
+      "original_git_blob": "2f074b7c17e32ae994983384fb97c7c890a105d2",
+      "translated_git_blob": "adb6ebb30c30fe5545a8229d5332663e896c1a1f"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/REPORT.md",
+      "original_git_blob": "11e5eab8faae50091eae35ac4c68d79a344fcfd6",
+      "translated_git_blob": "23026b5ad19f45fd3f9d2012e42ae11cdf0d5883"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/all_17_series_all_nonzero_float.sqlite",
+      "original_git_blob": "16bfab1662945054b1ccd730ac1f3cbb429d16fb",
+      "translated_git_blob": "16bfab1662945054b1ccd730ac1f3cbb429d16fb"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/all_17_series_sample_day_repeated.sqlite",
+      "original_git_blob": "191fd3487aa445b601705d3d85168a9f38432fb5",
+      "translated_git_blob": "191fd3487aa445b601705d3d85168a9f38432fb5"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/all_17_wide_all_nonzero_float.sqlite",
+      "original_git_blob": "329d52f526a642f72c8047b431970a7c87845157",
+      "translated_git_blob": "329d52f526a642f72c8047b431970a7c87845157"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/all_17_wide_sample_day_repeated.sqlite",
+      "original_git_blob": "df6541692985610980112d32b1a7850781946c2a",
+      "translated_git_blob": "df6541692985610980112d32b1a7850781946c2a"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/energy_and_soc_11_series_all_nonzero_float.sqlite",
+      "original_git_blob": "91fd86718d3029b0128d607d2ff9dfb0b05a2456",
+      "translated_git_blob": "91fd86718d3029b0128d607d2ff9dfb0b05a2456"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/energy_and_soc_11_series_sample_day_repeated.sqlite",
+      "original_git_blob": "19e39e6286cc601ecb07f1476b6b5d96c5c13166",
+      "translated_git_blob": "19e39e6286cc601ecb07f1476b6b5d96c5c13166"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/energy_and_soc_11_wide_all_nonzero_float.sqlite",
+      "original_git_blob": "7bd33c054aee5bba6ee967856c29d3d27a321380",
+      "translated_git_blob": "7bd33c054aee5bba6ee967856c29d3d27a321380"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/energy_and_soc_11_wide_sample_day_repeated.sqlite",
+      "original_git_blob": "630621f5ad2d509cfae5df74ef24aa4c0e96b36f",
+      "translated_git_blob": "630621f5ad2d509cfae5df74ef24aa4c0e96b36f"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_aggregated_2_series_all_nonzero_float.sqlite",
+      "original_git_blob": "0df9ec8557bd3afd8934a4243b5601bcd422619f",
+      "translated_git_blob": "0df9ec8557bd3afd8934a4243b5601bcd422619f"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_aggregated_2_series_sample_day_repeated.sqlite",
+      "original_git_blob": "0c37a202f97d66281c817fe1b123e57d4c649484",
+      "translated_git_blob": "0c37a202f97d66281c817fe1b123e57d4c649484"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_aggregated_2_wide_all_nonzero_float.sqlite",
+      "original_git_blob": "bab49b3d27533fe20ede76f550bf30004e2cb4b8",
+      "translated_git_blob": "bab49b3d27533fe20ede76f550bf30004e2cb4b8"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_aggregated_2_wide_sample_day_repeated.sqlite",
+      "original_git_blob": "bc8421cb4eac257eee21d3e058f49415dc379fbd",
+      "translated_git_blob": "bc8421cb4eac257eee21d3e058f49415dc379fbd"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_original_4_series_all_nonzero_float.sqlite",
+      "original_git_blob": "16ea2f8e3e9402852ecbc818797b7e85ec3145a1",
+      "translated_git_blob": "16ea2f8e3e9402852ecbc818797b7e85ec3145a1"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_original_4_series_sample_day_repeated.sqlite",
+      "original_git_blob": "11f8bea8a6f2fe7eef404b93aede6a7c8467c599",
+      "translated_git_blob": "11f8bea8a6f2fe7eef404b93aede6a7c8467c599"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_original_4_wide_all_nonzero_float.sqlite",
+      "original_git_blob": "5115323539d39041781ddf4195ca58472080c796",
+      "translated_git_blob": "5115323539d39041781ddf4195ca58472080c796"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/grid_original_4_wide_sample_day_repeated.sqlite",
+      "original_git_blob": "16f622c7f44e7d70667522495ce593ab4dc974f5",
+      "translated_git_blob": "16f622c7f44e7d70667522495ce593ab4dc974f5"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/measure_storage.py",
+      "original_git_blob": "6c4f6b4772f5116dd31209cdff89d8e3852937af",
+      "translated_git_blob": "b9245e2a8d6d3cfc3e18645eeb27b42ddf4c866d"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/measurement-day.json",
+      "original_git_blob": "a7c52988210e4cdf5388f02d0f8396d17be3b8a1",
+      "translated_git_blob": "a7c52988210e4cdf5388f02d0f8396d17be3b8a1"
+    },
+    {
+      "current_path": "design/storage-study-2026-10-17/storage_results.json",
+      "original_git_blob": "842802981b37a01c1b5047b188a979252146ff06",
+      "translated_git_blob": "842802981b37a01c1b5047b188a979252146ff06"
+    },
+    {
+      "current_path": "design/scenario-arithmetic-audit.json",
+      "original_git_blob": "977af3ca3e7fd7207dd38b759114ea872a04bdef",
+      "translated_git_blob": "977af3ca3e7fd7207dd38b759114ea872a04bdef"
+    },
+    {
+      "current_path": "solver-experiment/.dockerignore",
+      "original_git_blob": "b8f1a1dec06bbfe14d8eb4af6a322831e5168a8f",
+      "translated_git_blob": "b8f1a1dec06bbfe14d8eb4af6a322831e5168a8f"
+    },
+    {
+      "current_path": "solver-experiment/.gitignore",
+      "original_git_blob": "5f3b386d48f91bcfffbad9bc3621fac96ab4febf",
+      "translated_git_blob": "5f3b386d48f91bcfffbad9bc3621fac96ab4febf"
+    },
+    {
+      "current_path": "solver-experiment/CONTAINER-VALIDATION.md",
+      "original_git_blob": "69d2f5f8aeeb686b2926155796427196905eff12",
+      "translated_git_blob": "69d2f5f8aeeb686b2926155796427196905eff12"
+    },
+    {
+      "current_path": "solver-experiment/Dockerfile",
+      "original_git_blob": "db6e88bb51c662dc76031d7d825ddbc1017306db",
+      "translated_git_blob": "db6e88bb51c662dc76031d7d825ddbc1017306db"
+    },
+    {
+      "current_path": "solver-experiment/HORIZON-BENCHMARK.md",
+      "original_git_blob": "6cc47e5e64e1963746b584eb5ba20ace5c3b1d6d",
+      "translated_git_blob": "6cc47e5e64e1963746b584eb5ba20ace5c3b1d6d"
+    },
+    {
+      "current_path": "solver-experiment/HORIZON-SCENARIOS.md",
+      "original_git_blob": "c02d6626ce4534d9fdd152b33ac141b6b915b717",
+      "translated_git_blob": "c02d6626ce4534d9fdd152b33ac141b6b915b717"
+    },
+    {
+      "current_path": "solver-experiment/MIXED-HYBRID-PROOF.md",
+      "original_git_blob": "924d91ac8deadbe90b633e3071596f87c81e3598",
+      "translated_git_blob": "924d91ac8deadbe90b633e3071596f87c81e3598"
+    },
+    {
+      "current_path": "solver-experiment/MIXED-HYBRID-SCENARIOS.md",
+      "original_git_blob": "37659b6f423164ae2c9920df1d37e02290621af9",
+      "translated_git_blob": "37659b6f423164ae2c9920df1d37e02290621af9"
+    },
+    {
+      "current_path": "solver-experiment/MODELING-COMPARISON.md",
+      "original_git_blob": "d22a3210cf1aa15cc3657d28c73fd12afe5f44f5",
+      "translated_git_blob": "00dc8d2b65312546fabeff00c25786729262ddfd"
+    },
+    {
+      "current_path": "solver-experiment/MODELING-PERFORMANCE.md",
+      "original_git_blob": "d915e9d346b6df25305ff4abd0f5b11bc7db90cd",
+      "translated_git_blob": "d915e9d346b6df25305ff4abd0f5b11bc7db90cd"
+    },
+    {
+      "current_path": "solver-experiment/MODULAR-MIGRATION.md",
+      "original_git_blob": "99051923de778be2483c5586f32089ba736e9419",
+      "translated_git_blob": "99051923de778be2483c5586f32089ba736e9419"
+    },
+    {
+      "current_path": "solver-experiment/MULTI-BATTERY-SCENARIOS.md",
+      "original_git_blob": "566849d055bd0330e4868e27a7dcf5ed0cfdb8f0",
+      "translated_git_blob": "566849d055bd0330e4868e27a7dcf5ed0cfdb8f0"
+    },
+    {
+      "current_path": "solver-experiment/README.md",
+      "original_git_blob": "13c5b43ea10301ba7c2687c59acb3fbcc1b10028",
+      "translated_git_blob": "13c5b43ea10301ba7c2687c59acb3fbcc1b10028"
+    },
+    {
+      "current_path": "solver-experiment/SHARED-BUS-PROOF.md",
+      "original_git_blob": "7363961d9c36267856bfb501277729dba6ea2416",
+      "translated_git_blob": "7363961d9c36267856bfb501277729dba6ea2416"
+    },
+    {
+      "current_path": "solver-experiment/TOPOLOGY-SCENARIOS.md",
+      "original_git_blob": "b22ed82962134f3dc86db3b6607b4a82ee9c6afb",
+      "translated_git_blob": "b22ed82962134f3dc86db3b6607b4a82ee9c6afb"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/ARCHIVE-NOTE.md",
+      "original_git_blob": "cdc4a8ce6dd7b1b33ed8b775fcb078848fe440f2",
+      "translated_git_blob": "cdc4a8ce6dd7b1b33ed8b775fcb078848fe440f2"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/CONTAINER-VALIDATION.md",
+      "original_git_blob": "05cc39d49fd2194ffadede9fe1a375569ce42b43",
+      "translated_git_blob": "192dd6ca20f9d2ec0a3bcf6a2c21d5436b7190fe"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/Dockerfile",
+      "original_git_blob": "9f2e85b20216664683b9933ffb5d4f4676bdbafc",
+      "translated_git_blob": "9f2e85b20216664683b9933ffb5d4f4676bdbafc"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/HORIZON-BENCHMARK.md",
+      "original_git_blob": "96f9ab5e4f8dfe799f1cd9e8ccba899976f5a23d",
+      "translated_git_blob": "ef0d4338f141351f46df41cfe906ea062cc340aa"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/HORIZON-SCENARIOS.md",
+      "original_git_blob": "bd399fde7e55b6587a946673b17283f751e043c8",
+      "translated_git_blob": "bd399fde7e55b6587a946673b17283f751e043c8"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/MODELING-COMPARISON.md",
+      "original_git_blob": "9d32e72f345316d1512e3c8839096a500213f3ea",
+      "translated_git_blob": "7ea0cde4641438cff51e53266e51e1b86fcab090"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/MODELING-PERFORMANCE.md",
+      "original_git_blob": "2d63fe8038bf7864e665191b06131633663eb631",
+      "translated_git_blob": "2d63fe8038bf7864e665191b06131633663eb631"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/README.md",
+      "original_git_blob": "36ffbbda89f341179ad51afadfd53ad5a637b9c0",
+      "translated_git_blob": "0744f107dcca3a5d8a3c0dd29a02cacf1aa53b25"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/TOPOLOGY-SCENARIOS.md",
+      "original_git_blob": "64b98b91c4c405d2e513dcb4d3cc1b1106af516c",
+      "translated_git_blob": "490b702cc0be9840896677782dba38457e755ed3"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/manifest.json",
+      "original_git_blob": "88ae3b0182c88a9f78f43d233328fc27356943a4",
+      "translated_git_blob": "88ae3b0182c88a9f78f43d233328fc27356943a4"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/pyproject.toml",
+      "original_git_blob": "85f3ce48da40efbac8621d33501bb68005ce1512",
+      "translated_git_blob": "85f3ce48da40efbac8621d33501bb68005ce1512"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/requirements.lock",
+      "original_git_blob": "e8161bc53ef08183ec78259e893649aac5d297f8",
+      "translated_git_blob": "e8161bc53ef08183ec78259e893649aac5d297f8"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/modeling-interface-comparison-linux.json",
+      "original_git_blob": "464d231a8c2048a6b08f160f2b6056bafa2f126b",
+      "translated_git_blob": "464d231a8c2048a6b08f160f2b6056bafa2f126b"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/modeling-interface-comparison-win32.json",
+      "original_git_blob": "f769d4bb130dc7c77ed4c8608c310b8be9a6686e",
+      "translated_git_blob": "f769d4bb130dc7c77ed4c8608c310b8be9a6686e"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/selected-arm64-emulated-pytest.xml",
+      "original_git_blob": "a0b2f444442f7bc31db3200ef8601731fc3cb2cf",
+      "translated_git_blob": "a0b2f444442f7bc31db3200ef8601731fc3cb2cf"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/selected-highs-pytest.xml",
+      "original_git_blob": "3ddc5943545b032f8d3a037f4fe5e8bd2d95ed04",
+      "translated_git_blob": "3ddc5943545b032f8d3a037f4fe5e8bd2d95ed04"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/selected-horizon-benchmark-windows.json",
+      "original_git_blob": "c99983588b5e4a6943b3f4dede86370c2cc73e29",
+      "translated_git_blob": "c99983588b5e4a6943b3f4dede86370c2cc73e29"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/selected-linux-pytest.xml",
+      "original_git_blob": "c1a1623f514a98af68f650aca8ec3a05406fb601",
+      "translated_git_blob": "c1a1623f514a98af68f650aca8ec3a05406fb601"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/selected-model-stage-profile.json",
+      "original_git_blob": "bf96a892b08328c5f14fe498fa39940da29cf0df",
+      "translated_git_blob": "bf96a892b08328c5f14fe498fa39940da29cf0df"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/results/selected-topology-probe.json",
+      "original_git_blob": "d983be5342a12ac552ce710217dc1c14e8b627f5",
+      "translated_git_blob": "d983be5342a12ac552ce710217dc1c14e8b627f5"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/script/benchmark_horizon.py",
+      "original_git_blob": "290c7ebc085452caba6f1e66dc18495b50fd4919",
+      "translated_git_blob": "290c7ebc085452caba6f1e66dc18495b50fd4919"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/script/compare_modeling_interfaces.py",
+      "original_git_blob": "d050ecb024c33b62219ddeb4eabbd6cd4d42c748",
+      "translated_git_blob": "d050ecb024c33b62219ddeb4eabbd6cd4d42c748"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/script/direct_highs_experiment.py",
+      "original_git_blob": "66739f887c763cc115c47048624ac6c52bd37ebc",
+      "translated_git_blob": "66739f887c763cc115c47048624ac6c52bd37ebc"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/script/process_memory.py",
+      "original_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e",
+      "translated_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/script/profile_model_stages.py",
+      "original_git_blob": "55980820a1856f308a9544abe190d0dbaf46da69",
+      "translated_git_blob": "55980820a1856f308a9544abe190d0dbaf46da69"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/script/run_probe.py",
+      "original_git_blob": "ef33a142d0b81b037f358f0cabdf8405e46021d8",
+      "translated_git_blob": "ef33a142d0b81b037f358f0cabdf8405e46021d8"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/script/run_topology_probe.py",
+      "original_git_blob": "a83693d143defd451cd538097bcdc8861fe80dd2",
+      "translated_git_blob": "a83693d143defd451cd538097bcdc8861fe80dd2"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/src/oep_probe/__init__.py",
+      "original_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9",
+      "translated_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/src/oep_probe/adapters/__init__.py",
+      "original_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b",
+      "translated_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/src/oep_probe/adapters/pyomo_highs.py",
+      "original_git_blob": "ec637a8d92e047dd2c4052f7858cbda07b261e62",
+      "translated_git_blob": "ec637a8d92e047dd2c4052f7858cbda07b261e62"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/src/oep_probe/adapters/pyomo_model.py",
+      "original_git_blob": "a492c05f6767af40a5cf1e6b0c391eaf00828762",
+      "translated_git_blob": "a492c05f6767af40a5cf1e6b0c391eaf00828762"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/src/oep_probe/domain.py",
+      "original_git_blob": "83e675baa669df47c20dd41aa4bbd1702bc32004",
+      "translated_git_blob": "83e675baa669df47c20dd41aa4bbd1702bc32004"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/src/oep_probe/ports.py",
+      "original_git_blob": "93e0288eb9d202e5e8ef88078e78aa4a72634fa8",
+      "translated_git_blob": "93e0288eb9d202e5e8ef88078e78aa4a72634fa8"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/src/oep_probe/validation.py",
+      "original_git_blob": "43e0c82a393c68912a00d56c59defc77504fbc55",
+      "translated_git_blob": "43e0c82a393c68912a00d56c59defc77504fbc55"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/__init__.py",
+      "original_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb",
+      "translated_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/cases.py",
+      "original_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec",
+      "translated_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/conftest.py",
+      "original_git_blob": "03aa4541485b874171587472f0757c0e396cc1d2",
+      "translated_git_blob": "03aa4541485b874171587472f0757c0e396cc1d2"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/horizon_cases.py",
+      "original_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684",
+      "translated_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/test_horizon_scenarios.py",
+      "original_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072",
+      "translated_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/test_input_boundaries.py",
+      "original_git_blob": "8645f51fc7fba5a2a2f761a59db307a05090f0ba",
+      "translated_git_blob": "8645f51fc7fba5a2a2f761a59db307a05090f0ba"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/test_planner_scenarios.py",
+      "original_git_blob": "32ed2642bedd067c39141cf996c8a99d5dc67b5a",
+      "translated_git_blob": "32ed2642bedd067c39141cf996c8a99d5dc67b5a"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/test_process_memory.py",
+      "original_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da",
+      "translated_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/test_topology_scenarios.py",
+      "original_git_blob": "1cb4537f3ee683b6009f4e0034b2be5f2e1e2130",
+      "translated_git_blob": "1cb4537f3ee683b6009f4e0034b2be5f2e1e2130"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/test_validation.py",
+      "original_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96",
+      "translated_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96"
+    },
+    {
+      "current_path": "solver-experiment/archive/highspy-migration-2026-10-19/tests/topology_cases.py",
+      "original_git_blob": "60f75d1d33b2049285a841da28275021f87b94e1",
+      "translated_git_blob": "60f75d1d33b2049285a841da28275021f87b94e1"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/.dockerignore",
+      "original_git_blob": "4741937f697df328105a04033751714a8d0e80a8",
+      "translated_git_blob": "4741937f697df328105a04033751714a8d0e80a8"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/ARCHIVE-NOTE.md",
+      "original_git_blob": "2d3efd49332c08188134e838efab459047a10be7",
+      "translated_git_blob": "2d3efd49332c08188134e838efab459047a10be7"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/CONTAINER-VALIDATION.md",
+      "original_git_blob": "9b1864b958765fbea0ea829b991d6868179a19d4",
+      "translated_git_blob": "9b1864b958765fbea0ea829b991d6868179a19d4"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/Dockerfile",
+      "original_git_blob": "11aa63be2623c5364491656d01858cccae517ed5",
+      "translated_git_blob": "11aa63be2623c5364491656d01858cccae517ed5"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/HORIZON-BENCHMARK.md",
+      "original_git_blob": "b14d45f53940c185e28c098ec82e6f308cec783c",
+      "translated_git_blob": "2aa8579dcd122c54b0383e158475f20fc7e2fdab"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/HORIZON-SCENARIOS.md",
+      "original_git_blob": "bd399fde7e55b6587a946673b17283f751e043c8",
+      "translated_git_blob": "bd399fde7e55b6587a946673b17283f751e043c8"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/MODELING-COMPARISON.md",
+      "original_git_blob": "c95ab3493f708807d9ad40e04baad26d43b66937",
+      "translated_git_blob": "a70a3f5280c2cabaced37895ead67b1ba2f0e776"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/MODELING-PERFORMANCE.md",
+      "original_git_blob": "55c428573a9c441e7c1fd996bb0460f1a434d079",
+      "translated_git_blob": "bd4ae376757672820cb954cb26c05bce8cae74f6"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/MODULAR-MIGRATION.md",
+      "original_git_blob": "908e14a3e3636ed2a385e274689f7750fa7bf249",
+      "translated_git_blob": "8d83302ee728fe1aa01273f7df5c4b09e5d5913e"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/README.md",
+      "original_git_blob": "b98bb3e229a03a51cb728a69aa8369f90de2b346",
+      "translated_git_blob": "792d2f7839923d0b25937acd72d4e1200fe0c5fa"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/TOPOLOGY-SCENARIOS.md",
+      "original_git_blob": "f1bd4d7fe8ce19dadce2b800e0d66861873ada79",
+      "translated_git_blob": "f1bd4d7fe8ce19dadce2b800e0d66861873ada79"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/manifest.json",
+      "original_git_blob": "baf00fff3a8542197619698fc063fbcbfa3df096",
+      "translated_git_blob": "baf00fff3a8542197619698fc063fbcbfa3df096"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/pyproject.toml",
+      "original_git_blob": "fd7d3ef1a8c593c3233e44b3248c9446e3aea3ee",
+      "translated_git_blob": "fd7d3ef1a8c593c3233e44b3248c9446e3aea3ee"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/requirements.lock",
+      "original_git_blob": "e6c012110af1dff99e96018c3c2fdeabfcf0d57c",
+      "translated_git_blob": "e6c012110af1dff99e96018c3c2fdeabfcf0d57c"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modeling-interface-comparison-linux.json",
+      "original_git_blob": "464d231a8c2048a6b08f160f2b6056bafa2f126b",
+      "translated_git_blob": "464d231a8c2048a6b08f160f2b6056bafa2f126b"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modeling-interface-comparison-win32.json",
+      "original_git_blob": "f769d4bb130dc7c77ed4c8608c310b8be9a6686e",
+      "translated_git_blob": "f769d4bb130dc7c77ed4c8608c310b8be9a6686e"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-arm64-emulated-pytest.xml",
+      "original_git_blob": "82bc64d056d9d1d24a8e7bd20ffe2ff01d24b822",
+      "translated_git_blob": "82bc64d056d9d1d24a8e7bd20ffe2ff01d24b822"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-core-probe.json",
+      "original_git_blob": "31ff8e05fddddfd404cdc7bbcf12e9f9b43ccb3c",
+      "translated_git_blob": "31ff8e05fddddfd404cdc7bbcf12e9f9b43ccb3c"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-horizon-benchmark-linux.json",
+      "original_git_blob": "c04e14965e54badf499364fe7a94afaf8886c1c3",
+      "translated_git_blob": "c04e14965e54badf499364fe7a94afaf8886c1c3"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-horizon-benchmark-windows.json",
+      "original_git_blob": "651fc8aa81201017cfca0b1e2a36f521d500dbb1",
+      "translated_git_blob": "651fc8aa81201017cfca0b1e2a36f521d500dbb1"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-linux-pytest.xml",
+      "original_git_blob": "3055d3e651ff8c8d6211c2b27ddf362636e669de",
+      "translated_git_blob": "3055d3e651ff8c8d6211c2b27ddf362636e669de"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-runtime-images.json",
+      "original_git_blob": "54587afe998858fb9c363c8a8833ea15c3e375f3",
+      "translated_git_blob": "54587afe998858fb9c363c8a8833ea15c3e375f3"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-topology-probe.json",
+      "original_git_blob": "4ee92a4690f06c33128b02fdd7af86306b4e9c42",
+      "translated_git_blob": "4ee92a4690f06c33128b02fdd7af86306b4e9c42"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-verification.json",
+      "original_git_blob": "609c031d949cdda65559672c0bd01349ac3e132b",
+      "translated_git_blob": "609c031d949cdda65559672c0bd01349ac3e132b"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/modular-windows-pytest.xml",
+      "original_git_blob": "1f7187d684dc4468fdd02621bfcb58b14dd1130e",
+      "translated_git_blob": "1f7187d684dc4468fdd02621bfcb58b14dd1130e"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/selected-arm64-emulated-pytest.xml",
+      "original_git_blob": "a0b2f444442f7bc31db3200ef8601731fc3cb2cf",
+      "translated_git_blob": "a0b2f444442f7bc31db3200ef8601731fc3cb2cf"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/selected-highs-pytest.xml",
+      "original_git_blob": "3ddc5943545b032f8d3a037f4fe5e8bd2d95ed04",
+      "translated_git_blob": "3ddc5943545b032f8d3a037f4fe5e8bd2d95ed04"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/selected-horizon-benchmark-windows.json",
+      "original_git_blob": "c99983588b5e4a6943b3f4dede86370c2cc73e29",
+      "translated_git_blob": "c99983588b5e4a6943b3f4dede86370c2cc73e29"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/selected-linux-pytest.xml",
+      "original_git_blob": "c1a1623f514a98af68f650aca8ec3a05406fb601",
+      "translated_git_blob": "c1a1623f514a98af68f650aca8ec3a05406fb601"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/selected-model-stage-profile.json",
+      "original_git_blob": "bf96a892b08328c5f14fe498fa39940da29cf0df",
+      "translated_git_blob": "bf96a892b08328c5f14fe498fa39940da29cf0df"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/results/selected-topology-probe.json",
+      "original_git_blob": "d983be5342a12ac552ce710217dc1c14e8b627f5",
+      "translated_git_blob": "d983be5342a12ac552ce710217dc1c14e8b627f5"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/script/benchmark_horizon.py",
+      "original_git_blob": "445a90965dc0bac8e720d2c5e5f778ef5a821d55",
+      "translated_git_blob": "445a90965dc0bac8e720d2c5e5f778ef5a821d55"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/script/process_memory.py",
+      "original_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e",
+      "translated_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/script/run_probe.py",
+      "original_git_blob": "3414d484b9416188a695f12759f10495e57cd836",
+      "translated_git_blob": "3414d484b9416188a695f12759f10495e57cd836"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/script/run_topology_probe.py",
+      "original_git_blob": "ffa1a6648cb1f5599980c352a26318359b551299",
+      "translated_git_blob": "ffa1a6648cb1f5599980c352a26318359b551299"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/__init__.py",
+      "original_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9",
+      "translated_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/__init__.py",
+      "original_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b",
+      "translated_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/__init__.py",
+      "original_git_blob": "ef977fca51388a6abfa9014f0f083bc95174751b",
+      "translated_git_blob": "ef977fca51388a6abfa9014f0f083bc95174751b"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/context.py",
+      "original_git_blob": "78980a883b47bd394d72457a5708ef4e343f56e4",
+      "translated_git_blob": "78980a883b47bd394d72457a5708ef4e343f56e4"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/contracts.py",
+      "original_git_blob": "38a1155d2448ef9b60c49437d6be75f7bd821af3",
+      "translated_git_blob": "38a1155d2448ef9b60c49437d6be75f7bd821af3"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/extraction.py",
+      "original_git_blob": "a77ad604354ba98628b46a0960949ccfa4646727",
+      "translated_git_blob": "a77ad604354ba98628b46a0960949ccfa4646727"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/factory.py",
+      "original_git_blob": "29cbbf204f31feab4da0bac7d39ff953c76a1ccc",
+      "translated_git_blob": "29cbbf204f31feab4da0bac7d39ff953c76a1ccc"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/models.py",
+      "original_git_blob": "96c2e4944c8d6ee8ce8a03748b99730bb6b6ce94",
+      "translated_git_blob": "96c2e4944c8d6ee8ce8a03748b99730bb6b6ce94"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/network.py",
+      "original_git_blob": "00e19736096962c35b35f1a6218536560cac037e",
+      "translated_git_blob": "00e19736096962c35b35f1a6218536560cac037e"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/adapters/highs/solver.py",
+      "original_git_blob": "78760de4e2da1b173fac14b1a63d6462efd05029",
+      "translated_git_blob": "78760de4e2da1b173fac14b1a63d6462efd05029"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/costs.py",
+      "original_git_blob": "323d778d0066af1119dedab2f5d24a48915d23d5",
+      "translated_git_blob": "323d778d0066af1119dedab2f5d24a48915d23d5"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/domain.py",
+      "original_git_blob": "83e675baa669df47c20dd41aa4bbd1702bc32004",
+      "translated_git_blob": "83e675baa669df47c20dd41aa4bbd1702bc32004"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/ports.py",
+      "original_git_blob": "93e0288eb9d202e5e8ef88078e78aa4a72634fa8",
+      "translated_git_blob": "93e0288eb9d202e5e8ef88078e78aa4a72634fa8"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/src/oep_probe/validation.py",
+      "original_git_blob": "76a4d93ade13bdeaf639d86de043cead1693aca5",
+      "translated_git_blob": "76a4d93ade13bdeaf639d86de043cead1693aca5"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/__init__.py",
+      "original_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb",
+      "translated_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/cases.py",
+      "original_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec",
+      "translated_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/conftest.py",
+      "original_git_blob": "3f8db071e280bd8a8465e9253927ba669748192c",
+      "translated_git_blob": "3f8db071e280bd8a8465e9253927ba669748192c"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/horizon_cases.py",
+      "original_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684",
+      "translated_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_cost_evaluator.py",
+      "original_git_blob": "580e0534552b66ee75b8b6fcf5c66591355737f5",
+      "translated_git_blob": "580e0534552b66ee75b8b6fcf5c66591355737f5"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_horizon_scenarios.py",
+      "original_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072",
+      "translated_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_input_boundaries.py",
+      "original_git_blob": "ae15f0b49d3506ea86a4a516f64c69b9957e555a",
+      "translated_git_blob": "ae15f0b49d3506ea86a4a516f64c69b9957e555a"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_model_isolation.py",
+      "original_git_blob": "0674548cabfb0afcf78f5cfc63f6053b81fd2315",
+      "translated_git_blob": "0674548cabfb0afcf78f5cfc63f6053b81fd2315"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_planner_scenarios.py",
+      "original_git_blob": "32ed2642bedd067c39141cf996c8a99d5dc67b5a",
+      "translated_git_blob": "32ed2642bedd067c39141cf996c8a99d5dc67b5a"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_process_memory.py",
+      "original_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da",
+      "translated_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_solver_status.py",
+      "original_git_blob": "7a1057e136f56eb1dce3a32053d61dd634353a39",
+      "translated_git_blob": "7a1057e136f56eb1dce3a32053d61dd634353a39"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_topology_scenarios.py",
+      "original_git_blob": "1cb4537f3ee683b6009f4e0034b2be5f2e1e2130",
+      "translated_git_blob": "1cb4537f3ee683b6009f4e0034b2be5f2e1e2130"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/test_validation.py",
+      "original_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96",
+      "translated_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96"
+    },
+    {
+      "current_path": "solver-experiment/archive/modular-highspy-0.4.0/tests/topology_cases.py",
+      "original_git_blob": "60f75d1d33b2049285a841da28275021f87b94e1",
+      "translated_git_blob": "60f75d1d33b2049285a841da28275021f87b94e1"
+    },
+    {
+      "current_path": "solver-experiment/archive/shared-ac-0.5.0/manifest.json",
+      "original_git_blob": "6965a7b9816da51839742ce81d77ed780f1dc7ff",
+      "translated_git_blob": "6965a7b9816da51839742ce81d77ed780f1dc7ff"
+    },
+    {
+      "current_path": "solver-experiment/archive/shared-ac-0.5.0/source-tests.zip",
+      "original_git_blob": "3f1f178a58393f104617d3f5c7bac732e589be8f",
+      "translated_git_blob": "3f1f178a58393f104617d3f5c7bac732e589be8f"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/README.md",
+      "original_git_blob": "de006038a7dc1c33f712364ed8c76c6611c6a316",
+      "translated_git_blob": "525abfdbdd8c6c50c2cbd7ac55e41fa344afccb2"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/design/DEVICE-SETTINGS-PROPOSAL.md",
+      "original_git_blob": "cb5c06c16e8f79f59fb0afea76d97c52b168cf21",
+      "translated_git_blob": "50805dbee421ebb705c3df436336de0a67267db2"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/design/DESIGN-INPUT-REVIEW-2026-10-19.md",
+      "original_git_blob": "d389bde388d9016cc5c8108228898ce568850789",
+      "translated_git_blob": "602664e1013a80bb0dd4b55813c0bfcde55caaf5"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/design/PLANNER-SCENARIOS.md",
+      "original_git_blob": "b3ac6e79c43146c9b493d08d6ef0230aa90c32d8",
+      "translated_git_blob": "0c130117d23222ce7dacd22d442d8e85b5e7e813"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/design/REQUIREMENTS.md",
+      "original_git_blob": "7cc4644245147924d51d8482f032f8c16bebfc3a",
+      "translated_git_blob": "e8ea395f12e700e84d60ab670c3ff0cd21de6bc3"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/design/TECHNICAL-DESIGN.md",
+      "original_git_blob": "3a1b4a227fc8bcda807dbc6a6fb959d05bd8a046",
+      "translated_git_blob": "aa657372f49bf9105caff1327cecf23e0d0ec66b"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/design/TEST-COVERAGE.md",
+      "original_git_blob": "a8213b7851339a5d198da26fbd7570f23610034b",
+      "translated_git_blob": "77f98cc6382b6cf80adf4e445d7f00c364426993"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/.dockerignore",
+      "original_git_blob": "1ed40ee6777767c1faa00740f7d3c96bd6872263",
+      "translated_git_blob": "1ed40ee6777767c1faa00740f7d3c96bd6872263"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/COMPARISON.md",
+      "original_git_blob": "2486d3505e98442f054f7b86639402abc751ad01",
+      "translated_git_blob": "2486d3505e98442f054f7b86639402abc751ad01"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/CONTAINER-VALIDATION.md",
+      "original_git_blob": "3d2857cf8356c2bd91b4fcd435e23902e6a1510e",
+      "translated_git_blob": "3d2857cf8356c2bd91b4fcd435e23902e6a1510e"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/Dockerfile",
+      "original_git_blob": "026cb4be60a168f8bb7ad04e637baae0460cb56d",
+      "translated_git_blob": "026cb4be60a168f8bb7ad04e637baae0460cb56d"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/HORIZON-BENCHMARK.md",
+      "original_git_blob": "a43e21f4ddf13a440d1e73b0af96e7e08e723374",
+      "translated_git_blob": "a43e21f4ddf13a440d1e73b0af96e7e08e723374"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/HORIZON-SCENARIOS.md",
+      "original_git_blob": "5580fc1ec4933c4657ba55a4c9a9efad0f8236f4",
+      "translated_git_blob": "5580fc1ec4933c4657ba55a4c9a9efad0f8236f4"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/README.md",
+      "original_git_blob": "aea1736e08f0be9c9b230250bc01786a6cae29e1",
+      "translated_git_blob": "cf0612c6dca8768955a121ed7943a03d330cfd5f"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/comparison-requirements.lock",
+      "original_git_blob": "3ce703eaf1cb0226c3a4bec0ae7976594a4b8059",
+      "translated_git_blob": "3ce703eaf1cb0226c3a4bec0ae7976594a4b8059"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/pyproject.toml",
+      "original_git_blob": "b401c3e80868ee43de05e00b607c685011165731",
+      "translated_git_blob": "b401c3e80868ee43de05e00b607c685011165731"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/requirements.lock",
+      "original_git_blob": "e8161bc53ef08183ec78259e893649aac5d297f8",
+      "translated_git_blob": "e8161bc53ef08183ec78259e893649aac5d297f8"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/comparison-pytest.xml",
+      "original_git_blob": "fa49ea8e18d8530076b11c44d53af84bbbef5d1f",
+      "translated_git_blob": "fa49ea8e18d8530076b11c44d53af84bbbef5d1f"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/horizon-benchmark-linux.json",
+      "original_git_blob": "163aca877542bac85c26cc09fd1c3a0465477179",
+      "translated_git_blob": "163aca877542bac85c26cc09fd1c3a0465477179"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/horizon-benchmark-unrestricted-math-threads.json",
+      "original_git_blob": "9122b73caa470a72cb63ab2d0bfdab7e566d5b76",
+      "translated_git_blob": "9122b73caa470a72cb63ab2d0bfdab7e566d5b76"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/horizon-benchmark.json",
+      "original_git_blob": "d31e243d10be826c888c577cb995be8634d9d642",
+      "translated_git_blob": "d31e243d10be826c888c577cb995be8634d9d642"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/horizon-pytest.xml",
+      "original_git_blob": "38c3c55b8af93e7c27b23eb29374b50593b27212",
+      "translated_git_blob": "38c3c55b8af93e7c27b23eb29374b50593b27212"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/linux-amd64-image.json",
+      "original_git_blob": "163943bc7b9b21db66f19de77f0d809058d13062",
+      "translated_git_blob": "163943bc7b9b21db66f19de77f0d809058d13062"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/linux-arm64-emulated-pytest.xml",
+      "original_git_blob": "6e4152248fcd26564bee3049872fb366e4897068",
+      "translated_git_blob": "6e4152248fcd26564bee3049872fb366e4897068"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/linux-arm64-image.json",
+      "original_git_blob": "29be1a7c05764362f9eb226a7c360875c86b1d1d",
+      "translated_git_blob": "29be1a7c05764362f9eb226a7c360875c86b1d1d"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/linux-arm64-runtime.json",
+      "original_git_blob": "79764a15552793f21e46ec843388e18b98a37dfb",
+      "translated_git_blob": "79764a15552793f21e46ec843388e18b98a37dfb"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/linux-pytest.xml",
+      "original_git_blob": "c2b623892b1eb2c00926d8f060f0eb3b46c3d9a5",
+      "translated_git_blob": "c2b623892b1eb2c00926d8f060f0eb3b46c3d9a5"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/platform-package-evidence.json",
+      "original_git_blob": "1e5204a7cf7faf42b6605f4015ed363f70d5c77d",
+      "translated_git_blob": "1e5204a7cf7faf42b6605f4015ed363f70d5c77d"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/platform-prep-windows-pytest.xml",
+      "original_git_blob": "7bbe8d8102977390be85fc6921829df32d5ce7e2",
+      "translated_git_blob": "7bbe8d8102977390be85fc6921829df32d5ce7e2"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/probe-results.json",
+      "original_git_blob": "9839428635bf7d8bed36c3c7a01a163bec6bf934",
+      "translated_git_blob": "9839428635bf7d8bed36c3c7a01a163bec6bf934"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/pytest.xml",
+      "original_git_blob": "01b4499019e63df6d46ab1115de09614f43e81c2",
+      "translated_git_blob": "01b4499019e63df6d46ab1115de09614f43e81c2"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/results/solver-comparison.json",
+      "original_git_blob": "ebc16785d758e474b119aae4b2b165e25a43280b",
+      "translated_git_blob": "ebc16785d758e474b119aae4b2b165e25a43280b"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/script/benchmark_horizon.py",
+      "original_git_blob": "9a706b2988497902c931e6474b5255bbb377311b",
+      "translated_git_blob": "9a706b2988497902c931e6474b5255bbb377311b"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/script/compare_solvers.py",
+      "original_git_blob": "32c4e59167b56b3572b89fdf98d93cf90bfdc1b8",
+      "translated_git_blob": "32c4e59167b56b3572b89fdf98d93cf90bfdc1b8"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/script/process_memory.py",
+      "original_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e",
+      "translated_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/script/run_probe.py",
+      "original_git_blob": "ef33a142d0b81b037f358f0cabdf8405e46021d8",
+      "translated_git_blob": "ef33a142d0b81b037f358f0cabdf8405e46021d8"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/__init__.py",
+      "original_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9",
+      "translated_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/adapters/__init__.py",
+      "original_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b",
+      "translated_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/adapters/pyomo_highs.py",
+      "original_git_blob": "ec637a8d92e047dd2c4052f7858cbda07b261e62",
+      "translated_git_blob": "ec637a8d92e047dd2c4052f7858cbda07b261e62"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/adapters/pyomo_model.py",
+      "original_git_blob": "72e1a11a8f2cd114546d234c47a60bf6b3b06cd5",
+      "translated_git_blob": "72e1a11a8f2cd114546d234c47a60bf6b3b06cd5"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/adapters/pyomo_scip.py",
+      "original_git_blob": "eddd55488a90728bda5231215235ea74706f9574",
+      "translated_git_blob": "eddd55488a90728bda5231215235ea74706f9574"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/domain.py",
+      "original_git_blob": "2877d20f65920f78aa349cb576dd9f15a28400f6",
+      "translated_git_blob": "2877d20f65920f78aa349cb576dd9f15a28400f6"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/ports.py",
+      "original_git_blob": "93e0288eb9d202e5e8ef88078e78aa4a72634fa8",
+      "translated_git_blob": "93e0288eb9d202e5e8ef88078e78aa4a72634fa8"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/src/oep_probe/validation.py",
+      "original_git_blob": "5984d79ee95410e6bdfd9c11c668e48e07ae6b62",
+      "translated_git_blob": "5984d79ee95410e6bdfd9c11c668e48e07ae6b62"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/__init__.py",
+      "original_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb",
+      "translated_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/cases.py",
+      "original_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec",
+      "translated_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/conftest.py",
+      "original_git_blob": "08f44a540c878cfa5bbf11bf0563e9eacd4dd579",
+      "translated_git_blob": "08f44a540c878cfa5bbf11bf0563e9eacd4dd579"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/horizon_cases.py",
+      "original_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684",
+      "translated_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/test_horizon_scenarios.py",
+      "original_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072",
+      "translated_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/test_input_boundaries.py",
+      "original_git_blob": "8645f51fc7fba5a2a2f761a59db307a05090f0ba",
+      "translated_git_blob": "8645f51fc7fba5a2a2f761a59db307a05090f0ba"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/test_planner_scenarios.py",
+      "original_git_blob": "8016c6383fdafc2543eb72af93e05d3ff8c0c6cf",
+      "translated_git_blob": "8016c6383fdafc2543eb72af93e05d3ff8c0c6cf"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/test_process_memory.py",
+      "original_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da",
+      "translated_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/test_scip_translation.py",
+      "original_git_blob": "2b57bbacaa9c8d3643ece0589c9345722ed5d7be",
+      "translated_git_blob": "2b57bbacaa9c8d3643ece0589c9345722ed5d7be"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/solver-experiment/tests/test_validation.py",
+      "original_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96",
+      "translated_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96"
+    },
+    {
+      "current_path": "solver-experiment/archive/solver-comparison-2026-10-19/manifest.json",
+      "original_git_blob": "f0acbb11e546147a8f52427576a0f130f82d111b",
+      "translated_git_blob": "066ba273d8b1afdbbb4be63ad539acecd2ff09e1"
+    },
+    {
+      "current_path": "solver-experiment/pyproject.toml",
+      "original_git_blob": "5d52deb9676d7633521a3bbb745aacd6b645ef26",
+      "translated_git_blob": "5d52deb9676d7633521a3bbb745aacd6b645ef26"
+    },
+    {
+      "current_path": "solver-experiment/requirements.lock",
+      "original_git_blob": "d7d78f6245ce588af84c06fe46ff4ff78b94a52c",
+      "translated_git_blob": "d7d78f6245ce588af84c06fe46ff4ff78b94a52c"
+    },
+    {
+      "current_path": "solver-experiment/results/mixed-hybrid-arm64-emulated-pytest.xml",
+      "original_git_blob": "e94cf1b5b509703fe64f70b4a1398093a8f82f24",
+      "translated_git_blob": "e94cf1b5b509703fe64f70b4a1398093a8f82f24"
+    },
+    {
+      "current_path": "solver-experiment/results/mixed-hybrid-linux-pytest.xml",
+      "original_git_blob": "0845b705cf6258d46bbda7b0ea7b2ba49493133c",
+      "translated_git_blob": "0845b705cf6258d46bbda7b0ea7b2ba49493133c"
+    },
+    {
+      "current_path": "solver-experiment/results/mixed-hybrid-probe-linux.json",
+      "original_git_blob": "0c414991a71646cfd1ed64dfe68249b43feeb306",
+      "translated_git_blob": "0c414991a71646cfd1ed64dfe68249b43feeb306"
+    },
+    {
+      "current_path": "solver-experiment/results/mixed-hybrid-probe-win32.json",
+      "original_git_blob": "084db48290363e56cef9c5b9cc10220ef7aa00b4",
+      "translated_git_blob": "084db48290363e56cef9c5b9cc10220ef7aa00b4"
+    },
+    {
+      "current_path": "solver-experiment/results/mixed-hybrid-runtime-images.json",
+      "original_git_blob": "7a0fe636b83a6222610aed929b649ee452f53b14",
+      "translated_git_blob": "7a0fe636b83a6222610aed929b649ee452f53b14"
+    },
+    {
+      "current_path": "solver-experiment/results/mixed-hybrid-verification.json",
+      "original_git_blob": "185684128ac15eecd277ab9a42a2c25ff2d52c1a",
+      "translated_git_blob": "185684128ac15eecd277ab9a42a2c25ff2d52c1a"
+    },
+    {
+      "current_path": "solver-experiment/results/mixed-hybrid-windows-pytest.xml",
+      "original_git_blob": "522559a99231b798a0ff158c0ba313951ca67e0a",
+      "translated_git_blob": "522559a99231b798a0ff158c0ba313951ca67e0a"
+    },
+    {
+      "current_path": "solver-experiment/results/modeling-interface-comparison-linux.json",
+      "original_git_blob": "464d231a8c2048a6b08f160f2b6056bafa2f126b",
+      "translated_git_blob": "464d231a8c2048a6b08f160f2b6056bafa2f126b"
+    },
+    {
+      "current_path": "solver-experiment/results/modeling-interface-comparison-win32.json",
+      "original_git_blob": "f769d4bb130dc7c77ed4c8608c310b8be9a6686e",
+      "translated_git_blob": "f769d4bb130dc7c77ed4c8608c310b8be9a6686e"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-arm64-emulated-pytest.xml",
+      "original_git_blob": "82bc64d056d9d1d24a8e7bd20ffe2ff01d24b822",
+      "translated_git_blob": "82bc64d056d9d1d24a8e7bd20ffe2ff01d24b822"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-core-probe.json",
+      "original_git_blob": "31ff8e05fddddfd404cdc7bbcf12e9f9b43ccb3c",
+      "translated_git_blob": "31ff8e05fddddfd404cdc7bbcf12e9f9b43ccb3c"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-horizon-benchmark-linux.json",
+      "original_git_blob": "c04e14965e54badf499364fe7a94afaf8886c1c3",
+      "translated_git_blob": "c04e14965e54badf499364fe7a94afaf8886c1c3"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-horizon-benchmark-windows.json",
+      "original_git_blob": "651fc8aa81201017cfca0b1e2a36f521d500dbb1",
+      "translated_git_blob": "651fc8aa81201017cfca0b1e2a36f521d500dbb1"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-linux-pytest.xml",
+      "original_git_blob": "3055d3e651ff8c8d6211c2b27ddf362636e669de",
+      "translated_git_blob": "3055d3e651ff8c8d6211c2b27ddf362636e669de"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-runtime-images.json",
+      "original_git_blob": "54587afe998858fb9c363c8a8833ea15c3e375f3",
+      "translated_git_blob": "54587afe998858fb9c363c8a8833ea15c3e375f3"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-topology-probe.json",
+      "original_git_blob": "4ee92a4690f06c33128b02fdd7af86306b4e9c42",
+      "translated_git_blob": "4ee92a4690f06c33128b02fdd7af86306b4e9c42"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-verification.json",
+      "original_git_blob": "609c031d949cdda65559672c0bd01349ac3e132b",
+      "translated_git_blob": "609c031d949cdda65559672c0bd01349ac3e132b"
+    },
+    {
+      "current_path": "solver-experiment/results/modular-windows-pytest.xml",
+      "original_git_blob": "1f7187d684dc4468fdd02621bfcb58b14dd1130e",
+      "translated_git_blob": "1f7187d684dc4468fdd02621bfcb58b14dd1130e"
+    },
+    {
+      "current_path": "solver-experiment/results/selected-arm64-emulated-pytest.xml",
+      "original_git_blob": "a0b2f444442f7bc31db3200ef8601731fc3cb2cf",
+      "translated_git_blob": "a0b2f444442f7bc31db3200ef8601731fc3cb2cf"
+    },
+    {
+      "current_path": "solver-experiment/results/selected-highs-pytest.xml",
+      "original_git_blob": "3ddc5943545b032f8d3a037f4fe5e8bd2d95ed04",
+      "translated_git_blob": "3ddc5943545b032f8d3a037f4fe5e8bd2d95ed04"
+    },
+    {
+      "current_path": "solver-experiment/results/selected-horizon-benchmark-windows.json",
+      "original_git_blob": "c99983588b5e4a6943b3f4dede86370c2cc73e29",
+      "translated_git_blob": "c99983588b5e4a6943b3f4dede86370c2cc73e29"
+    },
+    {
+      "current_path": "solver-experiment/results/selected-linux-pytest.xml",
+      "original_git_blob": "c1a1623f514a98af68f650aca8ec3a05406fb601",
+      "translated_git_blob": "c1a1623f514a98af68f650aca8ec3a05406fb601"
+    },
+    {
+      "current_path": "solver-experiment/results/selected-model-stage-profile.json",
+      "original_git_blob": "bf96a892b08328c5f14fe498fa39940da29cf0df",
+      "translated_git_blob": "bf96a892b08328c5f14fe498fa39940da29cf0df"
+    },
+    {
+      "current_path": "solver-experiment/results/selected-topology-probe.json",
+      "original_git_blob": "d983be5342a12ac552ce710217dc1c14e8b627f5",
+      "translated_git_blob": "d983be5342a12ac552ce710217dc1c14e8b627f5"
+    },
+    {
+      "current_path": "solver-experiment/results/shared-bus-arm64-emulated-pytest.xml",
+      "original_git_blob": "6ef1d0574bd751f11aca3272e11470ee8ab139e9",
+      "translated_git_blob": "6ef1d0574bd751f11aca3272e11470ee8ab139e9"
+    },
+    {
+      "current_path": "solver-experiment/results/shared-bus-linux-pytest.xml",
+      "original_git_blob": "552a345ad05cc0f4fd0c6781c50e39c52a27bef9",
+      "translated_git_blob": "552a345ad05cc0f4fd0c6781c50e39c52a27bef9"
+    },
+    {
+      "current_path": "solver-experiment/results/shared-bus-probe-linux.json",
+      "original_git_blob": "2b01f5c2fa96877d4574f42f8e3286ecda886b1d",
+      "translated_git_blob": "2b01f5c2fa96877d4574f42f8e3286ecda886b1d"
+    },
+    {
+      "current_path": "solver-experiment/results/shared-bus-probe-win32.json",
+      "original_git_blob": "026c61461d6dabd1799d432e6957e4a8964073c1",
+      "translated_git_blob": "026c61461d6dabd1799d432e6957e4a8964073c1"
+    },
+    {
+      "current_path": "solver-experiment/results/shared-bus-runtime-images.json",
+      "original_git_blob": "5d0164a6ca921e0be956e402dffb8595d4887d64",
+      "translated_git_blob": "5d0164a6ca921e0be956e402dffb8595d4887d64"
+    },
+    {
+      "current_path": "solver-experiment/results/shared-bus-verification.json",
+      "original_git_blob": "d857176a4e78aa79e323a536b9d268d60aace44d",
+      "translated_git_blob": "d857176a4e78aa79e323a536b9d268d60aace44d"
+    },
+    {
+      "current_path": "solver-experiment/results/shared-bus-windows-pytest.xml",
+      "original_git_blob": "098de401362b5141b4869eb1beab613fcdbbf69b",
+      "translated_git_blob": "098de401362b5141b4869eb1beab613fcdbbf69b"
+    },
+    {
+      "current_path": "solver-experiment/script/benchmark_horizon.py",
+      "original_git_blob": "6a145da1c6a9d4e1cadac7d6050f77d897a4d6c2",
+      "translated_git_blob": "6a145da1c6a9d4e1cadac7d6050f77d897a4d6c2"
+    },
+    {
+      "current_path": "solver-experiment/script/process_memory.py",
+      "original_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e",
+      "translated_git_blob": "3d0cc8bba9e218e242464f33d3c8da956f01434e"
+    },
+    {
+      "current_path": "solver-experiment/script/run_mixed_hybrid_probe.py",
+      "original_git_blob": "4c0790f8c6ab93a1b7ce58b64c3eccdb6df5ff16",
+      "translated_git_blob": "4c0790f8c6ab93a1b7ce58b64c3eccdb6df5ff16"
+    },
+    {
+      "current_path": "solver-experiment/script/run_probe.py",
+      "original_git_blob": "6ea3882c69f29a165b850e8ee4400d8510d0cc4e",
+      "translated_git_blob": "6ea3882c69f29a165b850e8ee4400d8510d0cc4e"
+    },
+    {
+      "current_path": "solver-experiment/script/run_shared_bus_probe.py",
+      "original_git_blob": "d2d72ab40d6892eb454d6537b9550e33390cde46",
+      "translated_git_blob": "d2d72ab40d6892eb454d6537b9550e33390cde46"
+    },
+    {
+      "current_path": "solver-experiment/script/run_topology_probe.py",
+      "original_git_blob": "cf33b74fe841e5b62fed66aaa0b46d5948a19438",
+      "translated_git_blob": "cf33b74fe841e5b62fed66aaa0b46d5948a19438"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/__init__.py",
+      "original_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9",
+      "translated_git_blob": "9c6b4e19c4864c658bbbd1db085a23385878fcd9"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/__init__.py",
+      "original_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b",
+      "translated_git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/__init__.py",
+      "original_git_blob": "ef977fca51388a6abfa9014f0f083bc95174751b",
+      "translated_git_blob": "ef977fca51388a6abfa9014f0f083bc95174751b"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/ac_bus.py",
+      "original_git_blob": "3c3a922590327f130a8fe8e8c2f1be44eca2028b",
+      "translated_git_blob": "3c3a922590327f130a8fe8e8c2f1be44eca2028b"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/context.py",
+      "original_git_blob": "6605d1ff9461c1c6547c5b062c8332fdb5632fbc",
+      "translated_git_blob": "6605d1ff9461c1c6547c5b062c8332fdb5632fbc"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/contracts.py",
+      "original_git_blob": "1d73bfc0a27e740ddc26f1341ec772719fa8d089",
+      "translated_git_blob": "1d73bfc0a27e740ddc26f1341ec772719fa8d089"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/extraction.py",
+      "original_git_blob": "65957ad11affed3b550a1cd847516581a81e71cc",
+      "translated_git_blob": "65957ad11affed3b550a1cd847516581a81e71cc"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/factory.py",
+      "original_git_blob": "aff37981c3103da67c8e174ff242b45233fdc7e5",
+      "translated_git_blob": "aff37981c3103da67c8e174ff242b45233fdc7e5"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/models.py",
+      "original_git_blob": "8ea18a8760831d09057bdb0f4be213bb18c56074",
+      "translated_git_blob": "8ea18a8760831d09057bdb0f4be213bb18c56074"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/network.py",
+      "original_git_blob": "120e9cd5db021f8f5d0ae9dbb2f2c287d99e9e98",
+      "translated_git_blob": "120e9cd5db021f8f5d0ae9dbb2f2c287d99e9e98"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/adapters/highs/solver.py",
+      "original_git_blob": "f74174b6fdcb2e7820e79bfdaaf881c57d4c8197",
+      "translated_git_blob": "f74174b6fdcb2e7820e79bfdaaf881c57d4c8197"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/bus_validation.py",
+      "original_git_blob": "32397f2b3161344df0204b19b6616de216878838",
+      "translated_git_blob": "32397f2b3161344df0204b19b6616de216878838"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/costs.py",
+      "original_git_blob": "43feb8916e5e19c0c450b9c5cd8d6aec09c6f4c6",
+      "translated_git_blob": "43feb8916e5e19c0c450b9c5cd8d6aec09c6f4c6"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/domain.py",
+      "original_git_blob": "826b9c3d327cca5257c803c58c313697824def73",
+      "translated_git_blob": "826b9c3d327cca5257c803c58c313697824def73"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/errors.py",
+      "original_git_blob": "001d102cd335013a58d516d6a3e26db9333c8981",
+      "translated_git_blob": "001d102cd335013a58d516d6a3e26db9333c8981"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/ports.py",
+      "original_git_blob": "578ba00da0c85b2a792dddc51128b5116664efe0",
+      "translated_git_blob": "578ba00da0c85b2a792dddc51128b5116664efe0"
+    },
+    {
+      "current_path": "solver-experiment/src/oep_probe/validation.py",
+      "original_git_blob": "3478134c334bd4474049f82b94eaf18a3a904a04",
+      "translated_git_blob": "3478134c334bd4474049f82b94eaf18a3a904a04"
+    },
+    {
+      "current_path": "solver-experiment/tests/__init__.py",
+      "original_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb",
+      "translated_git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb"
+    },
+    {
+      "current_path": "solver-experiment/tests/bus_cases.py",
+      "original_git_blob": "3a85f39157478df227003e53e3694f1c36c868b1",
+      "translated_git_blob": "3a85f39157478df227003e53e3694f1c36c868b1"
+    },
+    {
+      "current_path": "solver-experiment/tests/cases.py",
+      "original_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec",
+      "translated_git_blob": "eff3a1e1c219e5c584098ef46c40d3ceceeeb5ec"
+    },
+    {
+      "current_path": "solver-experiment/tests/conftest.py",
+      "original_git_blob": "077f3a129a0ef2604d7dd156683a05b2ce675c91",
+      "translated_git_blob": "077f3a129a0ef2604d7dd156683a05b2ce675c91"
+    },
+    {
+      "current_path": "solver-experiment/tests/horizon_cases.py",
+      "original_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684",
+      "translated_git_blob": "2181a74e97dc0978b20cb6f2d6c811812ce56684"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_cost_evaluator.py",
+      "original_git_blob": "580e0534552b66ee75b8b6fcf5c66591355737f5",
+      "translated_git_blob": "580e0534552b66ee75b8b6fcf5c66591355737f5"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_horizon_scenarios.py",
+      "original_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072",
+      "translated_git_blob": "2e204a30f977e6c1152f982d90805c3e426dd072"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_input_boundaries.py",
+      "original_git_blob": "ed31b3c73eb07589376dfcd6c9b440d402a76183",
+      "translated_git_blob": "ed31b3c73eb07589376dfcd6c9b440d402a76183"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_mixed_hybrid.py",
+      "original_git_blob": "30831774f2feb6f1ea97d95d27d9e10e0cf79721",
+      "translated_git_blob": "30831774f2feb6f1ea97d95d27d9e10e0cf79721"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_model_isolation.py",
+      "original_git_blob": "0674548cabfb0afcf78f5cfc63f6053b81fd2315",
+      "translated_git_blob": "0674548cabfb0afcf78f5cfc63f6053b81fd2315"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_planner_scenarios.py",
+      "original_git_blob": "32ed2642bedd067c39141cf996c8a99d5dc67b5a",
+      "translated_git_blob": "32ed2642bedd067c39141cf996c8a99d5dc67b5a"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_process_memory.py",
+      "original_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da",
+      "translated_git_blob": "e74b50ae574de890c05ef5bbb41706c725df80da"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_shared_ac_bus.py",
+      "original_git_blob": "7b100b06fc25c4d3cd0f1d8c1065e2153550201c",
+      "translated_git_blob": "7b100b06fc25c4d3cd0f1d8c1065e2153550201c"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_solver_status.py",
+      "original_git_blob": "7a1057e136f56eb1dce3a32053d61dd634353a39",
+      "translated_git_blob": "7a1057e136f56eb1dce3a32053d61dd634353a39"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_topology_scenarios.py",
+      "original_git_blob": "1cb4537f3ee683b6009f4e0034b2be5f2e1e2130",
+      "translated_git_blob": "1cb4537f3ee683b6009f4e0034b2be5f2e1e2130"
+    },
+    {
+      "current_path": "solver-experiment/tests/test_validation.py",
+      "original_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96",
+      "translated_git_blob": "780268cfd7d590d50c43f7258714b36a06f9df96"
+    },
+    {
+      "current_path": "solver-experiment/tests/topology_cases.py",
+      "original_git_blob": "60f75d1d33b2049285a841da28275021f87b94e1",
+      "translated_git_blob": "60f75d1d33b2049285a841da28275021f87b94e1"
+    },
+    {
+      "current_path": "script/check_native.py",
+      "original_git_blob": "b5f9190e3a084833a2a834a503c2a4e129818ef9",
+      "translated_git_blob": "62c34bb8436becc7e23c38131360744bc6252fef"
+    },
+    {
+      "current_path": "script/ci.py",
+      "original_git_blob": "ea1d76e3e9b26799f2f86d332501679543ec4790",
+      "translated_git_blob": "e45affc76e996ede921eb23dc99a1c8715f541ae"
+    },
+    {
+      "current_path": "script/setup.py",
+      "original_git_blob": "d8451e5891dca6122491ebc0a042a7b953bf7def",
+      "translated_git_blob": "6e11d7483a9b23222f3a273d4fd75a3967c9d2f8"
+    }
+  ],
+  "translated_revision": "133b29771b98090644e4b452f7fdfb96b3f92408"
+}

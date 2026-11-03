@@ -1,0 +1,25 @@
+name: Quick checks
+description: Run the shared provenance and pinned lint checks without Docker.
+runs:
+  using: composite
+  steps:
+    - name: Install the central linter and policy test dependencies
+      shell: bash
+      run: |
+        python3 -m venv "$RUNNER_TEMP/oep-quick"
+        echo "$RUNNER_TEMP/oep-quick/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/oep-quick/bin/python3" - <<'PY'
+        import subprocess
+        import sys
+        import tomllib
+        from pathlib import Path
+        settings = tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))
+        requirements = settings['project']['optional-dependencies']['dev']
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *requirements], check=True)
+        PY
+    - name: Check provenance, lint and formatting without Docker
+      shell: bash
+      run: python3 script/ci/check_native.py --quick
+    - name: Check CI selection and execution policies without app dependencies
+      shell: bash
+      run: python3 -m pytest tests/ci -q

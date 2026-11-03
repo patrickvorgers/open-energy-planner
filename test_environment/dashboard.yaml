@@ -1,0 +1,39 @@
+title: OEP Test Lab
+views:
+  - title: Test installation
+    path: installation
+    cards:
+      - type: markdown
+        content: |
+          ## Simulated installation
+          Two solar sources and one 10 kWh battery. These measurements and the Energy history are synthetic.
+          The battery is stationary: proposed targets do not control the simulated state of charge.
+          [Open the app wizard](http://127.0.0.1:8102/setup) or open **Energy** to inspect the seeded history.
+      - type: entities
+        title: Test controls
+        entities:
+          - input_number.oep_test_soc
+          - input_boolean.oep_test_grid_available
+          - switch.open_energy_planner_enabled
+          - sensor.open_energy_planner_status
+      - type: entities
+        title: Proposed commands (no physical control)
+        entities:
+          - sensor.lab_battery_power_target
+          - sensor.lab_roof_enabled_target
+          - sensor.lab_garage_enabled_target
+      - type: entities
+        title: Simulated live measurements
+        entities:
+          - sensor.oep_test_grid_power
+          - sensor.oep_test_battery_power
+          - sensor.oep_test_battery_soc
+      - type: entities
+        title: Seeded energy meters
+        entities:
+          - sensor.oep_test_grid_import
+          - sensor.oep_test_grid_export
+          - sensor.oep_test_solar_roof
+          - sensor.oep_test_solar_garage
+          - sensor.oep_test_battery_charge
+          - sensor.oep_test_battery_discharge

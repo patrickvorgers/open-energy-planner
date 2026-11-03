@@ -1,0 +1,73 @@
+/* Installation retains existing controls and persistence inside the approved settings composition. */
+.installation-workspace .sidebar { padding-left:20px; padding-right:20px; }
+.installation-workspace .sidebar .nav-label { font-size:12px; font-weight:400; letter-spacing:0; }
+.installation-workspace .workspace-main { padding-left:32px; padding-right:32px; }
+.installation-workspace .settings-layout { grid-template-columns:minmax(0,1fr) 310px; }
+.installation-workspace .chart-card { box-shadow:none; }
+.installation-workspace .installation-editor { margin:0; }
+.installation-workspace .installation-editor > h2 { margin-top:0; }
+.installation-workspace #wizard > [data-step] { min-width:0; }
+.installation-workspace #wizard fieldset { padding:0; border:0; margin:20px 0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.installation-workspace #wizard fieldset > legend { font-family:Outfit,system-ui,sans-serif; font-size:18px; margin-bottom:20px; }
+.installation-workspace #wizard fieldset > p { grid-column:1/-1; }
+.installation-workspace #wizard fieldset > label { min-width:0; margin:0; }
+.installation-workspace #wizard label > input:not([type=checkbox]),.installation-workspace #wizard label > select { width:100%; box-sizing:border-box; }
+.installation-workspace .installation-device-selector { display:grid; gap:8px; margin:20px 0; }
+.installation-workspace #installation-steps { display:flex; gap:6px; list-style:none; padding:0; margin:0 0 24px; }
+#installation-steps li { flex:1; min-width:0; }
+.installation-workspace #installation-steps button { width:100%; height:100%; min-height:48px; padding:10px 8px; border:1px solid transparent; text-align:left; color:var(--oep-muted); background:transparent; font-weight:400; }
+.installation-workspace #installation-steps [aria-current] { border-color:var(--oep-blue); background:white; font-weight:600; color:var(--oep-blue); }
+.installation-workspace #installation-steps button:disabled { opacity:1; }
+#installation-wizard-actions { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin:24px 0; padding-top:20px; border-top:1px solid var(--oep-line); }
+#installation-wizard-actions #progress { flex:1; text-align:center; color:var(--oep-muted); font-size:12px; }
+#installation-wizard-actions .save-bar { position:static; display:flex; flex-wrap:wrap; flex:1 1 100%; gap:12px; justify-content:flex-end; padding:0; border:0; box-shadow:none; background:transparent; }
+#installation-wizard-actions .save-bar [role=status] { flex:1 1 100%; order:2; text-align:right; }
+.installation-readonly [data-step="4"] label,.installation-readonly #strategy { display:none; }
+.installation-workspace #strategy-settings > h2,.installation-workspace #price-sources > h2 { margin-top:0; }
+.installation-workspace #status { overflow-wrap:anywhere; }
+.installation-workspace #status:empty { display:none; }
+.installation-workspace .installation-note { font-size:12px; line-height:1.6; color:var(--oep-muted); }
+.installation-workspace #strategy-status:not(:empty) { border-top:1px solid var(--oep-line); padding-top:16px; margin-top:20px; }
+#installation-capacities { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:20px 0; }
+#installation-capacities > div { min-width:0; background:#f5fbff; border-radius:8px; padding:14px 10px; }
+#installation-capacities img { display:block; width:24px; height:24px; margin-bottom:10px; }
+#installation-capacities strong,#installation-capacities small { display:block; }
+#installation-capacities strong { font-weight:500; font-variant-numeric:tabular-nums; }
+.installation-workspace .settings-summary ul { list-style:none; padding:0; margin:0; }
+.installation-workspace .settings-summary li + li { margin-top:8px; }
+.solar-panel-summary { border-top:1px solid var(--oep-line); padding-top:20px; margin-top:20px; }
+.solar-panel-summary h3 { margin:0; overflow-wrap:anywhere; }
+.solar-panel-summary .settings-summary { margin-bottom:0; }
+.installation-workspace .settings-summary > div { grid-template-columns:1fr 1.2fr; gap:16px; margin-bottom:16px; }
+.installation-workspace #wizard fieldset > details { grid-column:1/-1; }
+.installation-workspace #wizard fieldset > details label { margin-top:16px; }
+.installation-workspace #grid-field,.installation-workspace label:has(> #export-energy),.installation-workspace #grid-invert-help { display:none; }
+.installation-workspace .settings-toolbar { box-shadow:none; padding:18px 22px; border-radius:16px; }
+.installation-workspace .settings-toolbar .save-bar [role=status] { max-width:none; }
+.installation-workspace #installation-summary { margin:0; }
+.installation-workspace #installation-summary h2 { margin-top:12px; }
+.installation-workspace #price-source-controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr)); gap:16px; }
+.installation-workspace #price-source-controls > label { margin:0; }
+.installation-workspace .settings-toolbar:has(> label[hidden]) { grid-template-columns:minmax(0,1fr); }
+.installation-workspace #price-source-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:16px; list-style:none; padding:0; }
+.installation-workspace #price-source-list > li { min-width:0; padding:16px; border:1px solid var(--oep-line); border-radius:12px; }
+.installation-workspace #price-source-list h3 { margin-top:0; }
+.installation-workspace #price-source-list p { margin:10px 0; }
+.installation-workspace #price-source-availability { margin:20px 0; }
+.installation-workspace #price-source-provenance > p:first-child { margin-top:16px; }
+.installation-workspace .price-source-status { list-style:none; padding:0; margin:16px 0 24px; }
+.installation-workspace .price-source-status > li { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2fr); gap:12px 24px; padding:16px 0; border-top:1px solid var(--oep-line); overflow-wrap:anywhere; }
+.installation-workspace .price-source-status strong,.installation-workspace .price-source-status small { display:block; }
+.installation-workspace .price-source-status small,.installation-workspace .price-source-status dt { color:var(--oep-muted); font-size:12px; }
+.installation-workspace .price-source-status dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0; }
+.installation-workspace .price-source-status dd { margin:4px 0 0; font-variant-numeric:tabular-nums; }
+.installation-workspace .price-source-status details { grid-column:1/-1; border:0; padding:0; margin:0; }
+.installation-workspace .price-source-status summary { width:fit-content; cursor:pointer; padding:6px 0; }
+.installation-workspace .price-source-status details p { color:var(--oep-muted); font-size:12px; margin:10px 0 0; }
+@media(max-width:700px) { .installation-workspace .price-source-status > li { grid-template-columns:minmax(0,1fr); }.installation-workspace .price-source-status dl { gap:12px; } }
+.installation-review-row { display:flex; justify-content:space-between; gap:16px; padding:14px 0; border-top:1px solid var(--oep-line); }
+.installation-review-row p { margin:0; }
+.installation-workspace .installation-review-row button { min-height:36px; font-size:12px; }
+.installation-workspace [data-step="3"] a { display:inline-block; margin:12px 16px 0 0; }
+@media(max-width:1050px) { .installation-workspace .settings-layout { grid-template-columns:1fr; }.installation-workspace .settings-layout > aside { position:static; grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:700px) { .installation-workspace .workspace-main { padding-left:16px; padding-right:16px; }.installation-workspace #wizard fieldset { grid-template-columns:1fr; }.installation-workspace .settings-layout > aside { grid-template-columns:1fr; }.installation-workspace #installation-steps button { padding:8px 4px; font-size:11px; text-align:center; }.installation-workspace #installation-steps { gap:4px; margin-bottom:20px; }.installation-workspace .settings-summary > div { grid-template-columns:.9fr 1.1fr; gap:12px; }.installation-workspace .chart-card { padding:20px; } }

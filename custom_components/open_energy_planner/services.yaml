@@ -1,0 +1,192 @@
+{
+  "appliance_context": {
+    "name": "Execution context",
+    "description": "Read the durably correlated task and attempt. No physical action.",
+    "fields": {
+      "device_id": {
+        "name": "Virtual OEP appliance",
+        "description": "Select the virtual Energy consumer device, not the physical appliance.",
+        "required": true,
+        "selector": {
+          "device": {
+            "integration": "open_energy_planner"
+          }
+        }
+      }
+    }
+  },
+  "appliance_ready": {
+    "name": "Appliance ready",
+    "description": "Submit one ready cycle and an absolute finish-before deadline.",
+    "fields": {
+      "device_id": {
+        "name": "Virtual OEP appliance",
+        "description": "Select the virtual Energy consumer device, not the physical appliance.",
+        "required": true,
+        "selector": {
+          "device": {
+            "integration": "open_energy_planner"
+          }
+        }
+      },
+      "request_id": {
+        "name": "Readiness request ID",
+        "description": "Use a stable identifier when retrying the same submission.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "ready_at": {
+        "name": "Ready at",
+        "description": "Optional aware ISO timestamp. Defaults to now.",
+        "required": false,
+        "selector": {
+          "text": {}
+        }
+      },
+      "deadline": {
+        "name": "Finish before",
+        "description": "Absolute ISO timestamp including timezone.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      }
+    }
+  },
+  "appliance_claim": {
+    "name": "Validate and claim start",
+    "description": "Authorize the exact current start request once, immediately before the physical action.",
+    "fields": {
+      "device_id": {
+        "name": "Virtual OEP appliance",
+        "description": "Select the virtual Energy consumer device, not the physical appliance.",
+        "required": true,
+        "selector": {
+          "device": {
+            "integration": "open_energy_planner"
+          }
+        }
+      },
+      "task_id": {
+        "name": "Task ID",
+        "description": "Supplied automatically by the blueprint.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "attempt_id": {
+        "name": "Attempt ID",
+        "description": "Supplied automatically by the blueprint.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      }
+    }
+  },
+  "appliance_feedback": {
+    "name": "Appliance execution feedback",
+    "description": "Report physical evidence. Not started also guarantees all delayed execution is cancelled.",
+    "fields": {
+      "device_id": {
+        "name": "Virtual OEP appliance",
+        "description": "Select the virtual Energy consumer device, not the physical appliance.",
+        "required": true,
+        "selector": {
+          "device": {
+            "integration": "open_energy_planner"
+          }
+        }
+      },
+      "task_id": {
+        "name": "Task ID",
+        "description": "Supplied automatically by the blueprint.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "attempt_id": {
+        "name": "Attempt ID",
+        "description": "Supplied automatically by the blueprint.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "event": {
+        "name": "Outcome",
+        "description": "started, not_started or completed.",
+        "required": true,
+        "selector": {
+          "select": {
+            "options": [
+              "started",
+              "not_started",
+              "completed"
+            ]
+          }
+        }
+      },
+      "at": {
+        "name": "Observed at",
+        "description": "Actual aware observation time. Defaults to now.",
+        "required": false,
+        "selector": {
+          "text": {}
+        }
+      },
+      "cancelled": {
+        "name": "Delayed execution prevented",
+        "description": "Required true for not_started. Never infer this from a timeout.",
+        "required": false,
+        "selector": {
+          "boolean": {}
+        }
+      }
+    }
+  },
+  "appliance_record_cycle": {
+    "name": "Record completed cycle",
+    "description": "Learn an average profile from a known completed cycle and fine cumulative Energy history.",
+    "fields": {
+      "device_id": {
+        "name": "Virtual OEP appliance",
+        "description": "Select the virtual Energy consumer device, not the physical appliance.",
+        "required": true,
+        "selector": {
+          "device": {
+            "integration": "open_energy_planner"
+          }
+        }
+      },
+      "cycle_id": {
+        "name": "Completed cycle ID",
+        "description": "Stable ID prevents learning the same cycle twice.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "started_at": {
+        "name": "Actual start",
+        "description": "Aware ISO timestamp for the actual physical start.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "completed_at": {
+        "name": "Actual completion",
+        "description": "Aware ISO timestamp for confirmed completion.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      }
+    }
+  }
+}

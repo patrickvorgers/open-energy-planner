@@ -1,0 +1,28 @@
+{
+  "name": "Open Energy Planner: Real Supervisor development",
+  "dockerComposeFile": ["../compose.dev.yaml"],
+  "service": "dev",
+  "runServices": ["dev"],
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "overrideCommand": false,
+  "initializeCommand": ["python", "-m", "script.supervisor.dev", "prepare"],
+  "postStartCommand": "python -m script.supervisor.provision_supervisor",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "ms-python.debugpy"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/oep-dev/bin/python",
+        "ruff.path": ["/opt/oep-dev/bin/ruff"],
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests", "--ignore=tests/home_assistant/integration"],
+        "editor.formatOnSave": true,
+        "[python]": {"editor.defaultFormatter": "charliermarsh.ruff"}
+      }
+    }
+  }
+}

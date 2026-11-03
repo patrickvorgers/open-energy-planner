@@ -1,0 +1,30 @@
+[project]
+name = "open-energy-planner"
+version = "0.2.0"
+description = "Local energy planning for Home Assistant: synthetic chain milestone"
+requires-python = ">=3.12"
+license = "AGPL-3.0-only"
+dependencies = ["astral==3.2", "aiohttp==3.14.5", "highspy==1.15.1", "numpy==2.5.4", "pvlib==0.16.1", "cryptography==50.0.1", "zeroconf==0.151.5", "SQLAlchemy==2.1.6", "psycopg[binary]==3.3.6", "PyMySQL==1.2.3"]
+
+[tool.setuptools.package-data]
+open_energy_planner = ["build-info.json", "web/pages/**/*.html", "web/partials/*.html", "web/public/*.css", "web/public/*.js", "web/public/*.txt", "web/public/icons/*.svg", "web/public/fonts/*.ttf", "web/public/fonts/*.txt", "web/public/fonts/*.json"]
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10", "ruff==0.17.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = ["planner_scenario: independently specified solver outcome"]
+
+[tool.ruff]
+required-version = "==0.17.1"
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", ".uv-cache", "results"]
+
+# Extend defaults only with missing/empty docstrings. Content quality stays in review.
+# Docker Desktop presents Windows files as executable.
+[tool.ruff.lint]
+extend-select = ["D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107", "D419"]
+ignore = ["EXE002"]

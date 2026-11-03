@@ -1,0 +1,15 @@
+# Isolated development installation. No production integrations or devices.
+homeassistant:
+  name: Open Energy Planner Development
+  latitude: 52.0
+  longitude: 6.0
+  elevation: 0
+  time_zone: Europe/Amsterdam
+  unit_system: metric
+frontend:
+config:
+history:
+logbook:
+recorder:
+automation:
+system_health:

@@ -1,0 +1,122 @@
+/* Configuration pages share a fixed action location and preserve SaveBar persistence semantics. */
+.appliance-detail-workspace .settings-facts-group + .settings-facts-group { margin-top:24px; padding-top:20px; border-top:1px solid var(--oep-line); }
+.appliance-detail-workspace .settings-facts-group h3 { font-size:14px; margin:0 0 14px; }
+.appliance-detail-workspace .settings-summary { margin:0; }
+.appliance-detail-workspace .settings-summary > div { grid-template-columns:minmax(120px,1fr) minmax(0,1.4fr); padding:11px 0; margin:0; border-bottom:1px solid var(--oep-line); }
+.appliance-detail-workspace .settings-summary > div:last-child { border-bottom:0; }
+.appliance-detail-workspace .settings-summary code { font-size:12px; }
+.appliance-detail-workspace .settings-summary dd { font-weight:500; }
+.appliance-detail-workspace .settings-fields { gap:20px 24px; }
+.appliance-detail-workspace .settings-fields > h3,.appliance-detail-workspace .settings-fields > details,.appliance-detail-workspace .settings-fields > fieldset { grid-column:1/-1; }
+.appliance-detail-workspace .settings-fields > h3 { margin:12px 0 0; padding-top:20px; border-top:1px solid var(--oep-line); font-size:14px; }
+.appliance-detail-workspace .settings-fields > h3:first-child { border:0; padding-top:0; margin:0; }
+.appliance-detail-workspace .settings-fields label { margin:0; }
+.appliance-detail-workspace .settings-fields small { display:block; margin-top:6px; color:var(--oep-muted); }
+.appliance-detail-workspace .settings-layout aside p { font-size:13px; line-height:1.65; color:var(--oep-muted); }
+.appliance-detail-workspace .settings-layout aside button { width:100%; }
+.appliance-detail-workspace .settings-operation-link { display:flex; align-items:center; justify-content:center; min-height:44px; border:1px solid var(--oep-line); border-radius:8px; margin:16px 0 8px; padding:10px; text-align:center; }
+.device-type-choice { padding:14px; border:1px solid var(--oep-line); border-radius:10px; display:flex; gap:12px; align-items:center; margin:10px 0!important; }
+.workspace .device-type-choice input[type=radio] { width:18px; height:18px; min-height:18px; margin:0; padding:0; flex:0 0 18px; }
+.device-type-choice span { display:grid; gap:4px; }
+.device-type-choice small { color:var(--oep-muted); }
+.settings-workspace .settings-toolbar { position:sticky; top:12px; z-index:12; display:grid; grid-template-columns:minmax(220px,1fr) minmax(0,2fr); align-items:start; gap:16px; flex-wrap:wrap; background:var(--oep-paper); border:1px solid var(--oep-line); border-radius:14px; padding:16px 20px; margin:0 0 24px; box-shadow:0 3px 14px #19263f0b; }
+.settings-toolbar > label { margin:0 auto 0 0; min-width:230px; }
+.settings-toolbar select { min-height:44px; max-width:100%; }
+.settings-toolbar .settings-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:8px; width:100%; margin-left:0; }
+.settings-toolbar > .settings-actions:only-child { grid-column:1 / -1; }
+.settings-toolbar .save-bar { position:static; display:contents; }
+/* Keep validation below actions so blur cannot move the button during a click. */
+.settings-toolbar .save-bar [role=status] { flex:1 1 100%; text-align:right; max-width:65ch; order:2; margin-top:8px; }
+.settings-workspace.has-save-bar .workspace-main { padding-bottom:60px; }
+.settings-workspace input,.settings-workspace select { scroll-margin-top:190px; }
+.settings-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,320px); align-items:start; gap:var(--oep-panel-gap); }
+.settings-layout > * { min-width:0; }
+.settings-layout aside { position:sticky; top:170px; }
+.settings-layout fieldset { min-width:0; }
+.settings-readonly input:not([type=hidden]),.settings-readonly select { background:#f4f7fa; opacity:1; color:var(--oep-ink); }
+.settings-more { position:relative; border:0!important; padding:0!important; margin:0!important; }
+.settings-more summary { display:grid; place-items:center; width:44px; min-height:44px; border:1px solid var(--oep-line); border-radius:8px; cursor:pointer; list-style:none; }
+.settings-more summary::-webkit-details-marker { display:none; }
+.settings-more > div { position:absolute; right:0; top:50px; z-index:20; padding:6px; background:var(--oep-paper); border:1px solid var(--oep-line); border-radius:10px; min-width:230px; box-shadow:0 6px 18px #19263f1a; }
+.workspace .settings-more button { width:100%; text-align:left; margin:0; }
+.workspace .danger { background:white; color:#a92d38; border:1px solid #d4bac0; }
+.settings-workspace dialog { color:var(--oep-ink); border:1px solid var(--oep-line); border-radius:16px; width:680px; max-width:calc(100vw - 32px); max-height:85dvh; padding:24px; overflow:auto; }
+.settings-workspace dialog::backdrop { background:#19263f66; }
+.settings-workspace dialog.source-picker { height:min(760px,85dvh); overflow:hidden; }
+.source-picker > div { height:100%; display:flex; flex-direction:column; min-height:0; }
+.source-picker header,.source-picker footer { flex:none; }
+.source-filters { display:grid; grid-template-columns:minmax(0,1fr) 160px; gap:16px; }
+.source-filters label { margin:0; }
+.source-results { min-height:0; flex:1; overflow-y:auto; overscroll-behavior:contain; overflow-anchor:none; scrollbar-gutter:stable; padding:4px; }
+.workspace .source-choice { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; text-align:left; min-height:52px; margin:0 0 8px; background:white; color:var(--oep-ink); border:1px solid var(--oep-line); }
+.source-choice:disabled { opacity:1; background:#edf3f6; }
+.source-picker footer { border-top:1px solid var(--oep-line); padding-top:12px; }
+.dialog-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:16px; }
+.settings-empty { padding:24px; }
+.settings-workspace .contract-rule { margin:0; }
+.settings-workspace .contract-rule > summary,.settings-workspace .contract-rule > fieldset > button.secondary { display:none; }
+.settings-workspace #contract-periods fieldset > label { margin-bottom:16px; }
+.settings-workspace .contract-rule legend { font-size:19px; }
+.settings-workspace .price-preview,.settings-workspace .bonus-preview { margin-bottom:20px; }
+.settings-workspace .settings-evidence .chart-card { padding:20px; }
+.settings-workspace .settings-evidence th,.settings-workspace .settings-evidence td { padding:9px 4px; font-size:12px; }
+.settings-workspace .settings-evidence .evidence-grid { display:block; }
+.settings-workspace .settings-evidence .evidence-grid > div { display:flex; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.settings-workspace .settings-evidence .evidence-grid dd { margin:0; }
+/* Approved prototypes: saved summaries, paired editors and a separate evidence column. */
+.settings-workspace { font-size:14px; }
+.settings-workspace label { font-size:14px; font-weight:400; }
+.settings-workspace small { font-size:12px; line-height:1.55; font-weight:400; }
+.settings-workspace button:not(.info-button),.settings-workspace input,.settings-workspace select { font-size:14px; }
+.settings-workspace button:not(.info-button) { min-height:44px; font-weight:500; }
+.settings-workspace h2 { font-family:Outfit,system-ui,sans-serif; font-size:18px; letter-spacing:0; font-weight:600; }
+.settings-workspace .chart-card { padding:24px; border-radius:16px; }
+.settings-workspace .settings-toolbar { background:white; }
+.settings-layout > aside { display:grid; gap:var(--oep-panel-gap); }
+.contract-market { display:grid; gap:4px; text-align:right; flex:none; }
+.contract-market strong { margin-left:8px; }
+.contract-workspace .settings-toolbar { grid-template-columns:minmax(200px,.85fr) minmax(110px,1fr) minmax(280px,1.4fr); align-items:center; }
+.contract-workspace .settings-layout { grid-template-columns:minmax(0,1fr) 310px; }
+.contract-workspace .rule-context { font-size:12px; color:var(--oep-muted); }
+.settings-summary { margin:20px 0; font-variant-numeric:tabular-nums; }
+.settings-summary > div { display:grid; grid-template-columns:minmax(100px,.9fr) minmax(0,1.4fr); align-items:baseline; gap:18px; margin:0 0 14px; }
+.settings-summary dt { color:var(--oep-muted); font-size:14px; }
+.settings-summary dd { margin:0; text-align:right; color:var(--oep-ink); overflow-wrap:anywhere; }
+.settings-tag { display:inline-block; font-size:12px; line-height:1.4; background:#e4f1ed; color:#187461; padding:4px 8px; border-radius:5px; }
+.contract-paper > h2 { margin-top:10px; }
+.example-links { display:flex; gap:12px; flex-wrap:wrap; margin:20px 0; }
+.settings-workspace #contract-periods .contract-rule,.settings-workspace #contract-periods .contract-rule > fieldset { border:0; padding:0; margin:0; }
+.settings-workspace .contract-rule > fieldset > legend { display:none; }
+.settings-workspace .contract-rule h3 { display:flex; gap:10px; align-items:center; margin:24px 0 16px; font-size:18px; }
+.settings-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.settings-workspace .settings-fields > label { min-width:0; margin:0; }
+.settings-workspace .settings-fields input:not([type=checkbox]),.settings-workspace .settings-fields select { width:100%; box-sizing:border-box; }
+.settings-workspace .bonus-editor { border:0!important; padding:0; margin:24px 0!important; }
+.settings-workspace .bonus-editor > legend { font-size:18px; margin-bottom:16px; }
+.settings-workspace .bonus-editor > .settings-fields { margin:16px 0; }
+#contract-editor .bonus-editor fieldset.settings-fields { padding:16px; }
+#contract-editor .bonus-editor fieldset.settings-fields > label,#contract-editor .bonus-editor fieldset.settings-fields > p { margin:0; }
+.settings-workspace .settings-fields > p,.settings-workspace .settings-fields > legend { grid-column:1/-1; }
+.settings-workspace .price-preview th { background:transparent; white-space:normal; }
+.settings-workspace .price-preview caption { display:none; }
+.settings-workspace .price-preview td,.settings-workspace .price-preview th { text-align:right; font-variant-numeric:tabular-nums; }
+.settings-workspace .budget-remaining { margin:20px 0; }
+.budget-remaining strong { display:block; font-size:32px; font-weight:600; font-variant-numeric:tabular-nums; }
+.budget-remaining small { display:block; }
+#bonus-budgets meter { display:block; width:100%; height:12px; accent-color:#187461; }
+.settings-workspace .settings-section-head { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:20px; }
+.settings-section-head h2 { margin:0; }
+.appliance-workspace #settings-devices fieldset { border:0; margin:0; padding:0; }
+.appliance-workspace #settings-devices legend { display:none; }
+.settings-workspace .settings-switch { display:flex; align-items:start; gap:12px; margin:20px 0; color:var(--oep-ink); }
+.settings-switch input { flex:none; width:18px; height:18px; margin:3px 0 0; }
+.settings-switch small { display:block; margin-top:5px; }
+.appliance-workspace #settings-devices code { display:block; overflow-wrap:anywhere; margin:12px 0 20px; }
+.appliance-workspace #settings-devices h3 { font-size:16px; margin:24px 0 8px; }
+.appliance-workspace #appliance-settings > .chart-card { margin-top:24px; }
+.settings-workspace #status:empty { display:none; }
+@media(min-width:951px) and (max-width:1250px) { .contract-workspace .settings-layout { grid-template-columns:minmax(0,1fr) 280px; gap:16px; } }
+@media(max-width:1200px) { .contract-workspace .settings-toolbar { grid-template-columns:minmax(200px,1fr) minmax(0,1fr); }.contract-workspace .settings-actions { grid-column:1/-1; }.contract-workspace .rule-context { text-align:right; } }
+@media(max-width:700px) { .settings-fields { grid-template-columns:minmax(0,1fr); }.contract-market { font-size:12px; }.contract-workspace .settings-toolbar { grid-template-columns:minmax(0,1fr); }.contract-workspace .rule-context { text-align:left; }.settings-summary > div { grid-template-columns:minmax(90px,.85fr) minmax(0,1.15fr); gap:12px; }.settings-workspace .settings-section-head { align-items:start; } }
+@media(max-width:950px) { .settings-workspace .settings-toolbar { grid-template-columns:minmax(0,1fr); }.settings-workspace .settings-layout { grid-template-columns:1fr; }.settings-layout aside { position:static; }.settings-toolbar .settings-actions { width:100%; }.settings-toolbar > label { width:100%; } }
+@media(max-width:640px) { .settings-workspace .settings-toolbar { top:72px; padding:12px; gap:12px; }.settings-toolbar .settings-actions { justify-content:flex-start; }.settings-toolbar .save-bar [role=status] { text-align:left; }.source-filters { grid-template-columns:minmax(0,1fr) 125px; gap:8px; }.settings-workspace dialog { padding:18px; }.settings-toolbar > label { min-width:0; }.settings-actions button { flex:1; } }

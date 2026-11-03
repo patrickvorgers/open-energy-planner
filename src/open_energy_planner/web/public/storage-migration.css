@@ -1,0 +1,20 @@
+/* The existing Courtyard shell owns palette, type and navigation. */
+.storage-workspace .sidebar .nav-label { font-size:12px; letter-spacing:0; }
+.storage-workspace .sidebar { padding-left:16px; padding-right:16px; }
+.storage-connection { margin:24px 0; }
+.storage-connection p { overflow-wrap:anywhere; }
+.storage-connection-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.storage-connection-heading h2 { margin:0; }
+.storage-connection form { max-width:760px; margin:24px 0; }
+.storage-connection .settings-actions { display:flex; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.storage-connection progress { display:block; width:min(100%,760px); height:12px; accent-color:var(--oep-blue); }
+.storage-connection input[type=checkbox] { width:20px; min-height:20px; height:20px; margin-right:10px; }
+.storage-connection #migration-count { font-variant-numeric:tabular-nums; }
+.storage-connection #migration-error { color:var(--oep-danger, #a92d38); }
+.storage-connection details { margin:16px 0 0; padding:0 16px; }
+.storage-connection details[open] { padding-bottom:16px; }
+.storage-connection summary { min-height:44px; line-height:20px; padding:12px 0; cursor:pointer; }
+.storage-connection details p { max-width:76ch; }
+.storage-connection [hidden] { display:none!important; }
+@media(max-width:640px) { .storage-connection-heading { align-items:start; flex-direction:column; }.storage-connection .settings-actions { flex-direction:column; }.storage-connection button { min-height:44px; } }
+@media(max-width:640px) { .workspace.storage-workspace .workspace-main { padding-left:16px; padding-right:16px; } }

@@ -1,0 +1,12 @@
+Open Energy Planner
+Copyright (C) 2026 Patrick Vorgers and contributors.
+
+Project source, integration, documentation and tests: AGPL-3.0-only.
+Third-party dependencies retain their own licences and notices.
+See LICENSE and THIRD_PARTY_NOTICES.md.
+
+Optional public EpexPredictor API data: https://epexpredictor.batzill.com/
+Upstream price-data attribution: energy-charts.info and ENTSO-E (CC BY 4.0);
+weather inputs: Open-Meteo.com. EpexPredictor source: https://github.com/b3nn0/EpexPredictor
+No upstream prediction-model source is bundled. External data access and reuse
+remain subject to the provider's terms, independently of this project's licence.

@@ -1,0 +1,447 @@
+"""App-owned settlement orchestration. Original plans and measured evidence are never rewritten."""
+
+import json
+from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from itertools import pairwise
+
+from open_energy_planner.contracts.wire import parse_counters
+from open_energy_planner.installation.location import SiteLocation
+
+from ..contracts.bonus import CounterSeed
+from .accounting import evaluate
+from .advice import active_advice
+from .bonus import HistoricalBonuses
+from .context import physical_context
+from .model import (
+    MAX_BATCH_INTERVALS,
+    POLICY_VERSION,
+    SETTLEMENT_INTERVAL,
+    PendingSettlement,
+    parse_frame,
+)
+from .physical import advance
+from .repricing import corrected_problem
+
+SETTLEMENT_RECORDER_DELAY = timedelta(minutes=10)
+MAX_EVALUATION_VERSIONS = 20
+SHA256_HEX_LENGTH = 64
+
+
+def version(value):
+    """Hash finite detached settlement inputs without connection or provider details."""
+    return sha256(
+        json.dumps(value, sort_keys=True, default=str, allow_nan=False).encode()
+    ).hexdigest()
+
+
+def quarter(instant):
+    """Floor an aware instant to a settlement boundary in UTC."""
+    instant = instant.astimezone(UTC)
+    seconds = int(SETTLEMENT_INTERVAL.total_seconds())
+    return datetime.fromtimestamp(int(instant.timestamp()) // seconds * seconds, UTC)
+
+
+class SavingsRuntime:
+    """Keep ingestion, continuous scenario state and correction generations outside planning."""
+
+    def __init__(self, store, documents, plans):
+        """Borrow app-owned stores. A dedicated settlement lock serializes mutations."""
+        self.store, self.documents, self.plans = store, documents, plans
+        self.bonus = HistoricalBonuses(store)
+        self.issue = None
+        self.attention = False
+        self.physical_issue = None
+        self._bindings_plan, self._bindings = None, None
+
+    def request(self, now, settings, solar, demand, seeds, location):
+        """Request at most one day after first publication. Wait for completed Recorder statistics."""
+        if settings is None or solar is None or demand is None:
+            return None
+        first = self.store.first_activation()
+        if first is None:
+            return None
+        start = quarter(datetime.fromisoformat(first)) + SETTLEMENT_INTERVAL
+        if self.documents.exists("capture.json"):
+            start = datetime.fromisoformat(self.documents.read("capture.json")["end"])
+        end = min(
+            quarter(now - SETTLEMENT_RECORDER_DELAY),
+            start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS,
+        )
+        if start >= end:
+            return None
+        bindings = {
+            "terms": [asdict(energy_term) for energy_term in demand.terms],
+            "solar": [asdict(source) for source in solar.sources],
+            "batteries": [asdict(battery) for battery in settings.batteries],
+        }
+        plan_id = self.store.context_plan(start)
+        if plan_id:
+            if self._bindings_plan != plan_id:
+                original = self.plans.get_plan(plan_id)
+                self._bindings = original.get("comparison_bindings")
+                self._bindings_plan = plan_id
+            bindings = self._bindings or bindings
+        changed = self.store.next_configuration(start, end, bindings)
+        if changed:
+            end = datetime.fromisoformat(changed)
+        request = {"start": start.isoformat(), "end": end.isoformat(), "bindings": bindings}
+        request["version"] = version(request)
+        return request
+
+    def receive(
+        self,
+        pending: dict,
+        body: object,
+        now: datetime,
+        seeds: tuple[CounterSeed, ...],
+        location: SiteLocation | None,
+    ) -> None:
+        """Validate a requested contiguous prefix before atomically archiving it.
+
+        Each frame spans at most SETTLEMENT_INTERVAL (a timedelta representing
+        fifteen minutes). The first start must match the requested start, which
+        may be off-grid after a configuration change. Interior frame ends must
+        align to the UTC quarters returned by quarter(). A prefix may stop at a
+        complete quarter before the requested end. Only the final frame may end
+        off-grid, and only at that requested end (a possible configuration-change
+        instant). Frame documents kWh units, sign rules and reconstruction quality.
+
+        Args:
+            pending: App-owned versioned request with aware bounds and frozen
+                Energy bindings. It is not supplied by the reporting client.
+            body: Untrusted JSON response with request identity, frames and
+                disjoint import/export meter identities.
+            now: Aware current time. Future measurement intervals are rejected.
+            seeds: Confirmed opening bonus positions retained with the evidence.
+            location: Optional installation coordinates/timezone for later billing.
+
+        Returns:
+            None after immutable frames and capture.json have committed in one
+            transaction and the previous ingestion issue has been cleared.
+
+        Raises:
+            ValueError: Request identity, interval coverage, contiguity, quarter
+                boundaries, meter roles, channels or finite energy values are
+                invalid, or stored immutable evidence conflicts with this batch.
+            TypeError: Timestamp fields have unsupported JSON types.
+
+        All intake validation finishes before any write. Storage conflicts or
+        other transaction failures leave no durable partial frames or pointer
+        advance. The caller serializes ingestion with other settlement mutations.
+        """
+        if not isinstance(body, dict) or body.get("request_version") != pending["version"]:
+            raise ValueError("Settlement request changed")
+        if set(body) != {"request_version", "frames", "imports", "exports"}:
+            raise ValueError("Invalid settlement response")
+        frames = body["frames"]
+        if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_BATCH_INTERVALS:
+            raise ValueError("Invalid settlement batch")
+        frames = tuple(parse_frame(row) for row in frames)
+        start, end = (
+            datetime.fromisoformat(pending["start"]),
+            datetime.fromisoformat(pending["end"]),
+        )
+        if frames[0].start != start or frames[-1].end > end or frames[-1].end > now:
+            raise ValueError("Settlement response outside requested coverage")
+        if any(
+            previous_item.end != next_item.start for previous_item, next_item in pairwise(frames)
+        ):
+            raise ValueError("Settlement batch has gaps or overlaps")
+        # Only request edges may split a quarter when physical configuration changes.
+        if any(row.end != quarter(row.end) for row in frames[:-1]) or (
+            frames[-1].end != end and frames[-1].end != quarter(frames[-1].end)
+        ):
+            raise ValueError("Settlement frame does not end on a requested quarter boundary")
+        terms = {
+            energy_term["entity_id"]: energy_term["sign"]
+            for energy_term in pending["bindings"]["terms"]
+        }
+        for kind, sign in (("imports", 1), ("exports", -1)):
+            ids = body[kind]
+            if (
+                not isinstance(ids, list)
+                or len(ids) != len(set(ids))
+                or any(terms.get(device_id) != sign for device_id in ids)
+                or (kind in pending["bindings"] and set(ids) != set(pending["bindings"][kind]))
+            ):
+                raise ValueError("Grid settlement meters do not match Energy configuration")
+        if not body["imports"]:
+            raise ValueError("Grid import measurement is required")
+        allowed = (
+            set(terms)
+            | {solar_flow["entity_id"] for solar_flow in pending["bindings"]["solar"]}
+            | {battery["energy_entity"] for battery in pending["bindings"]["batteries"]}
+        )
+        batteries = {battery["device_id"] for battery in pending["bindings"]["batteries"]}
+        for frame in frames:
+            if (
+                set(frame.channels) != allowed
+                or set(frame.meter_start) - allowed
+                or set(frame.battery_start) != batteries
+                or set(frame.battery_end) != batteries
+            ):
+                raise ValueError("Settlement channels do not match requested Energy bindings")
+        context = json.loads(
+            json.dumps(
+                {
+                    "bindings": {
+                        **pending["bindings"],
+                        "imports": body["imports"],
+                        "exports": body["exports"],
+                    },
+                    "seeds": [asdict(seed_item) for seed_item in seeds],
+                    "location": asdict(location) if location else None,
+                },
+                default=lambda value_item: value_item.isoformat(),
+            )
+        )
+        # Raw capture and pointer share the same database transaction.
+        with self.documents.transaction():
+            self.store.put_frames(frames, context, self.documents.pending.connection)
+            self.documents.write("capture.json", {"end": frames[-1].end.isoformat()})
+        self.issue = None
+
+    def advance_reference(self):
+        """Persist counter-free physical progress before attempting financial settlement.
+
+        Bootstrap from an existing successful continuation once, preserving its
+        independent stock. Subsequent contract/counter corrections never rewind it.
+        The settlement lock owned by the caller serializes this checkpoint with intake.
+        """
+        name = "physical-reference.json"
+        state = self.documents.read(name) if self.documents.exists(name) else None
+        if state is None and self.documents.exists("head.json"):
+            head = self.documents.read("head.json")
+            previous = self.store.state(head["revision"]) if head else None
+            if previous:
+                state = {
+                    key: previous[key]
+                    for key in ("end", "reference_stored", "actual_stored", "capacities")
+                }
+                self.documents.write(name, state)
+        for row in self.store.frames(datetime.fromisoformat(state["end"]) if state else None):
+            try:
+                frame = parse_frame(row["frame"])
+                plan_id = self.store.context_plan(frame.start)
+                plan = self.plans.get_plan(plan_id) if plan_id else None
+                if plan is None:
+                    raise PendingSettlement("No original installation plan covers this interval")
+                bindings = dict(row["context"]["bindings"])
+                advice = active_advice(
+                    frame, self.store.activations(frame.start, frame.end), self.plans
+                )
+                bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
+                state = advance(physical_context(plan), frame, bindings, state)["state"]
+                self.documents.write(name, state)
+            except (ValueError, KeyError, TypeError) as error:
+                self.physical_issue = str(error)
+                return
+        self.physical_issue = None
+
+    def process(self, contract, now, book=None):
+        """Evaluate bounded chronological batches. Replay on contract or already-settled price corrections."""
+        self.advance_reference()
+        if contract is None:
+            self.issue = "Contract configuration is required for settlement"
+            return
+        published = self.documents.read("head.json") if self.documents.exists("head.json") else None
+        working = (
+            self.documents.read("working.json") if self.documents.exists("working.json") else None
+        )
+        head = working or published
+        published_state = self.store.state(published["revision"]) if published else None
+        old_state = self.store.state(head["revision"]) if head else None
+        price_cursor = self.store.price_cursor(contract.market_area, contract.currency)
+        corrections = (
+            self.store.corrected_prices(
+                datetime.fromisoformat(old_state["end"]),
+                head.get("price_cursor", 0),
+                contract.market_area,
+                contract.currency,
+                price_cursor,
+            )
+            if old_state and head
+            else ()
+        )
+        counter_version = book.version if book else None
+        if (
+            head is None
+            or head["contract_version"] != contract.version
+            or head.get("counter_version") != counter_version
+            or corrections
+        ):
+            head = {
+                "revision": version(
+                    [
+                        contract.version,
+                        head,
+                        [tuple(row_item) for row_item in corrections],
+                        POLICY_VERSION,
+                    ]
+                ),
+                "contract_version": contract.version,
+                "counter_version": counter_version,
+                "created_at": now.isoformat(),
+                "previous_revision": published["revision"] if published else None,
+                "price_cursor": price_cursor,
+            }
+            self.documents.write("working.json", head)
+        state = self.store.state(head["revision"])
+        rows = self.store.frames(datetime.fromisoformat(state["end"]) if state else None)
+        for row in rows:
+            frame = parse_frame(row["frame"])
+            context = row["context"]
+            plan_id = self.store.context_plan(frame.start)
+            if plan_id is None:
+                self.issue = "No original installation plan covers this interval"
+                return
+            plan = self.plans.get_plan(plan_id)
+            try:
+                problem = physical_context(plan)
+                original_contract = plan["input_snapshot"].get("contract_version")
+                if original_contract and original_contract != contract.version:
+                    problem, _ = corrected_problem(plan, contract)
+                bindings = dict(context["bindings"])
+                advice = active_advice(
+                    frame, self.store.activations(frame.start, frame.end), self.plans
+                )
+                bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
+                seeds = (
+                    parse_counters({"seeds": context["seeds"]}, now).seeds
+                    if context["seeds"]
+                    else ()
+                )
+                seeds = self.bonus.prepare(
+                    contract, frame, bindings, seeds, book, now, version(bindings), state
+                )
+                prices = self.store.published(
+                    frame.start, frame.end, contract.market_area, contract.currency
+                )
+                result, continuation = evaluate(
+                    problem,
+                    frame,
+                    bindings,
+                    state,
+                    contract,
+                    seeds,
+                    prices,
+                    SiteLocation(**context["location"]) if context["location"] else None,
+                )
+                result.update(
+                    plan_id=plan_id,
+                    strategy=plan["strategy"],
+                    evaluated_at=now.isoformat(),
+                    revision=head["revision"],
+                    contract_version=contract.version,
+                    currency=contract.currency,
+                    market_area=contract.market_area,
+                    measurements=frame.record(),
+                    advice=advice,
+                    counter_version=counter_version,
+                    device_names=plan.get("comparison_names", {}),
+                    counter_seeds=json.loads(
+                        json.dumps(
+                            [asdict(seed) for seed in seeds],
+                            default=lambda value: value.isoformat(),
+                        )
+                    ),
+                )
+                self.store.commit(head["revision"], result, continuation)
+                state = continuation
+                self.issue = None
+            except (ValueError, KeyError, TypeError) as error:
+                self.issue = str(error)
+                self.attention = not isinstance(error, PendingSettlement)
+                return
+        head["price_cursor"] = price_cursor
+        with self.documents.transaction():
+            if state and (published_state is None or state["end"] >= published_state["end"]):
+                self.documents.write(f"evaluation-{head['revision']}.json", head)
+                self.documents.write("head.json", head)
+                self.documents.write("working.json", None)
+            else:
+                self.documents.write("working.json", head)
+        self.issue = (
+            "Correction is still being evaluated. The previous successful version remains visible"
+            if published_state and (state is None or state["end"] < published_state["end"])
+            else None
+        )
+        self.attention = False
+
+    def overview(self, start, end, revision=None):
+        """Filter stored nonoverlapping results. Never reset either scenario or run a historical optimizer."""
+        head = self.documents.read("head.json") if self.documents.exists("head.json") else None
+        versions, next_revision = self.evaluation_versions()
+        if revision:
+            if len(revision) != SHA256_HEX_LENGTH or any(
+                candidate not in "0123456789abcdef" for candidate in revision
+            ):
+                raise ValueError("Invalid evaluation version")
+            head = self.documents.read(f"evaluation-{revision}.json")
+        rows = self.store.results(head["revision"], start, end) if head else []
+        summary, daily = self.store.summary(head["revision"] if head else "", start, end)
+        totals = {
+            scenario: {
+                key: summary[f"{scenario}_{key}"]
+                for key in (
+                    "purchase",
+                    "sale",
+                    "bonus",
+                    "grid_cash",
+                    "wear",
+                    "inventory_change",
+                    "economic_cost",
+                    "import_kwh",
+                    "export_kwh",
+                )
+            }
+            for scenario in ("actual", "reference")
+        }
+        expected = int((end - start) / SETTLEMENT_INTERVAL)
+        return {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "revision": head["revision"] if head else None,
+            "contract_version": head["contract_version"] if head else None,
+            "issue": self.issue if not revision else None,
+            "intervals": rows,
+            "chart": daily,
+            "details_truncated": len(rows) < summary["count"],
+            "totals": totals,
+            "savings": summary["savings"],
+            "avoided_import_kwh": summary["avoided_import_kwh"],
+            "coverage": {
+                "evaluated": summary["duration_h"] / (SETTLEMENT_INTERVAL.total_seconds() / 3600),
+                "expected": expected,
+                "estimated": summary["estimated"],
+            },
+            "reference": "Simulated self-consumption without EMS",
+            "versions": versions,
+            "next_evaluation": next_revision,
+            "corrected": bool(head and head.get("previous_revision")),
+        }
+
+    def evaluation_versions(self, before=None):
+        """Page immutable correction descriptors without exposing or loading interval payloads."""
+        if before and (
+            len(before) != SHA256_HEX_LENGTH
+            or any(candidate not in "0123456789abcdef" for candidate in before)
+        ):
+            raise ValueError("Invalid evaluation cursor")
+        current = (
+            self.documents.read(f"evaluation-{before}.json")
+            if before
+            else (self.documents.read("head.json") if self.documents.exists("head.json") else None)
+        )
+        versions = []
+        while current and len(versions) < MAX_EVALUATION_VERSIONS:
+            versions.append(
+                {key: current.get(key) for key in ("revision", "created_at", "contract_version")}
+            )
+            parent = current.get("previous_revision")
+            if len(versions) == MAX_EVALUATION_VERSIONS:
+                return versions, parent
+            current = self.documents.read(f"evaluation-{parent}.json") if parent else None
+        return versions, None

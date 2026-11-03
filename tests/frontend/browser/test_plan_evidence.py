@@ -1,0 +1,600 @@
+"""Responsive app-owned setup against real authenticated API/storage, without physical devices."""
+
+from copy import deepcopy
+from datetime import datetime, timedelta
+
+import pytest
+from playwright.sync_api import expect
+
+from tests.frontend.browser.helpers import TOKEN
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize(
+    "kinds",
+    [
+        ("published", "forecast"),
+        ("forecast", "published"),
+        ("published", "published"),
+        ("forecast", "forecast"),
+        (None, None),
+        ("unrecognized", "unrecognized"),
+    ],
+)
+def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_page, kinds):
+    """All tariff lines use dotted forecasts and solid published rates on desktop/mobile.
+
+    The saved fixture has exactly two 15-minute tariff intervals for the strict
+    classification pairing. Its added bonus produces four price datasets: spot,
+    import, export and bonus-inclusive export. Each dataset must retain the
+    independently specified style of both intervals.
+    """
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    plan_id = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    comparison = page.request.get(url + f"/v1/plans/{plan_id}/comparison", headers=headers).json()
+    snapshot = comparison["plan"]["input_snapshot"]
+    tariffs = snapshot["tariff_evidence"]
+    for tariff, kind in zip(tariffs, kinds, strict=True):
+        tariff["price_kind"] = kind
+        # Source names must not override explicit published/forecast classification.
+        tariff["source_id"] = "nord_pool" if kind == "forecast" else "other_market"
+        tariff["total_export_price"] = 0.05
+    snapshot["problem"]["export_bonuses"] = [{"rates": [0.05, 0.05]}]
+    current = {
+        "as_of": tariffs[0]["start"],
+        "currency": "EUR",
+        "has_bonus": True,
+        "coverage": "complete",
+        "issue": None,
+        "intervals": deepcopy(tariffs),
+    }
+    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=comparison))
+    page.route("**/v1/prices/inputs", lambda route: route.fulfill(json=current))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#price-chart-legend")).to_contain_text("Export rate incl. bonus")
+    expect(page.locator("#current-price-chart-legend")).to_contain_text("before volume cap")
+
+    def rendered_intervals(chart_id):
+        """Read the resolved segment styles that Chart.js actually uses to stroke each interval."""
+        return page.evaluate(
+            """id => {
+                const chart = Chart.getChart(document.getElementById(id));
+                return chart.data.datasets.map((dataset, index) => {
+                    const line = chart.getDatasetMeta(index).dataset;
+                    return [0, 2].map(start => {
+                        const segment = line.segments.find(segment => segment.start <= start && segment.end >= start + 1);
+                        return (segment?.style?.borderDash || line.options.borderDash).length > 0;
+                    });
+                });
+            }""",
+            chart_id,
+        )
+
+    expected = [[kind == "forecast" for kind in kinds]] * 4
+    for chart_id in ("price-chart", "current-price-chart"):
+        assert rendered_intervals(chart_id) == expected
+        page.locator(f"#{chart_id}-legend").get_by_label("Import rate", exact=True).uncheck()
+        page.locator(f"#{chart_id}-legend").get_by_label("Import rate", exact=True).check()
+        assert rendered_intervals(chart_id) == expected
+    for interval_index, kind in enumerate(kinds):
+        page.evaluate(
+            """index => {
+                const chart = Chart.getChart(document.getElementById('price-chart'));
+                chart.tooltip.setActiveElements([{datasetIndex: 0, index: index * 2}], {x: 0, y: 0});
+                chart.update('none');
+            }""",
+            interval_index,
+        )
+        label = {
+            "published": "Published market rate",
+            "forecast": "Forecast market rate",
+        }.get(kind, "Market rate provenance unclassified")
+        expect(page.locator("#price-chart-tooltip")).to_contain_text(label)
+    if kinds == ("published", "forecast"):
+        page.locator("#current-price-chart").scroll_into_view_if_needed()
+        page.screenshot(path=f"results/ci/current-price-lines-{page.viewport_size['width']}.png")
+    page.get_by_role("button", name="Next 6 hours", exact=True).click()
+    assert rendered_intervals("price-chart") == expected
+    assert rendered_intervals("current-price-chart") == expected
+    for tariff in current["intervals"]:
+        tariff["price_kind"] = "published"
+    with page.expect_response("**/v1/prices/inputs"):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    page.wait_for_function("""() => {
+        const chart = Chart.getChart(document.getElementById('current-price-chart'));
+        return chart.data.datasets.every((dataset, index) =>
+            chart.getDatasetMeta(index).dataset.segments.every(segment => !segment.style?.borderDash?.length));
+    }""")
+    assert rendered_intervals("current-price-chart") == [[False, False]] * 4
+    assert rendered_intervals("price-chart") == expected
+    if kinds == ("published", "forecast"):
+        page.get_by_role("button", name="Full horizon", exact=True).click()
+        page.locator("#price-chart").scroll_into_view_if_needed()
+        page.screenshot(path=f"results/ci/forecast-price-lines-{page.viewport_size['width']}.png")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_missing_middle_tariff_segment_stays_a_gap_in_all_original_price_series(app_page):
+    """Two recorded rates separated by a missing quarter have null breaks, never an invented connecting rate."""
+    page, url = app_page
+
+    def missing_quarter(route):
+        """Keep exact original endpoint rates while making a deliberately incomplete tariff archive."""
+        body = route.fetch().json()
+        tariffs = body["plan"]["input_snapshot"]["tariff_evidence"]
+        later = deepcopy(tariffs[-1])
+        later["start"] = (
+            datetime.fromisoformat(later["start"]) + timedelta(minutes=15)
+        ).isoformat()
+        later["end"] = (datetime.fromisoformat(later["end"]) + timedelta(minutes=15)).isoformat()
+        later["price_kind"] = "forecast"
+        body["plan"]["input_snapshot"]["tariff_evidence"] = [tariffs[0], later]
+        route.fulfill(json=body)
+
+    page.route("**/v1/plans/*/comparison", missing_quarter)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    state = page.evaluate(
+        "Chart.getChart(document.getElementById('price-chart')).data.datasets.map(dataset => dataset.data.map(point => point.y))"
+    )
+    assert state == [
+        [0.1, 0.1, None, None, 0.1, 0.1],
+        [0.3, 0.3, None, None, 0.3, 0.3],
+        [0, 0, None, None, 0, 0],
+    ]
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_partial_first_interval_uses_quarter_axis_without_inventing_prior_energy(app_page):
+    """Partial opening and closing quarters keep full widths, explicit coverage and aligned shared time axes."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    identity = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    body = page.request.get(url + f"/v1/plans/{identity}/comparison", headers=headers).json()
+    first = body["plan"]["input_snapshot"]["problem"]["intervals"][0]
+    beginning = datetime.fromisoformat(first["start"])
+    partial = beginning + timedelta(minutes=10)
+    first["start"] = partial.isoformat()
+    first["duration_h"] = 5 / 60
+    body["plan"]["input_snapshot"]["problem"]["intervals"][-1]["duration_h"] = 5 / 60
+    body["comparison"] = None
+    body["scenarios"] = {}
+    page.clock.set_fixed_time(partial)
+    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    state = page.evaluate("""() => ({
+        axes: ['plan-chart','reference-chart','self-consumption-chart','forecast-chart','price-chart'].map(id => Chart.getChart(document.getElementById(id)).scales.x.min),
+        ends: ['plan-chart','reference-chart','self-consumption-chart','forecast-chart','price-chart'].map(id => Chart.getChart(document.getElementById(id)).scales.x.max),
+        first: Chart.getChart(document.getElementById('plan-chart')).data.datasets[0].data[0],
+        last: Chart.getChart(document.getElementById('plan-chart')).data.datasets[0].data.at(-1)
+    })""")
+    assert state["axes"] == [beginning.timestamp() * 1000] * 5
+    assert state["first"]["start"] == beginning.timestamp() * 1000
+    assert state["first"]["end"] == (beginning + timedelta(minutes=15)).timestamp() * 1000
+    assert state["first"]["coveredStart"] == partial.timestamp() * 1000
+    assert state["ends"] == [(beginning + timedelta(minutes=30)).timestamp() * 1000] * 5
+    assert state["last"]["start"] == (beginning + timedelta(minutes=15)).timestamp() * 1000
+    assert state["last"]["end"] == (beginning + timedelta(minutes=30)).timestamp() * 1000
+    assert state["last"]["coveredStart"] == (beginning + timedelta(minutes=15)).timestamp() * 1000
+    assert state["last"]["coveredEnd"] == (beginning + timedelta(minutes=20)).timestamp() * 1000
+    page.evaluate("""() => {
+        const chart = Chart.getChart(document.getElementById('plan-chart'));
+        chart.tooltip.setActiveElements([{datasetIndex:0,index:0}],{x:0,y:0});
+        chart.update('none');
+    }""")
+    expect(page.locator("#plan-chart-tooltip")).to_contain_text(
+        "Partial quarter: Mean power covers"
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_missing_spot_price_is_a_gap_while_original_effective_prices_remain_visible(app_page):
+    """Old plans without wholesale evidence show null spot values and preserve import/export interval prices."""
+    page, url = app_page
+
+    def remove_prices(route):
+        """Omit historical wholesale evidence without altering the retained physical/effective plan input."""
+        response = route.fetch()
+        body = response.json()
+        body["plan"]["input_snapshot"]["tariff_evidence"] = []
+        route.fulfill(json=body)
+
+    page.route("**/v1/plans/*/comparison", remove_prices)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    state = page.evaluate(
+        "Chart.getChart(document.getElementById('price-chart')).data.datasets.map(dataset => dataset.data)"
+    )
+    assert not state[0] or all(point["y"] is None for point in state[0])
+    assert {point["y"] for point in state[1]} == {0.3}
+    assert {point["y"] for point in state[2]} == {0}
+
+
+@pytest.mark.parametrize("app_site", ["savings", "savings_corrected"], indirect=True)
+def test_plan_evidence_is_readable_original_and_follows_selected_interval(app_page):
+    """Desktop/mobile inspect original .3 prices, 4000-W discharge and 25→0% SoC even after a contract correction."""
+    page, url = app_page
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    page.get_by_text("Understand this plan", exact=True).click()
+    page.get_by_text("Selected interval details", exact=True).click()
+    panel = page.locator("#interval-evidence")
+    expect(panel).to_be_visible()
+    expect(panel).to_contain_text("Discharge power limit reached")
+    expect(panel).to_contain_text("25.0 %")
+    price_card = panel.locator("article").filter(has_text="Forecast and original prices")
+    expect(price_card).to_contain_text("0.30 EUR/kWh")
+    expect(price_card).to_contain_text("Published")
+    expect(page.locator("#plan-evidence-panel")).to_contain_text(
+        "Alternatives have not been evaluated"
+    )
+    expect(page.locator("#evidence-period")).to_contain_text(
+        "All totals below cover this whole period"
+    )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    plan_id = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    archived_plan = page.request.get(
+        url + f"/v1/plans/{plan_id}/comparison", headers=headers
+    ).json()["plan"]
+    seeded_period_start = datetime.fromisoformat(archived_plan["generated_at"])
+    formatted_timestamps = page.evaluate(
+        "values => values.map(value => new Date(value).toLocaleString('en-US', {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC'}))",
+        [
+            (seeded_period_start + timedelta(minutes=minute_offset)).isoformat()
+            for minute_offset in (0, 15, 30)
+        ],
+    )
+    expect(page.locator("#evidence-period")).to_contain_text(
+        f"From {formatted_timestamps[0]} to {formatted_timestamps[2]}"
+    )
+    expect(page.locator("#evidence-time")).to_contain_text(
+        f"From {formatted_timestamps[0]} to {formatted_timestamps[1]}"
+    )
+    expect(page.locator("#evidence-time")).to_contain_text("15 minutes")
+    expect(page.locator("#evidence-time")).to_contain_text(
+        "Energy quantities apply to this interval"
+    )
+    expect(page.locator("#forecast-chart-legend")).to_contain_text("Household demand forecast")
+    expect(page.locator("#forecast-chart-legend")).to_contain_text("Available solar forecast")
+    page.get_by_text("Inputs and assumptions for this plan", exact=True).click()
+    expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
+    expect(page.locator("#plan-evidence")).to_contain_text(
+        "Estimated from a repeated trailing price window."
+    )
+    page.locator("#inspect-time").fill("1")
+    page.locator("#inspect-time").dispatch_event("input")
+    expect(panel).to_contain_text("Stored energy ends at the configured reserve")
+    expect(panel).to_contain_text("0 %")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
+    """Desktop/mobile preserve loading status on forced slider input, show a real failure, and recover on retry."""
+    page, url = app_page
+    held = []
+    page.route("**/v1/plans/*/comparison", lambda route: held.append(route))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_text("Understand this plan", exact=True).click()
+    page.get_by_text("Selected interval details", exact=True).click()
+    expect(page.locator("#evidence-issue")).to_contain_text("Loading")
+    expect(page.locator("#inspect-time")).to_be_disabled()
+    page.locator("#inspect-time").dispatch_event("input")
+    expect(page.locator("#evidence-issue")).to_contain_text("Loading")
+    for _ in range(50):
+        if held:
+            break
+        page.wait_for_timeout(100)
+    assert held
+    held[0].fulfill(status=503, body="Temporary archive read failure")
+    expect(page.locator("#evidence-issue")).to_contain_text("could not be loaded")
+    expect(page.locator("#plan-evidence-status")).to_contain_text("could not be loaded")
+    expect(page.locator("#inspect-time")).to_be_disabled()
+    page.unroute("**/v1/plans/*/comparison")
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.locator("#inspect-time")).to_be_enabled()
+    expect(page.locator("#interval-evidence")).to_contain_text("Forecast and original prices")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_same_named_batteries_keep_independent_graph_series(app_page):
+    """Duplicate names retain separate 50→25→0 and constant-75 percent SoC curves and fixed/following modes."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    identity = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    body = page.request.get(url + f"/v1/plans/{identity}/comparison", headers=headers).json()
+    plan = body["plan"]
+    plan["comparison_names"] = {"battery": "Shared battery", "spare": "Shared battery"}
+    second = deepcopy(plan["input_snapshot"]["problem"]["batteries"][0])
+    second["device_id"] = "spare"
+    second["battery"]["initial_kwh"] = 3
+    second["can_follow_grid"] = True
+    plan["input_snapshot"]["problem"]["batteries"].append(second)
+    for flow in plan["expected_flows"]:
+        flow["batteries"].append(
+            {"device_id": "spare", "charge_kwh": 0, "discharge_kwh": 0, "end_kwh": 3}
+        )
+    for step in plan["steps"]:
+        step["devices"]["spare"] = {"mode": "follow_grid_target", "power_w": None}
+    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Shared battery: 1: SoC")
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Shared battery: 2: SoC")
+    assert page.evaluate(
+        "Chart.getChart(document.getElementById('plan-chart')).data.datasets.filter(dataset => dataset.yAxisID === 'soc').map(dataset => dataset.data.map(point => point.y))"
+    ) == [[50, 25, 25, 0], [75, 75, 75, 75]]
+    expect(page.locator("#inspect-values")).to_contain_text("Shared battery: 2: Zero on the meter")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_plan_detail_failure_survives_initial_load_and_recovers(app_page):
+    """An original-plan detail outage remains visible, and a successful refresh restores the actual comparison."""
+    page, url = app_page
+    page.route(
+        "**/v1/plans/*/comparison", lambda route: route.fulfill(status=503, body="Unavailable")
+    )
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
+    page.unroute("**/v1/plans/*/comparison")
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.locator("#plan-rows tr")).to_have_count(2)
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("late", ["plan", "savings"])
+def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page, late):
+    """A late initial plan or financial response must not overwrite a newer failed plan selection."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    listing = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()
+    original = listing["plans"][0]
+    details = page.request.get(
+        url + "/v1/plans/" + original["plan_id"] + "/comparison", headers=headers
+    ).json()
+    listing["plans"].append({**original, "plan_id": "second-plan"})
+    financial = page.request.get(url + "/v1/savings", headers=headers).json()
+    held = []
+
+    def comparison_route(route):
+        """Keep the first request pending while a different plan fails through the normal reader."""
+        if "/second-plan/" in route.request.url:
+            route.fulfill(status=503, body="Unavailable")
+        elif late == "plan":
+            held.append(route)
+        else:
+            route.fulfill(json=details)
+
+    page.route("**/v1/plans?**", lambda route: route.fulfill(json=listing))
+    page.route("**/v1/plans/*/comparison", comparison_route)
+    if late == "savings":
+        page.route("**/v1/savings?**", lambda route: held.append(route))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#plan-version option")).to_have_count(2)
+    if late == "savings":
+        expect(page.locator("#plan-rows tr")).to_have_count(2)
+    page.locator("#plan-version").select_option("second-plan")
+    expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
+    assert len(held) == 1
+    with page.expect_response(
+        lambda response_item: (
+            response_item.url.endswith("/" + original["plan_id"] + "/comparison")
+            if late == "plan"
+            else "/v1/savings?" in response_item.url
+        )
+    ) as completed:
+        held[0].fulfill(json=details if late == "plan" else financial)
+    completed.value.finished()
+    expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
+
+
+@pytest.mark.parametrize("locale", ["en-US", "nl-NL"])
+def test_percentage_display_preserves_precise_edits_and_saved_state(app_page, browser, locale):
+    """Desktop/mobile show one locale decimal, retain unknowns and preserve exact percentage drafts across focus and blur."""
+    original_page, url = app_page
+    context = browser.new_context(locale=locale, viewport=original_page.viewport_size)
+    try:
+        page = context.new_page()
+        page.goto(url + "/contract")
+        formatted = page.evaluate("""async () => {
+            const display = await import('/setup/display.js');
+            const {SaveBar} = await import('/setup/save-bar.js');
+            const form = document.createElement('form'); form.id = 'percentage-test';
+            const input = document.createElement('input'); input.type = 'number';
+            input.step = 'any'; input.min = '0'; input.max = '100'; input.id = 'percentage-input';
+            form.append(input); document.body.append(form);
+            const bar = document.createElement('div'); bar.id = 'percentage-bar';
+            for (const id of ['percentage-save', 'percentage-discard', 'percentage-state']) {
+                const element = document.createElement(id.endsWith('state') ? 'span' : 'button');
+                element.id = id; bar.append(element);
+            }
+            document.body.append(bar); display.percentageInput(input, 12.3456);
+            const state = new SaveBar({form: form.id, bar: bar.id, save: 'percentage-save',
+                discard: 'percentage-discard', status: 'percentage-state'});
+            state.loaded(); window.percentageTest = {display, state};
+            return [0, 50, 12.3456, 12.35, null, NaN, Infinity].map(value => display.percentage(value));
+        }""")
+        decimal = "," if locale == "nl-NL" else "."
+        assert formatted == [
+            f"0{decimal}0%",
+            f"50{decimal}0%",
+            f"12{decimal}3%",
+            f"12{decimal}4%",
+            "Unavailable",
+            "Unavailable",
+            "Unavailable",
+        ]
+        field = page.locator("#percentage-input")
+        expect(field).to_have_value("12.3")
+        field.focus()
+        expect(field).to_have_value("12.3456")
+        field.press("Tab")
+        expect(field).to_have_value("12.3")
+        assert page.evaluate("window.percentageTest.state.dirty") is False
+        assert (
+            page.evaluate(
+                "window.percentageTest.display.inputNumber(document.getElementById('percentage-input'))"
+            )
+            == 12.3456
+        )
+        field.fill("8.7654")
+        field.press("Tab")
+        expect(field).to_have_value("8.8")
+        assert page.evaluate("window.percentageTest.state.dirty") is True
+        assert (
+            page.evaluate(
+                "window.percentageTest.display.inputNumber(document.getElementById('percentage-input'))"
+            )
+            == 8.7654
+        )
+        field.fill("12.35")
+        field.press("Tab")
+        expect(field).to_have_value("12.4")
+        assert (
+            page.evaluate(
+                "window.percentageTest.display.inputNumber(document.getElementById('percentage-input'))"
+            )
+            == 12.35
+        )
+        field.fill("")
+        field.press("Tab")
+        expect(field).to_have_value("")
+        assert (
+            page.evaluate(
+                "window.percentageTest.display.inputNumber(document.getElementById('percentage-input'))"
+            )
+            is None
+        )
+        field.fill("-0.04")
+        field.press("Tab")
+        expect(field).to_have_value("-0.04")
+        assert field.evaluate("input => input.validity.rangeUnderflow") is True
+        field.fill("100.04")
+        field.press("Tab")
+        expect(field).to_have_value("100.04")
+        assert field.evaluate("input => input.validity.rangeOverflow") is True
+        assert (
+            page.evaluate(
+                "window.percentageTest.display.inputNumber(document.getElementById('percentage-input'))"
+            )
+            is None
+        )
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_current_price_click_does_not_open_original_plan_evidence(app_page):
+    """Click a current tariff inside the second archived plan interval. The original inspector must retain its first selection."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    plan_id = page.request.get(url + "/v1/plans", headers=headers).json()["plans"][0]["plan_id"]
+    plan = page.request.get(url + f"/v1/plans/{plan_id}", headers=headers).json()
+    plan_intervals = plan["input_snapshot"]["problem"]["intervals"][:2]
+    rows = [
+        {
+            "start": interval["start"],
+            "end": (
+                datetime.fromisoformat(interval["start"]) + timedelta(hours=interval["duration_h"])
+            ).isoformat(),
+            "market_price": 0.10,
+            "buy_price": 0.20,
+            "sell_price": 0.08,
+            "total_export_price": 0.11,
+            "bonus_issue": None,
+        }
+        for interval in plan_intervals
+    ]
+    page.route(
+        "**/v1/prices/inputs",
+        lambda route: route.fulfill(
+            json={
+                "as_of": plan_intervals[0]["start"],
+                "currency": "EUR",
+                "has_bonus": True,
+                "coverage": "complete",
+                "intervals": rows,
+                "issue": None,
+            }
+        ),
+    )
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
+    expect(page.locator("#current-price-chart-legend")).to_contain_text("before volume cap")
+    inspector = page.locator("#inspect-time")
+    before = inspector.input_value()
+    point = page.evaluate("""() => {
+        const chart=Chart.getChart(document.getElementById('current-price-chart'));
+        const point=chart.getDatasetMeta(0).data[2];
+        return {x:point.x,y:point.y};
+    }""")
+    page.locator("#current-price-chart").click(position=point)
+    page.evaluate(
+        "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+    )
+    assert inspector.input_value() == before
+    assert page.locator("#interval-evidence-panel").get_attribute("open") is None
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_financial_reference_issue_keeps_physical_bars_visible(app_page):
+    """Desktop/mobile retain reference bars and SoC while the missing bonus baseline hides costs and benefit."""
+    page, url = app_page
+
+    def unknown_budget(route):
+        """Keep the API's original physical evidence while withholding financial comparison values."""
+        body = route.fetch().json()
+        reference = body["scenarios"]["self_consumption"]
+        reference["issue"] = "Continuous reference bonus state is missing"
+        reference["comparison"]["reference_costs"] = None
+        reference["comparison"]["expected_savings"] = None
+        reference.pop("expected_savings_vs_without_battery", None)
+        route.fulfill(json=body)
+
+    page.route("**/v1/plans/*/comparison", unknown_budget)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#self-consumption-chart")).to_be_visible()
+    expect(page.locator("#self-consumption-chart-legend")).to_contain_text("SoC")
+    expect(page.locator("#self-consumption-costs")).to_contain_text("Expected costs unavailable")
+    expect(page.locator("#self-consumption-issue")).to_have_text(
+        "Continuous reference bonus state is missing"
+    )
+    assert page.evaluate("""() => {
+        const graph = Chart.getChart(document.getElementById('self-consumption-chart'));
+        return graph.data.datasets.some(series => series.type === 'bar' && series.data.some(point => point.y !== null));
+    }""")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")

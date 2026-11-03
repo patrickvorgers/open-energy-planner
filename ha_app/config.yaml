@@ -1,0 +1,28 @@
+{
+  "name": "Open Energy Planner",
+  "version": "0.2.0",
+  "slug": "open_energy_planner",
+  "description": "Local energy optimization for Home Assistant",
+  "url": "https://github.com/patrickvorgers/open-energy-planner",
+  "arch": [
+    "amd64"
+  ],
+  "startup": "application",
+  "boot": "auto",
+  "init": false,
+  "ingress": true,
+  "ingress_port": 8099,
+  "panel_icon": "mdi:solar-power",
+  "homeassistant_api": true,
+  "hassio_api": true,
+  "hassio_role": "default",
+  "discovery": [
+    "open_energy_planner"
+  ],
+  "options": {},
+  "schema": {
+    "database_url": "password?",
+    "migrate_database": "bool?",
+    "recover_storage": "bool?"
+  }
+}

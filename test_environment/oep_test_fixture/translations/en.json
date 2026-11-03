@@ -1,0 +1,13 @@
+{
+  "title": "OEP simulated test installation",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Load test data on existing Energy sources",
+        "description": "TEST VM ONLY. Import 32 recent days of synthetic statistics on your configured Energy sensor identities. Keep the dashboard sources and older history. Recent statistics will be replaced without a backup. No physical services are called.",
+        "data": {"confirm_test_data": "Load synthetic data on this test instance"}
+      }
+    },
+    "abort": {"already_configured": "This test fixture is already configured."}
+  }
+}

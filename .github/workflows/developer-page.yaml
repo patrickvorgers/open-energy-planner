@@ -1,0 +1,46 @@
+name: Developer start page
+on:
+  push:
+    branches: [main]
+    paths: ['docs/developer/**', 'tests/frontend/**', 'Dockerfile.ui-test', '.github/workflows/developer-page.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: vars.DEVELOPER_PAGES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test desktop and mobile entry flow
+        run: |
+          mkdir -p results/ci
+          docker compose --profile test build ui-tests
+          docker compose run --rm ui-tests
+      - name: Prepare public static files only
+        run: |
+          mkdir -p _site/developer
+          cp docs/developer/index.html docs/developer/start.mjs docs/developer/style.css _site/developer/
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.publish.outputs.page_url }}
+    concurrency:
+      group: developer-pages
+      cancel-in-progress: false
+    steps:
+      - id: publish
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

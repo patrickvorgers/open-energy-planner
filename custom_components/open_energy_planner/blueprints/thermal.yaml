@@ -1,0 +1,44 @@
+blueprint:
+  name: Open Energy Planner electric boiler
+  description: >-
+    Follow one virtual OEP Heating requested sensor using your own immediate,
+    idempotent heater actions. No helpers are needed. Off, unknown and unavailable
+    permissions select the stop action. Do not queue delayed starts. Keep the
+    appliance's native thermostat, overheating protection and hygiene controls
+    enabled. OEP planning does not replace these protections.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    permission:
+      name: OEP Heating requested
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              integration: open_energy_planner
+    heat_action:
+      name: Physical enable action
+      description: Enable the heater immediately. Keep native safety controls active.
+      selector:
+        action:
+    stop_action:
+      name: Physical stop action
+      description: Disable heating immediately and prevent a previous delayed start.
+      selector:
+        action:
+mode: restart
+variables:
+  permission_entity: !input permission
+triggers:
+  - trigger: state
+    entity_id: !input permission
+  - trigger: homeassistant
+    event: start
+  - trigger: event
+    event_type: automation_reloaded
+actions:
+  - choose:
+      - conditions: "{{ is_state(permission_entity, 'on') }}"
+        sequence: !input heat_action
+    default: !input stop_action

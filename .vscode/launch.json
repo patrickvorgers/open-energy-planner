@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Open Energy Planner: debug synthetic planning round",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/script/app/debug_scenario.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {"PYTHONPATH": "${workspaceFolder}/src"},
+      "justMyCode": true
+    }
+  ]
+}

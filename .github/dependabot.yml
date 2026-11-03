@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      home-assistant-platform:
+        patterns:
+          - ghcr.io/home-assistant/home-assistant
+          - ghcr.io/home-assistant/amd64-hassio-supervisor

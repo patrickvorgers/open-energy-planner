@@ -1,0 +1,234 @@
+{
+  "date": "2026-10-18",
+  "status": "reference arithmetic checked; no EMS solver run",
+  "currency": "EUR",
+  "method": "Exact integer arithmetic in 1/10000 EUR; finite enumeration at 0.01 kWh of hand-reduced feasible families. Continuous optimality follows the separate analytic proofs, not the discrete enumeration alone.",
+  "provenance": "Independent original inputs; no external fixtures or outputs imported.",
+  "checks": [
+    {
+      "id": "S01",
+      "eur": -0.28,
+      "exact_eur": "-2800/10000"
+    },
+    {
+      "id": "S02",
+      "eur": -0.16,
+      "exact_eur": "-1600/10000"
+    },
+    {
+      "id": "S03",
+      "eur": -0.04,
+      "exact_eur": "-400/10000"
+    },
+    {
+      "id": "S04",
+      "eur": -0.28,
+      "exact_eur": "-2800/10000"
+    },
+    {
+      "id": "S04-NOV",
+      "eur": -0.14,
+      "exact_eur": "-1400/10000"
+    },
+    {
+      "id": "S04-LIM",
+      "eur": -0.175,
+      "exact_eur": "-1750/10000"
+    },
+    {
+      "id": "S01-L",
+      "eur": -0.168,
+      "exact_eur": "-1680/10000"
+    },
+    {
+      "id": "S01-W_full_cycle_rejected",
+      "eur": 0.07,
+      "exact_eur": "700/10000"
+    },
+    {
+      "id": "S01-E_full_cycle_tie",
+      "eur": 0,
+      "exact_eur": "0/10000"
+    },
+    {
+      "id": "S01-P",
+      "eur": -0.14,
+      "exact_eur": "-1400/10000"
+    },
+    {
+      "id": "S01-G",
+      "eur": -0.07,
+      "exact_eur": "-700/10000"
+    },
+    {
+      "id": "S02-PV",
+      "eur": 0.048,
+      "exact_eur": "480/10000"
+    },
+    {
+      "id": "S02-PV_shutdown_rejected",
+      "eur": 0.08,
+      "exact_eur": "800/10000"
+    },
+    {
+      "id": "S02-OFF",
+      "eur": 0.04,
+      "exact_eur": "400/10000"
+    },
+    {
+      "id": "S03-F",
+      "eur": 0,
+      "exact_eur": "0/10000"
+    },
+    {
+      "id": "S03-Z",
+      "eur": -0.16,
+      "exact_eur": "-1600/10000"
+    },
+    {
+      "id": "S03-ORDER",
+      "eur": -0.072,
+      "exact_eur": "-720/10000"
+    },
+    {
+      "id": "S03_bonus_credit",
+      "eur": 0.052,
+      "exact_eur": "520/10000"
+    },
+    {
+      "id": "S03_base_export_charge",
+      "eur": 0.012,
+      "exact_eur": "120/10000"
+    },
+    {
+      "id": "S04-LIM_cash",
+      "eur": -0.105,
+      "exact_eur": "-1050/10000"
+    },
+    {
+      "id": "S04-LIM_terminal",
+      "eur": 0.07,
+      "exact_eur": "700/10000"
+    },
+    {
+      "id": "S04-LOSS_terminal_value",
+      "eur": 0.252,
+      "exact_eur": "2520/10000"
+    },
+    {
+      "id": "S04_evaluated_cost",
+      "eur": 0,
+      "exact_eur": "0/10000"
+    },
+    {
+      "id": "S02-PV_reference_cash",
+      "eur": 0.048,
+      "exact_eur": "480/10000"
+    },
+    {
+      "id": "S02-PV_savings",
+      "eur": 0.0,
+      "exact_eur": "0/10000"
+    },
+    {
+      "id": "S02-OFF_savings",
+      "eur": 0.008,
+      "exact_eur": "80/10000"
+    },
+    {
+      "id": "S03_reference_cash",
+      "eur": 0.048,
+      "exact_eur": "480/10000"
+    },
+    {
+      "id": "S03_savings",
+      "eur": 0.088,
+      "exact_eur": "880/10000"
+    },
+    {
+      "id": "R01_mandatory_recovery_cash",
+      "eur": 0.25,
+      "exact_eur": "2500/10000"
+    },
+    {
+      "id": "R01_delayed_cheaper_but_rejected",
+      "eur": 0.05,
+      "exact_eur": "500/10000"
+    }
+  ],
+  "enumerations": {
+    "S01": {
+      "objective_units": -2800,
+      "variables": [
+        {
+          "charge_t0_hundredths": 100,
+          "discharge_t1_hundredths": 100
+        }
+      ],
+      "count": 5151,
+      "ties": 1
+    },
+    "S02": {
+      "objective_units": -1600,
+      "variables": [
+        {
+          "charge_hundredths": 100
+        }
+      ],
+      "count": 101,
+      "ties": 1
+    },
+    "S03": {
+      "objective_units": -400,
+      "variables": [
+        {
+          "export_t0_hundredths": 40,
+          "export_t1_hundredths": 0
+        }
+      ],
+      "count": 10201,
+      "ties": 1
+    },
+    "S04": {
+      "objective_units": -2800,
+      "variables": [
+        {
+          "discharge_t0_hundredths": 0,
+          "discharge_t1_hundredths": 0,
+          "terminal_hundredths": 100
+        }
+      ],
+      "count": 5151,
+      "ties": 1
+    },
+    "S04-NOV": {
+      "objective_units": -1400,
+      "variables": [
+        {
+          "discharge_t0_hundredths": 0,
+          "discharge_t1_hundredths": 100,
+          "terminal_hundredths": 0
+        }
+      ],
+      "count": 5151,
+      "ties": 1
+    },
+    "S04-LIM": {
+      "objective_units": -1750,
+      "variables": [
+        {
+          "discharge_t0_hundredths": 0,
+          "discharge_t1_hundredths": 75,
+          "terminal_hundredths": 25
+        }
+      ],
+      "count": 5151,
+      "ties": 1
+    }
+  },
+  "limitations": [
+    "Not an executable EMS planner test suite.",
+    "No automatic terminal-value derivation validated.",
+    "Enumeration excludes economically dominated late purchases using the documented price bounds."
+  ]
+}

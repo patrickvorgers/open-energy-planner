@@ -1,0 +1,58 @@
+blueprint:
+  name: Open Energy Planner EV charging
+  description: >-
+    Follow one virtual OEP charge point using your own physical actions, without helpers.
+    The charging action receives requested_power_w as a numeric variable.
+    Use an immediate idempotent enable/set-power action and an immediate stop action.
+    Do not queue delayed starts. Unknown, unavailable, disconnected, paused or expired
+    permissions always select the stop action. Identify the connected car separately
+    with the native Connected vehicle select control or your own HA automation.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    permission:
+      name: OEP Charging requested
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              integration: open_energy_planner
+    power:
+      name: OEP Requested charging power
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              integration: open_energy_planner
+              device_class: power
+    charge_action:
+      name: Physical enable and power action
+      description: Use requested_power_w for a variable-power point. On/off points can simply enable charging.
+      selector:
+        action:
+    stop_action:
+      name: Physical stop action
+      description: Must disable charging immediately and prevent a previous delayed start.
+      selector:
+        action:
+mode: restart
+variables:
+  permission_entity: !input permission
+  power_entity: !input power
+triggers:
+  - trigger: state
+    entity_id: !input permission
+  - trigger: state
+    entity_id: !input power
+  - trigger: homeassistant
+    event: start
+  - trigger: time_pattern
+    minutes: /1
+actions:
+  - variables:
+      requested_power_w: "{{ states(power_entity) | float(0) }}"
+  - choose:
+      - conditions: "{{ device_id(permission_entity) is not none and device_id(permission_entity) == device_id(power_entity) and is_state(permission_entity, 'on') and requested_power_w > 0 }}"
+        sequence: !input charge_action
+    default: !input stop_action

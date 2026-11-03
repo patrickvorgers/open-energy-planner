@@ -1,0 +1,35 @@
+name: PR Draft review phase (trusted base)
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Share candidate cancellation, while Quick keeps its independent group.
+  group: >-
+    ${{ github.event.action == 'edited' && github.event.changes.base.ref.from == null
+        && format('readiness-metadata-{0}', github.run_id)
+        || format('pr-ci-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
+jobs:
+  draft:
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != null)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # Return changed PR metadata to Draft, never execute PR source.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Keep changed code in the Draft review phase
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m script.ci.pr_readiness

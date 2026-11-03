@@ -1,0 +1,124 @@
+# Home Assistant Energy mapping
+
+Settings > Dashboards > Energy is authoritative. OEP's wizard displays its meters,
+SoC, normalized power direction and battery usable capacity read-only. Save APIs
+enforce the same contract. Source discovery does not depend on current readings or
+Recorder history: a configured source remains visible before it has measured data.
+Missing required settings instruct the user to complete Energy, not create a
+second installation definition in OEP.
+
+Read the Energy manager independently of whether the Energy UI component has
+loaded. Refresh the early catalogue once Core reports startup complete so entity
+metadata placeholders do not require a manual refresh. Invalid or oversized
+battery links and nonfinite/nonpositive/out-of-range capacity become missing
+fields with correction guidance. A ready wire catalogue must explicitly carry
+grid power channels and every battery capacity/charge-link field. Omitting keys
+cannot bypass the app's ownership checks.
+
+| Energy setting | OEP use |
+| --- | --- |
+| Every grid `stat_energy_from` | Separate cumulative import channel for household demand, measured settlement and period counters. |
+| Every grid `stat_energy_to` | Separate cumulative export channel for demand subtraction, settlement and bonus budgets. Export is optional for a connection. A PV/storage installation needs configured export coverage. |
+| Every grid `stat_rate` | Instantaneous normalized power. Import positive, export negative. Sum all distinct configured channels for deviation detection. At least one is required. Tariff rows can share one physical meter, so they do not each require a separate power sensor. |
+| Solar `stat_energy_from` | Separate production identity, measured production and per-source forecasting/training. |
+| Battery `stat_energy_from` | Cumulative discharge, added to whole-house energy. This preserves the existing device identity. |
+| Battery `stat_energy_to` | Cumulative charge, subtracted from whole-house energy and shown separately on the virtual device. |
+| Battery `stat_soc` | Measured percentage is required to calculate current internal stored kWh. |
+| Battery `stat_rate` | Required normalized terminal power. Discharge positive. HA owns power inversion/combination through `power_config`. |
+| Battery `capacity` | Usable kWh, reused without another capacity question. SoC scales against this frozen capacity in each plan. |
+| Explicit Energy names, device/sensor names and IDs | Energy's nonblank name takes precedence, followed by HA device and sensor names and a generic source label. IDs remain stable. |
+| HA location/timezone | Weather, solar/daylight windows and local forecast/calendar boundaries. |
+
+Energy counters use cumulative `total_increasing` kWh meters. Existing normalization
+also accepts compatible Wh/MWh and HA `total` energy statistics. OEP converts to
+kWh before arithmetic. Instantaneous W/kW are not substituted for cumulative
+settlement data. Missing measurements remain unknown, never zero.
+
+## Power measurement modes
+
+Grid and battery use the same adapter: read Energy's normalized `stat_rate`,
+not the raw `power_config` inputs. Home Assistant creates and maintains the
+inverted/combined entities. OEP must not invert or subtract their values again.
+
+| Energy selection | HA normalization | OEP behaviour |
+| --- | --- | --- |
+| Standard | Original signed sensor | Convert supported W/kW to W without changing the sign. |
+| Inverted | Negate the original sensor | Read HA's generated entity without a second inversion. |
+| Two sensors | `stat_rate_from - stat_rate_to`, normalizing source units | Read HA's generated entity. Both constituent sensors must be available. |
+| No power sensor | No configured normalized entity | Preserve Energy device discovery, but block setup/planning until the required power is configured in Energy. |
+
+Positive grid power means import. Negative means export. Positive battery power
+means discharge. Negative means charge. These are measurements, not commands.
+For example, 2 kW from minus 500 W to is +1500 W for either source type.
+
+If either constituent sensor is absent, removed, `unknown` or `unavailable`,
+HA marks the combined entity unavailable. OEP reports a required-source issue
+and admits no replacement reading: neither zero, the remaining half nor the
+previous combined value is used. Restoring both sensors restores measurement
+readiness through ordinary state events. No reconfiguration is needed.
+Temporary loss of a required measurement revokes active commands. Recovery
+requires usable readings and acceptance of a newer plan. The original archived
+plan remains available for history. Removing the configured required power link
+is a configuration mismatch and blocks planning against the old definition.
+
+`tests/custom_component/integration/contracts/test_catalogue.py` exercises all four modes for both grid and battery
+using real HA Energy entities and OEP's in-process reader. It checks both
+directions, mixed kW/W inputs and loss/recovery of either half. The app's
+separate no-power membership regression lives in `tests/ha_contract/test_energy_authority.py`.
+
+Whole-house demand is the sum of all imports, solar production and battery
+discharge, minus all exports and battery charging. The existing history adapter
+requests all channels. Settlement keeps gross import and export distinct even
+when several connections operate in opposite directions. The installation planner
+uses their aggregate grid boundary and configured total connection limits.
+
+Bonus budgets likewise use all configured export meters. The history adapter
+reads their common completed hours and normalizes/sums kWh while retaining each
+physical meter endpoint. Current counters must all be fresh. A meter reset or
+changed member set requires renewed baseline evidence. Growth in another meter
+cannot hide a reset. The internal aggregate identity is not a published helper
+sensor. Frozen-flow contract repricing uses all original export readings too.
+
+The integration reads these settings through HA's Energy manager and statistics
+APIs, never direct Recorder SQL. The app validates the bounded metadata contract,
+archives valid changes and installs a matching required measurement generation.
+Original plans and configuration versions remain unchanged. New batteries still
+need OEP-only ratings/relationships. Missing SoC, power or capacity must be fixed
+in Energy first. A removed required field blocks planning against the old settings.
+
+## Source display names
+
+The explicit name of a source in Energy is authoritative for its presentation.
+Use the HA device name, sensor name and a generic label such as Battery or Solar
+only as successive fallbacks. Preserve user/provider spelling and punctuation.
+Sensor identities remain available alongside labels when identifying a particular
+measurement, including the shared notification banner and drawer. The current
+Energy label is followed by the exact sensor ID and its specific failure cause.
+Aggregates such as Grid and Household consumption retain their
+aggregate labels instead of inheriting one contributing meter's name.
+
+The integration includes bounded optional `energy_name` metadata in its existing
+catalogue upload. It refreshes every five minutes. Open Installation pages read
+that metadata during their existing 30-second status poll without reloading
+configuration, changing the selected device or discarding drafts. Read-only plan
+and forecast-quality pages check a name revision every 30 seconds and refresh
+their selected plan or day when it changes. A connected visible page therefore
+normally shows a change after the next integration refresh plus its next browser
+poll. A restart, manual save or relinking is not required. Read failures retain
+the last displayed labels and retry. Hidden pages can defer their refresh.
+
+Historical views resolve current names through their frozen source identities.
+Removed or unavailable sources retain the name captured with the original plan
+or daily forecast. Original archive documents, input hashes, forecast versions,
+measurements, calculations and physical commands remain unchanged. Current names
+are a response projection, not a rewrite of historical evidence. Display-only
+consumer renames do not invalidate forecasts or their configuration versions.
+Explicit HA user overrides on OEP virtual devices remain HA-owned overrides.
+
+Not every Energy field belongs to optimization input. HA's fixed prices, cost
+statistics and cost adjustments do not override OEP's effective-dated contract
+formulas/bonuses. HA's forecast integration choice does not replace OEP's local
+48-hour solar model. Gas, water and dashboard presentation settings are outside
+the electricity installation model. Equipment ratings, converter relationships,
+efficiencies, reserves and control permissions remain OEP settings because Energy
+does not define these planner constraints.

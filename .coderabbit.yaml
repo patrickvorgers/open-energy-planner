@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  review_status: false
+  profile: assertive
+  request_changes_workflow: false
+  poem: false
+  tools:
+    # Project CI owns the pinned Python lint and formatting policy.
+    ruff:
+      enabled: false
+    flake8:
+      enabled: false
+  pre_merge_checks:
+    # Blanket coverage is not a project requirement. Review useful documentation.
+    docstrings:
+      mode: 'off'
+  auto_review:
+    enabled: true
+    drafts: true
+    auto_pause_after_reviewed_commits: 0
+    ignore_usernames:
+      - "dependabot[bot]"
+  path_instructions:
+    - path: src/**
+      instructions: >-
+        Preserve module boundaries and independent physical and economic validation.
+        Hardware control belongs to Home Assistant. Historical plans are immutable.
+        Assess regression coverage. Never regenerate scenario expectations from the solver.
+        Apply docs/development/CODE-DOCUMENTATION.md to new or modified code: meaningful
+        PEP 257/Google-style docstrings and explicit units, signs, assumptions, side effects,
+        failure behaviour and concurrency where relevant. Assess accuracy rather than a percentage.
+    - path: custom_components/**
+      instructions: >-
+        Keep the integration independent of native solver and app packages.
+        Distinguish zero, unknown and unavailable. No device-specific control drivers.
+        Apply docs/development/CODE-DOCUMENTATION.md to new or modified code: meaningful
+        PEP 257/Google-style docstrings, source timestamps, availability, ownership and
+        lifecycle contracts where relevant. Do not require boilerplate or a coverage percentage.
+    - path: tests/**
+      instructions: >-
+        Require short docstrings explaining each test's situation and expected behaviour.
+        Planner scenarios must explain why the independently specified outcome follows from
+        prices, losses, limits, bonuses or terminal value, directly or via precise fixture rationale.
+        Never regenerate expectations from solver output. Review semantic accuracy, not percentages.
+    - path: tests/frontend/**
+      instructions: >-
+        Require short docstrings explaining the browser situation and expected user-visible
+        behaviour. Document fixture assumptions. Keep assertions and mobile coverage meaningful.

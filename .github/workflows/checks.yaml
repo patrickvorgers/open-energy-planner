@@ -1,0 +1,294 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [ready_for_review, converted_to_draft, labeled]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Other label edits must not cancel a deliberately requested candidate run.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'ci: run'
+        && format('ignored-label-{0}', github.run_id)
+        || format('pr-ci-{0}', github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.draft == false &&
+       (github.event.action == 'ready_for_review' || github.event.label.name == 'ci: run'))
+    uses: ./.github/workflows/ci-admission.yaml
+    secrets:
+      OEP_RUNNER_READ_TOKEN: ${{ secrets.OEP_RUNNER_READ_TOKEN }}
+    permissions:
+      contents: read
+      # Read candidate identities and original artifacts only in the admission job.
+      actions: read
+      checks: read
+      pull-requests: read
+  quality:
+    needs: candidate
+    if: needs.candidate.outputs.reuse != 'true'
+    name: Quality and integration (AMD64)
+    runs-on: ${{ fromJSON(needs.candidate.outputs.runner_labels) }}
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      build_attempt: ${{ steps.bundle.outputs.attempt }}
+      execution: ${{ steps.execution.outputs.location }}
+    env:
+      COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
+      DOCKER_BUILD_RECORD_UPLOAD: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up host orchestration Python
+        if: runner.environment == 'github-hosted'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Check personal Docker runner without changing its daemon
+        if: runner.environment == 'self-hosted'
+        run: python -m script.ci.local_runner prepare
+      - name: Record actual execution location
+        id: execution
+        env:
+          EXECUTION_LOCATION: ${{ runner.environment == 'self-hosted' && 'local' || 'github' }}
+        run: |
+          echo "location=$EXECUTION_LOCATION" >> "$GITHUB_OUTPUT"
+          echo "Execution location: $EXECUTION_LOCATION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Capture the checked-out source tree
+        id: source
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+      - name: Select checks using the PR base policy
+        id: scope
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          policy_parent="$(cd "$RUNNER_TEMP" && pwd -P)"
+          policy_root="$(mktemp -d "$policy_parent/oep-ci-policy.XXXXXX")"
+          [[ "$policy_root" == "$policy_parent"/oep-ci-policy.* ]] || exit 1
+          trap 'rm -rf -- "$policy_root"' EXIT
+          policy_output="$policy_root/policy-output"
+          policy_archive="$policy_root/policy.tar"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" || "$GITHUB_EVENT_NAME" == "push" ]] && [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git archive "$PR_BASE_SHA" script > "$policy_archive" && python -I -S -c 'import sys, tarfile; tarfile.open(sys.argv[1]).extractall(sys.argv[2], filter="data")' "$policy_archive" "$policy_root"; then
+            policy="$policy_root/script/ci/ci_scope.py"
+            if [[ ! -f "$policy" ]]; then
+              policy="$policy_root/script/ci_scope.py"
+            fi
+            if GITHUB_OUTPUT="$policy_output" python -I -S "$policy" && [[ -s "$policy_output" ]]; then
+              cat "$policy_output" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "documentation_only=false" >> "$GITHUB_OUTPUT"
+          echo "profile=full" >> "$GITHUB_OUTPUT"
+          echo "matrix_profile=full" >> "$GITHUB_OUTPUT"
+          echo "test_only=false" >> "$GITHUB_OUTPUT"
+          echo "targets=app,native,ha-tests,ui-tests" >> "$GITHUB_OUTPUT"
+          echo "CI scope: full checks (non-PR event or unavailable base policy)"
+      - name: Report authoritative CI selection
+        run: python -m script.ci.scope_report
+      - name: Release unused hosted-runner SDK storage
+        if: runner.environment == 'github-hosted' && steps.scope.outputs.documentation_only != 'true'
+        run: |
+          # This job uses Python and Docker; unused mobile/.NET SDKs crowd out the private Supervisor engine.
+          df -h /
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+      - name: Enable shared build and container image storage
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          configuration = Path('/etc/docker/daemon.json')
+          settings = json.loads(configuration.read_text()) if configuration.exists() else {}
+          settings.setdefault('features', {})['containerd-snapshotter'] = True
+          configuration.write_text(json.dumps(settings))
+          PY
+          sudo systemctl restart docker
+          docker info --format '{{json .DriverStatus}}' | grep -q 'io.containerd.snapshotter.v1'
+      - name: Set up cached image builder
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          driver: ${{ runner.environment == 'github-hosted' && 'docker' || 'docker-container' }}
+      - name: Build current test images with reusable layers
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7
+        with:
+          source: .
+          files: compose.yaml
+          targets: ${{ steps.scope.outputs.targets || (steps.scope.outputs.documentation_only == 'true' && 'native' || 'app,native,ha-tests,ui-tests') }}
+          load: true
+          set: |
+            app.tags=${{ env.COMPOSE_PROJECT_NAME }}-app
+            native.tags=${{ env.COMPOSE_PROJECT_NAME }}-native
+            native.tags+=${{ env.COMPOSE_PROJECT_NAME }}-provision-tests
+            native.tags+=${{ env.COMPOSE_PROJECT_NAME }}-db-tests
+            ha-tests.tags=${{ env.COMPOSE_PROJECT_NAME }}-ha-tests
+            ui-tests.tags=${{ env.COMPOSE_PROJECT_NAME }}-ui-tests
+            app.cache-from=type=gha,scope=oep-app
+            app.cache-to=type=gha,scope=oep-app,mode=max,ignore-error=true,timeout=60s
+            native.cache-from=type=gha,scope=oep-native
+            native.cache-to=type=gha,scope=oep-native,mode=max,ignore-error=true,timeout=60s
+            ha-tests.cache-from=type=gha,scope=oep-ha
+            ha-tests.cache-to=type=gha,scope=oep-ha,mode=max,ignore-error=true,timeout=60s
+            ui-tests.cache-from=type=gha,scope=oep-ui
+            ui-tests.cache-to=type=gha,scope=oep-ui,mode=max,ignore-error=true,timeout=60s
+      - name: Packaged test images, collection and provisioning imports
+        env:
+          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || (steps.scope.outputs.documentation_only == 'true' && 'documentation' || 'full') }}
+        run: python script/ci/ci.py --prebuilt --stage preflight --profile "$OEP_CI_PROFILE"
+      - name: Documentation, provenance, Ruff and CI routing checks
+        if: steps.scope.outputs.documentation_only == 'true'
+        run: python script/ci/ci.py --documentation-only --prebuilt --stage tests
+      - name: Native checks, planner scenarios, app smoke and real HA handoff
+        if: steps.scope.outputs.documentation_only != 'true' && (steps.scope.outputs.matrix_profile == 'full' || steps.scope.outputs.profile == 'full' || steps.scope.outputs.profile == '')
+        env:
+          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || 'full' }}
+        run: python script/ci/ci.py --prebuilt --stage tests --profile "$OEP_CI_PROFILE"
+      - name: Selected native and integration suites
+        if: steps.scope.outputs.documentation_only != 'true' && steps.scope.outputs.matrix_profile != 'full' && steps.scope.outputs.profile != 'full' && steps.scope.outputs.profile != ''
+        env:
+          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile }}
+        run: python script/ci/ci.py --prebuilt --stage tests --profile "$OEP_CI_PROFILE"
+      - name: ${{ (steps.scope.outputs.matrix_profile == 'full' || steps.scope.outputs.profile == 'full' || steps.scope.outputs.profile == '') && 'Full CI suite completion' || 'Selected CI suite completion' }}
+        if: steps.scope.outputs.documentation_only != 'true'
+        env:
+          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || 'full' }}
+          OEP_TESTED_TREE: ${{ steps.source.outputs.tree }}
+        run: python -m script.ci.check_suite_completion --profile "$OEP_CI_PROFILE" --tree "$OEP_TESTED_TREE"
+      - name: Build matched private installation bundle
+        id: bundle
+        if: steps.scope.outputs.documentation_only != 'true' && steps.scope.outputs.test_only != 'true'
+        env:
+          OEP_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+          OEP_RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          arguments=(.local/installation-bundle --build-number "$OEP_BUILD_NUMBER")
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            arguments+=(--release-tag "$OEP_RELEASE_TAG")
+          fi
+          python -m script.release.package_release "${arguments[@]}"
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Preserve matched installation artifacts
+        if: steps.scope.outputs.documentation_only != 'true' && steps.scope.outputs.test_only != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ github.event_name == 'release' && format('installation-bundle-amd64-{0}', github.run_attempt) || 'installation-bundle-amd64' }}
+          path: |
+            .local/installation-bundle/open_energy_planner.zip
+            .local/installation-bundle/ha-app-repository.tar.gz
+            .local/installation-bundle/release-manifest.json
+            .local/installation-bundle/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: "Full CI source tree: ${{ steps.source.outputs.tree }} (${{ steps.scope.outputs.profile || 'full' }})"
+        if: steps.scope.outputs.documentation_only != 'true' && (steps.scope.outputs.matrix_profile == 'full' || steps.scope.outputs.profile == 'full' || steps.scope.outputs.profile == '')
+        env:
+          OEP_TESTED_TREE: ${{ steps.source.outputs.tree }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$OEP_TESTED_TREE"
+          git diff --exit-code HEAD --
+
+      - name: 'Test-only CI source tree: ${{ steps.source.outputs.tree }} (${{ steps.scope.outputs.profile }})'
+        if: steps.scope.outputs.test_only == 'true'
+        env:
+          OEP_TESTED_TREE: ${{ steps.source.outputs.tree }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$OEP_TESTED_TREE"
+          git diff --exit-code HEAD --
+
+      - name: 'Selected CI source tree: ${{ steps.source.outputs.tree }} (${{ steps.scope.outputs.profile }})'
+        if: steps.scope.outputs.documentation_only != 'true' && steps.scope.outputs.test_only != 'true' && (startsWith(steps.scope.outputs.profile, 'selected:') || steps.scope.outputs.profile == 'ci' || steps.scope.outputs.profile == 'ci+performance-queries')
+        env:
+          OEP_TESTED_TREE: ${{ steps.source.outputs.tree }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$OEP_TESTED_TREE"
+          git diff --exit-code HEAD --
+
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-amd64
+          path: |
+            results/ci/*.xml
+            results/ci/suite-completion.json
+            results/ci/phase-times*.json
+            results/ci/selection.json
+            results/ci/preflight-*.log
+            results/ci/price-history-*.json
+            results/ci/software-version-*.png
+            results/ci/storage-migration-*.png
+            results/ci/supervisor-*.json
+            results/ci/supervisor-failure.log
+            results/ci/supervisor-*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Clean only this personal runner test project
+        if: always() && runner.environment == 'self-hosted' && steps.execution.outputs.location == 'local'
+        run: python -m script.ci.local_runner cleanup
+
+  execution-label:
+    name: Label actual candidate execution location
+    needs: [candidate, quality]
+    if: always() && github.event_name == 'pull_request' && needs.quality.outputs.execution != ''
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
+      EXECUTION_LOCATION: ${{ needs.quality.outputs.execution }}
+    steps:
+      - name: Publish location without changing the test result
+        run: |
+          case "$EXECUTION_LOCATION" in local|github) ;; *) exit 1 ;; esac
+          current_head=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.sha')
+          if [[ "$current_head" != "$CANDIDATE_HEAD" ]]; then exit 0; fi
+          gh label create "ci-execution: local" --repo "$GH_REPO" --color 0e8a16 --description "Latest completed candidate executed on personal hardware, not a test result" --force
+          gh label create "ci-execution: github" --repo "$GH_REPO" --color 1d76db --description "Latest completed candidate executed on GitHub hardware, not a test result" --force
+          if [[ "$EXECUTION_LOCATION" == local ]]; then other=github; else other=local; fi
+          gh pr edit "$PR_NUMBER" --repo "$GH_REPO" --remove-label "ci-execution: $other" --add-label "ci-execution: $EXECUTION_LOCATION"
+
+  publish-release:
+    name: Attach tested release artifacts
+    if: github.event_name == 'release'
+    needs: quality
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      OEP_RELEASE_TAG: ${{ github.event.release.tag_name }}
+      OEP_BUILD_ATTEMPT: ${{ needs.quality.outputs.build_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Attach or resume the original tested release bundle
+        run: python3 -m script.release.publish_release

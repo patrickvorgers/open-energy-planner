@@ -1,0 +1,153 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    environment:
+      OEP_API_TOKEN: local-test-only-0123456789abcdef
+    networks: [test]
+    tmpfs:
+      - /data:uid=10001,gid=10001,mode=0700
+    cpus: 2
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD, python, /app/script/runtime/healthcheck.py]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+
+  native:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: Dockerfile.native-test
+    network_mode: none
+    cpus: 2
+    mem_limit: 2g
+    volumes:
+      - ./results/ci:/workspace/results/ci
+    command: [script/ci/check_native.py]
+
+  ha-tests:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: Dockerfile.chain-test
+    environment:
+      OEP_TEST_APP_URL: http://app:8099
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [test]
+    cpus: 2
+    mem_limit: 2g
+    volumes:
+      - ./results/ci:/workspace/results/ci
+    command: [-m, script.ci.check_ha]
+
+  homeassistant-test:
+    profiles: [test]
+    image: ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133
+    volumes:
+      - ./custom_components:/config/custom_components:ro
+      - ./.devcontainer/ha-configuration.yaml:/config/configuration.yaml:ro
+    tmpfs: [/config]
+    networks: [test]
+    cpus: 2
+    mem_limit: 2g
+
+  provision-tests:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: Dockerfile.native-test
+    environment:
+      OEP_DEV_HA_URL: http://homeassistant-test:8123
+      OEP_DEV_STATE: /tmp/developer.json
+    depends_on:
+      app:
+        condition: service_healthy
+      homeassistant-test:
+        condition: service_started
+    networks: [test]
+    command: [script/home_assistant/provision_smoke.py]
+
+  ui-tests:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: Dockerfile.ui-test
+    network_mode: none
+    cpus: 2
+    mem_limit: 2g
+    shm_size: 512m
+    volumes:
+      - ./results/ci:/workspace/results/ci
+
+  postgres-test:
+    profiles: [test]
+    image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5
+    environment:
+      POSTGRES_DB: oep_test
+      POSTGRES_USER: oep_test
+      POSTGRES_PASSWORD: fixture-only
+    networks: [test]
+    tmpfs: [/var/lib/postgresql]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U oep_test -d oep_test]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  mariadb-test:
+    profiles: [test]
+    image: mariadb:11.4@sha256:250e1609e93c0e6aecf64bfbab2d84d5e89d2481540fe77447ff6c855c3b1873
+    environment:
+      MARIADB_DATABASE: oep_test
+      MARIADB_USER: oep_test
+      MARIADB_PASSWORD: fixture-only
+      MARIADB_ROOT_PASSWORD: isolated-root-only
+    networks: [test]
+    tmpfs: [/var/lib/mysql]
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  mysql-test:
+    profiles: [test]
+    image: mysql:8.4@sha256:76f0358884cb92d9a086d24e5671c38048d3fef40f2588703d73eb55392d6b69
+    environment:
+      MYSQL_DATABASE: oep_test
+      MYSQL_USER: oep_test
+      MYSQL_PASSWORD: fixture-only
+      MYSQL_ROOT_PASSWORD: isolated-root-only
+    networks: [test]
+    tmpfs: [/var/lib/mysql]
+    healthcheck:
+      test: [CMD-SHELL, "MYSQL_PWD=$$MYSQL_PASSWORD mysql --host=127.0.0.1 --user=oep_test --database=oep_test --execute='SELECT 1' --silent"]
+      interval: 2s
+      timeout: 5s
+      retries: 90
+
+  db-tests:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: Dockerfile.native-test
+    environment:
+      OEP_REQUIRE_EXTERNAL_DATABASE_TESTS: "1"
+      PYTHONPATH: /workspace/src
+      OEP_TEST_MYSQL_URL: mysql+pymysql://oep_test:fixture-only@mysql-test/oep_test?charset=utf8mb4
+      OEP_TEST_POSTGRES_URL: postgresql+psycopg://oep_test:fixture-only@postgres-test/oep_test
+      OEP_TEST_MARIADB_URL: mariadb+pymysql://oep_test:fixture-only@mariadb-test/oep_test?charset=utf8mb4
+    networks: [test]
+    volumes:
+      - ./results/ci:/workspace/results/ci
+    command: [-m, script.ci.pytest_suites, databases]
+
+networks:
+  test:
+    internal: true

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="oep-api-base" content="__OEP_BASE__">
+<title>Open Energy Planner: Installation settings</title>
+<link rel="icon" type="image/svg+xml" href="/setup/icons/app.svg">
+<link rel="stylesheet" href="/setup/style.css"><link rel="stylesheet" href="/setup/workspace.css"><link rel="stylesheet" href="/setup/settings-layout.css"><link rel="stylesheet" href="/setup/installation-layout.css">
+<script type="module" src="/setup/setup.js"></script></head>
+<body class="workspace settings-workspace installation-workspace"><!-- OEP_NAVIGATION -->
+<main class="workspace-main"><header class="page-header"><div><h1 class="page-heading"><img class="page-icon" src="/setup/icons/settings.svg" alt="" width="32" height="32"><span id="installation-heading">Installation settings</span></h1><p id="installation-intro">Your connection, energy sources and planning preferences.</p></div></header>
+            <form id="connect">
+                <label
+                    >Installation API token<input
+                        id="token"
+                        aria-label="Installation API token"
+                        aria-describedby="token-help"
+                        type="password"
+                        required
+                        autocomplete="off" /></label
+                ><small id="token-help"
+                    >Sign in with the app administration token. Automatic HA
+                    pairing creates its own credential. Do not copy this token
+                    into the integration. It is held only until this page closes.</small
+                ><button>Connect</button>
+            </form>
+            <p id="status" role="status" aria-label="Installation status" aria-live="polite"></p>
+
+
+<div id="installation-shell" hidden>
+<ol id="installation-steps" aria-label="Installation setup"></ol>
+<section class="settings-toolbar" id="installation-toolbar">
+<label>Installation area<select id="installation-area"><option value="0">Connection and household</option><option value="1">Solar production</option><option value="2">Batteries</option><option value="4">Planning strategy</option><option value="5">Price sources</option><option value="-1">Home Assistant</option></select></label>
+<div class="settings-actions"><button type="button" id="installation-return" class="secondary" hidden>Back to setup</button><button type="button" id="edit-installation" class="secondary">Edit installation</button>
+<div id="installation-save-bar"><span id="installation-save-state"></span><button id="save" type="button" form="wizard">Save installation</button><button id="discard-installation" type="button" form="wizard" class="secondary">Cancel</button></div></div></section>
+<div class="settings-layout"><div>
+<section id="installation-summary" class="chart-card" hidden><div id="installation-device-toolbar"></div><div id="installation-summary-content"></div></section>
+<form id="wizard" class="panel-stack" hidden>
+<section class="installation-editor chart-card" data-step="-1"><span class="settings-tag" id="ha-installation-state">Home Assistant</span><h2>Home Assistant</h2><p>The Energy dashboard provides your meters, source membership, battery capacity, power direction and timezone.</p><dl id="ha-installation-facts" class="settings-summary"></dl><p id="ha-installation-summary" class="installation-note"></p>
+            <section id="pairing" hidden>
+                <h2>Connect Home Assistant</h2>
+                <p>Approve only your Home Assistant. Compare the verification code with the pending Open Energy Planner connection in Home Assistant before confirming. Names are supplied by the requesting installation.</p>
+                <div id="pairing-candidates"></div>
+            </section>
+
+
+<button id="reload" type="button" class="secondary">Refresh Home Assistant data</button><button id="installation-strategy-shortcut" type="button" class="secondary">Planning strategy</button><button id="installation-sources-shortcut" type="button" class="secondary">Price sources</button></section>
+<section class="installation-editor chart-card" data-step="0"><h2>Connection and household</h2>
+<p>Confirm the physical connection limits. Energy sources and direction come from Home Assistant.</p>
+<div class="settings-fields">
+<label>Maximum grid import (kW)<input id="import" aria-label="Maximum grid import (kW)" aria-describedby="import-help" type="number" min="0" max="10000" step="any" required><small id="import-help">Maximum total connection import in kW, from your installation documentation, not current consumption.</small></label>
+<label>Maximum grid export (kW)<input id="export" aria-label="Maximum grid export (kW)" aria-describedby="export-help" type="number" min="0" max="10000" step="any" required><small id="export-help">Maximum total connection export in kW. Zero forbids planned export. It does not grant permission to switch off solar.</small></label>
+<label id="annual-field">Annual whole-home consumption (kWh)<input id="annual" aria-label="Annual whole-home consumption (kWh)" aria-describedby="annual-help" type="number" min="0" max="1000000" step="any" required><small id="annual-help">Estimated total household electricity use in kWh/year, including self-consumed solar. Required only without sufficient history.</small></label>
+<label id="grid-field"><span>Grid power sensor</span><select id="grid" aria-label="Grid power sensor" aria-describedby="grid-help" required disabled></select><small id="grid-help">Read-only normalized power from Home Assistant Energy. Configure each connection there. Positive means import.</small></label>
+<label><span>Grid export energy sensor (read-only)</span><select id="export-energy" aria-label="Grid export energy sensor (read-only)" aria-describedby="export-energy-help" disabled></select><small id="export-energy-help">Cumulative export for contract bonus history. All Energy export meters are used automatically. Multiple meters remain separate for settlement.</small></label>
+</div>
+<label hidden><input id="grid-invert" aria-label="Invert measured grid power" aria-describedby="grid-invert-help" type="checkbox" disabled>Invert measured grid power</label><small id="grid-invert-help">Power direction is managed in Home Assistant Energy.</small>
+<dl id="installation-grid-sources" class="settings-summary"></dl>
+<input id="timezone" type="hidden"><p id="grid-summary" class="installation-note"></p><p id="household-summary" class="installation-note"></p>
+<details><summary>Energy dashboard sources</summary><p id="energy-summary"></p></details><button type="button" id="edit-detected" hidden>Review detected settings</button>
+<p class="installation-note">Import and battery discharge are positive. Confirm the total connection limits. These are planning limits, not physical protection.</p></section>
+                <section class="installation-editor chart-card" data-step="1" hidden>
+                    <h2>Solar production</h2>
+                    <p>
+                        Confirm properties of the solar sources detected in the
+                        Energy dashboard. Converter references are managed
+                        automatically. Open shared inverter settings only when sources share a converter.
+                    </p>
+                    <label class="installation-device-selector">Solar source<select id="installation-solar" data-view-control></select></label><div id="solar-rows"></div>
+                    <p>Solar sources follow the Home Assistant Energy dashboard. Add or remove sources there.</p>
+                </section>
+                <section class="installation-editor chart-card" data-step="2" hidden>
+                    <h2>Batteries</h2>
+                    <p>
+                        Confirm properties of each detected battery, including
+                        its own state and limits. Select a hybrid inverter to
+                        keep its direct DC connection.
+                    </p>
+                    <label class="installation-device-selector">Battery<select id="installation-battery" data-view-control></select></label><div id="battery-rows"></div>
+                    <p>Batteries follow the Home Assistant Energy dashboard. Add or remove batteries there.</p>
+                </section>
+                <section class="installation-editor chart-card" data-step="3" hidden>
+                    <h2>Review your installation</h2>
+                    <p id="review"></p>
+                    <div class="installation-review-row"><div><strong>Connection and household</strong><p id="review-connection"></p></div><button type="button" data-review-area="0" class="secondary">Review connection</button></div>
+                    <div class="installation-review-row"><div><strong>Solar production</strong><p id="review-solar"></p></div><button type="button" data-review-area="1" class="secondary">Review solar</button></div>
+                    <div class="installation-review-row"><div><strong>Batteries</strong><p id="review-batteries"></p></div><button type="button" data-review-area="2" class="secondary">Review batteries</button></div>
+                    <h3>What happens next?</h3>
+                    <p>
+                        Saving updates app-owned settings. The connected HA
+                        integration creates or updates the matching virtual
+                        command entities automatically. Your automations remain
+                        responsible for physical control.
+                    </p>
+                    <p>
+                        Existing contract rules and market-area configuration
+                        are still required before a live plan is available. <a href="/contract">Configure Contract</a><a href="/appliance-settings">Choose Appliances</a>
+                    </p>
+                </section>
+
+<section class="installation-editor chart-card" data-step="4">            <section id="strategy-settings" hidden>
+                <h2>Planning strategy</h2>
+                <dl id="installation-strategy-value" class="settings-summary"></dl>
+                <label for="strategy">Optimization goal</label>
+                <select id="strategy" form="wizard" aria-describedby="strategy-help" disabled>
+                    <option value="minimize cost">Minimize cost</option>
+                    <option value="minimize consumption">Minimize consumption</option>
+                </select>
+                <p id="strategy-explanation" class="installation-note"></p>
+                <details><summary>Compare optimization goals</summary><small id="strategy-help">Minimize cost chooses the lowest expected economic cost. Minimize consumption first reduces grid import plus the grid energy needed to replace depleted starting battery stock. It then chooses the lowest cost among equivalent plans. Export does not offset import. Mandatory reserve recovery comes first for both strategies.</small></details>
+                <p id="strategy-status" class="installation-note" role="status" aria-label="Strategy status" aria-live="polite"></p>
+            </section>
+</section>
+<section class="installation-editor chart-card" data-step="5">            <section id="price-sources" hidden>
+                <h2>Active price sources</h2>
+                <p id="price-market"></p>
+                <h3>Nord Pool: Fixed price basis</h3>
+                <p>Published Nord Pool prices always take priority. Their coverage follows daily publication, not a fixed 24-hour window.</p>
+                <p id="price-published-source" role="status" hidden>Checking the automatic published price source.</p>
+                <p id="price-published-coverage">Waiting for published price coverage.</p>
+                <p id="price-horizon">Blocks count hours ahead from now, not calendar days. Source choices apply only to predictions for unpublished hours.</p>
+                <div id="price-source-controls"></div>
+                <p>Automatic follows matched forecast quality. A manual preference keeps collecting quality evidence. Published prices always win. Another available forecast fills missing preferred coverage.</p>
+                <details id="price-source-availability"><summary>Forecast availability</summary><div id="price-source-provenance"></div></details>
+                <ul id="price-source-list"></ul>
+                <small id="price-selection-policy">Collecting price source status.</small>
+            </section>
+
+</section>
+<nav id="installation-wizard-actions" aria-label="Wizard actions"><button id="back" type="button" class="secondary">Back</button><p id="progress"></p><button id="next" type="button">Continue</button></nav>
+</form></div>
+<aside><section class="chart-card"><h2>Your installation</h2><p>Configured capacities and planning limits.</p><div id="installation-capacities"></div><small>These are configuration values, not live power or battery measurements.</small></section><section class="chart-card"><h2>Managed in Home Assistant</h2><p>Meters, source membership, battery capacity, sensor direction and timezone.</p><small>OEP owns planning limits, converter relationships and optimization preferences. Your HA automations own physical execution.</small></section><section id="installation-after-setup" class="chart-card"><h2>After setup</h2><p><a href="/contract">Configure Contract</a></p><p><a href="/appliance-settings">Choose Appliances</a></p></section></aside></div></div></main></body></html>

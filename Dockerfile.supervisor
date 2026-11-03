@@ -1,0 +1,1 @@
+FROM ghcr.io/home-assistant/amd64-hassio-supervisor:2026.10.5@sha256:f5f3728cf7a9a637485576c7588d209a1527fe9d6bb46f7326ef9aa629c55713

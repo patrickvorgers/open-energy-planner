@@ -1,0 +1,13 @@
+.venv/
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+.local/
+.env
+.env.*
+!.env.example
+results/ci/
+*.log
+.DS_Store

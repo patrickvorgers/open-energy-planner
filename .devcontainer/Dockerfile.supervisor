@@ -1,0 +1,12 @@
+FROM ghcr.io/home-assistant/devcontainer:5-apps@sha256:81ea6e6892125d08e88b5a873c12da00131dfc3a184d335179576ec60bc0ecb0
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/oep-dev
+ENV PATH=/opt/oep-dev/bin:$PATH PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+COPY requirements.lock pyproject.toml /tmp/oep-dependencies/
+RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r /tmp/oep-dependencies/requirements.lock \
+    && python -c "import subprocess,sys,tomllib; from pathlib import Path; values=tomllib.loads(Path('/tmp/oep-dependencies/pyproject.toml').read_text())['project']['optional-dependencies']['dev']; subprocess.run([sys.executable,'-m','pip','install','--no-cache-dir',*values],check=True)"
+RUN python -m pip install --no-cache-dir playwright==1.64.1 \
+    && python -m playwright install --with-deps chromium
+WORKDIR /workspace

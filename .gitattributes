@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.zip binary
+*.png binary
+results/** -text
+archive/** -text
+solver-experiment/results/** -text
+solver-experiment/archive/** -text

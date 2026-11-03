@@ -1,0 +1,41 @@
+# Simulated laboratory only. No discovery of physical devices or production integrations.
+homeassistant:
+  name: Open Energy Planner Test Lab
+  latitude: 52.0
+  longitude: 6.0
+  elevation: 0
+  time_zone: Europe/Amsterdam
+  country: NL
+  unit_system: metric
+frontend:
+config:
+history:
+logbook:
+recorder:
+automation: !include automations.yaml
+system_health:
+energy:
+zeroconf:
+open_energy_planner:
+input_number:
+  oep_test_soc:
+    name: Test battery state of charge
+    min: 10
+    max: 100
+    step: 1
+    initial: 50
+    unit_of_measurement: '%'
+input_boolean:
+  oep_test_grid_available:
+    name: Test grid measurement available
+    initial: true
+oep_test_fixture:
+lovelace:
+  mode: storage
+  dashboards:
+    oep-test:
+      mode: yaml
+      title: OEP Test Lab
+      icon: mdi:flask
+      show_in_sidebar: true
+      filename: oep-test.yaml

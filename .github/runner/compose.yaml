@@ -1,0 +1,28 @@
+services:
+  runner:
+    build:
+      context: ../..
+      dockerfile: .github/runner/Dockerfile
+    image: oep-ci-runner:local
+    platform: linux/amd64
+    init: true
+    restart: unless-stopped
+    cpus: 2
+    mem_limit: 2g
+    environment:
+      ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT: "false"
+      OEP_RUNNER_REPOSITORY: ${OEP_RUNNER_REPOSITORY:?Set the private owner/repository}
+      OEP_RUNNER_WORK_PATH: ${OEP_RUNNER_WORK_PATH:?Use the work volume Mountpoint from docker volume inspect}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-state:/home/runner
+      - type: volume
+        source: runner-work
+        target: ${OEP_RUNNER_WORK_PATH:?Use the work volume Mountpoint from docker volume inspect}
+
+volumes:
+  runner-state:
+    name: oep-ci-runner-state
+  runner-work:
+    external: true
+    name: oep-ci-runner-work

@@ -1,0 +1,192 @@
+# Configuration workspaces
+
+Installation, Contract and Appliances settings use the Courtyard sidebar and a sticky top action
+toolbar. Existing operational pages and charts retain their layout. The shared
+SaveBar owns saved state, write locks and retained failure messages. These pages
+change its presentation rather than replacing the persistence boundary.
+
+## Panel spacing
+
+The shared workspace owns separation between independent panels through
+`--oep-panel-gap`: 24 px on desktop and tablet, and 16 px at widths up to 640 px.
+Use `panel-stack` for a vertical group and `workspace-grid` for generated object
+panels. The chart grid and settings columns use the same gap. Put the gap on the
+container, rather than adding margins to each card. Hidden panels must not leave
+an empty gap, and cards inside a grid must not add a second gap. Keep internal
+field and evidence spacing separate from this outer panel rhythm.
+
+Check the empty, populated and failed-refresh states on desktop, tablet and
+mobile. `tests/frontend/browser/test_panel_spacing.py` measures rendered edges.
+
+## Explicit editing
+
+Saved configuration opens read-only. Edit unlocks the selected object. Save and
+Cancel appear in the same toolbar. Selection is locked during editing and writes.
+Saved Contract terms use a compact key/value summary, rather than a disabled
+form. Editing replaces that summary with paired date and formula fields. The
+sidebar folds behind Menu on phones on these configuration pages. Leaving
+the mobile viewport closes that menu, so returning to phone width starts closed.
+Cancel reloads confirmed settings. It does not undo writes that already succeeded
+before a partial failure. Failed writes retain the remaining draft and explain
+that some settings may already be saved. Refresh never silently discards edits.
+
+The first contract setup opens in edit mode because no confirmed rules exist yet.
+Installation also uses the shared toolbar and SaveBar persistence boundary.
+
+## Appliances
+
+The selector contains OEP members only. Add appliance opens a searchable list of
+HA Energy sources. Available excludes existing members. Already added shows
+members without allowing duplicates. All sources combines both lists. Charging
+meters are excluded because EV charging owns their configuration and membership.
+Search matches names and sensor IDs without case sensitivity. Provider names are
+rendered as text. Only the results list scrolls. Search and Cancel remain visible.
+
+Choosing a source stages it in the editor. Configure its weather sensitivity and
+cycle-shifting permission, then Save appliance settings. The source is not added
+until persistence succeeds. Cancel abandons the draft.
+
+More actions offers Remove from OEP with a named confirmation. An open cycle
+blocks removal. Existing server safeguards remain authoritative if evidence
+changes after loading. Removing first revokes shifting, then updates the
+versioned consumer selection. EV selections remain intact. HA sources and
+historical evidence are not deleted. Re-adding a source does not automatically
+restore shifting permission. Review its configuration before saving again.
+
+Cycle evidence and setup instructions sit beside configuration. Daily readiness,
+deadlines and task cancellation remain on Energy: Appliances. They are immediate
+operational actions rather than staged settings.
+The appliance name appears once above the configuration. Weather sensitivity and
+cycle-shifting choices include their explanations. The HA source is shown below
+them. The evidence column derives average cycle energy and duration from the same
+quarter-hour mean power phases as the operational charts. Zero-power pauses count
+towards duration. Synthetic profiles are explicitly labelled. Missing profiles do
+not acquire an assumed duration or zero energy. Reload is in More appliance actions
+and closes that menu. It still refuses to discard unsaved edits.
+
+## Contract
+
+The rule selector shows newest starts first and identifies active, scheduled and
+superseded rules. Only the selected rule is displayed. Add price rule copies the
+selected rule's formulas and bonus settings into an unsaved replacement. Its new
+effective date remains required. New and edited dates reorder rules chronologically
+while retaining the selected rule. Existing timestamps keep their original instant
+until their calendar date changes. HA remains the timezone authority.
+
+Deleting a selected rule explains the resulting coverage change and remains a
+draft until Save contract. At least one rule must remain. Adding, selecting or
+deleting cannot bypass unsaved changes. Original plan archives remain immutable.
+
+The right column shows server-evaluated rate examples at -0.20, -0.10, 0.00, 0.10
+and 0.20 EUR/kWh. Import, base export and the optional extra bonus share one table.
+The bonus remains a distinct column, rather than being added to base export.
+HA-local calendar starts and equivalent UTC instants identify the same rule.
+Examples are illustrative,
+not market forecasts. Saving still requires a successful preview of the current
+draft revision. Stale preview replies cannot validate newer input. New admissions
+validate all five samples before persistence. Archive restoration keeps the
+original three-sample admission policy so older evidence remains readable. A
+previously accepted formula that is undefined at an added sample returns a null
+rate and an explicit example issue. It is never replaced with zero. Actual
+planning prices retain their separate validation.
+
+Current bonus budgets retain their existing app-owned annual periods, opening
+evidence and versioned confirmation flow. They require a saved enabled bonus with
+a positive kWh cap. HA history normally provides the opening volume. Manual
+confirmation is available only when the existing backend offers it for missing
+history. Budget confirmation is separate from editing a price rule. Measurements,
+examples, proposed plans and evaluated savings remain distinct.
+The remaining annual allowance is the main budget figure, with a used-volume meter.
+Opening provenance and source-meter readings remain available in a disclosure.
+The initialization disclosure explains automatic HA history, manual recovery when
+history is incomplete and annual reset without carry-over. Draft budget previews
+remain separate from the confirmed saved allowance.
+
+## Verification
+
+Browser regression tests cover desktop, mobile and ingress. They exercise explicit
+editing, version conflicts, preview timing, partial writes, open-cycle removal,
+EV membership retention and a 34-source catalogue. The catalogue is synthetic and
+does not import or modify household devices.
+
+## Installation
+
+A first installation opens a five-stage wizard: Home Assistant, connection and
+household, solar production, batteries and review. No installation settings are
+written before Save installation at review. The review calls the existing server
+preview. Every detected source stays in the draft, even when another source is
+selected in the editor. An invalid hidden source is revealed before validation
+feedback is shown. Grid-only, solar-only and multi-battery installations retain
+their existing API contracts and source identities.
+
+After a complete save, Installation opens as saved summaries. The area selector
+contains connection and household, solar production, batteries, planning strategy,
+Price sources, and Home Assistant. Edit installation unlocks the selected
+configuration area. Save and Cancel occupy the same sticky toolbar. Area changes
+are locked while editing or saving. Source selectors change the view without
+creating an unsaved configuration change. Cancel reloads confirmed app settings
+without requesting a new HA catalogue refresh. It does not undo an independent
+write that already succeeded.
+
+Home Assistant discovery, pairing and refresh retain their existing workflows.
+Unavailable or incomplete Energy configuration prevents advancing the wizard.
+Strategy remains available from the Home Assistant stage while discovery is
+pending. Its explicit edit and compare-and-set persistence remain independent
+from installation setup. Planning strategy saves write only strategy in both
+first-run and maintenance mode, retaining any unsaved installation draft.
+Only Review can persist first-run installation
+settings. Cancel in that auxiliary view discards only the strategy edit. Back to
+setup remains available, and polling retains focused wizard step buttons.
+Maintenance Cancel preserves the selected installation area and the source by
+its meter identity. If that source was removed in Home Assistant, the first
+remaining source is selected.
+A strategy-only save never claims the installation is
+configured. The live status preserves requested, published and accepted strategy.
+
+Planning strategy uses the same saved label/value rows as the other installation
+areas. A short explanation follows the selected goal. Compare optimization goals
+reveals the full economic and replacement-energy rules. Home Assistant acceptance
+appears separately below the explanation and never claims physical execution.
+Editing replaces the saved row with the existing goal selector and retains the
+shared Edit, Save and Cancel workflow.
+The [desktop](images/installation-strategy/desktop.png) and
+[mobile](images/installation-strategy/mobile.png) browser-test captures
+show the saved row using synthetic installation data.
+
+Price-source status is live API data under Installation > Price sources. Read-only model status belongs to Insights > Forecast quality beside each device forecast.
+They continue refreshing without overwriting drafts or changing saved baselines.
+Price preferences use that area's explicit Edit, Save price sources and Cancel
+actions with the same page-level SaveBar. Choose Automatic or an available
+forecast provider separately for each 24-hour lead bucket. Saving or cancelling
+these preferences retains unsaved installation and strategy drafts. The source
+save never writes those other endpoints. Failed writes retain editable choices.
+Polling preserves focused preference controls and shows the independently
+maintained automatic recommendation, actual use, fallback and pairwise quality.
+Pairing approval and connection reset remain immediate actions under Home
+Assistant, outside the staged configuration semantics.
+
+The right column reports configured limits and capacity, not measured flows.
+Both import and export limits are shown. Home Assistant and Connection list all
+configured grid power, import energy and export energy sensors independently.
+Energy settlement metadata is authoritative. Legacy catalogues use the balance
+terms after excluding solar and both battery charge and discharge meters.
+Each source is a separate wrapping list item. Four or more PV installations do
+not produce a single unreadable comma-separated line. The native source selector
+keeps every PV and battery draft reachable without rendering all editors at once.
+Inverter references remain stable internally. Their technical editor is under
+Shared inverter settings. Device and hybrid connection choices include the source
+name and meter identifier so equal Home Assistant names remain distinguishable.
+The summary heading retains the source's readable name.
+Usable battery capacity is read-only Home Assistant Energy data. An absent value
+blocks wizard advancement and directs the user to the HA Energy settings.
+Strategy status stays compact when requested, published and accepted values match.
+Differences remain visible during activation or when no accepted plan exists.
+Missing required ratings remain unavailable. A single battery shows its planning
+reserve with one decimal. Multiple batteries retain their individual reserves
+in their summaries rather than acquiring a misleading aggregate percentage.
+
+The existing demand, solar, installation and strategy APIs remain independently
+versioned. A partial failure retains the remaining draft and the revisions already
+confirmed by successful writes. This change introduces no database schema or
+atomic cross-endpoint transaction. Physical execution remains owned by user HA
+automations and equipment.

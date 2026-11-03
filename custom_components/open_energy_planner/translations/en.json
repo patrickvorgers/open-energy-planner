@@ -1,0 +1,153 @@
+{
+  "title": "Open Energy Planner",
+  "entity": {
+    "sensor": {
+      "ev_status": {
+        "state": {
+          "energy_source_unavailable": "Energy dashboard source unavailable",
+          "telemetry_unavailable": "Telemetry unavailable",
+          "disconnected": "Disconnected",
+          "connection_unknown": "Connection unknown",
+          "vehicle_unknown": "Vehicle unknown",
+          "measurement_only": "Measurement only",
+          "ready": "Ready",
+          "soc_or_limits_unavailable": "SoC or limits unavailable"
+        }
+      },
+      "ev_control": {
+        "state": {
+          "read_only": "Measurement only",
+          "on_off": "On/off at fixed power",
+          "variable": "Variable power"
+        }
+      },
+      "status": {
+        "state": {
+          "active": "Active",
+          "paused": "Paused",
+          "waiting_for_new_plan": "Waiting for new plan",
+          "not_ready": "Not ready",
+          "expired": "Expired",
+          "stale": "Stale"
+        }
+      },
+      "grid_mode": {
+        "state": {
+          "zero_grid": "Zero grid",
+          "inactive": "Inactive"
+        }
+      },
+      "battery_mode": {
+        "state": {
+          "fixed_power": "Fixed power",
+          "follow_grid_target": "Follow grid target"
+        }
+      },
+      "solar_enabled": {
+        "state": {
+          "on": "On",
+          "off": "Off"
+        }
+      },
+      "setup_status": {
+        "state": {
+          "configured": "Configured",
+          "setup_required": "Setup required"
+        }
+      },
+      "permission": {
+        "state": {
+          "yes": "Yes",
+          "no": "No"
+        }
+      },
+      "reserve_status": {
+        "state": {
+          "measurement_unavailable": "Waiting for usable measurements",
+          "reserve_satisfied": "Reserve satisfied",
+          "recovery_required": "Recovery required",
+          "below_reserve": "Below reserve"
+        }
+      },
+      "consumer_forecast_status": {
+        "name": "Forecast status",
+        "state": {
+          "waiting_for_history": "Waiting for history",
+          "active": "Active",
+          "shadow_waiting_for_decision_evidence": "Waiting for decision evidence",
+          "history_or_weather_not_ready": "History or weather not ready",
+          "energy_consumer_removed": "Energy device removed",
+          "existing_exclusions_unsupported": "Existing exclusions unsupported",
+          "consumer_overlaps_household_boundary": "Meter overlaps household boundary",
+          "energy_consumer_hierarchy_inconsistent": "Energy meter hierarchy inconsistent",
+          "household_boundary_missing": "Household boundary missing"
+        }
+      },
+      "appliance_task_status": {
+        "name": "Task status",
+        "state": {
+          "idle": "Idle",
+          "pending": "Pending",
+          "scheduled": "Scheduled",
+          "requested": "Requested",
+          "start_not_confirmed": "Start not confirmed",
+          "running": "Running",
+          "completed": "Completed",
+          "deadline_not_achievable": "Deadline not achievable",
+          "forecast_not_ready": "Forecast not ready",
+          "cancelled": "Cancelled"
+        }
+      },
+      "appliance_start_request": {
+        "name": "Start request",
+        "state": {
+          "idle": "Idle",
+          "start": "Start"
+        }
+      },
+      "appliance_planned_start": {
+        "name": "Planned start"
+      },
+      "appliance_cycle_energy": {
+        "name": "Average cycle energy"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Advanced manual connection",
+        "description": "For the Home Assistant OS app, cancel this dialog and start Open Energy Planner from Settings > Apps. After first installing or updating the matching OEP integration, restart Home Assistant Core once. Supervisor connects automatically without an app URL or API token. Use the fields below only for an advanced standalone connection.",
+        "data": {
+          "url": "App URL",
+          "token": "Local API token"
+        }
+      },
+      "pairing": {
+        "description": "Compare verification code {verification} in the app, then confirm there.",
+        "title": "Waiting for confirmation in the app"
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect. Check the app address, token and matching release."
+    },
+    "abort": {
+      "already_configured": "This app is already configured.",
+      "invalid_discovery": "The discovered app metadata or release is unsupported.",
+      "identity_changed": "The app identity changed. Restore its original identity or explicitly pair again. The saved certificate pin was retained.",
+      "pairing_failed": "Pairing expired or failed. Open the app, check its identity and local networking, and retry discovery.",
+      "supervisor_connecting": "Start Open Energy Planner from Settings > Apps. The app connects automatically through Home Assistant Supervisor. No confirmation, address or token is required."
+    },
+    "progress": {
+      "app_consent": "Open the app and approve this Home Assistant only if its verification code matches: {verification}. No address or API token needs to be copied into this integration."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure in the app",
+        "description": "[Open Open Energy Planner]({url}). Configure the installation in the app. Virtual devices update automatically. Home Assistant OS uses your existing Home Assistant sign-in."
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "dishwasher": {"name": "Test dishwasher", "power_w": [1800, 80, 80, 0, 80, 1200, 80, 0]},
+  "washing_machine": {"name": "Test washing machine", "power_w": [2000, 400, 150, 80, 150, 500, 300, 0, 100, 0]},
+  "dryer": {"name": "Test dryer", "power_w": [900, 800, 700, 700, 600, 500, 300, 100, 400, 300, 200, 100]}
+}

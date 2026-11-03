@@ -1,0 +1,46 @@
+name: CI scope labels (trusted base)
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: >-
+    ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci: run'
+         || github.event.action == 'edited' && github.event.changes.base.ref.from == null
+         || github.event.pull_request.state != 'open')
+        && format('ignored-scope-label-{0}', github.run_id)
+        || format('pr-scope-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    name: Publish selected CI scope
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != null) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci: run')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # Apply the selected scope label to the pull request.
+      issues: write # Create a repository scope label when it does not exist yet.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Classify fetched Git objects without executing PR code
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -f script/ci/label_ci_scope.py ]]; then
+            python3 -I script/ci/label_ci_scope.py
+          else
+            python3 -I script/label_ci_scope.py
+          fi

@@ -1,0 +1,148 @@
+# Plan evidence and decision explanations
+
+The app provides two distinct layers. Neither uses generated narratives or a
+language model. All statements refer to the selected original plan, not today's
+configuration, revised forecasts or corrected contract prices.
+
+## Layer 1: recorded inputs, actions and limits
+
+Implemented by `savings/evidence.py`, exposed on the authenticated original-plan
+comparison response, and rendered in **Planning > Understand this plan**.
+The primary view covers the **whole original planning period**, with explicit
+start/end/duration, total forecast demand/PV, per-source forecast model/quality,
+total planned grid exchange and per-battery charge/discharge and start/final SoC.
+These totals are not the values for the first selected interval. The original
+household and available-solar forecasts also have their own time chart, alongside
+the original spot-market/import/export price chart. Mean kW describes the rate during each block. kWh is
+an energy quantity over the explicitly stated interval or whole horizon.
+
+Open **Selected interval details**, use the keyboard-accessible time slider or
+select a graph bar for a drill-down. Its header shows exact bounds/duration and
+states that energy quantities apply only to that interval. Cards show original
+household/PV forecasts, published/forecast price status,
+effective import/export prices before conditional bonuses, planned grid exchange,
+per-battery DC charging/discharging and end SoC, PV use/curtailment permission,
+and shared inverter AC limits/efficiency. Prepared bonus rates, period caps,
+counters and recorded credited volumes remain separate from base prices.
+
+Forecast provenance comes from the plan's own `demand_evidence` and per-source
+`solar_evidence`, not the currently trained model or a newer shadow candidate.
+Distinguish annual-estimate startup profiles, learned weekday/hour profiles,
+ridge ML regression, physical PVWatts and recorded learned solar corrections.
+Household demand includes baseload. There is no invented separate baseload
+forecast. If an older plan omitted provenance, show **Not recorded**. Solar
+correction candidates currently evaluated in shadow mode must not be presented
+as the physical forecast actually used by the planner.
+
+Expandable plan assumptions show strategy, solver quality, original contract
+version, starting battery energy/reserve, cell losses, wear and the bounded
+remaining-energy estimate. Original expected financial components remain
+separate, including inventory value, which is not cash income.
+
+A reached charge/discharge, grid or converter rating is an observation. So are
+ending at reserve/capacity and a disabled PV command. They do **not** prove that
+the bound caused the solver's choice. A binding constraint can have no economic
+impact. Several solutions can be equally good. Feasible financial results are
+never presented as proven optimal.
+
+For example, “Charge power limit reached” is supported by terminal energy divided
+by actual interval duration. “The rest is sold because the battery cannot charge
+faster” is not asserted by this layer. Shared AC-bus flows do not uniquely identify
+whether PV or imported electricity supplied a specific battery. The UI does not
+invent such provenance. Forecast energy, planned outcomes and measured realization
+remain distinct.
+
+Missing fields are **Not recorded**, never zero. Missing whole intervals retain
+their original timeline position. Incomplete snapshots show an explicit evidence
+issue. Evidence reads do not solve, publish commands, change strategy or write
+new plan/evaluation versions. Existing immutable plan documents already retain
+the necessary source facts, so no database schema or archival rewrite is needed.
+The response names its projection version (`plan-facts-v1`) and original plan ID.
+
+## Reference balances and original price inputs
+
+Planning defaults to **Without battery versus OEP**. The reference chart appears
+above the optimized chart, with shared time ranges, units and flow colors. It
+uses the same frozen household and available-solar forecasts but removes storage.
+PV serves demand, exports surplus and imports deficits. Converter efficiency,
+physical clipping and grid ratings still apply. A physically impossible reference
+is explicitly unavailable. No flow or price curtailment is invented to hide it.
+
+**Battery self-consumption** is shown as the second reference, without a dropdown. Its initial
+stock and bonus counters continue independently from the actual installation.
+Reading charts never resets that state. The no-battery forecast uses
+the plan's recorded initial bonus budgets. It is a horizon comparison, not a new
+continuous lifetime settlement scenario. The Savings screen continues to evaluate
+the established continuous self-consumption reference and labels that policy.
+
+Without-battery benefit includes the operational contribution of storage plus OEP.
+Self-consumption benefit isolates price optimization. Neither includes investment
+costs. Inventory changes remain separate from grid cash. Original costs are used
+for both graphs. Corrected cost evaluations remain separately available for the
+continuous self-consumption reference. Do not silently mix original and corrected
+reference/EMS costs.
+
+These reference results are computed in the app from frozen inputs without solver
+calls. Original saved self-consumption outcomes/costs are preserved. Physical bars
+for legacy references require deterministic replay to match every archived grid
+and battery endpoint. Mismatches yield an explicit issue. Plans are never rewritten.
+
+The reference is an **outcome derived from input**, not the complete input itself.
+Keep the original household/available-PV forecast chart: available DC PV before
+clipping/losses can differ from reference production. The full-horizon price chart
+shows spot market, effective import and effective export rates from original
+`tariff_evidence`, at its billing resolution, even within an hourly control block.
+Missing spot evidence stays a gap. Never derive spot from a retail rate. Conditional
+bonuses stay separate because their payment can depend on time, conditions and
+remaining period quota. Detailed factual explanation follows the graphs.
+
+Current Price inputs and Original plan prices draw published market intervals as
+solid lines and forecast intervals as dotted lines. Import, export and potential
+bonus-inclusive export rates inherit the market interval's recorded `price_kind`.
+Mixed series change style at the exact interval boundary, without changing rates,
+native resolution or missing-data gaps. Current prices use the current API
+classification. Original plan prices retain their frozen classification even when
+new published prices arrive. Older evidence without a classification retains its
+existing line style rather than inventing forecast provenance.
+
+## Layer 2: tested alternatives: specified, not implemented
+
+On request, compare a precise alternative, such as exporting a stated additional
+quantity in a selected interval instead of storing it. Reuse the original frozen
+input, complete horizon, strategy, contract rules, counters, loss model, limits
+and terminal valuation. Change only the explicit alternative requirement. Allow
+the remaining schedule to adapt. Never activate the comparison as a live plan.
+
+Report the tested quantity and scope, feasibility, objective differences and
+proof status. For consumption minimization, respect corrected-import priority
+before comparing costs. A more expensive feasible alternative is not proof that
+all alternatives are worse: optimality or sufficient solution bounds are needed.
+Distinguish proven worse, infeasible, equal within tolerance and not established
+within the computational budget. Infeasibility does not identify a particular
+physical cause without additional evidence. If an alternative is cheaper, report
+that honestly rather than inventing a justification for the original choice.
+
+This layer requires a separate implementation and independently specified small
+comparison scenarios. It is not silently approximated by Layer 1 observations.
+
+## Verification
+
+`tests/app/planning/test_plan_evidence.py` checks original values, numerical limit observations,
+negative prices/bonus separation, missing evidence, strategy, time-zone matching,
+read authentication and immutability without solver calls. Desktop/mobile tests
+in `tests/frontend/browser/test_plan_evidence.py` inspect cards, move between intervals, preserve
+original prices after contract corrections and enforce responsive layout.
+
+The planning page shows all three scenario balances without a comparison selector.
+Each graph identifies its original expected economic cost, net grid cash, wear and
+inventory change. Self-consumption and OEP also show expected benefit versus the
+same no-battery baseline. Negative benefit remains negative. These are horizon
+expectations, not summed overlapping savings. All planning graphs share the
+6-hour, 24-hour and full-horizon selection.
+
+The current plan's x-axis begins at the containing current quarter (22:10 starts
+at 22:00). Explicit historical plans keep their original period, rounded down only
+for axis presentation. First partial blocks retain their actual start and energy.
+Every displayed time tick falls on a quarter boundary. Skip labels on long horizons
+instead of inventing irregular timestamps. Source values and native price segments
+are never averaged or interpolated to create visual variation.
