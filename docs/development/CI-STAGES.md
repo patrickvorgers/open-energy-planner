@@ -13,8 +13,11 @@ It installs the central development dependencies, Ruff and pytest, without
 building Docker images or installing app and HA dependencies. Trusted signature
 verification remains a separate automatic check.
 
-CodeRabbit automatically reviews Drafts without pausing after a fixed number of
-reviewed commits. Keep the PR in Draft while assessing
+While the repository has fewer than 10 GitHub stars, manually start CodeRabbit
+with a PR comment containing `@coderabbitai review` after every new head. Do not
+request reviews for Dependabot PRs, which retain their documented exception.
+Verify actual completed current-head analysis. Do not assume automatic review,
+even after the star threshold is reached. Keep the PR in Draft while assessing
 findings and batching corrections. The trusted base workflow returns newly
 opened, reopened, revised or retargeted PRs to Draft. This includes PRs opened
 with GitHub's normal Ready option. Title and description edits do not reset
@@ -72,7 +75,7 @@ resolved comments are allowed. A completed current-head review is always require
 
 Keep the candidate frozen. A new commit cancels the obsolete candidate through
 the trusted readiness workflow, returns the PR to Draft and runs cheap
-checks and CodeRabbit again. After completing corrections and current-head
+checks again. Request CodeRabbit manually when required above. After completing corrections and current-head
 review, choose Ready again. An early Ready transition with missing evidence fails
 before image builds. Complete the missing work and make a fresh Ready transition.
 There is no polling workflow, periodic run, special disposition comment or
