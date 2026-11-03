@@ -13,8 +13,11 @@ It installs the central development dependencies, Ruff and pytest, without
 building Docker images or installing app and HA dependencies. Trusted signature
 verification remains a separate automatic check.
 
-CodeRabbit automatically reviews Drafts without pausing after a fixed number of
-reviewed commits. Keep the PR in Draft while assessing
+While the repository has fewer than 10 GitHub stars, manually start CodeRabbit
+with a PR comment containing `@coderabbitai review` after every new head. Do not
+request reviews for Dependabot PRs, which retain their documented exception.
+Verify actual completed current-head analysis. Do not assume automatic review,
+even after the star threshold is reached. Keep the PR in Draft while assessing
 findings and batching corrections. The trusted base workflow returns newly
 opened, reopened, revised or retargeted PRs to Draft. This includes PRs opened
 with GitHub's normal Ready option. Title and description edits do not reset
@@ -72,7 +75,7 @@ resolved comments are allowed. A completed current-head review is always require
 
 Keep the candidate frozen. A new commit cancels the obsolete candidate through
 the trusted readiness workflow, returns the PR to Draft and runs cheap
-checks and CodeRabbit again. After completing corrections and current-head
+checks again. Request CodeRabbit manually when required above. After completing corrections and current-head
 review, choose Ready again. An early Ready transition with missing evidence fails
 before image builds. Complete the missing work and make a fresh Ready transition.
 There is no polling workflow, periodic run, special disposition comment or
@@ -261,7 +264,7 @@ Inspect only the named invocation's resources before removing leftovers.
 
 Changes confined to `label_ci_scope.py`, `check_ci_candidate.py`,
 `check_commit_signatures.py`, `check_main_ci_reuse.py`,
-`check_suite_completion.py`, `check_provenance.py` and `scope_report.py` under `script/ci/` select
+`check_suite_completion.py`, `check_provenance.py`, `review_preflight.py` and `scope_report.py` under `script/ci/` select
 only the `ci` suite. These modules classify changes, verify admission and
 signatures, inspect original evidence or parse completion reports. They do not
 execute app, HA, database, migration or volume workloads. Mixed changes retain
@@ -274,6 +277,7 @@ The remaining CI responsibilities have separate reviewed owners:
 | `ci_scope.py`, `ci_groups.py` | CI regressions for selection and pure suite membership |
 | `ha_suites.py`, `ha_shard.py` | `selected:ci,ha` for HA arguments and worker partitioning |
 | `.github/workflows/ci-admission.yaml` | CI regressions for admission, Quick and evidence reuse |
+| `.coderabbit.yaml`, `.github/workflows/review-preflight.yaml` | CI regressions for review configuration and the fixed trusted-main metadata preflight |
 | `proof_git.py`, `pytest_suites.py`, `ci.py`, `check_images.py`, `checks.yaml` | Full functional and query-performance coverage for actual shared execution |
 
 `proof_git.py` owns fixed Git processes and immutable policy loading. Workflows
@@ -305,6 +309,19 @@ read-only command/action contract. Adding execution, services, environment hooks
 or fabricated reuse outputs fails its architecture regressions. Unknown owners
 and shared execution remain conservative. These guards complement review and do
 not establish an adversarial sandbox.
+
+The manual review preflight has a separate fixed workflow contract. It may run
+only from trusted main through an explicit dispatch, with read permissions and
+the declared proof entrypoint. Extra commands, services, mutable contributor
+checkouts, environment hooks or write permissions fail its structural checks.
+Its Python imports remain inside the same transitive proof ownership guard.
+Declared entrypoints are checked whenever present, including newly added files.
+Unknown preflight names retain conservative coverage.
+
+This boundary does not classify arbitrary CI changes as metadata. Changes to
+shared execution, Docker setup, pytest selection or immutable Git process
+adapters retain their existing functional and query-performance coverage.
+Removing an old runner or provenance call does not itself grant a cheaper route.
 
 The existing ownership guard follows proof imports through helpers and ancestor
 package initializers. It allows explicit metadata capabilities and reviewed
