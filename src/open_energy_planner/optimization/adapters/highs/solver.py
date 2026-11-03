@@ -1,6 +1,7 @@
 """One native solver lifecycle. No device physics, IO or publication policy."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from math import isfinite
 from time import perf_counter
 
@@ -9,6 +10,7 @@ import highspy
 from open_energy_planner.installation.model import InstallationProblem
 from open_energy_planner.optimization.adapters.highs.consumption import prioritize_consumption
 from open_energy_planner.optimization.adapters.highs.installation import InstallationModelFactory
+from open_energy_planner.optimization.adapters.highs.progress import FinancialProgress
 from open_energy_planner.optimization.adapters.highs.recovery import (
     prioritize_reserve,
     set_time_budget,
@@ -80,6 +82,20 @@ class HighsSolver:
         self.factory = factory if factory is not None else InstallationModelFactory()
 
     def solve(
+        self,
+        problem: InstallationProblem,
+        options: SolveOptions | None = None,
+    ) -> SolveResult:
+        """Retain the actual shared time budget for every outcome, including priority failures."""
+        options = options or SolveOptions()
+        started_at = datetime.now(UTC)
+        return replace(
+            self._solve(problem, options),
+            time_limit_seconds=options.time_limit_s,
+            started_at=started_at,
+        )
+
+    def _solve(
         self,
         problem: InstallationProblem,
         options: SolveOptions | None = None,
@@ -195,6 +211,9 @@ class HighsSolver:
             ):
                 raise ValueError("Rejected financial optimality tolerance")
             set_time_budget(native, remaining)
+            financial_started = perf_counter() - started
+            progress = FinancialProgress(started)
+            progress.subscribe(native)
             run_status = native.run()
             solve_seconds = perf_counter() - solving
             if run_status == highspy.HighsStatus.kError:
@@ -212,6 +231,10 @@ class HighsSolver:
             plan = model.extract() if disposition.use_candidate else None
             if disposition.status == Status.OPTIMAL and bound is None:
                 bound = float(native.getObjectiveValue())
+            if candidate:
+                progress.finish(
+                    float(native.getObjectiveValue()), bound if bound is not None else float("nan")
+                )
             return SolveResult(
                 disposition.status,
                 plan,
@@ -220,6 +243,9 @@ class HighsSolver:
                 solve_seconds,
                 bound,
                 consumption_optimum,
+                tuple(progress.samples),
+                financial_started,
+                progress.first_candidate_seconds,
             )
         except (RuntimeError, ValueError, TypeError, IndexError, KeyError) as exc:
             # No partial candidate escapes build, native or extraction failures.

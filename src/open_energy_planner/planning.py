@@ -130,10 +130,16 @@ class Solver(Protocol):
 
 @dataclass(frozen=True)
 class PlanningOutcome:
-    """Pair a complete validated wire document, if any, with an explicit calculation reason."""
+    """Pair a complete validated wire document, if any, with an explicit calculation reason.
+
+    ``result`` retains the solver outcome for calculation history. It is None
+    when no solver ran or no result returned. It can remain present after a
+    candidate is rejected or its inputs expire, while ``document`` is None.
+    """
 
     document: dict | None
     reason: str
+    result: SolveResult | None = None
 
 
 class CommandMapper:
@@ -199,6 +205,7 @@ class PlanningService:
             return PlanningOutcome(None, "unsupported_strategy")
         if not snapshot.current_at(self.clock()):
             return PlanningOutcome(None, "stale_input")
+        result = None
         try:
             result = (
                 await self.solver.solve(snapshot.problem)
@@ -206,7 +213,7 @@ class PlanningService:
                 else await self.solver.solve(snapshot.problem, strategy=Strategy.CONSUMPTION)
             )
             if result.status not in (Status.OPTIMAL, Status.FEASIBLE) or result.plan is None:
-                return PlanningOutcome(None, result.stop_reason)
+                return PlanningOutcome(None, result.stop_reason, result)
             costs = await asyncio.to_thread(self.validator, snapshot.problem, result.plan)
             metrics = evaluate_consumption(snapshot.problem, result.plan)
             if snapshot.strategy == Strategy.CONSUMPTION and (
@@ -216,10 +223,10 @@ class PlanningService:
                 or abs(metrics.corrected_import_kwh - result.consumption_optimum_kwh)
                 > CONSUMPTION_PRIORITY_TOLERANCE_KWH + CONSUMPTION_VALIDATION_TOLERANCE_KWH
             ):
-                return PlanningOutcome(None, "consumption_objective_rejected")
+                return PlanningOutcome(None, "consumption_objective_rejected", result)
             now = self.clock()
             if not snapshot.current_at(now):
-                return PlanningOutcome(None, "input_expired_during_solve")
+                return PlanningOutcome(None, "input_expired_during_solve", result)
             document = CommandMapper().build(snapshot, result, costs, now)
             if snapshot.strategy == Strategy.CONSUMPTION:
                 document["consumption_objective"] = {
@@ -229,9 +236,9 @@ class PlanningService:
                     "tolerance_kwh": CONSUMPTION_PRIORITY_TOLERANCE_KWH,
                     "terminal_method": "initial_stock_grid_replacement",
                 }
-            return PlanningOutcome(document, "validated")
+            return PlanningOutcome(document, "validated", result)
         except (ValueError, TypeError, RuntimeError, IndexError, KeyError):
-            return PlanningOutcome(None, "candidate_rejected")
+            return PlanningOutcome(None, "candidate_rejected", result)
 
 
 class PublicationSuperseded(Exception):
@@ -296,16 +303,25 @@ class PlanningCoordinator:
         *,
         clock=None,
         explain=None,
+        record_calculation=None,
     ):
         """Create a coordinator with an async publication callback.
 
         ``clock`` supplies timezone-aware instants for diagnostic elapsed seconds.
         It defaults to the current UTC time. Injected clocks must remain aware.
         ``explain`` supplies module-owned diagnostic text without changing admission.
+        ``record_calculation`` is awaited once per attempted round in the finally
+        block after publication disposition, as ``(snapshot, outcome, started,
+        finished, reason)``. The timestamps are aware instants. ``outcome`` is
+        None if calculation did not return. ``reason`` is ``published``, an
+        outcome or supersession reason, or ``planning_error``. Callback exceptions
+        are logged and contained. A slow callback delays the next round, so the
+        callback must enqueue optional persistence rather than wait for storage.
         """
         self.service, self.publish = service, publish
         self.clock = clock or (lambda: datetime.now(UTC))
         self.explain = explain or explain_planning_problem
+        self.record_calculation = record_calculation
         self.latest = None
         self.active = None
         self.published = None
@@ -410,8 +426,12 @@ class PlanningCoordinator:
             snapshot = self.latest
             self.active = snapshot
             self._set_status("calculating")
+            calculation_started = self.clock()
+            outcome = None
+            calculation_reason = "planning_error"
             try:
                 outcome = await self.service.calculate(snapshot)
+                calculation_reason = outcome.reason
                 if self.closed:
                     return
                 if outcome.document is not None:
@@ -422,6 +442,7 @@ class PlanningCoordinator:
                         raise PublicationSuperseded(reason)
                     await self.publish(outcome.document)
                     self.published = (snapshot, outcome.document)
+                    calculation_reason = "published"
                     if self.closed or self.latest is None:
                         continue
                     self._set_status("ready", outcome.reason)
@@ -430,15 +451,25 @@ class PlanningCoordinator:
                         continue
                     self._set_status("failed", outcome.reason or "no_usable_plan")
             except PublicationSuperseded as error:
+                calculation_reason = str(error) or "inputs_changed"
                 _LOGGER.info(
                     "Plan discarded before publication (%s)", str(error) or "inputs_changed"
                 )
                 if snapshot is self.latest:
                     self.invalidate(str(error) or "publication_inputs_expired")
             except Exception:
+                calculation_reason = "planning_error"
                 _LOGGER.exception("Planning round failed. No partial plan published")
                 if not self.closed and snapshot is self.latest:
                     self._set_status("failed", "planning_error")
+            finally:
+                if self.record_calculation is not None:
+                    try:
+                        await self.record_calculation(
+                            snapshot, outcome, calculation_started, self.clock(), calculation_reason
+                        )
+                    except Exception:
+                        _LOGGER.exception("Calculation history unavailable. Planning is unaffected")
             if snapshot is self.latest:
                 return
 

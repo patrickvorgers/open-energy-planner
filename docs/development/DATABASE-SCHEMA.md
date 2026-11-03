@@ -1062,3 +1062,19 @@ limit per bucket. `SqlAlchemySelectionStore` retains initialization, index repai
 atomic ingestion and decision writes. This ownership change does not alter any
 table, column, type, index, row representation, unit or archived JSON contract.
 The functional migration suite remains responsible for transfer of every table.
+
+
+### Planning calculation history
+
+`CalculationHistory` in `optimization/performance.py` owns `planning` keys `calculations-YYYY-MM-DD.json` in `oep_documents`. The date is the UTC start date. Each atomically appended array row stores opaque `id`, aware `started_at` and `finished_at`, whole-round `duration_seconds`, nullable actual `time_limit_seconds`, original `snapshot_id`, `strategy`, `intervals` count, publication `reason`, nullable native `stop_reason`, published `plan_id` and contract `currency`. No credentials or raw provider failures enter the document.
+
+`calculations-<UTC-date>.json` arrays retain summary rows without `progress`. Each separate `calculation-<id>.json` document retains the full observation, including its bounded `progress` curve. Both writes share one transaction. The authenticated daily endpoint returns summaries. The detail endpoint loads one record by validated opaque ID when requested.
+
+Nullable `build_seconds`, `solve_seconds` and `financial_started_seconds` are worker-relative durations. Nullable `worker_start_seconds` aligns the worker with the coordinator. Nullable `first_candidate_seconds` is whole-round elapsed time and requires an observed finite incumbent during final financial search, including a retained service-stage seed. `progress` contains up to 256 observations with whole-round `elapsed_seconds`, finite currency-valued `objective` and nullable finite `best_bound`. Service priorities are already fixed. Native feasibility is distinct from publication. No old archives are rewritten or backfilled.
+
+The existing composite primary key supports direct daily lookup. Local days read adjacent UTC partitions and filter aware starts. No new table, index or foreign key is introduced. `plan_id` is descriptive evidence. Shared database transfer retains and verifies these documents with all other data. Restart and source-independent transfer regressions use the shared SQLite, PostgreSQL, MariaDB and MySQL matrices.
+
+Retention is explicit: completed calculation evidence remains in the active database alongside original plans, without automatic deletion. This preserves requested historical day lookup. There is no additional retention setting. Separating curves from the index bounds ordinary daily response/write size by summary count rather than sample count. Database transfer preserves both the index and individual observations.
+
+
+Optional calculation recording uses one serialized background writer. The coordinator only captures a detached summary and at most 256 samples, then enqueues without waiting for SQL. Up to 32 pending observations bound memory. Queue saturation logs an unrecorded observation rather than delaying planning or fabricating a history row. Individual write failures are contained and later writes continue. Normal shutdown stops planning, drains queued observations and only then closes the shared archive engine. Forced termination or storage failure cannot guarantee retained diagnostics. This changes no device command, solver budget or existing history.

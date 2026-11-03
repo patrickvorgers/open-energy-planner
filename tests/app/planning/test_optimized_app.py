@@ -60,6 +60,21 @@ def test_api_remains_responsive_and_pause_is_immediate_during_calculation(tmp_pa
         finally:
             release.set()
             await runner.cleanup()
+        from datetime import UTC, datetime
+
+        from open_energy_planner.optimization.performance import CalculationHistory
+        from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+        reopened = SqlPlanRepository(tmp_path)
+        try:
+            history = CalculationHistory(SqlDocuments(reopened.engine, "planning"))
+            rows = history.day(datetime.now(UTC).date().isoformat(), "UTC")
+            assert len(rows) == 1
+            assert rows[0]["reason"] == "published"
+            assert rows[0]["plan_id"] == state["plan"]["plan_id"]
+            assert history.detail(rows[0]["id"])["progress"]
+        finally:
+            reopened.close()
 
     asyncio.run(scenario())
 
