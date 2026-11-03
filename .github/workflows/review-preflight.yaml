@@ -1,4 +1,5 @@
-name: Manual CodeRabbit review preflight
+name: Read-only preflight transport diagnostic
+run-name: Diagnostic only, not review or candidate evidence
 on:
   workflow_dispatch:
     inputs:
@@ -35,20 +36,68 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: manual-review-preflight
+  group: preflight-api-transport-diagnostic
   cancel-in-progress: false
 
 jobs:
-  preflight:
-    if: github.ref == 'refs/heads/main' && github.event.repository.default_branch == 'main'
+  transport-diagnostic:
+    if: github.ref == 'refs/heads/diagnostic/preflight-api-transport' && github.actor == github.repository_owner
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 3
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Check frozen identities, file count and current review prerequisites
+      - name: Read API status and quota without provider values or credentials
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 -m script.ci.review_preflight
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import platform
+          import re
+          import ssl
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          token = os.environ['GITHUB_TOKEN']
+          assert token and '\n' not in token and '\r' not in token
+          print(json.dumps({'python': platform.python_version(), 'openssl': ssl.OPENSSL_VERSION, 'image': os.environ.get('ImageVersion'), 'diagnostic_only': True}))
+
+          def probe(path):
+              """Report only public status, schema, quota and transport categories."""
+              request = Request('https://api.github.com/' + path, headers={
+                  'Authorization': 'Bearer ' + token,
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'Content-Type': 'application/json',
+              })
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      data = response.read(2_000_001)
+                      report = {'transport': 'urllib', 'path': path, 'status': response.status, 'bytes': len(data), 'remaining': response.headers.get('X-RateLimit-Remaining'), 'reset': response.headers.get('X-RateLimit-Reset')}
+                      try:
+                          payload = json.loads(data)
+                          report['json_object'] = isinstance(payload, dict)
+                          if path == 'rate_limit':
+                              core = payload.get('resources', {}).get('core', {})
+                              report['core'] = {key: core.get(key) for key in ('limit', 'remaining', 'reset')}
+                          else:
+                              report['expected_head'] = payload.get('head', {}).get('sha') == '8cdf7f71d37af81930371e023563efcad47a17dc'
+                      except (ValueError, AttributeError):
+                          report['json_object'] = False
+                      print(json.dumps(report))
+              except HTTPError as error:
+                  print(json.dumps({'transport': 'urllib', 'path': path, 'http_error': error.code, 'remaining': error.headers.get('X-RateLimit-Remaining'), 'reset': error.headers.get('X-RateLimit-Reset')}))
+              except URLError as error:
+                  print(json.dumps({'transport': 'urllib', 'path': path, 'error_class': type(error.reason).__name__, 'verify_code': getattr(error.reason, 'verify_code', None)}))
+
+          probe('rate_limit')
+          probe('repos/patrickvorgers/open-energy-planner/pulls/5')
+          with tempfile.TemporaryDirectory() as directory:
+              config = 'header = "Authorization: Bearer ' + token + '"\nheader = "Accept: application/vnd.github+json"\n'
+              result = subprocess.run(['curl', '--silent', '--max-time', '20', '--config', '-', '--output', str(Path(directory) / 'response.json'), '--write-out', '%{http_code}', 'https://api.github.com/repos/patrickvorgers/open-energy-planner/pulls/5'], input=config, text=True, capture_output=True)
+              status = result.stdout.strip()
+              print(json.dumps({'transport': 'curl', 'exit_code': result.returncode, 'status': status if re.fullmatch(r'\d{3}', status) else 'invalid'}))
+          PY
