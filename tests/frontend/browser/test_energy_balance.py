@@ -16,7 +16,7 @@ from tests.frontend.browser.helpers import (
 
 @pytest.mark.parametrize("app_site", ["savings", "savings_corrected"], indirect=True)
 def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(app_page):
-    """Desktop/mobile default to no storage, also show continuous storage and retain .1/.3/0 original price inputs."""
+    """Desktop/mobile lead with the optimizer, retain both references and keep .1/.3/0 original price inputs."""
     page, url = app_page
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
@@ -40,12 +40,14 @@ def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(ap
                 return [axis.min,axis.max,...axis.ticks.map(tick => tick.value)];
             }),
             prices: prices.data.datasets.map(dataset => ({label: dataset.label, values: dataset.data.map(point => point.y)})),
-            referenceFirst: document.getElementById('reference-chart').getBoundingClientRect().top < document.getElementById('plan-chart').getBoundingClientRect().top,
+            scenarioOrder: ['plan-chart','self-consumption-chart','reference-chart','current-price-chart'].map(id => document.getElementById(id).closest('figure').getBoundingClientRect().top),
             evidenceLast: document.getElementById('plan-chart').getBoundingClientRect().top < document.getElementById('plan-evidence-panel').getBoundingClientRect().top};
     }""")
     assert not any("Battery" in name for name in state["reference"])
     assert state["scales"][0] == state["scales"][1] == state["scales"][2]
-    assert state["referenceFirst"] and state["evidenceLast"]
+    assert state["scenarioOrder"] == sorted(state["scenarioOrder"])
+    assert len(set(state["scenarioOrder"])) == 4
+    assert state["evidenceLast"]
     assert [row["label"] for row in state["prices"]] == [
         "Spot market rate",
         "Import rate",

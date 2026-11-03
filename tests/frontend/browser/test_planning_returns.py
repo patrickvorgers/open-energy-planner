@@ -77,17 +77,33 @@ def test_incremental_benefit_is_prominent_and_keeps_loss_zero_and_unknown_distin
     connect(page, url)
     expect(page.locator("#smart-benefit-value")).to_have_text(amount)
     expect(page.locator("#smart-benefit-label")).to_have_text(label)
-    expect(page.locator(".planning-benefit")).to_have_attribute("data-state", state)
-    expect(page.locator(".planning-benefit")).to_contain_text(
+    expect(page.locator("#optimizer-total-value")).to_have_text(amount)
+    expect(page.locator("#optimizer-total-label")).to_have_text(label)
+    expect(page.locator(".optimizer-scenario .planning-benefit")).to_have_attribute(
+        "data-state", state
+    )
+    expect(page.locator(".optimizer-scenario .planning-benefit")).to_contain_text(
         "Compared with battery self-consumption"
     )
     expect(page.locator("#smart-benefit-period")).to_contain_text("Whole original plan")
+    expect(page.locator(".scenario-card > figcaption > h3")).to_have_text(
+        ["Optimizer", "Battery self-consumption", "Without battery: Baseline"]
+    )
+    expect(page.locator("#plan-chart").locator("xpath=ancestor::figure")).to_contain_text(
+        "Compared with battery self-consumption"
+    )
+    expect(page.locator("#self-consumption-heading").locator("xpath=..")).to_contain_text(
+        "Battery and converter limits can still leave grid import or export."
+    )
+    periods = page.locator(".scenario-period").all_text_contents()
+    assert len(periods) == 4 and len(set(periods)) == 1
     if extra == 2.75:
         expect(page.locator("#reference-costs > dl dd")).to_have_text("14,21 EUR")
         expect(page.locator("#self-consumption-costs > dl dd")).to_have_text(
             ["12,00 EUR", "2,21 EUR"]
         )
-        expect(page.locator("#ems-costs > dl dd")).to_have_text(["9,25 EUR", "4,96 EUR"])
+        for cost_id in ("ems-costs", "optimizer-total-costs"):
+            expect(page.locator(f"#{cost_id} > dl dd")).to_have_text(["9,25 EUR", "4,96 EUR"])
     assert (
         page.locator("#smart-benefit-value").evaluate(
             "el => parseFloat(getComputedStyle(el).fontSize)"
@@ -95,13 +111,19 @@ def test_incremental_benefit_is_prominent_and_keeps_loss_zero_and_unknown_distin
         >= 32
     )
     assert (
-        page.locator(".planning-benefit").bounding_box()["y"]
+        page.locator(".optimizer-scenario .planning-benefit").bounding_box()["y"]
         < page.locator("#reference-chart").bounding_box()["y"]
     )
-    before = page.locator(".planning-benefit").text_content()
+    summary_top = page.locator(".optimizer-total").bounding_box()["y"]
+    assert page.locator("#reference-chart").bounding_box()["y"] < summary_top
+    assert (
+        summary_top
+        < page.locator("#current-price-chart").locator("xpath=ancestor::figure").bounding_box()["y"]
+    )
+    before = page.locator(".optimizer-scenario .planning-benefit").text_content()
     for title in ("Next 6 hours", "Next 24 hours", "Full horizon"):
         page.get_by_role("button", name=title, exact=True).click()
-        expect(page.locator(".planning-benefit")).to_have_text(before)
+        expect(page.locator(".optimizer-scenario .planning-benefit")).to_have_text(before)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
@@ -123,6 +145,13 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
     page, url = financial_page
     page.route("**/v1/plans/*/comparison", lambda route: comparison_response(route))
     connect(page, url)
+    chart_help = page.get_by_text("Read this chart", exact=True)
+    chart_help.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator(".scenario-chart-help")).to_have_attribute("open", "")
+    expect(page.locator(".scenario-chart-help")).to_contain_text(
+        "All series together balance to zero"
+    )
     disclosure = page.locator("#ems-costs summary")
     disclosure.focus()
     page.keyboard.press("Enter")

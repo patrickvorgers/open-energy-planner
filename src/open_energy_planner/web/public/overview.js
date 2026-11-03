@@ -273,11 +273,11 @@ function renderSmartBenefit(value, currency, period = "Whole original plan. Expe
     const known = typeof value === "number" && Number.isFinite(value);
     const zero = known && money(Math.abs(value)) === money(0);
     const state = !known ? "unavailable" : zero ? "zero" : value > 0 ? "positive" : "negative";
-    $("smart-benefit-value").closest("section").dataset.state = state;
-    $("smart-benefit-label").textContent = state === "negative" ? "Extra expected cost from smart planning" : state === "zero" ? "No extra expected savings from smart planning" : "Extra expected savings from smart planning";
-    $("smart-benefit-value").textContent = known ? money(zero ? 0 : Math.abs(value)) : "-";
-    $("smart-benefit-currency").textContent = currency;
-    $("smart-benefit-period").textContent = period;
+    for (const region of document.querySelectorAll(".planning-benefit")) region.dataset.state = state;
+    for (const label of document.querySelectorAll('[data-smart-benefit="label"]')) label.textContent = state === "negative" ? "Extra expected cost from smart planning" : state === "zero" ? "No extra expected savings from smart planning" : "Extra expected savings from smart planning";
+    for (const amount of document.querySelectorAll('[data-smart-benefit="value"]')) amount.textContent = known ? money(zero ? 0 : Math.abs(value)) : "-";
+    for (const unit of document.querySelectorAll('[data-smart-benefit="currency"]')) unit.textContent = currency;
+    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = period;
 }
 
 /** Keep the original cost and optional benefit readable, with non-cash components in native disclosure. */
@@ -317,7 +317,7 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
 async function showPlan() {
     const request = ++selectionRequest, id = $("plan-version").value;
     renderSmartBenefit(null, "", id ? "Loading original plan comparison…" : "No plan selected.");
-    for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
+    for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs", "optimizer-total-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
     $("expected-benefit").textContent = "";
     planEvidence = null;
     $("inspect-time").disabled = true;
@@ -355,15 +355,15 @@ async function showPlan() {
         const self = selfConsumption?.comparison;
         renderScenarioCosts("reference-costs", baseline?.reference_costs, currency);
         renderScenarioCosts("self-consumption-costs", self?.reference_costs, currency, selfConsumption?.expected_savings_vs_without_battery, true);
-        renderScenarioCosts("ems-costs", baseline?.ems_costs || self?.ems_costs, currency, baseline?.expected_savings, true);
+        for (const costId of ["ems-costs", "optimizer-total-costs"]) renderScenarioCosts(costId, baseline?.ems_costs || self?.ems_costs, currency, baseline?.expected_savings, true);
         const period = planEvidence?.period;
         renderSmartBenefit(self?.expected_savings, currency, period ? `From ${when(period.start)} to ${when(period.end)}: Whole original plan. Expected, not measured.` : undefined);
-        let message = "The comparison without battery includes storage and OEP. Excludes investment costs. All graph costs use the original contract.";
+        let message = "Benefits versus without battery include storage and OEP. Excludes investment costs.";
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
         if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
         if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
         if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
-        $("expected-benefit").textContent = message + " Horizon expectations are not evaluated lifetime savings. See Savings for evaluated self-consumption results.";
+        $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
         const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
         for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row($("expected-cost-rows"), [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
         const ems = [], reference = [], bareReference = [], buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
