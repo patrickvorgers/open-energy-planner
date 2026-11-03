@@ -555,9 +555,16 @@ def create_app(
                                 async with lock:
                                     if live.report and live.report.location == location:
                                         demand.weather(temperatures)
-                                        weather_logger.success(
-                                            f"Received {len(temperatures)} temperature hours. Next refresh in {WEATHER_REFRESH_SECONDS / SECONDS_PER_MINUTE:g} minutes."
-                                        )
+                                        if temperatures:
+                                            weather_logger.success(
+                                                f"Received {len(temperatures)} temperature hours. Next refresh in {WEATHER_REFRESH_SECONDS / SECONDS_PER_MINUTE:g} minutes."
+                                            )
+                                        else:
+                                            weather_logger.unavailable(
+                                                "Calendar consumption forecasting remains available without temperature data.",
+                                                reason="no usable temperature hours",
+                                                retry_seconds=WEATHER_REFRESH_SECONDS,
+                                            )
                                 delay = WEATHER_REFRESH_SECONDS
                             except Exception as error:
                                 weather_logger.exception(

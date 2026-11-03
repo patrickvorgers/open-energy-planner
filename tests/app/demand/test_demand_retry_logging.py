@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,8 +15,106 @@ from open_energy_planner.demand.calculation.model import (
     TemperatureHour,
 )
 from open_energy_planner.demand.runtime import DemandRuntime
+from open_energy_planner.installation.location import SiteLocation
 
 NOW = datetime(2026, 11, 3, 12, tzinfo=UTC)
+
+
+def test_empty_temperature_evidence_waits_for_usable_recovery(tmp_path, monkeypatch, caplog):
+    """Empty successful reads stay unavailable until usable hours arrive, with unchanged hourly refresh."""
+    runtimes, live_inputs, calls = [], [], []
+    original_live_inputs = app_module.LiveInputs
+    location = SiteLocation(52, 6, "Europe/Amsterdam")
+    temperatures = (TemperatureHour(NOW, 8, NOW),)
+
+    def runtime_factory(store, **options):
+        """Configure a real demand runtime whose accepted weather can be inspected."""
+        runtime = DemandRuntime(store, **options)
+        runtime.configure(
+            DemandConfiguration("Europe/Amsterdam", 3650, (EnergyTerm("sensor.house", 1),))
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    def live_factory(*args):
+        """Retain the real live-input owner without starting unrelated workers."""
+        live = original_live_inputs(*args)
+        live_inputs.append(live)
+        return live
+
+    class Weather:
+        """Supply two empty provider results followed by one usable temperature hour."""
+
+        async def read(self, site, now):
+            """Observe actual refresh requests without contacting a weather service."""
+            assert site == location
+            calls.append(now)
+            return () if len(calls) < 3 else temperatures
+
+    @asynccontextmanager
+    async def factory():
+        """Borrow the deterministic provider for the real temperature lifecycle."""
+        yield Weather()
+
+    async def scenario():
+        """Release each actual scheduled wait and inspect evidence before cleanup."""
+        sleeps, resume = asyncio.Queue(), asyncio.Queue()
+
+        async def sleep(seconds):
+            """Capture the actual next refresh interval without waiting an hour."""
+            sleeps.put_nowait(seconds)
+            await resume.get()
+
+        monkeypatch.setattr(app_module, "DemandRuntime", runtime_factory)
+        monkeypatch.setattr(app_module, "LiveInputs", live_factory)
+        monkeypatch.setattr(
+            app_module,
+            "asyncio",
+            SimpleNamespace(
+                create_task=asyncio.create_task,
+                sleep=sleep,
+                Lock=asyncio.Lock,
+                CancelledError=asyncio.CancelledError,
+            ),
+        )
+        application = app_module.create_app(
+            tmp_path,
+            "temperature-test-token-0123456789",
+            source="home_assistant",
+            database_url=None,
+            weather_factory=factory,
+        )
+        live_inputs[0].report = SimpleNamespace(location=location)
+        lifecycle = next(
+            context
+            for context in application.cleanup_ctx
+            if context.__name__ == "weather_lifecycle"
+        )(application)
+        await anext(lifecycle)
+        try:
+            for attempt in range(3):
+                assert await asyncio.wait_for(sleeps.get(), 3) == 3600
+                assert len(calls) == attempt + 1
+                assert runtimes[0].temperatures == (() if attempt < 2 else temperatures)
+                if attempt < 2:
+                    resume.put_nowait(None)
+        finally:
+            await lifecycle.aclose()
+
+    with caplog.at_level(logging.DEBUG, logger=app_module.__name__):
+        asyncio.run(scenario())
+    records = [
+        record for record in caplog.records if "Temperature weather refresh" in record.message
+    ]
+    assert [record.levelno for record in records] == [logging.WARNING, logging.DEBUG, logging.INFO]
+    assert "no usable temperature hours" in records[0].message
+    assert "Retrying in 60 minutes." in records[0].message
+    assert all(
+        "ready" not in record.message and "recovered" not in record.message
+        for record in records[:2]
+    )
+    assert "recovered" in records[2].message
+    assert "Received 1 temperature hours" in records[2].message
 
 
 @pytest.mark.parametrize("failure", ["current", "stale", "before_capture"])
