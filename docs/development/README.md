@@ -3,8 +3,9 @@
 The [planning notifications guide](PLANNING-NOTIFICATIONS.md) describes actionable
 app warnings, recovery, authenticated status reads and deduplicated diagnostics.
 
-Start the [real Supervisor developer environment](DEVELOPER-ENVIRONMENT.md) with
-`python -m script.supervisor.dev start`. It supplies actual Supervisor/Core, OEP, simulated
+Prepare an original successful CI installation bundle as described in the
+[real Supervisor developer environment guide](DEVELOPER-ENVIRONMENT.md#start-and-stop),
+then run `python -m script.supervisor.dev start`. It supplies actual Supervisor/Core, OEP, simulated
 devices and recent Energy history without a personal HA OS VM. The Dev Container
 uses this same environment. Existing fast CI remains separate from interactive
 startup.
@@ -190,11 +191,11 @@ Pylint, security/secrets scanning, workflow/container/YAML analysis and GitHub-c
 
 ## First start
 
-Install Git, Docker with Compose, VS Code and the Dev Containers extension. Clone the private repository using your GitHub account, open its root in VS Code, and choose **Dev Containers: Reopen in Container**.
+Install Python 3.12 or newer, Git, Docker with Compose, VS Code and the Dev Containers extension. The repository is public. Package verification still needs GitHub read access through Git Credential Manager or `GH_TOKEN`/`GITHUB_TOKEN` in a host terminal. Never enter credentials on the start page.
 
-The optional static [developer start page](../developer/index.html) offers the browser-to-VS-Code entry pattern used by HA/DAO: enter a repository/branch URL and open the Dev Container clone flow. A direct [Open in Dev Containers link](https://vscode.dev/redirect?url=vscode%3A%2F%2Fms-vscode-remote.remote-containers%2FcloneInVolume%3Furl%3Dhttps%253A%252F%252Fgithub.com%252Fpatrickvorgers%252Fopen-energy-planner) also needs no hosted page. Browser/VS Code clone/trust prompts remain the developer's responsibility. The successful CLI receipt covers a fresh ordinary checkout, not the graphical container-volume flow.
+The public [developer start page](https://patrickvorgers.github.io/open-energy-planner/developer/) opens VS Code's ordinary Git clone flow for a repository or branch. Clone into a local folder and prepare the original successful CI installation bundle on the host. Run `python -m script.supervisor.dev start` on the host to provision the environment and copy its private login details into the checkout, then choose **Dev Containers: Reopen in Container**. Use the matching verified merge checkout for persistent provisioning. Unmerged branches remain available for editing and focused tests, not persistent source installation. The container-volume clone flow cannot perform the required host preparation. Browser/VS Code clone/trust prompts remain the developer's responsibility. See [package selection and preparation](DEVELOPER-ENVIRONMENT.md#start-and-stop).
 
-To view the page locally, run `python -m http.server 8765 --bind 127.0.0.1 --directory docs/developer`, then open `http://127.0.0.1:8765`. To publish later, select GitHub Pages source **GitHub Actions** and set repository variable `DEVELOPER_PAGES_ENABLED=true`. Intended URL: `https://patrickvorgers.github.io/open-energy-planner/developer/`. Hosting requires an eligible plan or public repository and is currently disabled. Only three public static files are published, never design/measurement archives or developer credentials. The page launches local installation. It does not run provisioning on GitHub.
+To view the page locally, run `python -m http.server 8765 --bind 127.0.0.1 --directory docs/developer`, then open `http://127.0.0.1:8765`. GitHub Pages uses source **GitHub Actions** and repository variable `DEVELOPER_PAGES_ENABLED=true`. The **Developer start page** workflow checks desktop/mobile behavior before publishing updates from `main`. Its manual dispatch can publish the current main revision without changing source. Only three public static files are published, never design/measurement archives or developer credentials. Hosting needs a public repository or an eligible plan. The page guides local installation. It does not run provisioning on GitHub.
 
 The Dev Container starts the real Supervisor environment, installs the normal OEP app and integration, completes HA onboarding and loads simulated devices and history. Provisioning fills only missing sample settings and preserves existing settings, partial configuration and HA identities. No production HA settings are copied. See the [developer environment guide](DEVELOPER-ENVIRONMENT.md) for the host-only start command and source-update workflow.
 
@@ -207,8 +208,8 @@ The privileged developer container owns a private inner Docker engine. The host 
 - `python script/ci/setup.py`: inside the Dev Container, repeat native/UI quality checks. Actual Supervisor provisioning uses `python -m script.supervisor.provision_supervisor` inside that container.
 - `docker compose --profile test build ui-tests` and `docker compose run --rm ui-tests`: Chromium checks at desktop/mobile sizes, without launching VS Code. Full CI includes these tests.
 - `python script/ci/ci.py`: from a host with Docker, run the same full isolated suite as GitHub Actions. It builds the app and both test runtimes, runs Ruff/format/native scenarios/smoke and actual HA handoff, then removes only its uniquely named test project.
-- `python -m script.supervisor.dev start`: from the host, repeat onboarding and stage current sources while preserving existing state. Do not run the host launcher inside the Dev Container.
-- After editing app or integration sources, repeat the host start command. The provisioner rebuilds the changed local app and reloads the changed integration; unchanged source is reused.
+- `python -m script.supervisor.dev start`: from the host, repeat onboarding with the accepted CI package while preserving existing state. Do not run the host launcher inside the Dev Container.
+- After editing app or integration sources, run focused tests or disposable Supervisor acceptance. Persistent startup rejects changed tracked sources. Update the persistent environment only after merge, using the original successful matching CI bundle as described in the [developer environment guide](DEVELOPER-ENVIRONMENT.md#start-and-stop).
 
 CI writes fresh JUnit files to ignored `results/ci/`. The HA suite uses its own framework runtime and must not be skipped silently in the full pipeline. Native tests run without a network. No tests require production credentials or physical equipment.
 

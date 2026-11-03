@@ -70,7 +70,14 @@ describes all persisted tables, fields, relationships, JSON document owners and 
 
 For hands-on testing without a production installation, use the [separate persistent test environment](docs/development/USER-TEST-ENVIRONMENT.md). It includes Home Assistant, two simulated solar sources, a battery, Energy history and sample contract settings.
 
-Use the [developer start page](docs/developer/index.html) or [open directly in Dev Containers](https://vscode.dev/redirect?url=vscode%3A%2F%2Fms-vscode-remote.remote-containers%2FcloneInVolume%3Furl%3Dhttps%253A%252F%252Fgithub.com%252Fpatrickvorgers%252Fopen-energy-planner). GitHub access is required while this repository remains private. Pages hosting is prepared but disabled. See [development instructions](docs/development/README.md) for the tested local-checkout route and hosting prerequisites.
+Open the **[developer start page](https://patrickvorgers.github.io/open-energy-planner/developer/)** to start provisioning. It links to a local VS Code clone and explains the prerequisites. Install VS Code, Dev Containers, Git, Python 3.12 or newer and Docker with Linux containers. Verification needs existing GitHub read access through Git Credential Manager or `GH_TOKEN`/`GITHUB_TOKEN` in your host terminal. Never enter credentials on the start page. Download the original `installation-bundle-amd64` ZIP from a successful Checks candidate merged onto `main`, then check out its matching verified merge. From a host terminal in that checkout, prepare and start the package before choosing **Dev Containers: Reopen in Container**:
+
+```console
+python -m script.supervisor.dev prepare --bundle /path/to/installation-bundle-amd64.zip --run-id RUN_ID
+python -m script.supervisor.dev start
+```
+
+Replace both placeholders with the original ZIP path and candidate run ID. Pages hosts public instructions only. Provisioning runs locally and preserves existing development data. See [the developer environment guide](docs/development/DEVELOPER-ENVIRONMENT.md#start-and-stop) for package selection, validation and startup.
 
 ## Development layout
 
@@ -91,7 +98,7 @@ Use the [developer start page](docs/developer/index.html) or [open directly in D
 | `tests/frontend/unit/` and `tests/frontend/browser/` | Public routing/security contracts and real desktop/mobile behavior |
 | `tests/provisioning/` and `tests/supervisor/` | Ordinary example provisioning and separate platform lifecycle acceptance |
 
-Open this folder in VS Code and choose **Reopen in Container**. The [Dev Container](.devcontainer/devcontainer.json) starts the editor runtime, separate synthetic app and isolated Home Assistant, then runs [setup](script/ci/setup.py). Setup checks Ruff/format/native tests/app smoke and provisions a developer account plus the EMS integration through HA APIs. See [development guide](docs/development/README.md) for login and commands. `python script/ci/ci.py` runs the complete native/HA/provisioning chain from a Docker-enabled host. GitHub Actions uses this same entry point.
+After package preparation, open this folder in VS Code and choose **Reopen in Container**. The [Dev Container](.devcontainer/devcontainer.json) starts the real Supervisor developer environment with the accepted OEP app/integration pair, isolated Home Assistant and simulated devices. Login details remain in the ignored `.local/dev/developer.json`. See [development guide](docs/development/README.md) for commands. `python script/ci/ci.py` runs the complete native/HA/provisioning chain from a Docker-enabled host. GitHub Actions uses this same entry point.
 
 ## Local API
 
