@@ -1,6 +1,4 @@
-"""Import editable HA panel geometry through the real setup API without losing drafts or provenance."""
-
-import re
+"""Follow HA panel geometry through real setup without losing independent manual settings or drafts."""
 
 import pytest
 from playwright.sync_api import expect
@@ -85,7 +83,8 @@ def test_new_prefilled_solar_source_stays_unsaved_until_all_writes_succeed(app_p
     installation_area(page, 1, edit=True)
     expect(state).to_contain_text("Unsaved changes")
     source = page.locator("#solar-rows > fieldset").first
-    expect(source.get_by_label("Inverter AC rating (kW)", exact=True)).to_have_value("5")
+    expect(source.get_by_label("Inverter AC rating (kW)", exact=True)).to_have_value("")
+    source.get_by_label("Inverter AC rating (kW)", exact=True).fill("3")
     expect(source.get_by_label("Panel capacity (kWp)", exact=True)).to_have_value("1")
     save = page.get_by_role("button", name="Save installation", exact=True)
     expect(save).to_be_enabled()
@@ -134,8 +133,8 @@ def test_new_prefilled_solar_source_stays_unsaved_until_all_writes_succeed(app_p
     ],
     indirect=True,
 )
-def test_solar_import_is_editable_persistent_and_not_overwritten_by_ha_refresh(app_page):
-    """Desktop/mobile retain exact independent planes and manual overrides while archiving the original import."""
+def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
+    """Desktop, tablet and ingress retain converter drafts while HA owns linked geometry through outages and relinks."""
     page, url = app_page
     page.clock.install()
     body = discover(page, url, devices=True)
@@ -148,93 +147,64 @@ def test_solar_import_is_editable_persistent_and_not_overwritten_by_ha_refresh(a
     providers = [
         {
             "adapter": "forecast_solar",
-            "entry_id": "eleven",
+            "entry_id": "synthetic-roof",
+            "inverter_limit_w": 9900,
             "panels": [
                 {
-                    "panel_id": "eleven.plane",
-                    "name": "South roof",
-                    "capacity_w": 3410,
-                    "azimuth": 205,
-                    "tilt": 45,
-                }
-            ],
-            "inverter_limit_w": 12000,
-        },
-        {
-            "adapter": "forecast_solar",
-            "entry_id": "ten",
-            "panels": [
-                {
-                    "panel_id": "ten.plane",
+                    "panel_id": "east",
                     "name": "East roof",
-                    "capacity_w": 3100,
-                    "azimuth": 125,
+                    "capacity_w": 1500,
+                    "azimuth": 100,
+                    "tilt": 25,
+                },
+                {
+                    "panel_id": "west",
+                    "name": "West roof",
+                    "capacity_w": 2200,
+                    "azimuth": 280,
                     "tilt": 40,
-                }
+                },
             ],
-            "inverter_limit_w": 12000,
-        },
+        }
     ]
+    linked = {"entity_id": "sensor.roof", "providers": providers, "issue": None}
     body["suggestions"]["solar_configurations"] = [
-        {"entity_id": "sensor.roof", "providers": providers, "issue": None},
+        linked,
         {"entity_id": "sensor.shed", "providers": [], "issue": "solar_configuration_not_available"},
     ]
-    response = page.request.post(
-        url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
-    )
-    assert response.ok, response.text()
+
+    def refresh():
+        """Send real HA metadata, then let the normal read-only polling consume it."""
+        response = page.request.post(
+            url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
+        )
+        assert response.ok, response.text()
+        page.clock.fast_forward(31000)
+
+    refresh()
     connect_solar_setup(page, url)
     grid(page)
     page.locator("#installation-solar").select_option("0")
     source = page.locator("#solar-rows > fieldset").first
-    source.get_by_label("Forecast source", exact=True).select_option("ha")
     panels = source.locator(".solar-panel")
+    angle = panels.first.get_by_label("Azimuth (° clockwise from north)", exact=True)
     expect(panels).to_have_count(2)
-    expect(panels.nth(0)).to_contain_text("205°: South-southwest")
-    shortcut = panels.nth(0).get_by_label("Direction shortcut", exact=True)
-    angle = panels.nth(0).get_by_label("Azimuth (° clockwise from north)", exact=True)
-    expect(shortcut).to_have_value("")
-    shortcut.select_option("270")
-    expect(angle).to_have_value("270")
-    expect(panels.nth(0)).to_contain_text("270°: West")
-    angle.fill("205")
-    expect(shortcut).to_have_value("")
-    expect(panels.nth(0).get_by_label("Panel capacity (kWp)", exact=True)).to_have_value("3.41")
+    expect(angle).to_have_value("100")
+    expect(angle).to_be_disabled()
+    expect(source.get_by_role("button", name="Add panel group", exact=True)).to_be_disabled()
     expect(
-        panels.nth(0).get_by_label("Azimuth (° clockwise from north)", exact=True)
-    ).to_have_value("205")
-    expect(panels.nth(1).get_by_label("Tilt (°)", exact=True)).to_have_value("40")
-    expect(source.get_by_label("Inverter AC rating (kW)", exact=True)).to_have_value("")
-    source.get_by_role("button", name="Add panel group", exact=True).click()
-    expect(panels).to_have_count(3)
-    panels.nth(2).get_by_role("button", name="Remove panel group", exact=True).click()
-    expect(panels).to_have_count(2)
-    expect(panels.nth(1)).to_have_attribute("aria-label", "East roof")
-    expect(panels.nth(0).get_by_label("Panel group name", exact=True)).to_have_value("South roof")
-    panels.nth(0).get_by_label("Panel group name", exact=True).fill("House roof")
-    expect(panels.nth(0).get_by_role("heading", name="House roof", exact=True)).to_be_visible()
-    panels.nth(0).get_by_label("Panel capacity (kWp)", exact=True).fill("3.2")
-    panels.nth(0).get_by_label("Azimuth (° clockwise from north)", exact=True).fill("210")
-    source.get_by_label("Inverter AC rating (kW)", exact=True).fill("12")
-    providers[0]["panels"][0]["azimuth"] = 230
-    assert page.request.post(
-        url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
-    ).ok
-    page.clock.fast_forward(31000)
-    expect(
-        panels.nth(0).get_by_label("Azimuth (° clockwise from north)", exact=True)
-    ).to_have_value("210")
-    mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
-    page.evaluate("scrollTo(0, 0)")
-    page.screenshot(
-        path=f"results/ci/solar-import-{page.viewport_size['width']}-{mode}.png", full_page=True
-    )
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        panels.first.get_by_role("button", name="Remove panel group", exact=True)
+    ).to_be_disabled()
+    expect(source).to_contain_text("Managed by Home Assistant")
+    rating = source.get_by_label("Inverter AC rating (kW)", exact=True)
+    expect(rating).to_have_value("")
+    expect(rating).to_be_enabled()
+    rating.fill("2.9")
     page.locator("#installation-solar").select_option("1")
     manual = page.locator("#solar-rows > fieldset").nth(1)
-    expect(manual).to_contain_text("No solar forecast configuration is linked")
+    expect(manual).to_contain_text("Manual panel settings")
     manual.get_by_label("Panel capacity (kWp)", exact=True).fill("1")
-    manual.get_by_label("Panel group name", exact=True).fill("Shed roof")
+    manual.get_by_label("Panel group name", exact=True).fill("Garden roof")
     manual.get_by_label("Direction shortcut", exact=True).select_option("45")
     expect(manual.get_by_label("Azimuth (° clockwise from north)", exact=True)).to_have_value("45")
     manual.get_by_label("Azimuth (° clockwise from north)", exact=True).fill("22.7")
@@ -243,88 +213,99 @@ def test_solar_import_is_editable_persistent_and_not_overwritten_by_ha_refresh(a
     page.get_by_role("button", name="Continue", exact=True).click()
     finish(page)
     saved = read_settings(page, url)["solar"]
-    roof = next(item for item in saved["sources"] if item["entity_id"] == "sensor.roof")
-    assert roof["capacity_w"] == 6300
-    assert roof["panels"][0]["azimuth"] == 210
-    assert roof["ha_imports"][0]["panels"][0]["azimuth"] == 205
-    assert roof["forecast_source"] == "ha"
-    assert roof["panels"][0]["name"] == "House roof"
-    assert roof["ha_imports"][0]["panels"][0]["name"] == "South roof"
-    shed = next(item for item in saved["sources"] if item["entity_id"] == "sensor.shed")
-    assert shed["panels"][0]["name"] == "Shed roof"
-    assert shed["panels"][0]["azimuth"] == 22.7
-    page.reload()
-    connect_solar_setup(page, url)
+    assert saved["sources"][0]["capacity_w"] == 3700
+    assert saved["sources"][0]["ha_imports"] == providers
+    assert saved["sources"][1]["panels"][0]["azimuth"] == 22.7
     installation_area(page, 1)
     page.locator("#installation-solar").select_option("0")
-    summary = page.locator("#installation-summary")
-    groups = summary.locator(".solar-panel-summary")
-    expect(page.locator("#installation-capacities")).to_contain_text(re.compile(r"7[.,]3 kWp"))
-    expect(page.locator("#review-solar")).to_have_text(re.compile(r"2 sources: 7[.,]3 kWp"))
-    expect(groups).to_have_count(2)
-    expect(groups.nth(0).get_by_role("heading", name="House roof", exact=True)).to_be_visible()
-    expect(groups.nth(0)).to_contain_text("3.2")
-    expect(groups.nth(0)).to_contain_text("210")
-    expect(groups.nth(1).get_by_role("heading", name="East roof", exact=True)).to_be_visible()
-    expect(groups.nth(1)).to_contain_text("3.1")
-    expect(groups.nth(1)).to_contain_text("125")
+    providers[0]["panels"][0]["azimuth"] = 115
+    refresh()
+    expect(page.locator("#installation-summary")).to_contain_text("115")
+    installation_area(page, 1, edit=True)
+    expect(angle).to_have_value("115")
+    expect(angle).to_be_disabled()
+    rating.fill("3.1")
+    providers[0]["panels"][0]["azimuth"] = 120
+    refresh()
+    expect(rating).to_have_value("3.1")
+    expect(angle).to_have_value("115")
+    expect(source).to_contain_text("Your draft is retained")
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("Reload before saving")
+    expect(rating).to_have_value("3.1")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    installation_area(page, 1, edit=True)
+    expect(angle).to_have_value("120")
+    expect(rating).to_have_value("2.9")
+    linked.update(issue="solar_configuration_incomplete", providers=[])
+    refresh()
+    expect(angle).to_have_value("120")
+    expect(angle).to_be_disabled()
+    expect(source).to_contain_text("Last accepted settings are retained")
+    mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
+    page.screenshot(
+        path=f"results/ci/solar-follow-outage-{page.viewport_size['width']}-{mode}.png",
+        full_page=True,
+    )
+    linked["issue"] = "solar_configuration_not_available"
+    refresh()
+    expect(angle).to_be_enabled()
+    expect(angle).to_have_value("120")
+    angle.fill("135")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    installation_area(page, 1, edit=True)
+    angle.fill("140")
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    linked.update(issue=None, providers=providers)
+    providers[0]["panels"][0]["azimuth"] = 85
+    refresh()
+    installation_area(page, 1, edit=True)
+    expect(angle).to_have_value("85")
+    expect(angle).to_be_disabled()
+    expect(rating).to_have_value("2.9")
+    assert read_settings(page, url)["solar"]["inverters"] == saved["inverters"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(
-        path=f"results/ci/solar-saved-{page.viewport_size['width']}-{mode}.png", full_page=True
+        path=f"results/ci/solar-follow-linked-{page.viewport_size['width']}-{mode}.png",
+        full_page=True,
     )
-    installation_area(page, 1, edit=True)
-    page.locator("#installation-solar").select_option("0")
-    source = page.locator("#solar-rows > fieldset").first
-    expect(
-        source.locator(".solar-panel").first.get_by_label(
-            "Azimuth (° clockwise from north)", exact=True
-        )
-    ).to_have_value("210")
-    source.get_by_role("button", name="Use Home Assistant panel settings", exact=True).click()
-    expect(
-        source.locator(".solar-panel").first.get_by_label("Panel group name", exact=True)
-    ).to_have_value("South roof")
-    expect(
-        source.locator(".solar-panel").first.get_by_label(
-            "Azimuth (° clockwise from north)", exact=True
-        )
-    ).to_have_value("230")
-    page.get_by_role("button", name="Cancel", exact=True).click()
-    assert read_settings(page, url)["solar"] == saved
 
-    # The next import changes provenance only, with identical visible panel controls.
-    providers[0]["panels"][0].update(capacity_w=3200, azimuth=210, name="House roof")
-    providers[0]["inverter_limit_w"] = 11000
+
+@pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
+def test_first_unreadable_link_has_no_assumed_panel_geometry(app_page):
+    """Desktop/mobile display blank locked geometry for an unreadable first link without assuming south or tilt."""
+    page, url = app_page
+    body = discover(page, url)
+    body["suggestions"].update(
+        solar=True,
+        solar_sources=["sensor.roof"],
+        terms=[
+            {"entity_id": "sensor.incoming", "sign": 1},
+            {"entity_id": "sensor.roof", "sign": 1},
+        ],
+        solar_configurations=[
+            {"entity_id": "sensor.roof", "providers": [], "issue": "solar_configuration_incomplete"}
+        ],
+    )
     assert page.request.post(
         url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
     ).ok
     page.reload()
     connect_solar_setup(page, url)
-    installation_area(page, 1, edit=True)
-    page.locator("#installation-solar").select_option("0")
+    grid(page)
     source = page.locator("#solar-rows > fieldset").first
-    controls = source.locator("input, select")
-    before = controls.evaluate_all("controls => controls.map(control => control.value)")
-    source.get_by_role("button", name="Use Home Assistant panel settings", exact=True).click()
-    assert controls.evaluate_all("controls => controls.map(control => control.value)") == before
-    expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
-    page.get_by_role("button", name="Save installation", exact=True).click()
-    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
-    updated = read_settings(page, url)["solar"]
-    updated_roof = next(item for item in updated["sources"] if item["entity_id"] == "sensor.roof")
-    assert updated_roof["panels"] == roof["panels"]
-    assert updated_roof["ha_imports"] == providers
-    assert updated_roof["ha_imports"][0]["inverter_limit_w"] == 11000
-    page.reload()
-    connect_solar_setup(page, url)
-    assert read_settings(page, url)["solar"] == updated
-    installation_area(page, 1, edit=True)
-    page.locator("#installation-solar").select_option("0")
-    page.locator("#solar-rows > fieldset").first.get_by_role(
-        "button", name="Use Home Assistant panel settings", exact=True
-    ).click()
-    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
-    expect(page.get_by_role("button", name="Save installation", exact=True)).to_be_disabled()
+    for label in ("Panel capacity (kWp)", "Azimuth (° clockwise from north)", "Tilt (°)"):
+        expect(source.get_by_label(label, exact=True)).to_have_value("")
+        expect(source.get_by_label(label, exact=True)).to_be_disabled()
+    expect(source).to_contain_text("No panel geometry has been assumed")
+    expect(source.get_by_label("Inverter AC rating (kW)", exact=True)).to_be_enabled()
+    mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
+    page.screenshot(
+        path=f"results/ci/solar-follow-incomplete-{page.viewport_size['width']}-{mode}.png",
+        full_page=True,
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 @pytest.mark.parametrize(

@@ -16,24 +16,30 @@ Select disjoint meters: never select a total together with its component meters.
 The app rejects repeated IDs/meters, but HA Energy does not establish arbitrary
 meter-containment relationships. OEP retains those dashboard-defined identities.
 
-For each source, OEP proposes panel settings from Forecast.Solar entries explicitly
+For each source, OEP follows panel settings from Forecast.Solar entries explicitly
 linked to that production meter in HA Energy. The configuration adapter reads Core
 plane subentries, preserving Wp, azimuth clockwise from north and tilt in degrees.
 Multiple selected entries and planes remain one measured production source.
-Unsupported, incomplete or multiply assigned forecast entries require manual setup.
+Unsupported, incomplete or multiply assigned forecast entries require correction in HA.
 Assignments are counted before normalizing individual provider groups. An
 unsupported or malformed sibling cannot hide a forecast assigned to two meters.
 Solcast is not supported. Missing metadata never removes part of a proposed array.
 
-Imported panel groups remain editable. Saved OEP settings take precedence over
-later HA refreshes, including panel group names. For a single plane, the imported
+Linked panel groups are read-only in OEP. Fresh complete HA discovery updates saved
+geometry automatically and refreshes forecast inputs. For a single plane, the imported
 name is the Forecast.Solar entry title when present. Entries with multiple planes
-use each plane's title. An empty title uses a numbered group heading in OEP.
-Each saved group keeps its name, capacity, azimuth and tilt together. Names can
-be edited in OEP without changing HA or inferring geometry from the text.
-**Use Home Assistant panel settings** explicitly reimports into
-the draft. Cancel restores the saved configuration. Original provider geometry is
-retained separately as provenance, including after manual edits and restart.
+use each plane's title. Empty titles use numbered group headings.
+Each saved group keeps its name, capacity, azimuth and tilt together. Names do not
+determine geometry. Temporary outages, stale discovery and missing or incomplete
+provider metadata retain accepted geometry and HA ownership, including after restart.
+OEP warns that settings cannot be refreshed. A first unreadable link has no assumed
+capacity, azimuth or tilt. Only fresh complete discovery explicitly confirming that
+the forecast link is absent enables manual editing. OEP preserves the last geometry
+and shows an informational notice. Relinking automatically adopts HA geometry,
+locks panel fields and explains replacement of previous manual values.
+Metadata refresh preserves unsaved drafts and their original version guard. If HA
+changes saved geometry while editing, reload before saving. Cancel reloads accepted
+settings. Immutable configuration versions retain original provider provenance.
 New Energy solar sources remain an unsaved installation draft even when every
 field is prefilled. Review the proposed physical ratings and save explicitly.
 A failed solar or installation write retains that state and allows retrying
@@ -42,7 +48,7 @@ Adapters normalize to one shared contract in `solar_adapters.py`. A future provi
 adds its reader to that registry rather than adding provider branches to setup,
 catalogue validation or solar calculation. No credentials leave the adapter.
 
-Without supported metadata, enter a name, panel kWp, tilt and azimuth for each
+With no linked forecast, enter a name, panel kWp, tilt and azimuth for each
 panel group in the same editor. Azimuth is clockwise from north, from 0 to 360
 degrees. Enter exact degrees or choose one of eight compass shortcuts. A shortcut
 sets the numeric angle. An arbitrary imported or typed angle remains exact and
@@ -57,9 +63,9 @@ approximate orientation in PVWatts. A suggested inverter identity represents a s
 Sources may share an identity and must agree on its rating/properties. The app collects the AC rating, hybrid flag and curtailment permission. Existing
 advanced measurement-side settings are retained when editing.
 Confirm the AC converter rating separately from panel kWp. The wizard does not
-claim to discover physical nameplate ratings. A single imported forecast-model
-inverter limit can be proposed for confirmation. Limits from multiple entries are
-never added or assumed to describe shared physical wiring.
+claim to discover physical nameplate ratings. Forecast.Solar inverter limits describe
+its forecast model only. They never prefill or overwrite the physical inverter's
+identity, AC rating, efficiency or hybrid settings.
 HA Energy is never modified. All OEP settings persist in the app. No solar sources in HA Energy means no solar installations in OEP. Historical archives remain.
 
 ## Model and responsibility boundaries

@@ -77,6 +77,9 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
         async with lock:
             try:
                 membership.validate_membership("solar", candidate)
+                membership.validate_panel_settings(
+                    candidate, runtime.configuration, datetime.now(UTC)
+                )
             except ValueError as error:
                 raise web.HTTPBadRequest(text=str(error)) from None
             current = runtime.configuration.version if runtime.configuration else None

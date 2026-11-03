@@ -17,6 +17,7 @@ from open_energy_planner.installation.api import catalogue as installation_catal
 from open_energy_planner.installation.calculation.annual_estimate import annual_estimate
 from open_energy_planner.installation.model import InstallationProblem, PVUnit
 from open_energy_planner.installation.storage import document, parse
+from open_energy_planner.notifications.api import NOTIFICATIONS
 from open_energy_planner.optimization.domain import Interval
 from open_energy_planner.solar.wire import parse_configuration as parse_solar
 
@@ -52,6 +53,7 @@ def register(
     discovery_handler = SetupDiscovery(
         catalogue, installation, demand, solar, lock, live, persist, required, contracts, appliances
     )
+    app[NOTIFICATIONS].register("solar-panels", discovery_handler.panel_notifications)
 
     async def settings(request):
         """Return app definitions and mandatory Energy discovery, requesting a refresh only when needed or explicit."""
@@ -63,6 +65,7 @@ def register(
             return web.json_response(
                 {
                     "mode": "home_assistant" if live else "synthetic",
+                    "panel_settings": discovery_handler.panel_settings(),
                     "installation": document(installation.current),
                     "solar": {**asdict(solar.configuration), "version": solar.configuration.version}
                     if solar.configuration
@@ -112,7 +115,12 @@ def register(
             body = await request.json()
             if set(body) != {"installation", "solar", "demand"}:
                 raise ValueError("Complete setup required")
+            if "expected_version" in body["solar"] and body["solar"]["expected_version"] != (
+                solar.configuration.version if solar.configuration else None
+            ):
+                raise web.HTTPConflict(text="Solar configuration changed. Reload before saving")
             physical, pv = parse(body["installation"]), parse_solar(body["solar"])
+            catalogue.validate_panel_settings(pv, solar.configuration, datetime.now(UTC))
             catalogue.validate_membership("installation", physical)
             load = parse_demand(body["demand"])
             catalogue.validate_membership("demand", load)
