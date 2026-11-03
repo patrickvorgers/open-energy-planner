@@ -1,0 +1,54 @@
+name: Manual CodeRabbit review preflight
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request number
+        required: true
+        type: string
+      expected_head:
+        description: Frozen current PR head SHA
+        required: true
+        type: string
+      expected_base:
+        description: Current PR base SHA
+        required: true
+        type: string
+      codex_reviewed_sha:
+        description: Independently reviewed commit within this PR history
+        required: true
+        type: string
+      independent_codex_review_done:
+        description: Independent Codex context review completed before the final correction batch
+        required: true
+        default: false
+        type: boolean
+      findings_dispositioned:
+        description: Genuine findings evaluated and corrections batched and retested
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+concurrency:
+  group: manual-review-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main' && github.event.repository.default_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check frozen identities, file count and current review prerequisites
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m script.ci.review_preflight
