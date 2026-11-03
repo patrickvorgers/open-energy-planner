@@ -46,7 +46,7 @@ jobs:
         run: python3 -m script.ci.check_main_ci_reuse"""
 
 
-def admission_violations(source):
+def admission_violations(source, expected=ADMISSION_PROTOCOL):
     """Keep executable YAML fixed while allowing plain labels, comments and the job's time budget."""
     protocol = []
     for original in source.splitlines():
@@ -58,7 +58,79 @@ def admission_violations(source):
         ) or re.fullmatch(r"[ \t]+timeout-minutes:[ \t]+[1-9][0-9]*", line):
             continue
         protocol.append(line)
-    return "\n".join(protocol) != ADMISSION_PROTOCOL
+    return "\n".join(protocol) != expected
+
+
+REVIEW_PREFLIGHT_PROTOCOL = """on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        required: true
+        type: string
+      expected_head:
+        required: true
+        type: string
+      expected_base:
+        required: true
+        type: string
+      codex_reviewed_sha:
+        required: true
+        type: string
+      independent_codex_review_done:
+        required: true
+        default: false
+        type: boolean
+      findings_dispositioned:
+        required: true
+        default: false
+        type: boolean
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+concurrency:
+  group: manual-review-preflight
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main' && github.event.repository.default_branch == 'main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m script.ci.review_preflight"""
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
+        ("workflow_dispatch:", "pull_request:"),
+        ("contents: read", "contents: write"),
+        ("pull-requests: read", "pull-requests: write"),
+        ("ref: ${{ github.sha }}", "ref: ${{ inputs.expected_head }}"),
+        ("persist-credentials: false", "persist-credentials: true"),
+        ("runs-on: ubuntu-24.04", "runs-on: self-hosted"),
+        ("steps:", "steps:\n      - run: docker compose up"),
+        ("steps:", "services:\n      db:\n        image: postgres\n    steps:"),
+        ("run: python3 -m script.ci.review_preflight", "run: bash arbitrary.sh"),
+        (
+            "run: python3 -m script.ci.review_preflight",
+            "shell: bash -c 'docker compose up; bash {0}'\n        run: python3 -m script.ci.review_preflight",
+        ),
+        ("env:\n", "env:\n          BASH_ENV: arbitrary.sh\n"),
+        ("cancel-in-progress: false", "cancel-in-progress: true"),
+    ],
+)
+def test_review_preflight_rejects_execution_and_privilege_expansion(before, after):
+    """A metadata workflow cannot silently gain workloads, mutable source or privileged execution."""
+    assert before in REVIEW_PREFLIGHT_PROTOCOL
+    assert admission_violations(
+        REVIEW_PREFLIGHT_PROTOCOL.replace(before, after, 1), REVIEW_PREFLIGHT_PROTOCOL
+    )
 
 
 def test_reusable_admission_owns_only_reviewed_proof_operations():

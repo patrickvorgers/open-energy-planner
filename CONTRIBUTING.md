@@ -26,7 +26,10 @@ from a checkout. Personal HA OS machines are not required development or merge g
 
 During development, run `python script/ci/check_native.py --quick` and affected
 regression tests before each push. Group related review corrections into one
-tested push. Build and review in Draft. CodeRabbit reviews Drafts automatically.
+tested push. Build and review in Draft. While the repository has fewer than 10
+GitHub stars, request CodeRabbit manually with `@coderabbitai review` after every
+new PR head. Retain the Dependabot exception above. Always verify that a review
+actually completed on the current head instead of assuming automatic execution.
 After latest-head review and disposition of every finding, resolve the evaluated
 threads and choose **Ready for review** to start one selected candidate automatically.
 A PR returns to Draft when opened, reopened, given a new commit or retargeted.

@@ -22,6 +22,7 @@ PROOF_FILES = (
     "check_main_ci_reuse.py",
     "check_suite_completion.py",
     "check_provenance.py",
+    "review_preflight.py",
     "scope_report.py",
     "ci_scope.py",
     "ci_groups.py",
@@ -56,6 +57,48 @@ def test_execution_policy_and_unknown_ci_owners_remain_conservative(path):
     """Changing execution capabilities or unknown harness code retains full and performance coverage."""
     assert path_profile(PurePosixPath(path)) == "full"
     assert performance_queries_path(PurePosixPath(path))
+
+
+@pytest.mark.parametrize("path", [".coderabbit.yaml", ".github/workflows/review-preflight.yaml"])
+@pytest.mark.parametrize("status", ["A", "M", "D"])
+def test_review_configuration_has_no_product_or_query_workload(monkeypatch, path, status):
+    """Declared review configuration retains CI proof across additions, edits and removals."""
+    old_mode = "000000" if status == "A" else "100644"
+    new_mode = "000000" if status == "D" else "100644"
+    record = f":{old_mode} {new_mode} {'3' * 40} {'4' * 40} {status}\0{path}\0".encode()
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: record)
+    assert select_profile("1" * 40, "2" * 40) == "ci"
+    assert not performance_queries_path(PurePosixPath(path))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".github/workflows/future-preflight.yaml",
+        "script/ci/future_preflight.py",
+        "compose.yaml",
+        ".github/workflows/checks.yaml",
+    ],
+)
+def test_review_metadata_does_not_capture_unknown_or_shared_execution(path):
+    """Similar names and real workload owners cannot inherit the metadata-only route."""
+    assert path_profile(PurePosixPath(path)) == "full"
+
+
+@pytest.mark.parametrize(
+    "metadata", [".coderabbit.yaml", ".github/workflows/review-preflight.yaml"]
+)
+@pytest.mark.parametrize(
+    "workload",
+    [".github/workflows/checks.yaml", "script/ci/pytest_suites.py", "compose.yaml"],
+)
+def test_review_metadata_cannot_remove_shared_workload_coverage(monkeypatch, metadata, workload):
+    """Review-only changes cannot conceal execution or database-fixture changes in the same PR."""
+    records = "".join(
+        f":100644 100644 {'3' * 40} {'4' * 40} M\0{path}\0" for path in (metadata, workload)
+    ).encode()
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: records)
+    assert select_profile("1" * 40, "2" * 40) == "full+performance-queries"
 
 
 @pytest.mark.parametrize(
