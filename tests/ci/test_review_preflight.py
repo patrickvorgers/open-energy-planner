@@ -79,6 +79,7 @@ class Evidence:
         self.pr_reads = 0
         self.changed = None
         self.unresolved = False
+        self.comparison = {"merge_base_commit": {"sha": BASE}, "status": "ahead"}
         self.calls = []
 
     def get(self, path):
@@ -87,6 +88,8 @@ class Evidence:
         if path == f"repos/{REPOSITORY}/pulls/12":
             self.pr_reads += 1
             return deepcopy(self.changed if self.pr_reads > 1 and self.changed else self.current)
+        if path == f"repos/{REPOSITORY}/compare/{BASE}...{HEAD}?per_page=1":
+            return deepcopy(self.comparison)
         assert path.startswith(f"repos/{REPOSITORY}/commits/{HEAD}/check-runs?")
         page = int(path.rsplit("=", 1)[1])
         return {
@@ -168,6 +171,25 @@ def test_reviewed_commit_can_be_on_the_second_complete_history_page():
     client.current["commits"] = 102
     assert "No review has been requested." in run(client)
     assert any(path.endswith("commits?per_page=100&page=2") for _, path in client.calls)
+
+
+@pytest.mark.parametrize(
+    "comparison",
+    [
+        {"merge_base_commit": {"sha": "4" * 40}, "status": "diverged"},
+        {"merge_base_commit": {"sha": HEAD}, "status": "behind"},
+        {"merge_base_commit": None, "status": "ahead"},
+        {"merge_base_commit": {"sha": BASE}, "status": "behind"},
+        {},
+    ],
+)
+def test_current_main_must_be_included_before_final_review(comparison):
+    """Green head checks cannot authorize review before the predecessor's main merge is included."""
+    client = Evidence()
+    client.comparison = comparison
+    with pytest.raises(VerificationError, match="current main"):
+        run(client)
+    assert not any("check-runs?" in path for _, path in client.calls)
 
 
 @pytest.mark.parametrize("count", [151, 0, -1, None, True, "3"])

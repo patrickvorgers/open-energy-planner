@@ -52,6 +52,30 @@ PR diff, not the default after each correction. Latest-head review and dispositi
 of every finding remain mandatory. Once candidate CI starts, keep that candidate
 frozen unless a new finding or failure requires a correction.
 
+## Follow the intended merge order
+
+Develop Drafts and run independent local Codex reviews in parallel. Agree on one
+merge queue before requesting final CodeRabbit reviews. Review availability is
+not a reason to review a later PR before its predecessor has merged.
+
+For a queue of PR A followed by PR B, finish A's review, required candidate CI,
+guarded merge and required main validation first. Then include that actual main
+in B, resolve conflicts and run Quick, affected regression tests and CodeQL on
+the updated head. Reassess material changes with an independent reviewer. Only
+then freeze B's head and base and request its final CodeRabbit review. Complete
+B's selected candidate CI before merging B. Repeat this sequence for the next PR.
+
+Do not request a second review while the first is running or push speculative
+base updates during a final review. If main advances before merge, synchronize
+and validate again. A review of an older head is not review evidence for the new
+head. The coordinator records the actual queue in PR discussions or the active
+coordination chat, not in maintained product documentation.
+
+The preflight verifies that the selected current main commit is an ancestor of
+the frozen head and rechecks the current base and head before emitting a command.
+It cannot prove the human queue order. The operator must still confirm that all
+preceding PRs have completed the required merge and main checks.
+
 ## Prepare one final CodeRabbit review
 
 Keep every PR within **150 changed files**. All files count, including binary,
@@ -73,7 +97,8 @@ an explicit human request for that service and PR. Do not repeat independent
 review on every push. Batch corrections, run affected checks and reassess material
 scope changes before consuming another external review.
 
-Freeze the final head and base. Run **Manual CodeRabbit review preflight** from
+After the preceding queued merge is complete, include and test the actual current
+main before freezing the final head and base. Run **Manual CodeRabbit review preflight** from
 `main` with the PR number, expected head/base and independent Codex review SHA.
 Affirm that the independent review and finding disposition are complete. The
 reviewed SHA must be the final head or an earlier commit in the complete PR
@@ -340,7 +365,7 @@ Inspect only the named invocation's resources before removing leftovers.
 
 Changes confined to `label_ci_scope.py`, `check_ci_candidate.py`,
 `check_commit_signatures.py`, `check_main_ci_reuse.py`,
-`check_suite_completion.py`, `check_provenance.py` and `scope_report.py` under `script/ci/` select
+`check_suite_completion.py`, `check_provenance.py`, `review_preflight.py` and `scope_report.py` under `script/ci/` select
 only the `ci` suite. These modules classify changes, verify admission and
 signatures, inspect original evidence or parse completion reports. They do not
 execute app, HA, database, migration or volume workloads. Mixed changes retain
@@ -353,6 +378,7 @@ The remaining CI responsibilities have separate reviewed owners:
 | `ci_scope.py`, `ci_groups.py` | CI regressions for selection and pure suite membership |
 | `ha_suites.py`, `ha_shard.py` | `selected:ci,ha` for HA arguments and worker partitioning |
 | `.github/workflows/ci-admission.yaml` | CI regressions for admission, Quick and evidence reuse |
+| `.coderabbit.yaml`, `.github/workflows/review-preflight.yaml` | CI regressions for review configuration and the fixed trusted-main metadata preflight |
 | `proof_git.py`, `pytest_suites.py`, `ci.py`, `check_images.py`, `checks.yaml` | Full functional and query-performance coverage for actual shared execution |
 
 `proof_git.py` owns fixed Git processes and immutable policy loading. Workflows
@@ -384,6 +410,19 @@ read-only command/action contract. Adding execution, services, environment hooks
 or fabricated reuse outputs fails its architecture regressions. Unknown owners
 and shared execution remain conservative. These guards complement review and do
 not establish an adversarial sandbox.
+
+The manual review preflight has a separate fixed workflow contract. It may run
+only from trusted main through an explicit dispatch, with read permissions and
+the declared proof entrypoint. Extra commands, services, mutable contributor
+checkouts, environment hooks or write permissions fail its structural checks.
+Its Python imports remain inside the same transitive proof ownership guard.
+Declared entrypoints are checked whenever present, including newly added files.
+Unknown preflight names retain conservative coverage.
+
+This boundary does not classify arbitrary CI changes as metadata. Changes to
+shared execution, Docker setup, pytest selection or immutable Git process
+adapters retain their existing functional and query-performance coverage.
+Removing an old runner or provenance call does not itself grant a cheaper route.
 
 The existing ownership guard follows proof imports through helpers and ancestor
 package initializers. It allows explicit metadata capabilities and reviewed

@@ -19,6 +19,20 @@ from script.ci.pr_readiness import require_resolved_threads
 MAX_PAGES = 10
 
 
+def require_included_base(repository, head, base, client):
+    """Require the selected current main revision in the frozen head before final review."""
+    comparison = client.get(f"repos/{repository}/compare/{base}...{head}?per_page=1")
+    common = comparison.get("merge_base_commit")
+    if (
+        not isinstance(common, dict)
+        or common.get("sha") != base
+        or comparison.get("status") not in {"ahead", "identical"}
+    ):
+        raise VerificationError(
+            "Include the current main in this PR and retest before final review"
+        )
+
+
 def require_reviewed_commit(repository, number, current, reviewed, client):
     """Bind the independent review SHA to the complete PR history, allowing later batched corrections."""
     expected = current.get("commits")
@@ -118,6 +132,7 @@ def preflight(repository, number, head, base, reviewed, client):
         return current
 
     current = current_pr()
+    require_included_base(repository, head, base, client)
     file_count = changed_files(repository, number, current, client)
     require_reviewed_commit(repository, number, current, reviewed, client)
     checks = current_checks(repository, head, client)

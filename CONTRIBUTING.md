@@ -34,6 +34,11 @@ the Draft. Record the reviewed commit SHA and finding dispositions in the PR.
 Batch corrections and retest instead of restarting independent review on every
 push. This local review is distinct from the optional Codex Cloud service above.
 
+Develop Drafts and run independent local Codex reviews in parallel, but request
+final CodeRabbit reviews in the intended merge order. Wait for the preceding PR
+to merge and finish its required main checks. Include that actual main in this
+PR, resolve conflicts, retest affected behavior and wait for current-head Quick,
+signature and CodeQL checks. Reassess material changes before final review.
 Only after that work is complete, freeze the final head and base. Run the
 **Manual CodeRabbit review preflight** workflow from `main`, with those SHAs,
 the independent Codex review SHA and affirmative review/disposition attestations.
