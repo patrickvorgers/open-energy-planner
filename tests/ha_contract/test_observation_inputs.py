@@ -1,6 +1,7 @@
 """Independent source-contract, temporal and physical snapshot expectations."""
 
 import asyncio
+import logging
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
@@ -585,7 +586,7 @@ def test_live_candidate_cannot_skip_first_transfer_when_solving_crosses_boundary
     asyncio.run(scenario())
 
 
-def test_changing_price_versions_cannot_bypass_five_minute_limit():
+def test_changing_price_versions_cannot_bypass_five_minute_limit(caplog):
     """Even a new composed price version every poll coalesces until 300 seconds. Quarters remain immediate."""
 
     class Planner:
@@ -610,6 +611,7 @@ def test_changing_price_versions_cannot_bypass_five_minute_limit():
             return replace(basis(config, now=now), price_version=str(now))
 
     clock = [NOW]
+    caplog.set_level(logging.INFO, logger="open_energy_planner.live_inputs")
     planner = Planner()
     live = LiveInputs(planner, Repository(), Future(), clock=lambda: clock[0])
     config = configuration()
@@ -629,6 +631,13 @@ def test_changing_price_versions_cannot_bypass_five_minute_limit():
         clock[0] = NOW + timedelta(seconds=seconds)
         live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
         assert len(planner.submitted) == expected
+    requests = [message for message in caplog.messages if message.startswith("Planning requested:")]
+    assert len(requests) == 4
+    assert "all required inputs are ready" in requests[0]
+    assert "updated market prices" in requests[1]
+    assert "300 seconds ago" in requests[1]
+    assert "a new quarter-hour started" in requests[-1]
+    assert "Last submission" not in caplog.text
 
 
 @pytest.mark.parametrize(

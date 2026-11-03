@@ -681,6 +681,13 @@ rows remain readable. Chart replay must match saved grid/stock outcomes first.
 or a reset of continuous settlement state. Both forecast references and original
 spot/import/export tariff evidence are described in [plan evidence](PLAN-EVIDENCE.md).
 
+An optional `reference_forecast_issue` stores fixed owned recovery advice when
+the original plan could be published without its comparison forecast. New writes
+never store arbitrary exception values in this field. Older archived values stay
+unchanged for hash-checked reconstruction and transfer. Public plan responses
+project unrecognized issue text to safe advice, including nested comparison and
+forecast-quality context. This projection changes no financial or physical data.
+
 
 ## Forecast model decision documents
 
