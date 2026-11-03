@@ -11,7 +11,14 @@ from tests.frontend.browser.helpers import TOKEN
 
 @pytest.fixture
 def automatic_plan_overview(app_page):
-    """Serve immutable synthetic plan versions while controlling publication and browser time."""
+    """Serve immutable synthetic plan versions while controlling publication and browser time.
+
+    The seeded plan begins on a UTC quarter boundary. Pause the browser clock 14 minutes
+    later, leaving four 15-second publication polls until the next quarter. Older and newer
+    versions clone that plan under distinct identities. The newer plan's first buy price is
+    0.91. Current prices reuse the seeded tariff intervals with a buy price of 0.3 by default.
+    Publication tests change that current price to 0.88.
+    """
     page, url = app_page
     headers = {"Authorization": "Bearer " + TOKEN}
     original = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()["plans"][0]

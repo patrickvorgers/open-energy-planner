@@ -582,7 +582,13 @@ function selectOriginal(id) {
     }
     location.hash = "planning"; view(); $("plan-version").value = id; showPlan(); $("plan-heading").scrollIntoView({behavior: "smooth"});
 }
-/** Read current saved tariff inputs without waiting for a plan or changing frozen plan evidence. */
+/**
+ * Read current saved tariffs without changing frozen plan evidence.
+ * @param {AbortSignal} [signal] Aborting the newest request follows the read failure path.
+ * @returns {Promise<boolean|undefined>} True after drawing, false after hiding the chart and
+ * showing a read error, or undefined when superseded. Superseded reads leave chart and status
+ * unchanged, including when aborted.
+ */
 async function currentPrices(signal) {
     const request = ++priceRequest;
     try {
