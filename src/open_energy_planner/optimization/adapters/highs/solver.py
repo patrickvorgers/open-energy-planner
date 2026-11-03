@@ -86,7 +86,14 @@ class HighsSolver:
         problem: InstallationProblem,
         options: SolveOptions | None = None,
     ) -> SolveResult:
-        """Retain the actual shared time budget for every outcome, including priority failures."""
+        """Return a candidate and native evidence without publishing device commands.
+
+        Extracted candidates require independent physical and financial validation.
+        Known build, native and extraction failures return an error without a
+        partial plan. Unproved service priorities also return no candidate.
+        Timings and the retained shared preparation/service/search budget are
+        seconds. The objective and bound use the problem's contract currency.
+        """
         options = options or SolveOptions()
         started_at = datetime.now(UTC)
         return replace(

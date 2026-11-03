@@ -403,7 +403,10 @@ def create_app(
     planner.record_calculation = register_performance(
         app,
         SqlDocuments(repository.engine, "planning"),
-        lambda: (setup_catalogue.value or {}).get("timezone"),
+        lambda: (
+            (setup_catalogue.value or {}).get("timezone")
+            or ("UTC" if source == "synthetic" else None)
+        ),
     )
 
     pairing = Pairing(directory, repository.state["instance_id"])

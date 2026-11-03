@@ -1620,6 +1620,8 @@ The planning service retains the result alongside validation outcome. The serial
 
 The frontend reuses OEP navigation, type, palette, Chart.js and date/money/percentage formatters. Insights defaults to HA today with another-day selection. The largest chart answers which calculations took longer. One blue candidate-finding segment and neutral continuation/unknown segments share a zero baseline. The actual solver budget is a reference, not a total-round target. The native accessible dialog restores focus and day selection when closed, and becomes full-screen on phones. Details distinguish candidate costs, proof bounds, independent checks and publication. No raw provider messages or invented causal explanations are shown. Costs between different input horizons are not comparable as realized savings.
 
+Synthetic mode uses UTC for calculation history when no discovery timezone is available. Home Assistant mode requires its discovered timezone and never substitutes the demo fallback.
+
 First observed candidate means the first finite incumbent observed in the financial stage, including a feasible seed retained from an earlier service stage. It does not claim a newly discovered solution or independent publication validation. Financial objectives are never mixed with earlier service objective values. The one-shot calculation query parameter is consumed after a successful daily load, preserving the day, embedded shell parameters and URL hash.
 
 
