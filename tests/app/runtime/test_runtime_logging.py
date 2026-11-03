@@ -66,6 +66,30 @@ def test_malformed_json_is_not_logged_as_an_application_defect(caplog):
     assert "SECRET" not in caplog.text
 
 
+def test_missing_background_evidence_does_not_report_readiness_before_recovery(caplog):
+    """An empty valid response is unavailable evidence, and repeated absence stays below INFO."""
+    logger = logging.getLogger("open_energy_planner.background_test")
+    status = BackgroundLog(logger, "Weather refresh")
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        for _ in range(2):
+            status.unavailable(
+                "Retaining only valid forecasts.",
+                reason="no usable weather hours",
+                retry_seconds=3600,
+            )
+        assert not status.has_succeeded
+        assert not any("ready" in message or "recovered" in message for message in caplog.messages)
+        status.success("Weather hours are now available.")
+    assert [record.levelno for record in caplog.records] == [
+        logging.WARNING,
+        logging.DEBUG,
+        logging.INFO,
+    ]
+    assert "Retrying in 60 minutes." in caplog.messages[0]
+    assert "recovered" in caplog.messages[-1]
+    assert all(record.exc_info is None for record in caplog.records)
+
+
 def test_lifecycle_messages_bracket_resources_and_graceful_stop(caplog):
     """Startup completes before started. Stopping precedes resource draining and stopped follows it."""
 

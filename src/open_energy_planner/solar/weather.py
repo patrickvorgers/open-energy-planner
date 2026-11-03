@@ -90,9 +90,15 @@ class OpenMeteoSolarSource:
                 )
             else:
                 self.past_key = key
-                self.archive_status.success(
-                    "Historical weather is available for solar model training."
-                )
+                if past:
+                    self.archive_status.success(
+                        "Historical weather is available for solar model training."
+                    )
+                else:
+                    self.archive_status.unavailable(
+                        "Current weather is retained. Historical model training has less evidence. The archive is checked again after the UTC day or site changes.",
+                        reason="no usable historical weather hours were returned",
+                    )
             self.past = past
         return tuple(
             sorted(

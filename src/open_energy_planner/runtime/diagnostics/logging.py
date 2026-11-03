@@ -89,13 +89,33 @@ class BackgroundLog:
         if error is None:
             raise RuntimeError("Background exception logging requires an active exception handler")
         known_reason = failure_reason(error)
-        description = reason or known_reason or type(error).__name__
-        unexpected = not expected and known_reason is None
-        trace = error.__traceback__
+        self._failure(
+            impact,
+            reason=reason or known_reason or type(error).__name__,
+            retry_seconds=retry_seconds,
+            waiting=waiting,
+            error=error,
+            unexpected=not expected and known_reason is None,
+        )
+
+    def unavailable(self, impact, *, reason, retry_seconds=None, waiting=False):
+        """Report missing usable results without inventing an exception, readiness or a retry policy.
+
+        The caller supplies owned reason/impact text and the existing next attempt.
+        This changes only diagnostic state. An empty successful response may still
+        retain its normal refresh interval or cache validity.
+        """
+        self._failure(impact, reason=reason, retry_seconds=retry_seconds, waiting=waiting)
+
+    def _failure(
+        self, impact, *, reason, retry_seconds=None, waiting=False, error=None, unexpected=False
+    ):
+        """Share failure deduplication and formatting for exceptions and unavailable evidence."""
+        trace = error.__traceback__ if error is not None else None
         while trace is not None and trace.tb_next is not None:
             trace = trace.tb_next
         site = (trace.tb_frame.f_code.co_filename, trace.tb_lineno) if trace is not None else None
-        failure_key = type(error), description, impact, site
+        failure_key = type(error) if error is not None else None, reason, impact, site
         repeated = failure_key == self.failure_key
         self.failure_key = failure_key
         retry = ""
@@ -115,8 +135,8 @@ class BackgroundLog:
             else logging.WARNING,
             "%s %s (%s). %s%s",
             self.operation,
-            "pending" if waiting else "failed",
-            description,
+            "pending" if waiting else "unavailable" if error is None else "failed",
+            reason,
             impact,
             retry,
             exc_info=(type(error), error, error.__traceback__) if unexpected else None,

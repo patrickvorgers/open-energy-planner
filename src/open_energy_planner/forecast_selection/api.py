@@ -154,9 +154,16 @@ def register(
                         raise cancelled
                     async with lock:
                         apply_preferences()
-                    comparison_logger.success(
-                        "Shadow comparison processing is running. Models change only after checked decision evidence."
-                    )
+                    if runtime.store.issue or runtime.issue:
+                        comparison_logger.unavailable(
+                            "Baseline models remain active. Check comparison archive storage before expecting learned-model decisions.",
+                            reason="comparison archive unavailable",
+                            retry_seconds=MODEL_WORKER_POLL_SECONDS,
+                        )
+                    else:
+                        comparison_logger.success(
+                            "Shadow comparison processing is running. Models change only after checked decision evidence."
+                        )
             except Exception:
                 comparison_logger.exception(
                     "Baseline models are retained. Planning continues independently. Check comparison and storage diagnostics.",

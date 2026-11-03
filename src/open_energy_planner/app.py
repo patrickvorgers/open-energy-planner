@@ -492,11 +492,14 @@ def create_app(
                                 )
                 except Exception:
                     async with lock:
-                        if job is not None:
-                            demand.failed(job[0], datetime.now(UTC))
+                        failure_recorded = job is not None and demand.failed(
+                            job[0], datetime.now(UTC)
+                        )
                         retry_seconds = (
                             (demand.retry_after - datetime.now(UTC)).total_seconds()
-                            if demand.retry_after and demand.retry_after > datetime.now(UTC)
+                            if failure_recorded
+                            and demand.retry_after
+                            and demand.retry_after > datetime.now(UTC)
                             else FORECAST_WORKER_POLL_SECONDS
                         )
                     forecast_logger.exception(

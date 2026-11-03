@@ -22,6 +22,11 @@ run inside the exception handler. Its `success` method reports first readiness
 and recovery at INFO, then ordinary successful refreshes at DEBUG. Do not log
 every sensor sample, loop iteration, HTTP request or solver variable.
 
+Use `unavailable` when a valid response contains no usable evidence or an archive
+cannot be used without raising an exception. It shares failure deduplication and
+recovery reporting. Preserve the operation's existing refresh and cache policy,
+and report readiness only after usable results are accepted.
+
 ## Actionable messages
 
 Include the operation, safe cause, practical impact and actual next step. When a

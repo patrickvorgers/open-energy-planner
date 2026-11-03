@@ -167,11 +167,12 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                     live.refresh()
                 except Exception:
                     async with lock:
-                        if job:
-                            runtime.failed(job, datetime.now(UTC))
+                        failure_recorded = runtime.failed(job, datetime.now(UTC)) if job else False
                         retry_seconds = (
                             (runtime.retry_after - datetime.now(UTC)).total_seconds()
-                            if runtime.retry_after and runtime.retry_after > datetime.now(UTC)
+                            if failure_recorded
+                            and runtime.retry_after
+                            and runtime.retry_after > datetime.now(UTC)
                             else SOLAR_WORKER_POLL_SECONDS
                         )
                     forecast_logger.exception(
@@ -216,9 +217,18 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                 async with lock:
                                     if live.report and live.report.location == location:
                                         runtime.set_weather(location, weather)
-                                        weather_logger.success(
-                                            f"Received {len(weather)} weather hours. Next refresh in {WEATHER_REFRESH_HOURS * MINUTES_PER_HOUR:g} minutes."
-                                        )
+                                        if weather:
+                                            weather_logger.success(
+                                                f"Received {len(weather)} weather hours. Next refresh in {WEATHER_REFRESH_HOURS * MINUTES_PER_HOUR:g} minutes."
+                                            )
+                                        else:
+                                            weather_logger.unavailable(
+                                                "Retaining only valid forecasts. Planning still requires usable solar data.",
+                                                reason="no usable current weather hours were returned",
+                                                retry_seconds=WEATHER_REFRESH_HOURS
+                                                * MINUTES_PER_HOUR
+                                                * SECONDS_PER_MINUTE,
+                                            )
                                 due = now + timedelta(hours=WEATHER_REFRESH_HOURS)
                             except Exception as error:
                                 weather_logger.exception(
