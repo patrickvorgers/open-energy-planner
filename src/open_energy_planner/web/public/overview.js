@@ -466,15 +466,15 @@ async function showPlan(signal) {
     }
 }
 /** Page original plan identities without activating them. */
-async function plans(older = false) {
-    const data = await api(`v1/plans?limit=20${older && cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`);
+async function plans(older = false, signal) {
     planRefreshEnabled = true;
+    const data = await api(`v1/plans?limit=20${older && cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`, signal);
     if (!older) $("plan-version").replaceChildren();
     for (const plan of data.plans) {
         const option = document.createElement("option"); option.value = plan.plan_id; option.textContent = `${when(plan.generated_at)}: ${strategies[plan.strategy] || "Unknown"}`; $("plan-version").append(option);
     }
     cursor = data.next_before; $("older-plans").hidden = !cursor;
-    if (!older) return showPlan();
+    if (!older) return showPlan(signal);
 }
 /** Follow completed publications while preserving a deliberately selected historical plan. */
 async function refreshLatestPlan() {
@@ -503,7 +503,7 @@ async function refreshLatestPlan() {
     finally { planRefreshBusy = false; }
 }
 /** Use local calendar boundaries as aware API instants. Absent coverage never becomes zero savings. */
-async function savings() {
+async function savings(signal) {
     const request = ++periodRequest;
     try {
         const start = $("period-start").value, last = $("period-end").value;
@@ -511,7 +511,7 @@ async function savings() {
         const query = {start: localInstant(start), end: localInstant(nextDate(last))};
         const selectedRevision = $("evaluation-version").value;
         if (selectedRevision) query.revision = selectedRevision;
-        const data = await api(`v1/savings?${new URLSearchParams(query)}`);
+        const data = await api(`v1/savings?${new URLSearchParams(query)}`, signal);
         if (request !== periodRequest) return false;
         const coverage = data.coverage;
         for (const revision of data.versions || []) evaluationVersions.set(revision.revision, revision);
@@ -619,7 +619,8 @@ async function currentPrices(signal) {
 async function load() {
     overviewLoads++;
     try {
-        await Promise.all([plans(), savings(), currentPrices()]);
+        const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
+        await Promise.all([plans(false, signal), savings(signal), currentPrices(signal)]);
     }
     catch (error) { $("overview-status").textContent = error.message; }
     finally { overviewLoads--; }
@@ -647,7 +648,7 @@ $("overview-connect").addEventListener("submit", (event) => { event.preventDefau
 $("plan-version").addEventListener("change", () => showPlan());
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
 $("period").addEventListener("submit", (event) => { event.preventDefault(); savings(); });
-$("evaluation-version").addEventListener("change", savings);
+$("evaluation-version").addEventListener("change", () => savings());
 $("overview-refresh").addEventListener("click", load);
 $("older-evaluations").addEventListener("click", async () => {
     try {

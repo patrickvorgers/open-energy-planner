@@ -148,6 +148,8 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     page.clock.run_for(15000)
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
+        .data.datasets[1].data[0].y === 0.88""")
     assert page.evaluate("""() => ['price-chart', 'current-price-chart'].map(id =>
         Chart.getChart(document.getElementById(id)).data.datasets[1].data[0].y)""") == [0.91, 0.88]
     assert (
@@ -163,6 +165,43 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     page.locator("figure").filter(has=page.locator("#plan-chart")).screenshot(
         path=f"results/ci/planning-auto-refresh-{page.viewport_size['width']}.png"
     )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("hung_view", ["listing", "savings", "comparison", "prices"])
+def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_overview, hung_view):
+    """A bounded overview load releases polling even when one of its view reads never responds."""
+    state = automatic_plan_overview
+    page = state["page"]
+    pattern = {
+        "listing": "**/v1/plans?limit=20",
+        "savings": "**/v1/savings?**",
+        "comparison": "**/v1/plans/*/comparison",
+        "prices": "**/v1/prices/inputs",
+    }[hung_view]
+    held = []
+
+    def hold_read(route):
+        """Keep only the selected overview request open until its deadline cancels it."""
+        held.append(route)
+
+    page.route(pattern, hold_read)
+    with page.expect_request(pattern):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    with page.expect_event(
+        "requestfailed", predicate=lambda request: request.url == held[0].request.url
+    ):
+        page.clock.run_for(5001)
+    assert len(held) == 1
+    held[0].fulfill(status=503, body="Late response after cancellation")
+    page.unroute(pattern, hold_read)
+    page.wait_for_load_state("networkidle")
+    state["plans"].insert(0, state["newer"])
+    with page.expect_response("**/v1/plans/newly-published-plan/comparison"):
+        page.clock.run_for(15000 - 5001)
+    expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
+    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
