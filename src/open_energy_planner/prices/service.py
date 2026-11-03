@@ -3,10 +3,15 @@
 import asyncio
 import hashlib
 import json
+import logging
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
+
+from open_energy_planner.core.units import MINUTES_PER_HOUR, SECONDS_PER_MINUTE
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
 from ..planning_policy import PLANNING_HORIZON_HOURS, PRICE_COVERAGE_HOURS
 from .model import (
@@ -32,6 +37,29 @@ from .policy import (
     PUBLISHED_RETRY_MINUTES,
     REQUIRED_CONSECUTIVE_ASSESSMENTS,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def price_failure_reason(error):
+    """Explain owned provider codes without copying arbitrary exception bodies into logs."""
+    if not isinstance(error, PricesUnavailable):
+        return None
+    code = str(error)
+    if re.fullmatch(r"price_http_[1-5][0-9]{2}", code):
+        return f"HTTP {code[-3:]}"
+    return {
+        "published_prices_not_final": "the provider has not finalized this delivery day",
+        "home_assistant_prices_pending": "Home Assistant prices have not arrived yet",
+        "published_day_incomplete": "the provider's delivery day is incomplete",
+        "price_forecast_expired": "the provider forecast has expired",
+        "price_response_unavailable": "the provider request could not be read",
+        "price_response_too_large": "the provider response exceeded its size limit",
+        "source_identity_mismatch": "the provider area or currency does not match",
+        "invalid_price_forecast": "the provider forecast failed validation",
+        "invalid_epex_forecast": "the EPEX forecast failed validation",
+        "invalid_jeroen_forecast": "the Jeroen forecast failed validation",
+    }.get(code, "no usable provider prices")
 
 
 class PriceStore(Protocol):
@@ -100,6 +128,7 @@ class PriceService:
         self.extra_forecasts = tuple(extra_forecasts)
         self.selection_input_version = None
         self.issues = {}
+        self.refresh_logs = {}
         try:
             loaded = store.load()
         except (ValueError, OSError, TypeError, KeyError):
@@ -121,6 +150,11 @@ class PriceService:
             for source_item in loaded
         ):
             self.issues["cache"] = "cache_identity_mismatch"
+        if "cache" in self.issues:
+            _LOGGER.warning(
+                "Price cache could not be fully restored (%s). Only accepted current-area prices will be used while sources refresh.",
+                self.issues["cache"],
+            )
         self.attempts = {}
         self.corrections = set()
         self.forecast_attempts = {}
@@ -269,6 +303,11 @@ class PriceService:
                 for key, value in self.issues.items()
                 if not key.startswith("published:") or key.split(":", 1)[1] >= today.isoformat()
             }
+            self.refresh_logs = {
+                key: status
+                for key, status in self.refresh_logs.items()
+                if not key.startswith("published:") or key.split(":", 1)[1] >= today.isoformat()
+            }
             days = [today]
             if local.time() >= self.schedule.publication:
                 days.append(today + timedelta(days=1))
@@ -295,13 +334,32 @@ class PriceService:
                 ):
                     continue
                 self.attempts[day] = now
+                status = self.refresh_logs.setdefault(
+                    issue_key,
+                    BackgroundLog(_LOGGER, f"Published market prices for {day.isoformat()}"),
+                )
                 try:
                     await self._accept(await self.published.fetch_day(day, now), day)
                     if correction and self.complete(day):
                         self.corrections.add(day)
                     self.issues.pop(issue_key, None)
+                    status.success(
+                        "The complete delivery day is available. Scheduled correction checks remain enabled."
+                    )
                 except (PricesUnavailable, OSError) as error:
                     self.issues[issue_key] = str(error)
+                    status.exception(
+                        "Previously accepted prices keep their original expiry. Planning requires usable price coverage.",
+                        retry_seconds=self.schedule.retry.total_seconds(),
+                        expected=True,
+                        reason=price_failure_reason(error),
+                        waiting=str(error)
+                        in {
+                            "published_prices_not_final",
+                            "home_assistant_prices_pending",
+                            "published_day_incomplete",
+                        },
+                    )
             paired = []
             for key, source in (
                 ("forecast", self.forecast),
@@ -319,16 +377,35 @@ class PriceService:
                 if previous is not None and now - previous < interval:
                     continue
                 self.forecast_attempts[key] = now
+                status = self.refresh_logs.setdefault(
+                    key,
+                    BackgroundLog(_LOGGER, f"Price forecast {getattr(source, 'SOURCE_ID', key)}"),
+                )
                 try:
                     candidate = await source.fetch(now)
                     await self._accept(candidate)
                     paired.append(candidate)
                     self.issues.pop(key, None)
+                    status.success(
+                        f"Received {len(candidate.points)} price intervals. Next refresh in {FORECAST_REFRESH_INTERVAL_HOURS * MINUTES_PER_HOUR:g} minutes."
+                    )
                 except (PricesUnavailable, OSError) as error:
                     self.issues[key] = str(error)
+                    status.exception(
+                        "Previously accepted prices keep their original expiry. Other available sources remain usable.",
+                        retry_seconds=FORECAST_FAILURE_RETRY_MINUTES * SECONDS_PER_MINUTE,
+                        expected=True,
+                        reason=price_failure_reason(error),
+                    )
             await self.assess(now, tuple(paired))
             current_timeline = self.timeline(now)
             current_coverage = self._coverage(current_timeline)
+            if self.last_coverage is None or previous_coverage != current_coverage:
+                _LOGGER.info(
+                    "Market price coverage: %s. Usable intervals: %d. Only current, unexpired source data is admitted.",
+                    current_timeline.status.value.replace("_", " "),
+                    len(current_timeline.entries),
+                )
             self.last_coverage = current_coverage
             return before != self.version or previous_coverage != current_coverage
 
@@ -353,12 +430,21 @@ class PriceService:
                 self.selection.issue = None
                 self.selection_input_version = self.version
                 self.issues.pop("selection", None)
+                if "selection" in self.refresh_logs:
+                    self.refresh_logs["selection"].success(
+                        "Price source selection is stored again."
+                    )
             except asyncio.CancelledError:
                 await asyncio.gather(writer, return_exceptions=True)
                 raise
             except OSError as error:
                 self.selection.issue = str(error)
                 self.issues["selection"] = str(error)
+                self.refresh_logs.setdefault(
+                    "selection", BackgroundLog(_LOGGER, "Price source selection storage")
+                ).exception(
+                    "The previous source preference remains active. Check storage availability. A later price refresh will retry.",
+                )
 
     def _coverage(self, timeline):
         """Compare usable prefixes without treating a full rolling horizon's moving end as a new input."""

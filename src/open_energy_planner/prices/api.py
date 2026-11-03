@@ -1,5 +1,6 @@
 """Register cached price and contract projections without fetching providers in HTTP requests."""
 
+import logging
 from datetime import UTC, datetime
 
 from aiohttp import web
@@ -7,8 +8,19 @@ from aiohttp import web
 from open_energy_planner.contracts.compilation import BonusCompiler
 from open_energy_planner.contracts.model import TariffCalculator
 from open_energy_planner.planning_policy import PLANNING_HORIZON_HOURS
+from open_energy_planner.runtime.diagnostics.logging import request_error_message
 
 from .adapters.home_assistant import bridge
+
+# Only these reviewed owned literals may cross the public error boundary.
+PUBLIC_VALIDATION_MESSAGES = (
+    "Choose Automatic or an available forecast source for every lead period",
+    "Configure the market area before selecting price sources",
+    "Expected source preferences and their configuration version",
+    "Forecast source does not support the selected lead period",
+    "Market area changed. Reload before saving price preferences",
+    "Price source preferences changed. Reload before saving",
+)
 
 
 def register(app, current_prices, contracts, live, lock):
@@ -53,7 +65,15 @@ def register(app, current_prices, contracts, live, lock):
                     live.refresh(force=True)
             return web.json_response(cached_document())
         except (ValueError, TypeError, KeyError) as error:
-            raise web.HTTPBadRequest(text=str(error)) from None
+            raise web.HTTPBadRequest(
+                text=request_error_message(
+                    error,
+                    logger=logging.getLogger(__name__),
+                    operation="Price source preferences",
+                    safe_messages=PUBLIC_VALIDATION_MESSAGES,
+                    fallback="Price source preferences could not be confirmed. Refresh source settings before retrying.",
+                )
+            ) from None
         except OSError:
             raise web.HTTPServiceUnavailable(
                 text="Price source preferences could not be saved"

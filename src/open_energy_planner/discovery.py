@@ -21,6 +21,7 @@ from zeroconf.asyncio import AsyncZeroconf
 
 from open_energy_planner.contracts.bonus_statistics import MAX_STATISTICS_REPORT_BYTES
 from open_energy_planner.core.units import BYTES_PER_KIB
+from open_energy_planner.runtime.diagnostics.logging import failure_reason
 
 from .build_info import HEADER_FIELDS, RELEASE
 from .home_assistant.routes import PEER_ROUTES
@@ -215,9 +216,10 @@ def advertise(
                             },
                         ) as response:
                             response.raise_for_status()
-                    except (ClientError, TimeoutError):
+                    except (ClientError, TimeoutError) as error:
                         LOG.warning(
-                            "Supervisor discovery failed. Check the app discovery permission"
+                            "Supervisor discovery announcement failed (%s). The app remains available. Check Supervisor connectivity and the app discovery permission.",
+                            failure_reason(error),
                         )
             info = ServiceInfo(
                 SERVICE,
