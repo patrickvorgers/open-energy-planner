@@ -128,6 +128,12 @@ obsolete content length. Ordinary authentication still belongs to the inner app.
 The source copy is made only after app request handlers, planner and source
 workers have drained. The private runtime disables aiohttp's shutdown deadline.
 An accepted write must finish even if it takes longer than the default 60 seconds.
+The Home Assistant app declares 300 seconds of Supervisor stop grace, the
+platform's supported maximum. Active native work and separate HTTP shutdown
+phases can exceed the platform's default ten seconds. This is available cleanup
+time, not a delay on an otherwise completed stop or a change to the solver
+budget. It does not guarantee that unbounded storage I/O finishes before a hard
+stop. An interrupted transfer still follows the durable recovery contract below.
 Copy/verification progress counts all registered rows and
 is relative to the current phase, not a fictitious overall time estimate. Row
 counts stay in memory. The phase and release boundary are durable. After a process
