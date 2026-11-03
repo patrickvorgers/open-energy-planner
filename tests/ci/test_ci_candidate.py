@@ -384,7 +384,7 @@ class Evidence:
             self.pr_reads += 1
             return deepcopy(self.changed if self.changed and self.pr_reads > 1 else self.current)
         assert path.startswith(
-            f"repos/owner/planner/commits/{HEAD}/check-runs?filter=latest&per_page=100&page="
+            f"repos/owner/planner/commits/{HEAD}/check-runs?filter=all&per_page=100&page="
         )
         page = int(path.rsplit("=", 1)[1])
         return {

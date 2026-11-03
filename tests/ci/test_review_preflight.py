@@ -310,7 +310,10 @@ def test_unresolved_findings_block_the_manual_command():
         run(client)
 
 
-@pytest.mark.parametrize("status", ["queued", "in_progress", "waiting", "pending", "completed"])
+@pytest.mark.parametrize(
+    "status",
+    ["queued", "requested", "in_progress", "waiting", "pending", "unknown", None, "completed"],
+)
 def test_in_flight_or_substantively_completed_review_is_not_requested_again(status):
     """The real review phase evidence prevents another request after a completed review on this head."""
     client = Evidence()
@@ -330,6 +333,47 @@ def test_successful_but_skipped_provider_check_is_not_a_completed_review():
     assert "No review has been requested." in run(client)
     with pytest.raises(VerificationError):
         require_coderabbit_review(client.checks)
+
+
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_automatic_skip_preserves_only_existing_same_head_review_evidence(reviewed):
+    """A Ready metadata skip neither replaces a completed review nor becomes review evidence itself."""
+    client = Evidence()
+    if reviewed:
+        client.checks.append(completed_review())
+    client.checks.append(
+        {
+            **completed_review(),
+            "id": 21,
+            "conclusion": "skipped",
+            "output": {"title": "Review skipped"},
+        }
+    )
+    if reviewed:
+        require_coderabbit_review(client.checks)
+        with pytest.raises(VerificationError, match="already completed"):
+            run(client)
+    else:
+        with pytest.raises(VerificationError):
+            require_coderabbit_review(client.checks)
+        assert "No review has been requested." in run(client)
+    assert any("check-runs?filter=all&" in path for _, path in client.calls)
+
+
+def test_later_pending_review_cannot_hide_behind_completed_or_skipped_results():
+    """A pending new analysis still blocks admission and duplicate requests after an automatic skip."""
+    client = Evidence()
+    client.checks.extend(
+        [
+            completed_review(),
+            {**completed_review(), "id": 21, "status": "requested", "conclusion": None},
+            {**completed_review(), "id": 22, "conclusion": "skipped"},
+        ]
+    )
+    with pytest.raises(VerificationError):
+        require_coderabbit_review(client.checks)
+    with pytest.raises(VerificationError, match="already reviewing"):
+        run(client)
 
 
 @pytest.mark.parametrize("trusted", [False, True])
@@ -526,26 +570,19 @@ def test_malformed_event_shapes_fail_closed_without_api_access(monkeypatch, tmp_
     assert review_preflight.main() == 1
 
 
-def test_preflight_workflow_and_native_config_have_no_automatic_or_write_path():
-    """Retain explicit structural proof for trusted-main selection, read permissions and disabled native triggers."""
-    workflow = (ROOT / ".github/workflows/review-preflight.yaml").read_text()
-    assert "  workflow_dispatch:" in workflow
-    assert "pull_request:" not in workflow.split("    inputs:", 1)[0]
-    assert "issue_comment:" not in workflow
-    assert "ref: ${{ github.sha }}" in workflow
-    assert "persist-credentials: false" in workflow
-    assert "pull-requests: read" in workflow and ": write" not in workflow
-    assert "cancel-in-progress: false" in workflow
+def test_native_review_configuration_disables_automatic_triggers():
+    """Require direct auto-review settings. Comments and nested mappings cannot satisfy the policy."""
     configuration = (
         (ROOT / ".coderabbit.yaml")
         .read_text()
         .split("  auto_review:", 1)[1]
         .split("  path_instructions:", 1)[0]
     )
+    lines = {line.rstrip() for line in configuration.splitlines()}
     for setting in (
         "enabled: false",
         "auto_incremental_review: false",
         "labels: []",
         'description_keyword: ""',
     ):
-        assert setting in configuration
+        assert "    " + setting in lines

@@ -154,6 +154,14 @@ required CI evidence still apply.
 
 ## Request candidate CI
 
+Ready for review starts candidate CI, not another CodeRabbit review. Native
+automatic review routes stay disabled, while the explicit manual command remains
+available. Admission reuses substantive review evidence for the exact same head,
+even if a later automatic metadata check is skipped. It reads the complete check
+history and still rejects later pending or failed reviews. A new head must obtain
+its own completed review before admission. A Ready transition must not be used to
+spend another review on an already reviewed, unchanged commit.
+
 First complete CodeRabbit review of the current head and address all findings,
 including comments outside the diff. Resolve evaluated discussions, including
 outdated threads. Then select **Ready for review**. That transition automatically

@@ -215,6 +215,9 @@ def test_ready_and_manual_retry_use_the_same_current_head_gate(action):
             "| Publish review results | Completed | 1s |\n"
         ),
     }
+    checks.append(
+        {**checks[2], "id": 5, "conclusion": "skipped", "output": {"title": "Review skipped"}}
+    )
     client = Evidence(current, checks)
     assert check(event, "owner/planner", client) == "2" * 40
     checks[2]["status"] = "in_progress"

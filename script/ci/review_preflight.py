@@ -139,7 +139,7 @@ def preflight(repository, number, head, base, reviewed, client):
     require_prerequisites(checks)
     review = latest_check(checks, "CodeRabbit", CODERABBIT_APP_ID)
     if review:
-        if review.get("status") in {"queued", "in_progress", "waiting", "pending"}:
+        if review.get("status") != "completed":
             raise VerificationError("CodeRabbit is already reviewing this head")
         try:
             require_coderabbit_review(checks)

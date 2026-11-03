@@ -56,7 +56,7 @@ def current_checks(repository, head, client):
     checks = []
     for page in range(1, MAX_CHECK_PAGES + 1):
         result = client.get(
-            f"repos/{repository}/commits/{head}/check-runs?filter=latest&per_page={CHECKS_PER_PAGE}&page={page}"
+            f"repos/{repository}/commits/{head}/check-runs?filter=all&per_page={CHECKS_PER_PAGE}&page={page}"
         )
         rows = result.get("check_runs")
         total = result.get("total_count")
@@ -81,14 +81,20 @@ def current_checks(repository, head, client):
 
 
 def latest_check(checks, name, app_id):
-    """Select the actual service's newest check, ignoring skipped Actions metadata duplicates."""
+    """Select the service's newest evidence, preserving head proof across completed metadata skips."""
     matching = [
         row
         for row in checks
         if row.get("name") == name
         and isinstance(row.get("app"), dict)
         and row["app"].get("id") == app_id
-        and not (app_id == GITHUB_ACTIONS_APP_ID and row.get("conclusion") == "skipped")
+        and not (
+            row.get("conclusion") == "skipped"
+            and (
+                app_id == GITHUB_ACTIONS_APP_ID
+                or (app_id == CODERABBIT_APP_ID and row.get("status") == "completed")
+            )
+        )
     ]
     return max(matching, key=lambda row: row["id"]) if matching else None
 
