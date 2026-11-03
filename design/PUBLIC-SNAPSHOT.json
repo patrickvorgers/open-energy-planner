@@ -1,0 +1,3231 @@
+{
+  "snapshot_revision": "2afe255c94ea206360c96721bca41bc240ee2146",
+  "purpose": "Complete signed public source baseline. Earlier private Git objects are intentionally excluded.",
+  "excluded_paths": [
+    "design/storage-study-2026-10-17/all_17_series_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/all_17_series_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/all_17_wide_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/all_17_wide_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/energy_and_soc_11_series_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/energy_and_soc_11_series_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/energy_and_soc_11_wide_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/energy_and_soc_11_wide_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/grid_aggregated_2_series_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/grid_aggregated_2_series_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/grid_aggregated_2_wide_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/grid_aggregated_2_wide_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/grid_original_4_series_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/grid_original_4_series_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/grid_original_4_wide_all_nonzero_float.sqlite",
+    "design/storage-study-2026-10-17/grid_original_4_wide_sample_day_repeated.sqlite",
+    "design/storage-study-2026-10-17/measure_storage.py",
+    "design/storage-study-2026-10-17/measurement-day.json",
+    "design/storage-study-2026-10-17/storage_results.json"
+  ],
+  "records": [
+    {
+      "path": ".coderabbit.yaml",
+      "git_blob": "31be5a62b602a2b026247167a776bb6becb67a65"
+    },
+    {
+      "path": ".devcontainer/Dockerfile.supervisor",
+      "git_blob": "b22b78cc2d44a76b650fed0d647f407b1600b596"
+    },
+    {
+      "path": ".devcontainer/devcontainer.json",
+      "git_blob": "9b31e875910d808a78dce111050a19e6b777ed18"
+    },
+    {
+      "path": ".devcontainer/ha-configuration.yaml",
+      "git_blob": "0003b6779b990789488413035d1d439bb5fade66"
+    },
+    {
+      "path": ".dockerignore",
+      "git_blob": "3f6d67bd982fb1acd00484699435f0931b97fc99"
+    },
+    {
+      "path": ".editorconfig",
+      "git_blob": "aae1a11d5b695448fa5cdef975ba8f3bd481fc7e"
+    },
+    {
+      "path": ".gitattributes",
+      "git_blob": "42d7d3d59882eca0a5842bec6d47259eb78286df"
+    },
+    {
+      "path": ".github/PULL_REQUEST_TEMPLATE.md",
+      "git_blob": "7b0d391c6696bbf85b6691b6f39b7fafed8ce508"
+    },
+    {
+      "path": ".github/actions/quick-checks/action.yaml",
+      "git_blob": "257c8f71c4cdeacaf1c0ac29220daa0def4e0183"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "git_blob": "dc9ecf3846ec5690e6d52208419ea2f7387c739e"
+    },
+    {
+      "path": ".github/runner/Dockerfile",
+      "git_blob": "9fb9f464e2da5c16150f170f92f7424210d5e2d4"
+    },
+    {
+      "path": ".github/runner/compose.yaml",
+      "git_blob": "68129a440a5f54184e943b4749464d18bd2b9302"
+    },
+    {
+      "path": ".github/runner/entrypoint.sh",
+      "git_blob": "4357a5c380034d4947bab4f5e1b5a21f30f75718"
+    },
+    {
+      "path": ".github/runner/job-started.sh",
+      "git_blob": "5b23944a94a9dff94427ef88c76492eb4b252209"
+    },
+    {
+      "path": ".github/workflows/checks.yaml",
+      "git_blob": "1b593fead7d3a6344562146ee4b1c2134952dd5b"
+    },
+    {
+      "path": ".github/workflows/ci-admission.yaml",
+      "git_blob": "dd414552fe19705dfafbcd2f5adec1076942da14"
+    },
+    {
+      "path": ".github/workflows/ci-scope-labels.yaml",
+      "git_blob": "ee962b8b3090cb93c809e2f5bf507b33e1c72a6a"
+    },
+    {
+      "path": ".github/workflows/developer-page.yaml",
+      "git_blob": "cd03fa2158561b7da960b68d5879add2d4e5bccf"
+    },
+    {
+      "path": ".github/workflows/pr-readiness.yaml",
+      "git_blob": "127b86c16de8b693e784e1933cbf86754785acfd"
+    },
+    {
+      "path": ".github/workflows/quick-checks.yaml",
+      "git_blob": "03279a0ade7ad1129817ac2c291adb43307f7de1"
+    },
+    {
+      "path": ".github/workflows/verified-commits.yaml",
+      "git_blob": "68cdc19512efc38ce878c713011300bab58d0ae8"
+    },
+    {
+      "path": ".gitignore",
+      "git_blob": "0933c658dedba15754813d231b21899ef71a6895"
+    },
+    {
+      "path": ".vscode/launch.json",
+      "git_blob": "02496030edb849ea195232857c3944d694af62f9"
+    },
+    {
+      "path": ".vscode/tasks.json",
+      "git_blob": "2270db0c81d62c592b53230c9bfb73c1a728a027"
+    },
+    {
+      "path": "AGENTS.md",
+      "git_blob": "4e6c2f7ea053f19e22ee051f51c280f86393c5b7"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "git_blob": "38b9ecae9478765997361c917f629bd7c5926d88"
+    },
+    {
+      "path": "Dockerfile.app",
+      "git_blob": "f997ba9e003e3b39cbcb600b6666f6bc56cc3d2b"
+    },
+    {
+      "path": "Dockerfile.chain-test",
+      "git_blob": "02b39243e61bbe79da61e999769b68bc72101aad"
+    },
+    {
+      "path": "Dockerfile.native-test",
+      "git_blob": "9681820b16ef8a98052179b05b09301fa6eca23e"
+    },
+    {
+      "path": "Dockerfile.supervisor",
+      "git_blob": "bb1f617a59143aba3d9feb495fef77423839b20f"
+    },
+    {
+      "path": "Dockerfile.ui-test",
+      "git_blob": "5e8f2913b88aabecd5556c94760c3365b25861ed"
+    },
+    {
+      "path": "LICENSE",
+      "git_blob": "0c97efd25b5974b974ed9a8a18207bc4f55bb338"
+    },
+    {
+      "path": "NOTICE",
+      "git_blob": "f601ad535c0a4157bd3bd7cc5377f8c46113b455"
+    },
+    {
+      "path": "README.md",
+      "git_blob": "6939b6663d86b4c05972373d924ec93420f6756e"
+    },
+    {
+      "path": "SECURITY.md",
+      "git_blob": "d387d1bbd0e41744146c64466f67d05abb967b1f"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "git_blob": "2384b07270fc9efce4cc4212492c436f0289d3f5"
+    },
+    {
+      "path": "compose.dev.yaml",
+      "git_blob": "2c7e6c643666bf9129c1b5188320f27b5b3a16fd"
+    },
+    {
+      "path": "compose.yaml",
+      "git_blob": "a8dc42664164805167f2e7aee8927fa73d0e5101"
+    },
+    {
+      "path": "custom_components/open_energy_planner/__init__.py",
+      "git_blob": "422148d1b6940cd9b6e8029dcdc801a67ba92928"
+    },
+    {
+      "path": "custom_components/open_energy_planner/appliance_controls.py",
+      "git_blob": "e45b837185811dc36c01f72d7134dc7287741952"
+    },
+    {
+      "path": "custom_components/open_energy_planner/appliance_history.py",
+      "git_blob": "29da57ecc7c52cbbbeed8abce42f1c0945795fb8"
+    },
+    {
+      "path": "custom_components/open_energy_planner/appliances.py",
+      "git_blob": "e64fdaa6797f667ab12d39347af2fc9308f07946"
+    },
+    {
+      "path": "custom_components/open_energy_planner/binary_sensor.py",
+      "git_blob": "3480db3ce5f739675b4444b30e75afaa2efc78b8"
+    },
+    {
+      "path": "custom_components/open_energy_planner/blueprints/appliance.yaml",
+      "git_blob": "3ed3413fc75619452cc3ab52fbd26dd557c0d525"
+    },
+    {
+      "path": "custom_components/open_energy_planner/blueprints/ev.yaml",
+      "git_blob": "e72882e1fb3d9f7e7aca512cdf097f7e1e113847"
+    },
+    {
+      "path": "custom_components/open_energy_planner/blueprints/thermal.yaml",
+      "git_blob": "95a7360a28a66777cce44911662a32797c5fa03d"
+    },
+    {
+      "path": "custom_components/open_energy_planner/brand/icon.png",
+      "git_blob": "73941f3da545a5ebd5378b1167fba85f6ced9200"
+    },
+    {
+      "path": "custom_components/open_energy_planner/build-info.json",
+      "git_blob": "df988e57b7a674169755412f1982afdf29c769d8"
+    },
+    {
+      "path": "custom_components/open_energy_planner/button.py",
+      "git_blob": "5f9702af7fe4b3caa67afbc8bd9255e002aadd05"
+    },
+    {
+      "path": "custom_components/open_energy_planner/catalogue.py",
+      "git_blob": "2bdfd5046ce72d7fddcd8d662135aca6913b946b"
+    },
+    {
+      "path": "custom_components/open_energy_planner/client.py",
+      "git_blob": "58ea8f28d3ee8f034f53f8778564b10d204d77b3"
+    },
+    {
+      "path": "custom_components/open_energy_planner/config_flow.py",
+      "git_blob": "1dfa5a39754dd7aaf5548879e617435b2e920fd1"
+    },
+    {
+      "path": "custom_components/open_energy_planner/configuration_sensors.py",
+      "git_blob": "b3ec1b836102cc61fe7d040217b632967f8945a5"
+    },
+    {
+      "path": "custom_components/open_energy_planner/const.py",
+      "git_blob": "33d142a41eb6b18b7244a8376faffe2cf8a5df52"
+    },
+    {
+      "path": "custom_components/open_energy_planner/consumer_sensors.py",
+      "git_blob": "81fefd3104fe8bf61551ed964dfb5ceee156d6e1"
+    },
+    {
+      "path": "custom_components/open_energy_planner/coordinator.py",
+      "git_blob": "fe7be8b7cc0ffbf1ec79c9f2d7f7e2081ec46282"
+    },
+    {
+      "path": "custom_components/open_energy_planner/date.py",
+      "git_blob": "25d8341ac35b4ab362cb27e8f0b7b82ec5cdc7f3"
+    },
+    {
+      "path": "custom_components/open_energy_planner/device_sensors.py",
+      "git_blob": "35fc46f070f65018223c33394c74f629ebe69465"
+    },
+    {
+      "path": "custom_components/open_energy_planner/entity.py",
+      "git_blob": "865262e78b7a3fab797661a8a7646b4365d6bee8"
+    },
+    {
+      "path": "custom_components/open_energy_planner/ev.py",
+      "git_blob": "30b9dd77ca135ffdefbd1f46e82d0474a1983b0c"
+    },
+    {
+      "path": "custom_components/open_energy_planner/ev_controls.py",
+      "git_blob": "5f3a9a02ee692941f33fc0c447a87af8589a7f12"
+    },
+    {
+      "path": "custom_components/open_energy_planner/history.py",
+      "git_blob": "76c730a6d27e526936decedf0e7666c74da1a7c7"
+    },
+    {
+      "path": "custom_components/open_energy_planner/manifest.json",
+      "git_blob": "302a85887573d24252f29fe839253c272a33aec8"
+    },
+    {
+      "path": "custom_components/open_energy_planner/market_prices.py",
+      "git_blob": "d544bd225e7b3415077b6b87ae63c4180041291c"
+    },
+    {
+      "path": "custom_components/open_energy_planner/measurement_sources.py",
+      "git_blob": "b99a1c6b90212b631154d357c0df068d6f368310"
+    },
+    {
+      "path": "custom_components/open_energy_planner/measurements.py",
+      "git_blob": "32162af5f8a052ae367ba8d0e74437746a9c2737"
+    },
+    {
+      "path": "custom_components/open_energy_planner/number.py",
+      "git_blob": "d5d571c651ab6bf7dc78cd7ae78294b421f27e7f"
+    },
+    {
+      "path": "custom_components/open_energy_planner/observation_bridge.py",
+      "git_blob": "24635cdc254abd808160ad5c72143b76217bc7c7"
+    },
+    {
+      "path": "custom_components/open_energy_planner/protocol.py",
+      "git_blob": "24d0f6dcf81c97875e6629555acf7a2004824749"
+    },
+    {
+      "path": "custom_components/open_energy_planner/select.py",
+      "git_blob": "f90f2b919ef639977eb3a3de1face4b2aecf76cb"
+    },
+    {
+      "path": "custom_components/open_energy_planner/sensor.py",
+      "git_blob": "2e8cdcc43568b659024e69a72476d25b9e243a77"
+    },
+    {
+      "path": "custom_components/open_energy_planner/services.yaml",
+      "git_blob": "c0584cc422508560ae9fe4063b9759f543e12297"
+    },
+    {
+      "path": "custom_components/open_energy_planner/settlement.py",
+      "git_blob": "dede9256e455a8abfde361e90fb174485e1549a0"
+    },
+    {
+      "path": "custom_components/open_energy_planner/setup_history.py",
+      "git_blob": "8c7fa483022cd2faf6ba137e481a231c500ad3ad"
+    },
+    {
+      "path": "custom_components/open_energy_planner/solar_adapters.py",
+      "git_blob": "bddc4cae78c5d62dab5d12af09a10dc733ca177f"
+    },
+    {
+      "path": "custom_components/open_energy_planner/solar_forecasts.py",
+      "git_blob": "093ccf495c3ae236ab488f0b8921128c6e216beb"
+    },
+    {
+      "path": "custom_components/open_energy_planner/strings.json",
+      "git_blob": "5354bc493a785dc96c54efa16e805427ee157167"
+    },
+    {
+      "path": "custom_components/open_energy_planner/supervisor/__init__.py",
+      "git_blob": "a3669f8f7b04217bc7a2d9c770226c8437b2071c"
+    },
+    {
+      "path": "custom_components/open_energy_planner/switch.py",
+      "git_blob": "74fec29bf8277022c82c70fb78504890ad4a42ca"
+    },
+    {
+      "path": "custom_components/open_energy_planner/thermal.py",
+      "git_blob": "02609dba2492815d75a837d5cad6e8c2494323fe"
+    },
+    {
+      "path": "custom_components/open_energy_planner/thermal_controls.py",
+      "git_blob": "d3768beec04e3046bc753f4c2f8181c8a35a0d29"
+    },
+    {
+      "path": "custom_components/open_energy_planner/time.py",
+      "git_blob": "de214e602b900784ac036ca60b59fc8b3b48cdb1"
+    },
+    {
+      "path": "custom_components/open_energy_planner/translations/en.json",
+      "git_blob": "5354bc493a785dc96c54efa16e805427ee157167"
+    },
+    {
+      "path": "design/DEVELOPMENT-FOUNDATION.md",
+      "git_blob": "c4c4c741acbb4194739c1d1a21d4ac0522ca3ae0"
+    },
+    {
+      "path": "design/DEVICE-SETTINGS-PROPOSAL.md",
+      "git_blob": "ca345d582e3d709a034573fcceab98ef2128eca5"
+    },
+    {
+      "path": "design/ENGLISH-MIGRATION.json",
+      "git_blob": "95799ec2acfdc39dda6920a0a67273be9b32c731"
+    },
+    {
+      "path": "design/FIRST-RELEASE-SCOPE.md",
+      "git_blob": "3f299f21bc996200ae3540f79d2b4b11dd9458f6"
+    },
+    {
+      "path": "design/PLANNER-SCENARIOS.md",
+      "git_blob": "9af70888efc4b639538a54e41f3d80325b87097c"
+    },
+    {
+      "path": "design/REQUIREMENTS.md",
+      "git_blob": "d92767beea5e9b72b9e2c427e81aa8b24ee48777"
+    },
+    {
+      "path": "design/SOLVER-REGRESSION-MIGRATION.md",
+      "git_blob": "d7efc9516d277f6c1aed7a7bd2838932ff2614be"
+    },
+    {
+      "path": "design/SOLVER-SELECTION.md",
+      "git_blob": "05697e52194773033479792d9305068b441bccd1"
+    },
+    {
+      "path": "design/TECHNICAL-DESIGN.md",
+      "git_blob": "15e410d840ef83c68886eea4e2007f23205ec461"
+    },
+    {
+      "path": "design/TEST-COVERAGE.md",
+      "git_blob": "3440327369e3843c685f60b4a49a71baa7919c79"
+    },
+    {
+      "path": "design/scenario-arithmetic-audit.json",
+      "git_blob": "977af3ca3e7fd7207dd38b759114ea872a04bdef"
+    },
+    {
+      "path": "design/storage-study-2026-10-17/REPORT.md",
+      "git_blob": "500825d6a90b5459b06029d0bc3a77be4969130d"
+    },
+    {
+      "path": "docs/developer/index.html",
+      "git_blob": "f2b94c6ff9cb9c3b7c39faf5e630add51e435ebf"
+    },
+    {
+      "path": "docs/developer/start.mjs",
+      "git_blob": "c98e6ca2420cf4265e52a433dcd29abed3908564"
+    },
+    {
+      "path": "docs/developer/style.css",
+      "git_blob": "a589944f0078c7c1c251270bdc1de26d33ca448b"
+    },
+    {
+      "path": "docs/development/APPLIANCE-ARCHITECTURE.md",
+      "git_blob": "8b3bbfc1f797be9cc946ad5e932c73f73ba67395"
+    },
+    {
+      "path": "docs/development/APPLIANCE-LEARNING.md",
+      "git_blob": "1e809eb51769b65f86c2b7beb309991b1035b936"
+    },
+    {
+      "path": "docs/development/AUTOMATIC-PAIRING.md",
+      "git_blob": "6eefe54dff054d689109abeec067749a4e94a34e"
+    },
+    {
+      "path": "docs/development/BONUS-RULES.md",
+      "git_blob": "d17309e187bf5977276d1390e8a7b2648e4b9716"
+    },
+    {
+      "path": "docs/development/BONUS-STATISTICS.md",
+      "git_blob": "11f832665efc3b85f51e9c06579c8c083b6f3472"
+    },
+    {
+      "path": "docs/development/CI-STAGES.md",
+      "git_blob": "6d64450ff82518bfdfed88da2952935550039e92"
+    },
+    {
+      "path": "docs/development/CODE-DOCUMENTATION.md",
+      "git_blob": "d6127498bd11a9d7159e584c44b53d91ee81cd40"
+    },
+    {
+      "path": "docs/development/CONFIGURATION-UI.md",
+      "git_blob": "e08507d5d44aae0b97447f803f145e4686905a15"
+    },
+    {
+      "path": "docs/development/CONSUMPTION-STRATEGY.md",
+      "git_blob": "34651a7b0af947234d04c797e681afafe17401c7"
+    },
+    {
+      "path": "docs/development/CONTRACT-EXAMPLES-NL.md",
+      "git_blob": "10c784439e0e97e8dc9b1de7af0662347d51e89c"
+    },
+    {
+      "path": "docs/development/CONTRACT-PRICES.md",
+      "git_blob": "1f0e58fcc6f0362e518ea8f9e3b92e6e4feee46e"
+    },
+    {
+      "path": "docs/development/COURTYARD-THEME.md",
+      "git_blob": "691ff030a7f3dcaf0be459e2c7618f5a396dfee2"
+    },
+    {
+      "path": "docs/development/DATABASE-SCHEMA.md",
+      "git_blob": "afef9a868a6ac93fc345561afb6a07b3a1e05f1b"
+    },
+    {
+      "path": "docs/development/DEMAND-FORECASTING.md",
+      "git_blob": "d607df6230295f9fcdba9719a3a457fcc5b709d5"
+    },
+    {
+      "path": "docs/development/DEVELOPER-ENVIRONMENT.md",
+      "git_blob": "c8f13ce19d4397fafc820c80bec7d5a035127340"
+    },
+    {
+      "path": "docs/development/EMS-FEATURE-COMPARISON.md",
+      "git_blob": "1f2d44a1e3ae9e5c2cf30f3cb445a24d26cf5c18"
+    },
+    {
+      "path": "docs/development/EMS-VISUALIZATION.md",
+      "git_blob": "0a5df5e2fd699bfbef58a8169b340b8955347494"
+    },
+    {
+      "path": "docs/development/ENERGY-DASHBOARD.md",
+      "git_blob": "23cb886c47c977052476070cea00f64c3dc72407"
+    },
+    {
+      "path": "docs/development/EV-CHARGING.md",
+      "git_blob": "508c75f415ae72bf65fd5f848ba533218e684299"
+    },
+    {
+      "path": "docs/development/FIXED-VALUES.md",
+      "git_blob": "5843639107875b967dc8e59e686dcbe12fb547b9"
+    },
+    {
+      "path": "docs/development/FORECAST-QUALITY.md",
+      "git_blob": "36fede8e4b074cb5650b804a2f3fde020316ec54"
+    },
+    {
+      "path": "docs/development/HA-HISTORY.md",
+      "git_blob": "c1db5b32d418d42becf2dd191234a0f091ecabed"
+    },
+    {
+      "path": "docs/development/HA-MEASUREMENT-SOURCES.md",
+      "git_blob": "e226546b0eaf2350d6ee3628fcf47b4ec1b0eb01"
+    },
+    {
+      "path": "docs/development/HAOS-ACCEPTANCE.md",
+      "git_blob": "1744c0c0efc4fba68b00594a3763fac7c125d1c5"
+    },
+    {
+      "path": "docs/development/INSTALLATION-PLANNING.md",
+      "git_blob": "7b3cf8071710c56f89b8541f9e57b2117ca6ef5d"
+    },
+    {
+      "path": "docs/development/MODEL-SELECTION.md",
+      "git_blob": "81cf235c4e962ec4484f4b7606a2959883e6621e"
+    },
+    {
+      "path": "docs/development/PLAN-ARCHIVE.md",
+      "git_blob": "037891a55091ce96cac9323b81474ba8d2c9363a"
+    },
+    {
+      "path": "docs/development/PLAN-EVIDENCE.md",
+      "git_blob": "c56c4acd22c162f71b8649d5a47d84b24b1df249"
+    },
+    {
+      "path": "docs/development/PLANNING-NOTIFICATIONS.md",
+      "git_blob": "84c7660a7a03aa0e1f430bbe8af5526ec593a08a"
+    },
+    {
+      "path": "docs/development/PRICE-FORECAST-SELECTION.md",
+      "git_blob": "e96d663a5897d545a3dd01799a6100f974b096b6"
+    },
+    {
+      "path": "docs/development/PRICE-INPUTS.md",
+      "git_blob": "b3a6aeb6d19cd3e735f077b05d810e399c6ae82e"
+    },
+    {
+      "path": "docs/development/PRICE-TIMELINE-AND-CONTROL-GRID.md",
+      "git_blob": "fffd447ba54f0a530fd56371c170b5abb8590d83"
+    },
+    {
+      "path": "docs/development/README.md",
+      "git_blob": "620fbc71f59587ae105f55a260a7f101d747917a"
+    },
+    {
+      "path": "docs/development/RELEASE-IDENTITY.md",
+      "git_blob": "7edc8863ed40c37da7db24a10fc6616bf40c7069"
+    },
+    {
+      "path": "docs/development/RESERVE-RECOVERY.md",
+      "git_blob": "140391448727d0b9180b132dfbb5ff158e69fae4"
+    },
+    {
+      "path": "docs/development/SAVINGS.md",
+      "git_blob": "35895627e7d4e4872444dbf565942dbba5d9485f"
+    },
+    {
+      "path": "docs/development/SHIFTABLE-APPLIANCES.md",
+      "git_blob": "2fe5d25a61827b81cab0484d57c07e578c41d98a"
+    },
+    {
+      "path": "docs/development/SOLAR-FORECASTING.md",
+      "git_blob": "8180751fb93eabe7a7886149524ded4ce1490aab"
+    },
+    {
+      "path": "docs/development/SOURCE-PROVENANCE.md",
+      "git_blob": "a0ba9b810f72192c563a5a518a46dc8cffcfd5ed"
+    },
+    {
+      "path": "docs/development/STORAGE-MIGRATION-UI.md",
+      "git_blob": "2237ea6cb04abbfc78492504a8ed168db05ccf89"
+    },
+    {
+      "path": "docs/development/TERMINAL-VALUATION.md",
+      "git_blob": "7c79e8edb7fe08e428ed74ba35ac306eee433d94"
+    },
+    {
+      "path": "docs/development/THERMAL-STORAGE.md",
+      "git_blob": "a615a49b26fbbd9df38e2a9117abfc01e0165a99"
+    },
+    {
+      "path": "docs/development/USER-TEST-ENVIRONMENT.md",
+      "git_blob": "d084a669acbf943c2e9f72b19c5e69518ff5a2c6"
+    },
+    {
+      "path": "docs/development/VERIFIED-COMMITS.md",
+      "git_blob": "8478105c392518ac3e141716fc5e55c41ffb6180"
+    },
+    {
+      "path": "docs/development/VIRTUAL-DEVICES.md",
+      "git_blob": "c103df02c7e3a259936b0b6a0d9954e5676dc756"
+    },
+    {
+      "path": "docs/development/images/installation-strategy/desktop.png",
+      "git_blob": "ce1a92592f477edb863f8198e7f3ef5bfacaee20"
+    },
+    {
+      "path": "docs/development/images/installation-strategy/mobile.png",
+      "git_blob": "930e4e353784c684040fb91aaa3f19311e606210"
+    },
+    {
+      "path": "ha_app/Dockerfile",
+      "git_blob": "13cc9140d683604689025a90d4c487120332102e"
+    },
+    {
+      "path": "ha_app/config.yaml",
+      "git_blob": "4fd974051a99580167d122945712ee857d455c51"
+    },
+    {
+      "path": "hacs.json",
+      "git_blob": "bfd1700f9da0c9d70bb73ba24f528b0fff12abd8"
+    },
+    {
+      "path": "pyproject.toml",
+      "git_blob": "acd263d637c1680e25aaf5ec08c8a7612abf6380"
+    },
+    {
+      "path": "requirements.lock",
+      "git_blob": "5297c558ef7c2eff9f0d0e2f9435cf577b682b59"
+    },
+    {
+      "path": "script/app/__init__.py",
+      "git_blob": "075bca62172141817486cfd466e0bef8bde4af2b"
+    },
+    {
+      "path": "script/app/debug_scenario.py",
+      "git_blob": "43c8c64531bcc8abe67369ec5c277d7b6c0e845b"
+    },
+    {
+      "path": "script/app/process_memory.py",
+      "git_blob": "d850961e28c82a5da51a4a68e7d55312a1bf3ba3"
+    },
+    {
+      "path": "script/app/smoke_app.py",
+      "git_blob": "140383d12aba66370d41eceaa661f70d10ef4bfc"
+    },
+    {
+      "path": "script/check_commit_signatures.py",
+      "git_blob": "1a722f1823236099fea157c1b799ff75afa30cab"
+    },
+    {
+      "path": "script/ci/__init__.py",
+      "git_blob": "7f5e6554947c25b278be52e3aaba387005710242"
+    },
+    {
+      "path": "script/ci/check_ci_candidate.py",
+      "git_blob": "c48a8e0bfb0b5fb35ae0a2a47d1ed498961359d7"
+    },
+    {
+      "path": "script/ci/check_commit_signatures.py",
+      "git_blob": "9b26a748f6908854136fd60ccbf8a057a2abdb4a"
+    },
+    {
+      "path": "script/ci/check_ha.py",
+      "git_blob": "4c1a00b35f5443c3be87a5ccf957fdcabaeabb62"
+    },
+    {
+      "path": "script/ci/check_images.py",
+      "git_blob": "41fbcb86835c1b9046ad73f8e639eb47ed525d76"
+    },
+    {
+      "path": "script/ci/check_main_ci_reuse.py",
+      "git_blob": "d37929ee249ce0d6e764f95ec50528d2dd5a806d"
+    },
+    {
+      "path": "script/ci/check_native.py",
+      "git_blob": "be8eea967cdcfdfc554a4e5b030a7fdd1d259370"
+    },
+    {
+      "path": "script/ci/check_provenance.py",
+      "git_blob": "ca05078e56383ceb2a9e55425dbf23d9e1d0ace7"
+    },
+    {
+      "path": "script/ci/check_suite_completion.py",
+      "git_blob": "60d63821e4c8dfdf3a45a289ca8a6b840a238ee9"
+    },
+    {
+      "path": "script/ci/ci.py",
+      "git_blob": "b083ef24691f4fedd35a6a4f41a25ee564010b6f"
+    },
+    {
+      "path": "script/ci/ci_groups.py",
+      "git_blob": "832af2d4bca467ebeafde063752bb4fad84cae66"
+    },
+    {
+      "path": "script/ci/ci_scope.py",
+      "git_blob": "b08d8844b7155dc8ca1887c8b90b8ffa65468568"
+    },
+    {
+      "path": "script/ci/ha_shard.py",
+      "git_blob": "9d6460bc2d8ff3f2cddc23584fdd0c60b91ab3ca"
+    },
+    {
+      "path": "script/ci/ha_suites.py",
+      "git_blob": "857e25cdfb230a99012de1735c8a5d6dafec8751"
+    },
+    {
+      "path": "script/ci/label_ci_scope.py",
+      "git_blob": "36d6de0d49a397e2050e731ab51241ea08e90e0d"
+    },
+    {
+      "path": "script/ci/local_runner.py",
+      "git_blob": "946c9c8eb84e99cd7e406bf5c048e6b29b8ffb23"
+    },
+    {
+      "path": "script/ci/pr_readiness.py",
+      "git_blob": "fa3498b92ee1e28f7fc2e87b52e08c6ec1bb6930"
+    },
+    {
+      "path": "script/ci/proof_git.py",
+      "git_blob": "90a82f19461e62e1b395134a80de62bf99c2b92d"
+    },
+    {
+      "path": "script/ci/pytest_suites.py",
+      "git_blob": "393567a84e3c033d23426d5fe7cab1ffc4dfae21"
+    },
+    {
+      "path": "script/ci/runner_workspace.py",
+      "git_blob": "362795cb613ce6c2b60cab8618a05ec0196576c2"
+    },
+    {
+      "path": "script/ci/scope_report.py",
+      "git_blob": "cefccba3aa56e16b648c8d09c78cc341cc462a49"
+    },
+    {
+      "path": "script/ci/setup.py",
+      "git_blob": "e83ae778fd6b61ceeed3bf6e98b9a2cc4575b45e"
+    },
+    {
+      "path": "script/home_assistant/__init__.py",
+      "git_blob": "a18d3554e5d9314d04bde01917608ad3fb7bf88f"
+    },
+    {
+      "path": "script/home_assistant/bootstrap/__init__.py",
+      "git_blob": "57793923702ccf2733914659b59f0c3ec72609e2"
+    },
+    {
+      "path": "script/home_assistant/bootstrap/provision_ha.py",
+      "git_blob": "68fed6a4697d2b300df4f3506b1fe72fd0f874fc"
+    },
+    {
+      "path": "script/home_assistant/bootstrap/provision_ha_examples.py",
+      "git_blob": "f7b7542221e8bb40c27a52912477afdfd9cd048d"
+    },
+    {
+      "path": "script/home_assistant/provision_smoke.py",
+      "git_blob": "de379910050e11e5ad01cd57d401f2e9c3b29f7c"
+    },
+    {
+      "path": "script/label_ci_scope.py",
+      "git_blob": "3a39b48e24f5d0f7e226298f60311f47d956a208"
+    },
+    {
+      "path": "script/provisioning/__init__.py",
+      "git_blob": "3a4466c16976e115238bc4623c6c87deef856d12"
+    },
+    {
+      "path": "script/provisioning/acceptance.py",
+      "git_blob": "d5776a9e6296cea158d77126d79e321da3c66a7a"
+    },
+    {
+      "path": "script/provisioning/automations.py",
+      "git_blob": "7e9df1c1644392dd001fb0c6d9f12898bcaf59f6"
+    },
+    {
+      "path": "script/provisioning/device_examples.py",
+      "git_blob": "54a08ce3d3d7a5f7d75df50f47e599b0f70126cb"
+    },
+    {
+      "path": "script/provisioning/sample_settings.py",
+      "git_blob": "d794c3fc9122faf8d522319fbdf0b379d822e79f"
+    },
+    {
+      "path": "script/release/__init__.py",
+      "git_blob": "2a08ec9c616387f57ef7d83539159bc523c24231"
+    },
+    {
+      "path": "script/release/package_ha_app.py",
+      "git_blob": "b21e2fe7ae64e24ff2679d5b64dbbc9bea3383c1"
+    },
+    {
+      "path": "script/release/package_release.py",
+      "git_blob": "767492e911c0ca4d61fc370ec7cbe861838a5f63"
+    },
+    {
+      "path": "script/release/publish_release.py",
+      "git_blob": "f40ab78ad88974810668fc8656042e36518b89ef"
+    },
+    {
+      "path": "script/release/runtime_notices.py",
+      "git_blob": "e0387d57caded7dc7cc1e2d374dd4de2492f9bb8"
+    },
+    {
+      "path": "script/release/verify_deployment.py",
+      "git_blob": "a7d17d11feb641ddc417aec8dfbad2d70398aece"
+    },
+    {
+      "path": "script/runtime/__init__.py",
+      "git_blob": "6bcc5fd70013f53241a0cf9d5f81454c693f620c"
+    },
+    {
+      "path": "script/runtime/ha_app.py",
+      "git_blob": "d26ea3dd0f4c52c44b92b33bd646a085dfa654f5"
+    },
+    {
+      "path": "script/runtime/healthcheck.py",
+      "git_blob": "87aafc5cb4f15c362f61bf9d9abb6d3874c89479"
+    },
+    {
+      "path": "script/supervisor/__init__.py",
+      "git_blob": "09f248908db78521ccf2941c04805c88a5e40ecc"
+    },
+    {
+      "path": "script/supervisor/acceptance_app.py",
+      "git_blob": "f418cb037bce2c2f768625236c71ecc7f380810f"
+    },
+    {
+      "path": "script/supervisor/check_supervisor.py",
+      "git_blob": "55e669948518d5eadc202fd1d654d7571b89305b"
+    },
+    {
+      "path": "script/supervisor/dev.py",
+      "git_blob": "bb737af2b36e76af6946f8d28dd16c20e265aa6e"
+    },
+    {
+      "path": "script/supervisor/dev_bundle.py",
+      "git_blob": "a654ba76e05fb47e6c0aef6dbd87c7d29d6f7fa8"
+    },
+    {
+      "path": "script/supervisor/diagnostics.py",
+      "git_blob": "7124663e0f0338da644d5b15abad7415b90b8c2e"
+    },
+    {
+      "path": "script/supervisor/platform_images.py",
+      "git_blob": "09e681b675bdcca6caeafc487aadcb17d263538d"
+    },
+    {
+      "path": "script/supervisor/provision_supervisor.py",
+      "git_blob": "6214c1d2f7085883b97511205abf838776ff022f"
+    },
+    {
+      "path": "script/supervisor/supervisor_smoke.py",
+      "git_blob": "435090e629a8803eb77df67a1e5721c84766058c"
+    },
+    {
+      "path": "src/open_energy_planner/__init__.py",
+      "git_blob": "2c79ad59324331581151170ec29d860fd61aca91"
+    },
+    {
+      "path": "src/open_energy_planner/app.py",
+      "git_blob": "4b76056ce18dbec1dbad69037dfa3cfe66175f14"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/__init__.py",
+      "git_blob": "e4071f0a1beb6666307509f8cf34ac9c8b8ed25c"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/cycles/__init__.py",
+      "git_blob": "a24364574ecd9f93a043a42b7ee46d42d1d330b4"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/cycles/api.py",
+      "git_blob": "e06c844e32ccb6c99ca901c7606ed66ab6930109"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/cycles/history.py",
+      "git_blob": "56b60fd893930216885bf38a8ecfdc5be65feb7b"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/cycles/learning.py",
+      "git_blob": "4db8f4d3280fc0e198aa0605f3bfa72844e6cb4a"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/cycles/model.py",
+      "git_blob": "2c519a0cec86a649e1423a4f3d57323c142f19fa"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/cycles/service.py",
+      "git_blob": "e1f88d7f48b70e49c7764c4f4f536bbe9860cf25"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/ev/__init__.py",
+      "git_blob": "52c19a4394296063d499cda1a75c425ce7ec4158"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/ev/api.py",
+      "git_blob": "360e14d690a028d86114501ed3a711eb1a96a9c5"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/ev/configuration.py",
+      "git_blob": "6709fa6a1ef4d31d058a3812e6b7484cc8c90785"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/ev/model.py",
+      "git_blob": "ee51355b38fde7d79dd9c9f4f47904121d965d70"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/ev/service.py",
+      "git_blob": "0229b07a39bf08d04f5c2a55ef8424224142ff19"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/ev/validation.py",
+      "git_blob": "882b69bbf2e02674677b89478a819f89ec1e7700"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/forecasting.py",
+      "git_blob": "ac84bed76cf208f586a7a4d9657b7f36d6bbdcb6"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/sources.py",
+      "git_blob": "132ff24ba87eaef891494a41b777c376488f19ed"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/thermal/__init__.py",
+      "git_blob": "303787c5a0986abce8d8799dcfb9290b4a97f370"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/thermal/api.py",
+      "git_blob": "7d7d3281af6669f4e5d982fba5990958635134bb"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/thermal/model.py",
+      "git_blob": "8b98d2273dd2db6d191e5e76c7ce74ed75272fff"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/thermal/service.py",
+      "git_blob": "e4a6aaea5a8df78f8fc2d85dde5f5cf716a02ec5"
+    },
+    {
+      "path": "src/open_energy_planner/appliances/thermal/validation.py",
+      "git_blob": "d4cf0b8e566947cb9f115ef5881e8eebec5d37e9"
+    },
+    {
+      "path": "src/open_energy_planner/build-info.json",
+      "git_blob": "df988e57b7a674169755412f1982afdf29c769d8"
+    },
+    {
+      "path": "src/open_energy_planner/build_info.py",
+      "git_blob": "3643172dc56fc5888f994659a2031f135e9833ed"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/__init__.py",
+      "git_blob": "3df98eb412d263f36076b4cc9fa782d4bd89203f"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/api/__init__.py",
+      "git_blob": "f9c2e4215e5109234c1f9489ca19a919da4d63b3"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/bonus.py",
+      "git_blob": "8c494ea3c31e8eb2162c15de008da35f3ab90379"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/bonus_history.py",
+      "git_blob": "e2dc8fac450e79545976a84cadd5dbc1ab2c91a9"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/bonus_statistics.py",
+      "git_blob": "d99612772b8d843882c52a635a243abf1a0a4923"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/calculation/__init__.py",
+      "git_blob": "a02178ebc9f281883043d0b587a32e0afeb976b7"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/calculation/condition.py",
+      "git_blob": "942281864f13155403d309b7d2341f37c5011f8c"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/calculation/formula.py",
+      "git_blob": "b872b5ef96bd3f859b567827349b9eb84fdd20f8"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/compilation.py",
+      "git_blob": "4fa8959bdbda558c35a0613db235b17d8ddb941d"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/export_meter.py",
+      "git_blob": "705451d06052619734185b4761979311b28c5b54"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/model.py",
+      "git_blob": "aee432b7d5dd15b74b055c2157b47dc315a661db"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/notifications.py",
+      "git_blob": "1751a672460f21c7585bcc925813c45607115d00"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/planning_basis.py",
+      "git_blob": "59c9e46dcf0fd66048ebdd16ac461684536118b2"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/storage.py",
+      "git_blob": "accc49f956eeeec8a67b22fba6adaec10cff360e"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/windows.py",
+      "git_blob": "6f8953aee2a2cf0b39383f94f2ebfc99c3495326"
+    },
+    {
+      "path": "src/open_energy_planner/contracts/wire.py",
+      "git_blob": "e257bb78a69c44f1e0e1e21d3623099ca0485737"
+    },
+    {
+      "path": "src/open_energy_planner/core/__init__.py",
+      "git_blob": "03730b8c0236fffd8230c956b4337537da592b4c"
+    },
+    {
+      "path": "src/open_energy_planner/core/forecast_timing.py",
+      "git_blob": "edaf7c3cc28a75aec9c46d31bebcda9377505add"
+    },
+    {
+      "path": "src/open_energy_planner/core/units.py",
+      "git_blob": "e1ced088e8b605ddce0c44281192beb45f299077"
+    },
+    {
+      "path": "src/open_energy_planner/demand/__init__.py",
+      "git_blob": "0e6d655e24e74c4d92435863f6d4ac01ef11de65"
+    },
+    {
+      "path": "src/open_energy_planner/demand/api.py",
+      "git_blob": "cc62598771a5cc5cf2fabaf0ae58d71f53760092"
+    },
+    {
+      "path": "src/open_energy_planner/demand/basis.py",
+      "git_blob": "6cc52218ec71ea6bb178d932947a09d613593bc9"
+    },
+    {
+      "path": "src/open_energy_planner/demand/calculation/__init__.py",
+      "git_blob": "a02178ebc9f281883043d0b587a32e0afeb976b7"
+    },
+    {
+      "path": "src/open_energy_planner/demand/calculation/forecasting.py",
+      "git_blob": "a84ec3fca6177e1501dac74ae068bfa7857fa2d7"
+    },
+    {
+      "path": "src/open_energy_planner/demand/calculation/model.py",
+      "git_blob": "f5566ac2bd12f56e07e90f96dadbff024186ab6a"
+    },
+    {
+      "path": "src/open_energy_planner/demand/consumer_api.py",
+      "git_blob": "07485c198f4aaaf775901216d9a01aa4372fd68c"
+    },
+    {
+      "path": "src/open_energy_planner/demand/evaluation.py",
+      "git_blob": "23e8d469a91e11a3baa938c1399f1deaa1e8d4c0"
+    },
+    {
+      "path": "src/open_energy_planner/demand/reconstruction.py",
+      "git_blob": "de78af0bb38cd737201cce280100231e87ee75f3"
+    },
+    {
+      "path": "src/open_energy_planner/demand/runtime.py",
+      "git_blob": "69ad19403399872a0eff2e9c28825d9eedf9381a"
+    },
+    {
+      "path": "src/open_energy_planner/demand/storage/__init__.py",
+      "git_blob": "0eb552f84f6b19cabce754912db7cdf2ca93b86c"
+    },
+    {
+      "path": "src/open_energy_planner/demand/weather.py",
+      "git_blob": "004d03051f4fa4c5fc4628da977fa5b7ddc6dbdf"
+    },
+    {
+      "path": "src/open_energy_planner/demand/wire.py",
+      "git_blob": "b75682ff23d50094e673627618dcdd17e503a778"
+    },
+    {
+      "path": "src/open_energy_planner/discovery.py",
+      "git_blob": "49eedbb68ca1b0a71b510db430378e56393cbfe7"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/__init__.py",
+      "git_blob": "5711d221ef7834034aca4abe815a766c074a73ea"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/api.py",
+      "git_blob": "35b12e5ee9bb03a7358113ed8f71a0d045b2853a"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/bindings.py",
+      "git_blob": "89c1d07ebcd5ee8339591a779eb5d7f51561df36"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/calculation/__init__.py",
+      "git_blob": "81cdca8b258a67d045b80f990ddfc1dddbe7652d"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/calculation/metrics.py",
+      "git_blob": "a4e1db7dd81d18926abfe726a2519ea882f80d53"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/daily.py",
+      "git_blob": "805214e933d9724d7132e84a445372838bd8484f"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/evidence.py",
+      "git_blob": "6615ea3b3cb87b30380907390bd83d945dfae38d"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/history.py",
+      "git_blob": "79fee70ba712b0f0bd60265460cd9ab6b70da219"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_quality/policy.py",
+      "git_blob": "61b41cfccdb0ec7b24b89521ac9e78405d25fe2b"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/__init__.py",
+      "git_blob": "f4c6362f1525565cf603ecca639dfe77bcfa70f1"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/api.py",
+      "git_blob": "ce7aa9234b746cf5b088e49c0e651c4243bc9560"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/calculation/__init__.py",
+      "git_blob": "81cdca8b258a67d045b80f990ddfc1dddbe7652d"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/calculation/decision.py",
+      "git_blob": "389b57083ead5c59115bb81d6b52ff35e0370d9a"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/evaluation.py",
+      "git_blob": "425a4de3a8a431cd42056121c2b1ce093c0c65b2"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/policy.py",
+      "git_blob": "110a843bd0b00658557c3cc905f8a41152b29549"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/runtime.py",
+      "git_blob": "9394b19228fc678856e779072c018a472ae49199"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/storage.py",
+      "git_blob": "8a4740901f005ecd5370c36b0b5b837c8d3f0449"
+    },
+    {
+      "path": "src/open_energy_planner/forecast_selection/worker.py",
+      "git_blob": "846f3616a940991b48fc0dd822edb77d6e450f1f"
+    },
+    {
+      "path": "src/open_energy_planner/frontend/__init__.py",
+      "git_blob": "e277c7069ccb2b59e495e6a3bd865cfaafbbe6ad"
+    },
+    {
+      "path": "src/open_energy_planner/frontend/assets.py",
+      "git_blob": "1d9a0c305f6785dc2d49ae9559cf1d378d12995f"
+    },
+    {
+      "path": "src/open_energy_planner/frontend/session.py",
+      "git_blob": "da4a861c8a031e5bb415df08b002c95bba617cb4"
+    },
+    {
+      "path": "src/open_energy_planner/history/__init__.py",
+      "git_blob": "a12ff8e1ab237514a439b25548156782f6da2d8e"
+    },
+    {
+      "path": "src/open_energy_planner/history/model.py",
+      "git_blob": "648d7b5180d3b2344ab9b3dbdd2c7593b94eeb08"
+    },
+    {
+      "path": "src/open_energy_planner/history/wire.py",
+      "git_blob": "96c9fe3075c4595db56e0ea65dcd492207dc32b3"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/__init__.py",
+      "git_blob": "0e6a0a308097297e008f44667f9d4302e39e2278"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/catalogue.py",
+      "git_blob": "a6551c24b028d5c4bd615388a74a3e715124c2b3"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/market_prices.py",
+      "git_blob": "0986bfcd8a77a03d54614c6eb2ef5796df9beec3"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/names.py",
+      "git_blob": "5f85f179fc422d68299d32b1dff1309ff370b28d"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/notifications.py",
+      "git_blob": "fabf6dbbf5eff4afd0a0e1ece1104eaf50ca69fe"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/observation_wire.py",
+      "git_blob": "db34f9dc91393db0eb2b884c17f6e49e8ea4a98b"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/observations.py",
+      "git_blob": "42262a4f839645e434b80303af0854227771aa41"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/routes.py",
+      "git_blob": "c69f473a33658c5599507b0e8d002b48605d9fd7"
+    },
+    {
+      "path": "src/open_energy_planner/home_assistant/setup_catalogue.py",
+      "git_blob": "fd378c50c74bb7ff85eaf2078f97b1b33686d052"
+    },
+    {
+      "path": "src/open_energy_planner/ingress.py",
+      "git_blob": "a5364f028c6a66600da4bbb098ed9e516d873fcc"
+    },
+    {
+      "path": "src/open_energy_planner/installation/__init__.py",
+      "git_blob": "d9b14a5338bf5f953a90aa99fd9ffb7885c67381"
+    },
+    {
+      "path": "src/open_energy_planner/installation/api/__init__.py",
+      "git_blob": "ae1a1fa7a7467c8e6c367825ddf7b7e1f8537ef4"
+    },
+    {
+      "path": "src/open_energy_planner/installation/api/setup.py",
+      "git_blob": "c2d78525d3ee311f7dd3d4d0cc9f82d3bcfb8d33"
+    },
+    {
+      "path": "src/open_energy_planner/installation/basis.py",
+      "git_blob": "8adc38c04ac014977976d9f2ab22336ba7b2a820"
+    },
+    {
+      "path": "src/open_energy_planner/installation/calculation/__init__.py",
+      "git_blob": "595d931c617d5db25a0ac5de27b79c653bb589bd"
+    },
+    {
+      "path": "src/open_energy_planner/installation/calculation/annual_estimate.py",
+      "git_blob": "c32c891520deeac0cc85a0660559a09b319b992b"
+    },
+    {
+      "path": "src/open_energy_planner/installation/commands.py",
+      "git_blob": "e8409ee8b51a96bd94f9a4f667f3c723e3a4f6bb"
+    },
+    {
+      "path": "src/open_energy_planner/installation/forecast_policy.py",
+      "git_blob": "74663ee64c12a5a3c58b0adbf86d17b3f0703106"
+    },
+    {
+      "path": "src/open_energy_planner/installation/location.py",
+      "git_blob": "7eb1347751d33d27f21fef512763c8eba25c0126"
+    },
+    {
+      "path": "src/open_energy_planner/installation/model.py",
+      "git_blob": "d447f3f544389872dd46266304a97c7c30daa971"
+    },
+    {
+      "path": "src/open_energy_planner/installation/storage/__init__.py",
+      "git_blob": "af5686e9ae1cd99823032c8e7424ad56fd21a6e0"
+    },
+    {
+      "path": "src/open_energy_planner/installation/validation.py",
+      "git_blob": "e800be83196e27f6193cee1631603afd6d6152fd"
+    },
+    {
+      "path": "src/open_energy_planner/installation/valuation.py",
+      "git_blob": "85b7901f60ddd51381d0160548eb223b372debde"
+    },
+    {
+      "path": "src/open_energy_planner/live_inputs.py",
+      "git_blob": "07fefbef34d00b1ce6e1ff67ec016bbea381694b"
+    },
+    {
+      "path": "src/open_energy_planner/notifications/__init__.py",
+      "git_blob": "0c9c239764093f848c56d61999f9291effe1b425"
+    },
+    {
+      "path": "src/open_energy_planner/notifications/api.py",
+      "git_blob": "da91f744e4dd849005ab90b0d89e22e79fe81919"
+    },
+    {
+      "path": "src/open_energy_planner/notifications/collection.py",
+      "git_blob": "fe2c40108ed990982cf5fcf256372d5d6f5c382d"
+    },
+    {
+      "path": "src/open_energy_planner/notifications/model.py",
+      "git_blob": "bb5479d9ad5344d76da7668eb5cc0d79fb905819"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/__init__.py",
+      "git_blob": "79553446d060c41683e1349646a00791b8639dfa"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/__init__.py",
+      "git_blob": "29b6faf4f4500c3afe31c3e1e463fe948ddd0d6b"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/__init__.py",
+      "git_blob": "d46175fe84c7c89be45ca67c5a9ead409feef7d6"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/appliances.py",
+      "git_blob": "bc029a9791b4484e3eb43adcd5f95be652c67fdd"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/consumption.py",
+      "git_blob": "eb7a04a1a1ccc0a6efd5436aff5c33648011755d"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/context.py",
+      "git_blob": "6d51028cd8e43a78acf53a357b546af142b178e3"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/ev.py",
+      "git_blob": "6674997029bd32f32784963bcc2fffdbb82cbf03"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/export_bonus.py",
+      "git_blob": "e07d424921e015173d61c1ada600934848aa7bb5"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/installation.py",
+      "git_blob": "3faea8cf61911780b9e3a252622e48cc58307724"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/installation_components.py",
+      "git_blob": "e8efb314e1ab74938f85a08d009ff4653106e357"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/recovery.py",
+      "git_blob": "d8611a9b74f77b777ca4dec40eb1745edf994c5d"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/replay.py",
+      "git_blob": "2c2113f20b9e3b3fa6707713c6189b986cc90233"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/solver.py",
+      "git_blob": "0fc332fe24b903d78b5c3503f45a0a42ef0923aa"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/highs/thermal.py",
+      "git_blob": "f2414937bfdfa9d63fcf8d36477d49c68615eab7"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/process/__init__.py",
+      "git_blob": "3ce11193f8bec32f830f0c75640d83b7dd66502c"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/adapters/process/worker.py",
+      "git_blob": "60a9d0d0bce3515002ac4d01e47e71f719f23eeb"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/calculation/__init__.py",
+      "git_blob": "595d931c617d5db25a0ac5de27b79c653bb589bd"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/calculation/consumption.py",
+      "git_blob": "23c436e5673dbe59eebf0ab09310da8ae6bce249"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/domain.py",
+      "git_blob": "545c9d68d89959ef81e9d3c03aaf3767e79790aa"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/export_bonus.py",
+      "git_blob": "4f112d2df8afcb0fc0ad608ed7ab97bb09a2eaa0"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/ports.py",
+      "git_blob": "2eb7e723598eac94d4049ee903ca6d5aef9250fa"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/storage/__init__.py",
+      "git_blob": "43631285e7df02c385f441bbe06104fdd0dc9c55"
+    },
+    {
+      "path": "src/open_energy_planner/optimization/strategy_api.py",
+      "git_blob": "27e80f57d1ff6af88eff94835ea25060a18fd115"
+    },
+    {
+      "path": "src/open_energy_planner/pairing.py",
+      "git_blob": "4b77e293e8e9dcf2cf6ea7e9365ca9865e0185f2"
+    },
+    {
+      "path": "src/open_energy_planner/planning.py",
+      "git_blob": "18e987a1c56255cb4a598a714f7c3bcdda3f01f3"
+    },
+    {
+      "path": "src/open_energy_planner/planning_policy.py",
+      "git_blob": "0584d8909d6553257afaf5bff64c3aa4d236e8f1"
+    },
+    {
+      "path": "src/open_energy_planner/prices/__init__.py",
+      "git_blob": "25260fcb9bdf515bb2316a1207d108413f0e9e67"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/__init__.py",
+      "git_blob": "1f4e9e25b66507c2cd78ad96662b8ba1af691569"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/_parsing.py",
+      "git_blob": "1b98883bcddef4f243952c40cf1c57f5aed7c325"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/energy_price_forecast.py",
+      "git_blob": "154c7f8aceac5a13264000707e5abddfc406ad93"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/epex_predictor.py",
+      "git_blob": "6c48fe4b086f53de18f53ec2c7a326c90e82d3a0"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/home_assistant.py",
+      "git_blob": "26502e06064e8674be051d4c94b1dd33a44544c8"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/jeroen.py",
+      "git_blob": "ecf3b47f250d55ba59461e91f8bb7c22856ee914"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/json_client.py",
+      "git_blob": "2154219adaf80e0382df252c240e45a62980108d"
+    },
+    {
+      "path": "src/open_energy_planner/prices/adapters/nord_pool.py",
+      "git_blob": "cd86f6d675eab7648782315b8a2423aa03c78d4c"
+    },
+    {
+      "path": "src/open_energy_planner/prices/api.py",
+      "git_blob": "94f20d140dbc4b8b36897afa0337aac477c34be2"
+    },
+    {
+      "path": "src/open_energy_planner/prices/bootstrap.py",
+      "git_blob": "afbaf4093db0170bac4b97a2c0c85a0e3a30d6be"
+    },
+    {
+      "path": "src/open_energy_planner/prices/model.py",
+      "git_blob": "a4d0f5972cc4a5baa9ac4b5fc86a255dc5196896"
+    },
+    {
+      "path": "src/open_energy_planner/prices/policy.py",
+      "git_blob": "391fbd35f14e3a065eecc254fe2fe2ac3a92df0c"
+    },
+    {
+      "path": "src/open_energy_planner/prices/runtime.py",
+      "git_blob": "cded9d31c257e6874248adfaee05aef9a8484fc1"
+    },
+    {
+      "path": "src/open_energy_planner/prices/selection.py",
+      "git_blob": "de8dbbc6579478fc3eb756db7eab64c6310479e9"
+    },
+    {
+      "path": "src/open_energy_planner/prices/service.py",
+      "git_blob": "aa201e199618bd1727a378fd981a97fb96f39e5b"
+    },
+    {
+      "path": "src/open_energy_planner/prices/source_selection.py",
+      "git_blob": "d219cb9ebfa39c7c5f0f7489be23c0d67d72c370"
+    },
+    {
+      "path": "src/open_energy_planner/prices/storage/__init__.py",
+      "git_blob": "57fc3c6b29d511d4d2b4eb6dcaac91cd4ba28ea9"
+    },
+    {
+      "path": "src/open_energy_planner/prices/storage/adapters/__init__.py",
+      "git_blob": "ac091c79f28e3e6e9cc5c4aa01efac3d1fd3b04a"
+    },
+    {
+      "path": "src/open_energy_planner/prices/storage/adapters/published.py",
+      "git_blob": "b5a9006ed8b7e75fd4d1236a4c8947e390888b63"
+    },
+    {
+      "path": "src/open_energy_planner/prices/storage/adapters/queries/__init__.py",
+      "git_blob": "50ad543d93fed3def3f0ee3cab2f6572f192b9e7"
+    },
+    {
+      "path": "src/open_energy_planner/prices/storage/adapters/queries/selection.py",
+      "git_blob": "1720f85e7487cfa236bcc2e65f00f328fcab7848"
+    },
+    {
+      "path": "src/open_energy_planner/prices/storage/adapters/selection_store.py",
+      "git_blob": "99774a9bcb83afff337fc337fc262827a2645ea9"
+    },
+    {
+      "path": "src/open_energy_planner/prices/storage/adapters/store.py",
+      "git_blob": "6679ebd39a183977c586084d6816fd7cbbd8534a"
+    },
+    {
+      "path": "src/open_energy_planner/runtime/__init__.py",
+      "git_blob": "fa56c38f916942379bd39ab3dd71a0b3ec1bdaaf"
+    },
+    {
+      "path": "src/open_energy_planner/runtime/diagnostics/__init__.py",
+      "git_blob": "dc780f660cc2d12ac011fdca998a61de8639ad7b"
+    },
+    {
+      "path": "src/open_energy_planner/runtime/diagnostics/logging.py",
+      "git_blob": "6c16718de56dd2a2f5e1c26e672a6b3e2b505e8e"
+    },
+    {
+      "path": "src/open_energy_planner/runtime/diagnostics/planning_notifications.py",
+      "git_blob": "ecda487dd76e6a424b066eadfc5afc0a7d9af277"
+    },
+    {
+      "path": "src/open_energy_planner/runtime/diagnostics/version_notifications.py",
+      "git_blob": "f0577bb4f642725457a4091212db6061d536ec4d"
+    },
+    {
+      "path": "src/open_energy_planner/runtime/entrypoint.py",
+      "git_blob": "0c086cb651cd71a2227f17e8dede54075c58ad21"
+    },
+    {
+      "path": "src/open_energy_planner/runtime/maintenance.py",
+      "git_blob": "7ffb59784bde1f5d9af67a1ef81c95614df280ba"
+    },
+    {
+      "path": "src/open_energy_planner/savings/__init__.py",
+      "git_blob": "788e51b1e20e55ad82efc54b76a07e4de2560304"
+    },
+    {
+      "path": "src/open_energy_planner/savings/accounting.py",
+      "git_blob": "8aa26bf69e7719703175cc2cf197ae0897c35d29"
+    },
+    {
+      "path": "src/open_energy_planner/savings/advice.py",
+      "git_blob": "6476d47a9bd6c4878df4f298c8e998a88e105ee5"
+    },
+    {
+      "path": "src/open_energy_planner/savings/api.py",
+      "git_blob": "f976dcb7fa6040ad40e64a83715871ff4a5d08de"
+    },
+    {
+      "path": "src/open_energy_planner/savings/bonus.py",
+      "git_blob": "8192735b6394dcac52c4817f3ef7c09fe6f77824"
+    },
+    {
+      "path": "src/open_energy_planner/savings/context.py",
+      "git_blob": "15cfc6b8c42aae591a3c179a17536578b74f2fa9"
+    },
+    {
+      "path": "src/open_energy_planner/savings/evidence.py",
+      "git_blob": "014293319fac3597e40e012b84e38c53878786a8"
+    },
+    {
+      "path": "src/open_energy_planner/savings/forecast.py",
+      "git_blob": "e885055db27fe87848399f45cdc48fd06218810c"
+    },
+    {
+      "path": "src/open_energy_planner/savings/forecast_state.py",
+      "git_blob": "4aaf4c6a28e158c7462402f0b70791578b434373"
+    },
+    {
+      "path": "src/open_energy_planner/savings/model.py",
+      "git_blob": "73d610c64bd71189d3dc0b91465a26d068079c44"
+    },
+    {
+      "path": "src/open_energy_planner/savings/physical.py",
+      "git_blob": "5fafbdf6fea9645322071cded647e3661727a120"
+    },
+    {
+      "path": "src/open_energy_planner/savings/reference.py",
+      "git_blob": "6d1b9d996d12c5981164dda69f53505e8d76dad8"
+    },
+    {
+      "path": "src/open_energy_planner/savings/repricing.py",
+      "git_blob": "e5d03d7acaf9910fd5dd04fe841b407317a7c817"
+    },
+    {
+      "path": "src/open_energy_planner/savings/runtime.py",
+      "git_blob": "7b4fa971c26561eb03cc5d0072ad57f31fda3963"
+    },
+    {
+      "path": "src/open_energy_planner/savings/scenarios.py",
+      "git_blob": "c97e402a56c27b489e1a7dfbcd43de010e013789"
+    },
+    {
+      "path": "src/open_energy_planner/savings/storage/__init__.py",
+      "git_blob": "91b790bb8026f2e0ef07755d3d422646cde3614e"
+    },
+    {
+      "path": "src/open_energy_planner/savings/storage/adapters/__init__.py",
+      "git_blob": "91b790bb8026f2e0ef07755d3d422646cde3614e"
+    },
+    {
+      "path": "src/open_energy_planner/savings/storage/adapters/sqlalchemy.py",
+      "git_blob": "57abda4a7e31f961afa785d0d0ec62496fc6cbbf"
+    },
+    {
+      "path": "src/open_energy_planner/solar/__init__.py",
+      "git_blob": "ea3b13f8860d44937e1cca7163d595884acf4094"
+    },
+    {
+      "path": "src/open_energy_planner/solar/api.py",
+      "git_blob": "81e988fe1da5f4dbdac9cfc6599f18b863b1ae50"
+    },
+    {
+      "path": "src/open_energy_planner/solar/basis.py",
+      "git_blob": "788b67412d323a3655fbc6ccacf8a735945b02bb"
+    },
+    {
+      "path": "src/open_energy_planner/solar/calculation/__init__.py",
+      "git_blob": "a02178ebc9f281883043d0b587a32e0afeb976b7"
+    },
+    {
+      "path": "src/open_energy_planner/solar/calculation/model.py",
+      "git_blob": "7a3b0881c7b686957a2ef3537e271753f5646efc"
+    },
+    {
+      "path": "src/open_energy_planner/solar/calculation/predictor.py",
+      "git_blob": "12b76e2aae70084ce6021d6dd0fac6087685e494"
+    },
+    {
+      "path": "src/open_energy_planner/solar/ha_forecasts.py",
+      "git_blob": "dfd105031d4c46319f452255fe57b157a1c5ddad"
+    },
+    {
+      "path": "src/open_energy_planner/solar/learning.py",
+      "git_blob": "cdf29762db893a93df013e435dfe60b328f020e0"
+    },
+    {
+      "path": "src/open_energy_planner/solar/model_policy.py",
+      "git_blob": "411714fddce6fe0b7a673039da54c90d87aa14c5"
+    },
+    {
+      "path": "src/open_energy_planner/solar/notifications.py",
+      "git_blob": "7c8ba24f585979f440212ad010fc3ee0a40b3b19"
+    },
+    {
+      "path": "src/open_energy_planner/solar/runtime.py",
+      "git_blob": "af1c9f0ace77d31e098ee8acfca296be88ddc559"
+    },
+    {
+      "path": "src/open_energy_planner/solar/source_selection.py",
+      "git_blob": "4a96acd4dfc8c2b24531a514709945c5587dd635"
+    },
+    {
+      "path": "src/open_energy_planner/solar/storage/__init__.py",
+      "git_blob": "b6821038707f4b5c4945c7b4226febf740ce68ae"
+    },
+    {
+      "path": "src/open_energy_planner/solar/weather.py",
+      "git_blob": "a4c6d3adb8753095ae3ff144bb4bb124af1d4055"
+    },
+    {
+      "path": "src/open_energy_planner/solar/wire.py",
+      "git_blob": "f9716075969381399d2d199be25f4f593037f3d9"
+    },
+    {
+      "path": "src/open_energy_planner/storage/__init__.py",
+      "git_blob": "72498067f94986c34320e3fdda8c78e896298926"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/__init__.py",
+      "git_blob": "b066a2cce7070badfee214be0bcd4710b381b02b"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/documents.py",
+      "git_blob": "000554bbc1c92c041af87f82a590580ff1fa5a1a"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/lifecycle/__init__.py",
+      "git_blob": "b32cb2a2f64854508963a2df02d7ea4c9dc2bfe1"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/lifecycle/files.py",
+      "git_blob": "a5aba4cf14d8f21dcdee231d70bb895f24419c66"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/lifecycle/maintenance.py",
+      "git_blob": "9deb1f709953a6c8038e8cae172dda6ad2109fa7"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/lifecycle/migration.py",
+      "git_blob": "47a6a3fa7d8926c16f121e9bd03fe9936a7e1e1b"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/lifecycle/schema.py",
+      "git_blob": "71997ae92bde6f64dd7eb6c86efe94baa4dabd64"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/lifecycle/sqlalchemy.py",
+      "git_blob": "8ee21daaa8a8aa772dba9ad16f51f115a7bcc2a8"
+    },
+    {
+      "path": "src/open_energy_planner/storage/adapters/usage.py",
+      "git_blob": "67611be0ade9bf5f52e63b4d09135b86717fa069"
+    },
+    {
+      "path": "src/open_energy_planner/storage/counters.py",
+      "git_blob": "bd42ac2a127635d9ad21d47f54247f7d3f0f7d93"
+    },
+    {
+      "path": "src/open_energy_planner/storage/writes.py",
+      "git_blob": "8854982a986632cf4eb0648586b5598cb40b7a5e"
+    },
+    {
+      "path": "src/open_energy_planner/supervisor/__init__.py",
+      "git_blob": "03d5b82308e1a60f02823279327432d538eda32c"
+    },
+    {
+      "path": "src/open_energy_planner/synthetic.py",
+      "git_blob": "3f1ada019f334f0bb9b228c6ca8467c4514710a5"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/appliance-settings.html",
+      "git_blob": "3d0b7ed01d5461bb09ae03d982887441ab5a0207"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/appliance-settings/ev.html",
+      "git_blob": "97db784cba1f1e55d2d630b3bcf5cf61eae6c66a"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/appliance-settings/thermal.html",
+      "git_blob": "9f206aa2aaa9dac0953e773c77ecc0a1d548b469"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/appliances.html",
+      "git_blob": "933e9adf1c856a165230901300b03a7b503f91e1"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/contract.html",
+      "git_blob": "35910da45eb87447624a223ca213f368576c0467"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/data-storage.html",
+      "git_blob": "40266be21fc4e34884ccfe2ce0dc086a0e8f4afa"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/ev.html",
+      "git_blob": "748f71b863b5dc18eea8a3fcc7c382ea79681e55"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/overview.html",
+      "git_blob": "ad4843c8a9ebcb14262685a76d197c6a5514a0b3"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/quality.html",
+      "git_blob": "54da754a52f351c87ff1067b1ed566c9774e9772"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/setup.html",
+      "git_blob": "29ceaa91c0b8618c49b90393fc405e516014c6ee"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/thermal.html",
+      "git_blob": "cc42e0b8a7c5268a74f87c78b0939c0513d459c3"
+    },
+    {
+      "path": "src/open_energy_planner/web/pages/workspace.html",
+      "git_blob": "0e229f385548e0ca122e3de28938bb9a8121553c"
+    },
+    {
+      "path": "src/open_energy_planner/web/partials/appliance-settings-navigation.html",
+      "git_blob": "f5c51f1392a7e4b73e1d897ec2960c20e37e7601"
+    },
+    {
+      "path": "src/open_energy_planner/web/partials/navigation.html",
+      "git_blob": "403c2af1b98ee7308d09b36dbeecda660a25a5ec"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/appliance-evidence.js",
+      "git_blob": "224ec1a4a62e5bdef3ab2e678bd76254b9622ff8"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/appliance-profile.js",
+      "git_blob": "ea72178ed70b66e633b6160b4e61c312cb7fe692"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/appliance-settings-detail.js",
+      "git_blob": "323023a0e8559f842677964689f1081f6c61772f"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/appliance-settings-navigation.js",
+      "git_blob": "4af3da48303565db4f97254d0b819a0b52c28d20"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/appliance-settings.js",
+      "git_blob": "a121415293ba4fd151e3a04e7ab92bcaa4f4f10b"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/appliances.js",
+      "git_blob": "5056fb58f6318a2441b27ab4fb4b04aad00e2f1c"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/balance.js",
+      "git_blob": "ab68a82e91b8b4292a7d2c5c884f59549a2d21b9"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/chart-LICENSE.txt",
+      "git_blob": "f216610fd7edadc57a11668b3ca5b7a400e5b96e"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/chart.umd.min.js",
+      "git_blob": "008464faaecaf20a761739a61da2278be62b4963"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/chart_days.js",
+      "git_blob": "832bf247cf249908e2b981edc698d32e137e42c4"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/chart_theme.js",
+      "git_blob": "bcec52c4cd009df14c43e5711dc140bb965187f6"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/contract.js",
+      "git_blob": "9126b02694f786ba01e0b67c26de6889c275ce7b"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/data-storage.js",
+      "git_blob": "4bde9a79da11e21c959eec0176ff44e609940711"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/display.js",
+      "git_blob": "17be0744cb3136c60d1a12efdf90867557f164ba"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/ev-settings.js",
+      "git_blob": "bdfd4bf1a4efafa4f8063ddb23e700ab2779fbfa"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/ev.js",
+      "git_blob": "1445ce1f693b66c7502182d0de4a75d2f7e297c1"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/fonts/Outfit.ttf",
+      "git_blob": "466d6245f9582df39bf73da91a8b3c938fd061cd"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/fonts/SpaceGrotesk.ttf",
+      "git_blob": "a1b2e6c26093066510a31147e7aec9abdc8d6c5e"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/fonts/outfit-OFL.txt",
+      "git_blob": "723cd447edee83ed3bb07c3343f478d352aa7440"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/fonts/sources.json",
+      "git_blob": "4c3ddd46e2a60c8f2218db64eac7d851c5f81c81"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/fonts/spacegrotesk-OFL.txt",
+      "git_blob": "f831dbc69f05a4d5abbb54c530f0123bc0ff2d8b"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/app.svg",
+      "git_blob": "be6d2015285e2d42f95d8bb371b325274c155981"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/appliances.svg",
+      "git_blob": "8fbd9679b4cfd8441b5f149ddfe23cc01b3cf377"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/balance.svg",
+      "git_blob": "5a384c2a00cd890e280d95bee0220047dcf35670"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/battery.svg",
+      "git_blob": "5a2c63ce0f1ecb2646966a9ec693d99df6c55bf6"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/consumers.svg",
+      "git_blob": "5c0778efdc065e24225c187d8ec9f97957bf0e21"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/contract.svg",
+      "git_blob": "08828baa4d33b4d90006627e71ee9f7c2d42c88b"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/ev.svg",
+      "git_blob": "5c4d950a4cb7c056b1771602e5bedab6568b591e"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/home.svg",
+      "git_blob": "4ee4ed4b4b66b4c1449bf28b1a4b319d24b32e90"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/planning.svg",
+      "git_blob": "ee373e6e7e97c2989d34b13eca11ff814bcedeff"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/quality.svg",
+      "git_blob": "60ff6fbd7823ffc5c58b9e589ff5c795a5d513a8"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/savings.svg",
+      "git_blob": "5a516c0f41bb28ac6b407ba2744a6be6987cbcab"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/settings.svg",
+      "git_blob": "31bb6ffc2bad9a75cea356b497abf33df0eec272"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/icons/solar.svg",
+      "git_blob": "d8810e1ccde5ca350e3b448b265d4069356a9e5f"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/identity.js",
+      "git_blob": "e52c584c0cdbc03439dc03131c425662e70d0155"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/installation-layout.css",
+      "git_blob": "c6ab16275da8cc906d1f9afe822602a832c79030"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/installation-layout.js",
+      "git_blob": "ab1232cb457d90c9b76ebe54d9102857573a89e6"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/notifications.js",
+      "git_blob": "b4d3663b0aa62fc499dc7c42540aaf0afce21e26"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/overview.js",
+      "git_blob": "e268725846949dbc0a659e7d5a3163e080a4ecb9"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/price-sources.js",
+      "git_blob": "eaa6515cb7c16628cda637d6414262280e0dfc8f"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/quality-models.js",
+      "git_blob": "e48309def2c4a5cc83d3ae980c0dfd9c2de6fd7b"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/quality.js",
+      "git_blob": "fab71f18d405f2701fed877799e2d1cbb348c17b"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/save-bar.js",
+      "git_blob": "06141b5cd85a281fe0a205cc383cfc977f2d99fa"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/settings-actions.js",
+      "git_blob": "a37dbd9dc9c685045efdbc19ed28a352ce53c0f2"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/settings-layout.css",
+      "git_blob": "ccdf0dad3d7e741ce4c0dfe064c9ea1b5fd1bd19"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/setup.js",
+      "git_blob": "b2fc073c45e753482e32546cf933532094393e8c"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/solar-geometry.js",
+      "git_blob": "61577fb5846274da46d7a09ae62dc189013ebd0f"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/storage-migration.css",
+      "git_blob": "fd14b575f452fa28a75ef17f406ae6c08489430c"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/storage-migration.js",
+      "git_blob": "84a81158365c8f954a741515890cab7395d971d1"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/style.css",
+      "git_blob": "2deb8a75c5ea2e4e1d2b4966d04cbedd68d7ec13"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/thermal-settings.js",
+      "git_blob": "79775edc6e30ee80db5e359739a8a6814a9db6a4"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/thermal.js",
+      "git_blob": "24d88d5eff8701959d961adbaae4dc87e286fba4"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/workspace.css",
+      "git_blob": "4b2cd836503fa6cadd1937bec9238ae0f1862c57"
+    },
+    {
+      "path": "src/open_energy_planner/web/public/workspace.js",
+      "git_blob": "925dc99c61ac77030d7783a648cba64006d54c28"
+    },
+    {
+      "path": "test_environment/configuration.yaml",
+      "git_blob": "94934e2a676b82ad8ac870def331ac63e4c03d75"
+    },
+    {
+      "path": "test_environment/dashboard.yaml",
+      "git_blob": "14b5a3e57a5374e68540a1d83d1b0083569c24ed"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/__init__.py",
+      "git_blob": "cc4cc736f791f0524facd20230d83fe48146109e"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/appliance_profiles.json",
+      "git_blob": "c0ad95fd1f04f9aaa5c9a6c82d7f368b152b5f40"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/balance.py",
+      "git_blob": "c7fdc17dd1673df453b575ef9ae2e86b387e6a27"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/calculation/__init__.py",
+      "git_blob": "3a66ff1dd72109a5291b8fc652630507d8382c1e"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/calculation/appliances.py",
+      "git_blob": "625c30607c1ec1a7469b077bc5bb4a229f658482"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/calculation/consumption.py",
+      "git_blob": "313011b7648f59e940539acdce71b24ca7616ca9"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/calculation/energy.py",
+      "git_blob": "a9546d8a1a08a96511752163dce396a81ab590f8"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/calculation/recorder/__init__.py",
+      "git_blob": "f7f245e452eb717f3f7c56c2b8fed0203828c4ff"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/calculation/recorder/balance.py",
+      "git_blob": "af35c1dcf719d457949c6aac7b4bcc9bb57a3688"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/calculation/recorder/history.py",
+      "git_blob": "7cb233cae3cbaea746ebb9dd3ec1eccfe32973c0"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/config_flow.py",
+      "git_blob": "f92b9593f5df0e9e9166094331532fa34005b02d"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/consumer.py",
+      "git_blob": "b871940fa402e7c0136b9bed3e211a665c81465a"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/dishwasher.py",
+      "git_blob": "90ff38bfc3a0349427b3ae896ea8debfaed58f7a"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/ev.py",
+      "git_blob": "0bc959d698905d7bd8191e9206c3857a781df043"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/existing.py",
+      "git_blob": "f4368e3687a719ad8691457ff3aa2936fcfaaa36"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/grid.py",
+      "git_blob": "86629b590b216f0db96c0dc302c04c1d75b45865"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/history.py",
+      "git_blob": "d4dc6cf249637f4d7c27c0bc0c5a2ac3f89787e6"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/manifest.json",
+      "git_blob": "8e16ab4cad2e60f43c5d08a22006437ed5637469"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/policy.py",
+      "git_blob": "11b9d7198c60e5a9bb61b8897c15b4baf805af90"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/profiles.py",
+      "git_blob": "e50a0bdae9dd669a78cf0a0269e161e14f7f0201"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/runtime.py",
+      "git_blob": "0be2d9a78b5fb462aa9fdfa9e3fe352fb8c997f8"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/strings.json",
+      "git_blob": "99ff6da561788b7af523069cd76e88b51d92daff"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/thermal.py",
+      "git_blob": "07187e840e099d9be9b617180b50fe717c196366"
+    },
+    {
+      "path": "test_environment/oep_test_fixture/translations/en.json",
+      "git_blob": "99ff6da561788b7af523069cd76e88b51d92daff"
+    },
+    {
+      "path": "tests/__init__.py",
+      "git_blob": "5210b299275c830de3fc9d58ba922d3b0feb4053"
+    },
+    {
+      "path": "tests/app/__init__.py",
+      "git_blob": "e3b141f685e234dd21e646f026e1f00cb918c129"
+    },
+    {
+      "path": "tests/app/appliance/__init__.py",
+      "git_blob": "71edac6662a932ef47f7e8fd441e5b163d4c041f"
+    },
+    {
+      "path": "tests/app/appliance/conftest.py",
+      "git_blob": "060018902da3c150e6f37240494b381b2f1bb4c9"
+    },
+    {
+      "path": "tests/app/appliance/test_appliance_learning.py",
+      "git_blob": "d8980a356a1892c967cf4795ba3029386c5b160e"
+    },
+    {
+      "path": "tests/app/appliance/test_appliances.py",
+      "git_blob": "e1cad29f69bba2caa33d2bb5285f52b0bf1a4886"
+    },
+    {
+      "path": "tests/app/appliance/test_history_learning.py",
+      "git_blob": "5dfdb9fe68a146b74f940ddd524960c237ba330b"
+    },
+    {
+      "path": "tests/app/contract/__init__.py",
+      "git_blob": "caa7340c6ded169e6f2a931dbad1743ff9617328"
+    },
+    {
+      "path": "tests/app/contract/support/__init__.py",
+      "git_blob": "5f5f894a05a733a9ca5586602ece76ab28d41ab9"
+    },
+    {
+      "path": "tests/app/contract/support/settings.py",
+      "git_blob": "c480af4b0b66b1db57aeaaf87ea9d8780c8c5126"
+    },
+    {
+      "path": "tests/app/contract/test_bonus_app.py",
+      "git_blob": "ce356679de638b106038cad0556b9e7e7f900c72"
+    },
+    {
+      "path": "tests/app/contract/test_bonus_windows.py",
+      "git_blob": "a6d5201785a8010b7d1bd044e9ce18b4f738f52a"
+    },
+    {
+      "path": "tests/app/contract/test_contract_app.py",
+      "git_blob": "81e76d286b3b81118b19c9920a3c7cfd5ec17de1"
+    },
+    {
+      "path": "tests/app/contract/test_contract_bonuses.py",
+      "git_blob": "408d212a2c50dd568a9cd37437828d8a8cffc64c"
+    },
+    {
+      "path": "tests/app/contract/test_contract_conditions.py",
+      "git_blob": "7a39c8737ce164e2f0a9d8fdf5fcb7674382b8c0"
+    },
+    {
+      "path": "tests/app/contract/test_contract_prices.py",
+      "git_blob": "27d90d41ce8193d180ee0935b1f037392132ac32"
+    },
+    {
+      "path": "tests/app/contract/test_export_bonuses.py",
+      "git_blob": "c9e4f13c33130446a107326345f08f7d3ee8733b"
+    },
+    {
+      "path": "tests/app/contract/test_supplier_contracts.py",
+      "git_blob": "7aa76af95684a5e04ca4d242bfde27d0eed90344"
+    },
+    {
+      "path": "tests/app/demand/__init__.py",
+      "git_blob": "078442e21f1be0b1361d93a478763c2fc1450035"
+    },
+    {
+      "path": "tests/app/demand/test_consumer_choices.py",
+      "git_blob": "372bb10851fdbe2ecb2782c7d676d68367a0f92c"
+    },
+    {
+      "path": "tests/app/demand/test_consumers.py",
+      "git_blob": "b736b82acdc3b743f95f3111701ae844048d599c"
+    },
+    {
+      "path": "tests/app/demand/test_demand.py",
+      "git_blob": "a0ee68809a3f80a21a60953f7793d363035173ce"
+    },
+    {
+      "path": "tests/app/demand/test_demand_app.py",
+      "git_blob": "966557eabef62cbfb6f04a05e0d4fe71ba8ee6d3"
+    },
+    {
+      "path": "tests/app/demand/test_demand_weather.py",
+      "git_blob": "d076b9b0e77513e5fd0d541d3473648fce1d8fab"
+    },
+    {
+      "path": "tests/app/ev/__init__.py",
+      "git_blob": "388c7824b8cdc41d52658905d195581b21ce707a"
+    },
+    {
+      "path": "tests/app/ev/support/__init__.py",
+      "git_blob": "68367fb0ac73181c8457453075db0c76e23fbd63"
+    },
+    {
+      "path": "tests/app/ev/support/devices.py",
+      "git_blob": "c46b9467d00dee27e04a31998bef160af1b43fe3"
+    },
+    {
+      "path": "tests/app/ev/test_device_commands.py",
+      "git_blob": "a17cea78e5a150652253bb44c64572b0c8c8eff0"
+    },
+    {
+      "path": "tests/app/ev/test_ev_solver.py",
+      "git_blob": "3a827a248b0abdc62eb248e1d10b624b0122eb45"
+    },
+    {
+      "path": "tests/app/forecast/__init__.py",
+      "git_blob": "b5660ead7a6c2d739af572b443e55912d75d087f"
+    },
+    {
+      "path": "tests/app/forecast/support/__init__.py",
+      "git_blob": "9b409d52db1f01a67c9079f23b3132589de3dafb"
+    },
+    {
+      "path": "tests/app/forecast/support/basis.py",
+      "git_blob": "cc0d02d9e6c05059a7034f36a7b4b687db9a07df"
+    },
+    {
+      "path": "tests/app/forecast/support/http.py",
+      "git_blob": "82ff7b8316ba4df00be0c42feb435add9eacc850"
+    },
+    {
+      "path": "tests/app/forecast/support/quality.py",
+      "git_blob": "e0c242b961b201932c86e6198c405cd03bfb7aa0"
+    },
+    {
+      "path": "tests/app/forecast/test_forecast_replay.py",
+      "git_blob": "9cf1acef825093fb828e94ba349ff7911582b3b4"
+    },
+    {
+      "path": "tests/app/forecast/test_forecast_selection.py",
+      "git_blob": "e1ba56661e89a81f2c06bb6840ec2e548096919b"
+    },
+    {
+      "path": "tests/app/forecast/test_model_status.py",
+      "git_blob": "82e5311cc7cb96ac230901558632c28ae768a053"
+    },
+    {
+      "path": "tests/app/forecast/test_quality_metrics.py",
+      "git_blob": "e4871dbc6f2c7ad3237b36990c0f37b84f157c17"
+    },
+    {
+      "path": "tests/app/history/__init__.py",
+      "git_blob": "bf623878fdecd9bcf21108c197387a63508d7403"
+    },
+    {
+      "path": "tests/app/history/support/__init__.py",
+      "git_blob": "0334f9bda32b5a11464c865a41b071c399e99573"
+    },
+    {
+      "path": "tests/app/history/support/bonus.py",
+      "git_blob": "f5eeb16cc7ea9713a543cc19a1f49f51638ccd94"
+    },
+    {
+      "path": "tests/app/history/test_bonus_statistics.py",
+      "git_blob": "4ff6bdb4e9e5baed3f7f68c7de688371c0122df9"
+    },
+    {
+      "path": "tests/app/history/test_counter_provenance.py",
+      "git_blob": "723b19c24292048d5f1cd479c5a8477005d3d51b"
+    },
+    {
+      "path": "tests/app/history/test_history.py",
+      "git_blob": "2a8935b144a3fd4dbc0f77de068746e86eb4f518"
+    },
+    {
+      "path": "tests/app/history/test_history_app.py",
+      "git_blob": "77ca981556d6986f8e2c413f850505c810345dda"
+    },
+    {
+      "path": "tests/app/installation/__init__.py",
+      "git_blob": "fec2781ba5417c1b88d1c436f56e4eb45c4e4237"
+    },
+    {
+      "path": "tests/app/installation/support/__init__.py",
+      "git_blob": "7d186dbebaa1b8f767a574fb8597caae68311cc4"
+    },
+    {
+      "path": "tests/app/installation/support/problems.py",
+      "git_blob": "a88e03452c314904bf0865b0f8e68cfe42ae3043"
+    },
+    {
+      "path": "tests/app/installation/test_installation.py",
+      "git_blob": "d8e6a95fa983040a854f0873993280978be016c9"
+    },
+    {
+      "path": "tests/app/installation/test_installation_app.py",
+      "git_blob": "f39ef57edfe3ee74fb35d9c281525a124517c56d"
+    },
+    {
+      "path": "tests/app/installation/test_reserve_recovery.py",
+      "git_blob": "52f90cb417c8397ed3e315fc0cac2bb86f9e2253"
+    },
+    {
+      "path": "tests/app/installation/test_setup.py",
+      "git_blob": "f13bf4d37ddc2dd39d1d6a8dcdada7086b7f2483"
+    },
+    {
+      "path": "tests/app/installation/test_terminal_valuation.py",
+      "git_blob": "438d9841c8e3b6a22583426ab6f2c1aac1f44153"
+    },
+    {
+      "path": "tests/app/notifications/__init__.py",
+      "git_blob": "84eb9a5c4bd126d3d6058e7fe32da433f0218163"
+    },
+    {
+      "path": "tests/app/notifications/support.py",
+      "git_blob": "d9acd81b5ba44cca38766a7657d977371adc58d7"
+    },
+    {
+      "path": "tests/app/notifications/test_boundaries.py",
+      "git_blob": "c47c42a6ddf71ac657e9d1583b9f90105a8d77b0"
+    },
+    {
+      "path": "tests/app/notifications/test_collection.py",
+      "git_blob": "1274d6e7662d0e51fdf7563a2a3dce5e91888dec"
+    },
+    {
+      "path": "tests/app/notifications/test_measurements.py",
+      "git_blob": "8e13c6222df783b85ff6bd3297ee72a843dcd8df"
+    },
+    {
+      "path": "tests/app/notifications/test_notifications.py",
+      "git_blob": "63790c67608941ee7825fd9d53f817d7c181e441"
+    },
+    {
+      "path": "tests/app/notifications/test_providers.py",
+      "git_blob": "7d1cca0715cadd5042da232dca865121284fda84"
+    },
+    {
+      "path": "tests/app/notifications/test_registration.py",
+      "git_blob": "9cad7bf8109928ef1c0855b54d33535903b0bc99"
+    },
+    {
+      "path": "tests/app/planning/__init__.py",
+      "git_blob": "f721fdb1f61272d9948f5686ab483b31b8c7e30a"
+    },
+    {
+      "path": "tests/app/planning/test_consumption_strategy.py",
+      "git_blob": "fe2f316a286c05e896ea81725f0168b4e241c1ca"
+    },
+    {
+      "path": "tests/app/planning/test_live_app.py",
+      "git_blob": "71f18769a3f32f0d77f88cb4263c8a654b7b30a6"
+    },
+    {
+      "path": "tests/app/planning/test_optimized_app.py",
+      "git_blob": "c0f10b8dd3a3799297de5b2eeb34f1e7669f3b8a"
+    },
+    {
+      "path": "tests/app/planning/test_plan_evidence.py",
+      "git_blob": "f5b2bec07322f661f7d1cf6a9b8e9d5d1c2a636a"
+    },
+    {
+      "path": "tests/app/planning/test_planning_pipeline.py",
+      "git_blob": "c22e262224a4a2d45ac3763a8b6be23ca2145b93"
+    },
+    {
+      "path": "tests/app/planning/test_planning_policy.py",
+      "git_blob": "48aace627752f9050954d5b23776b0eb6fa398f1"
+    },
+    {
+      "path": "tests/app/planning/test_publication.py",
+      "git_blob": "eecc8969f49962232beec90561c0206812223508"
+    },
+    {
+      "path": "tests/app/planning/test_strategy_settings.py",
+      "git_blob": "b6489b7051fb02261a78bba44dea329addb844c6"
+    },
+    {
+      "path": "tests/app/price/__init__.py",
+      "git_blob": "33c9d211e353c0c0eadcc02dd15e30dd8f0ec8eb"
+    },
+    {
+      "path": "tests/app/price/test_configured_prices.py",
+      "git_blob": "7528f6c08f7be97af51fe0aec9d121ec379afe02"
+    },
+    {
+      "path": "tests/app/price/test_ha_prices.py",
+      "git_blob": "cf5f29495ac794031fd71c58df4fe31b94c5e0bb"
+    },
+    {
+      "path": "tests/app/price/test_price_selection.py",
+      "git_blob": "f7fb56d3f5ac34e62dace0a7a7605013a3064815"
+    },
+    {
+      "path": "tests/app/price/test_prices.py",
+      "git_blob": "6805a06004e825a4de5bdb12ff89a7f0737353c0"
+    },
+    {
+      "path": "tests/app/runtime/__init__.py",
+      "git_blob": "da1310368f35354f980d9f4bc9340e57a2221548"
+    },
+    {
+      "path": "tests/app/runtime/test_app.py",
+      "git_blob": "ac472a03b63fc867a89709cf356f34ddf52c2474"
+    },
+    {
+      "path": "tests/app/runtime/test_development_helpers.py",
+      "git_blob": "d770169261a52385323a4acce4932470513609af"
+    },
+    {
+      "path": "tests/app/runtime/test_runtime_logging.py",
+      "git_blob": "07798c78f1a280aebc73861240016b7ba39c2113"
+    },
+    {
+      "path": "tests/app/savings/__init__.py",
+      "git_blob": "259a66ff22c634dcb2bd64fd1b92e694fe55d6e5"
+    },
+    {
+      "path": "tests/app/savings/support/__init__.py",
+      "git_blob": "5b8c5e4472d028ed5b7f6e211d7ff6372d09e712"
+    },
+    {
+      "path": "tests/app/savings/support/scenarios.py",
+      "git_blob": "43474274a7e5d28259bd18ad720888c87ecc4222"
+    },
+    {
+      "path": "tests/app/savings/test_plan_repricing.py",
+      "git_blob": "b2a484a4922e3dbda01d3a523c6aed6da80815fa"
+    },
+    {
+      "path": "tests/app/savings/test_reference_scenarios.py",
+      "git_blob": "7cfbc418c68df8c451d2f1d3d69ac9fd24e970d5"
+    },
+    {
+      "path": "tests/app/savings/test_savings.py",
+      "git_blob": "3b307ebd3fdd79365dfcc69ec6a9b8ec5296ea3f"
+    },
+    {
+      "path": "tests/app/savings/test_savings_api.py",
+      "git_blob": "11a02e090a3f42159f622027f09f8f84e296b65a"
+    },
+    {
+      "path": "tests/app/savings/test_savings_bonus.py",
+      "git_blob": "4df499bc1afcc049c5dcbdcb4e5552a62de7df34"
+    },
+    {
+      "path": "tests/app/solar/__init__.py",
+      "git_blob": "90f1ba65b3a7418ae0e1679973d6e9e40fed53bf"
+    },
+    {
+      "path": "tests/app/solar/test_solar.py",
+      "git_blob": "7bb7199428bd4aaf9cdd25a00e369c93efc24049"
+    },
+    {
+      "path": "tests/app/solar/test_solar_app.py",
+      "git_blob": "bf5171763ebe514a1442acd64a7f567ad58bee12"
+    },
+    {
+      "path": "tests/app/solar/test_solar_imports.py",
+      "git_blob": "28949c8a6afdced9f97e8d51683fd824be43bb2a"
+    },
+    {
+      "path": "tests/app/solar/test_solar_notifications.py",
+      "git_blob": "61a89176dffc3ff06b7637d142e11e3138f6c545"
+    },
+    {
+      "path": "tests/app/solar/test_solar_weather.py",
+      "git_blob": "d41fb2aef3239115927e87ceca3b2e331a6ec714"
+    },
+    {
+      "path": "tests/app/solar/test_source_selection.py",
+      "git_blob": "f343cd82f5b879c52a0043eb79b9ca18ea42aa6c"
+    },
+    {
+      "path": "tests/app/solver_regression/__init__.py",
+      "git_blob": "e95f2fcfa7e2e4ce0ba6e062678857a7b65d5beb"
+    },
+    {
+      "path": "tests/app/solver_regression/bus_cases.py",
+      "git_blob": "bd00c71b0713dc169188d26f3af6e06c06816eb1"
+    },
+    {
+      "path": "tests/app/solver_regression/cases.py",
+      "git_blob": "eb8ac6b49ad5b3fe1e651a39ec6e44ca1d3c0224"
+    },
+    {
+      "path": "tests/app/solver_regression/conftest.py",
+      "git_blob": "9c580bdc0fa4810f978fb24618edd96a231cf1f8"
+    },
+    {
+      "path": "tests/app/solver_regression/horizon_cases.py",
+      "git_blob": "a4971c02426abd47781824fa5408ec62ce1a5639"
+    },
+    {
+      "path": "tests/app/solver_regression/test_horizon_scenarios.py",
+      "git_blob": "d187eb7189ea29349dc4151ea663d2b723e2a89d"
+    },
+    {
+      "path": "tests/app/solver_regression/test_input_boundaries.py",
+      "git_blob": "bceb5346edd3a34674069e312b57fbdb53b4ba59"
+    },
+    {
+      "path": "tests/app/solver_regression/test_mixed_hybrid.py",
+      "git_blob": "ec2289fa89a164badca5441116a7af30baf09486"
+    },
+    {
+      "path": "tests/app/solver_regression/test_model_isolation.py",
+      "git_blob": "36705f31ce61c04452f17e6c37fa4a25daa3e003"
+    },
+    {
+      "path": "tests/app/solver_regression/test_planner_scenarios.py",
+      "git_blob": "974bb8b566fce2b3b65ba18e9f0a4fbe548e60a3"
+    },
+    {
+      "path": "tests/app/solver_regression/test_process_memory.py",
+      "git_blob": "6d4d0741d6324ddd5f54d6b7ab62ce7847dbb75a"
+    },
+    {
+      "path": "tests/app/solver_regression/test_shared_ac_bus.py",
+      "git_blob": "c86a3b16b9ef142603af9d33e956492dd33d003f"
+    },
+    {
+      "path": "tests/app/solver_regression/test_solver_status.py",
+      "git_blob": "81e42f4e2030be685abed8b9204dc5d42b30af78"
+    },
+    {
+      "path": "tests/app/solver_regression/test_topology_scenarios.py",
+      "git_blob": "93af89b1d3181e2452d7869d8747debb6addb582"
+    },
+    {
+      "path": "tests/app/solver_regression/test_validation.py",
+      "git_blob": "bafa84169cc4efff5f43f7eed273242771d9bf87"
+    },
+    {
+      "path": "tests/app/solver_regression/topology_cases.py",
+      "git_blob": "83ccbfb1c459818a571a9f2ebe72166788d73060"
+    },
+    {
+      "path": "tests/app/test_storage_maintenance.py",
+      "git_blob": "0962613866cd613921a5327bbefaedb330f41e81"
+    },
+    {
+      "path": "tests/app/thermal/__init__.py",
+      "git_blob": "1c753192829af620a3c74996d76195a74ee82a32"
+    },
+    {
+      "path": "tests/app/thermal/test_thermal_api.py",
+      "git_blob": "6b6998a18ad931721426492993a9ee1eefdac93b"
+    },
+    {
+      "path": "tests/app/thermal/test_thermal_references.py",
+      "git_blob": "0aba42daf664f0d27ca32d34084627d136eedad0"
+    },
+    {
+      "path": "tests/app/thermal/test_thermal_solver.py",
+      "git_blob": "e71c0213c2e430fb1707e5ccf84983b93131a856"
+    },
+    {
+      "path": "tests/ci/__init__.py",
+      "git_blob": "63b833c169d5f61368fb397e7a527110c1be4da9"
+    },
+    {
+      "path": "tests/ci/conftest.py",
+      "git_blob": "c8c7fd004fa2d81a3f288ef0724da42dbd061fb9"
+    },
+    {
+      "path": "tests/ci/test_admission_ownership.py",
+      "git_blob": "c44ab3bf00a18cc9363a82b2cba927bcef003f38"
+    },
+    {
+      "path": "tests/ci/test_app_boundaries.py",
+      "git_blob": "99ddc6758ce20085a65d0e33f054279843c592e5"
+    },
+    {
+      "path": "tests/ci/test_ci_candidate.py",
+      "git_blob": "cb3ac6524a781318c281b58cc0e5630ffc269fdd"
+    },
+    {
+      "path": "tests/ci/test_ci_ownership.py",
+      "git_blob": "b71c8dafbf293bc81b2c26cb1bafd50eee5a4285"
+    },
+    {
+      "path": "tests/ci/test_ci_role_selection.py",
+      "git_blob": "ff2ab4c7b8dde7071688aaefa0f603b373dc9401"
+    },
+    {
+      "path": "tests/ci/test_ci_scope.py",
+      "git_blob": "bdd7d964c24706afb7a2ca8ade357c73134d2d67"
+    },
+    {
+      "path": "tests/ci/test_ci_scope_labels.py",
+      "git_blob": "5c2ab429ede88303251f414110b1952c4c68a85c"
+    },
+    {
+      "path": "tests/ci/test_ci_suite_completion.py",
+      "git_blob": "a695c336b353bb0c59e7bd6aa0526f1cdfb28ab6"
+    },
+    {
+      "path": "tests/ci/test_commit_signatures.py",
+      "git_blob": "edfc262a09a10b005ee771e8be9c40756611ba6e"
+    },
+    {
+      "path": "tests/ci/test_database_migrations.py",
+      "git_blob": "255a1a9798c69cf715eea2ca68dfe058ca9ba66a"
+    },
+    {
+      "path": "tests/ci/test_docstring_policy.py",
+      "git_blob": "dddd16125b6e508449416f0310d68f0b849e7169"
+    },
+    {
+      "path": "tests/ci/test_focused_product_policy.py",
+      "git_blob": "20da75ff6d1debb4c17ffad9def3ccb2ceff93f8"
+    },
+    {
+      "path": "tests/ci/test_group_selection.py",
+      "git_blob": "d95b50e810462a629f0dd59d2083e6102196d6d3"
+    },
+    {
+      "path": "tests/ci/test_ha_shards.py",
+      "git_blob": "29cd85e13c95f3f72eb882e9204657f4fc3bd084"
+    },
+    {
+      "path": "tests/ci/test_helper_impact.py",
+      "git_blob": "7ea971b0449efd608725255ac36fbe52bc1d7bef"
+    },
+    {
+      "path": "tests/ci/test_image_preflight.py",
+      "git_blob": "ae44dc3c1097dc97b3d72e8e1d4b16f6d8dec62e"
+    },
+    {
+      "path": "tests/ci/test_import_boundaries.py",
+      "git_blob": "add80983668b5c6e74bf8156802184662d0cfc76"
+    },
+    {
+      "path": "tests/ci/test_independent_execution.py",
+      "git_blob": "49d4e81a6773cb4d878b950b17ca0bb815a4c7d9"
+    },
+    {
+      "path": "tests/ci/test_local_runner.py",
+      "git_blob": "e334d3df15b006c5986419c16a218c7344fc4547"
+    },
+    {
+      "path": "tests/ci/test_main_ci_reuse.py",
+      "git_blob": "b1981ff39f3b499378a44cee7921bd2be5fab671"
+    },
+    {
+      "path": "tests/ci/test_performance_queries.py",
+      "git_blob": "40a7874be05a5d2ee5b08736f19222f8b611393f"
+    },
+    {
+      "path": "tests/ci/test_policy_snapshot.py",
+      "git_blob": "b088b6d87e3bce1cc99247b9123e1eb07a53e06a"
+    },
+    {
+      "path": "tests/ci/test_pr_readiness.py",
+      "git_blob": "65a6d3a176fe52a20f3bd7e55134cbbeee1c78b9"
+    },
+    {
+      "path": "tests/ci/test_proof_git.py",
+      "git_blob": "1d41c96fa5dc588f48d23619acb8cef7f26b383a"
+    },
+    {
+      "path": "tests/ci/test_proof_selection.py",
+      "git_blob": "86f946caa5ccdcf9f526c7a64f4b3c8277161d89"
+    },
+    {
+      "path": "tests/ci/test_provenance.py",
+      "git_blob": "60a21b45406b02d75f2dc13e372a94f0a2c9471e"
+    },
+    {
+      "path": "tests/ci/test_runner_workspace.py",
+      "git_blob": "e45ef3824ae9080b826769405842d650cc675a36"
+    },
+    {
+      "path": "tests/ci/test_scope_report.py",
+      "git_blob": "2d6f91e84981218becc19db290679f38bb816534"
+    },
+    {
+      "path": "tests/ci/test_test_only_route.py",
+      "git_blob": "936d426d55e1de6ffd0ba375c24ea6ed004489e4"
+    },
+    {
+      "path": "tests/ci/test_trusted_entrypoints.py",
+      "git_blob": "8a6f25efd4c5e3504b9badf3164d8dcab332afd2"
+    },
+    {
+      "path": "tests/custom_component/__init__.py",
+      "git_blob": "fd1b76f73242f730269d713305f024f3baf0e9cf"
+    },
+    {
+      "path": "tests/custom_component/integration/__init__.py",
+      "git_blob": "9da2bb11893f8741bc0112966fd4f92a0f462cdc"
+    },
+    {
+      "path": "tests/custom_component/integration/connection/__init__.py",
+      "git_blob": "16b6821e97f8924f1afa622103cb9cbc3290e2e5"
+    },
+    {
+      "path": "tests/custom_component/integration/connection/test_connection.py",
+      "git_blob": "22cccd54af2e7d1205973312a39f9b6df27c835b"
+    },
+    {
+      "path": "tests/custom_component/integration/connection/test_market_prices.py",
+      "git_blob": "7aa1231ba6c1883933d7454fca0d0ddaf1e041dc"
+    },
+    {
+      "path": "tests/custom_component/integration/contracts/__init__.py",
+      "git_blob": "37571a0d0f4e55e7a33349c98c716d32e1543bff"
+    },
+    {
+      "path": "tests/custom_component/integration/contracts/test_catalogue.py",
+      "git_blob": "c2de1c8dba6f3cfd6dfdb0d59fb5e73d9cd0bf39"
+    },
+    {
+      "path": "tests/custom_component/integration/contracts/test_early_contracts.py",
+      "git_blob": "7921a3d8a12cdad77b40dbf6660923abc98b4d8c"
+    },
+    {
+      "path": "tests/custom_component/integration/contracts/test_solar_adapters.py",
+      "git_blob": "5533dfb6581b426dd3207be2cea9d75fd9ba30fb"
+    },
+    {
+      "path": "tests/custom_component/integration/controls/__init__.py",
+      "git_blob": "1a6232c388be29f0f16c01cab50e41bc58187a0a"
+    },
+    {
+      "path": "tests/custom_component/integration/controls/remote/__init__.py",
+      "git_blob": "d13cde7176b73858f9290f1aa6c97fb5c146c567"
+    },
+    {
+      "path": "tests/custom_component/integration/controls/remote/test_solver.py",
+      "git_blob": "4bb139eed2d7d36e98f27e4d1b2f7e15ab3c8777"
+    },
+    {
+      "path": "tests/custom_component/integration/controls/test_appliance_claim.py",
+      "git_blob": "3820c4841114d523005176361db5909e2e06bebf"
+    },
+    {
+      "path": "tests/custom_component/integration/controls/test_controls.py",
+      "git_blob": "456ee08f40bb5d90c8b737439258f2fddf7b7e18"
+    },
+    {
+      "path": "tests/custom_component/integration/history/__init__.py",
+      "git_blob": "9984cd5f02690d5d5b23dd681e4c14a2674380c7"
+    },
+    {
+      "path": "tests/custom_component/integration/history/test_fixture_history_window.py",
+      "git_blob": "4e9cf748ccca2a9edec2bea06fb36d0135e26efe"
+    },
+    {
+      "path": "tests/custom_component/integration/history/test_recorder.py",
+      "git_blob": "fd7f4f1978de35670fd5d13db5be559daaf0ef1f"
+    },
+    {
+      "path": "tests/custom_component/integration/thermal/__init__.py",
+      "git_blob": "5d56644e3d6803fea57735ff2a55909a9d547a7f"
+    },
+    {
+      "path": "tests/custom_component/integration/thermal/test_thermal.py",
+      "git_blob": "0218517e5b1783d34f63b13d8be1464818ae1fca"
+    },
+    {
+      "path": "tests/custom_component/support/__init__.py",
+      "git_blob": "c797a7e8b50a4ff9908499b2b1efb54a6112c592"
+    },
+    {
+      "path": "tests/custom_component/support/chain.py",
+      "git_blob": "388ac036906e2e4fcecbabcccd9a5440d100299c"
+    },
+    {
+      "path": "tests/custom_component/support/fixture_history.py",
+      "git_blob": "96c7f415861f8d5fe6301947bd26da6e45dae143"
+    },
+    {
+      "path": "tests/custom_component/unit/__init__.py",
+      "git_blob": "761b77e01b97cf357ff6021487d6ce29fdf66676"
+    },
+    {
+      "path": "tests/custom_component/unit/test_device_configuration.py",
+      "git_blob": "4b66ca72c1a08347db959b8d7932bca01f122c32"
+    },
+    {
+      "path": "tests/custom_component/unit/test_measurements.py",
+      "git_blob": "4bf06426a68622ee46fc930445a86b43615ab3d1"
+    },
+    {
+      "path": "tests/custom_component/unit/test_schedule.py",
+      "git_blob": "f21e4b819dd35580737fa9d5be4bdb4906ff7d25"
+    },
+    {
+      "path": "tests/database/__init__.py",
+      "git_blob": "1a57163f254e51b45c41abd8fc45fed9f3bf9503"
+    },
+    {
+      "path": "tests/database/conftest.py",
+      "git_blob": "8ecf882ad523a105a2af282bf545dee7d819fd37"
+    },
+    {
+      "path": "tests/database/contracts/__init__.py",
+      "git_blob": "37571a0d0f4e55e7a33349c98c716d32e1543bff"
+    },
+    {
+      "path": "tests/database/contracts/test_archive_lifecycle.py",
+      "git_blob": "d283b5c21b16b3319c3b19ad07b560f08d400f08"
+    },
+    {
+      "path": "tests/database/contracts/test_document_backends.py",
+      "git_blob": "a5d54f8a254b63b76be785269fd64f9d57712e85"
+    },
+    {
+      "path": "tests/database/contracts/test_ev_service.py",
+      "git_blob": "f359cf7f6d5d0a3c257b232db6af3f3918d6d9ef"
+    },
+    {
+      "path": "tests/database/contracts/test_fixture_cleanup.py",
+      "git_blob": "8677c342dd7e7f31886c2286a920b9d78c2e8a58"
+    },
+    {
+      "path": "tests/database/contracts/test_forecast_quality.py",
+      "git_blob": "ade8247efd541a8534626cd47d84cd903d65de34"
+    },
+    {
+      "path": "tests/database/contracts/test_history_datasets.py",
+      "git_blob": "a29a7b6c8cfb111ad6ef2b57bfb5f4353d1aebc9"
+    },
+    {
+      "path": "tests/database/contracts/test_jeroen_prices.py",
+      "git_blob": "5b4b7ad27a4b3dc004f1aff39d3a1bbb3a5e1c60"
+    },
+    {
+      "path": "tests/database/contracts/test_performance_collection.py",
+      "git_blob": "9dd78d16fce57a04f6a757f3388c44c6dbb7f4fd"
+    },
+    {
+      "path": "tests/database/contracts/test_plan_archive_backends.py",
+      "git_blob": "e63ba5274ecfae5d6aad83377ecb7d562c80ecb7"
+    },
+    {
+      "path": "tests/database/contracts/test_price_history_performance.py",
+      "git_blob": "08d2019ddd4e02bd86be8a7db9ba4ce039baacf3"
+    },
+    {
+      "path": "tests/database/contracts/test_price_markets.py",
+      "git_blob": "574f0fc86e2580d157987b2acc7f70de6d9aa5dd"
+    },
+    {
+      "path": "tests/database/contracts/test_savings_backends.py",
+      "git_blob": "121936195eb7f28ebf7ce659168a1efcb5464329"
+    },
+    {
+      "path": "tests/database/contracts/test_selection_store_backends.py",
+      "git_blob": "48bc1156e2296d89631cebc679ae0148e8f818ce"
+    },
+    {
+      "path": "tests/database/contracts/test_storage_usage.py",
+      "git_blob": "dd069b7308bb98cd0de1f98c72a14e1a936d1ee3"
+    },
+    {
+      "path": "tests/database/contracts/test_thermal_service.py",
+      "git_blob": "99dc204b215c26861798c984d5eea3086d3e2679"
+    },
+    {
+      "path": "tests/database/migrations/__init__.py",
+      "git_blob": "ad320ccff2c97bbd824d9f935739ad723d57220b"
+    },
+    {
+      "path": "tests/database/migrations/test_archive_migration.py",
+      "git_blob": "7bf8d30e6d9e1934ff739db76568e855b8fec956"
+    },
+    {
+      "path": "tests/database/migrations/test_savings_transfer.py",
+      "git_blob": "6a058bdf314c87c199304798554972f72651924a"
+    },
+    {
+      "path": "tests/database/performance/__init__.py",
+      "git_blob": "c70a5eb55c56833acf8968f279f21643515f09cf"
+    },
+    {
+      "path": "tests/database/performance/test_price_queries.py",
+      "git_blob": "baec38cd381a2a1f7f995ebfeacc5a5e654bed1d"
+    },
+    {
+      "path": "tests/database/performance/test_savings_queries.py",
+      "git_blob": "ee76012f0839215c3a5ee7f886b1d29b2297619a"
+    },
+    {
+      "path": "tests/database/support/__init__.py",
+      "git_blob": "417aa0348ffe18bd346a8f01dd974689316fcd09"
+    },
+    {
+      "path": "tests/database/support/archive.py",
+      "git_blob": "c65a0d22c997852f7f1f1c3bb2599c401e311681"
+    },
+    {
+      "path": "tests/database/support/backends.py",
+      "git_blob": "913b0af36935b2d9a2d99c82a66abc004ff5e6a4"
+    },
+    {
+      "path": "tests/database/support/history_datasets.py",
+      "git_blob": "5bbc03e5a6ef9c360c7f27a4b0811f32eca33998"
+    },
+    {
+      "path": "tests/database/support/settlement.py",
+      "git_blob": "b328aa2c8fe07ff6ca709a354ae03485bd906e72"
+    },
+    {
+      "path": "tests/documentation/__init__.py",
+      "git_blob": "e074bc298710ac2aa30dd3b2bbb8d71fcd942233"
+    },
+    {
+      "path": "tests/documentation/test_documentation.py",
+      "git_blob": "7cd42687fdcfb63fd7a4bca13ceb236a315f6a51"
+    },
+    {
+      "path": "tests/fixtures/requirement-ids.json",
+      "git_blob": "f2a2feb1286c28564705b64d5f77dca580f5e2a3"
+    },
+    {
+      "path": "tests/frontend/__init__.py",
+      "git_blob": "5bb47c8165cae603bf3db7b291d99fde6c2d9ff1"
+    },
+    {
+      "path": "tests/frontend/browser/__init__.py",
+      "git_blob": "081cd541ee62522cc8df10d89c82350537c0b0b3"
+    },
+    {
+      "path": "tests/frontend/browser/conftest.py",
+      "git_blob": "def0bcacd6e92245ddaccfabfe8ebd83bd15d1d6"
+    },
+    {
+      "path": "tests/frontend/browser/control_layout.py",
+      "git_blob": "66c17b7747b4d4c146ae3a1d65b2e8af46cb7aea"
+    },
+    {
+      "path": "tests/frontend/browser/helpers.py",
+      "git_blob": "97cf42219538ddb19c9de0fffbe409719224ead7"
+    },
+    {
+      "path": "tests/frontend/browser/savings_fixture.py",
+      "git_blob": "4ebb046efb852a96d460dba76e32ded997cf8ec9"
+    },
+    {
+      "path": "tests/frontend/browser/test_appliance_settings.py",
+      "git_blob": "016d7208c1e0fa3f4843dc7483c27ac6865498b0"
+    },
+    {
+      "path": "tests/frontend/browser/test_balance_quarters.py",
+      "git_blob": "f88976e717f64f2ce00b2f591d71e61ad62f7b14"
+    },
+    {
+      "path": "tests/frontend/browser/test_chart_days.py",
+      "git_blob": "462dd3e261c8bedd85441a46f1f030382b1d5b07"
+    },
+    {
+      "path": "tests/frontend/browser/test_chart_scales.py",
+      "git_blob": "43e3a72ddec850a3226d1663c93b8b78d7fe33dc"
+    },
+    {
+      "path": "tests/frontend/browser/test_connection.py",
+      "git_blob": "24bbb3675a1c5f7f453455d0deb3b2166d93ea6b"
+    },
+    {
+      "path": "tests/frontend/browser/test_contract_editor.py",
+      "git_blob": "0e1e6c7054bd7a641b5a63e44809cc7d1331b25c"
+    },
+    {
+      "path": "tests/frontend/browser/test_developer_start.py",
+      "git_blob": "4aa14289339f3b8d9ade5705ab505cad59fbddb2"
+    },
+    {
+      "path": "tests/frontend/browser/test_energy_balance.py",
+      "git_blob": "0bd732c0918cf1bbdd187ba591914dc84366f89b"
+    },
+    {
+      "path": "tests/frontend/browser/test_forecast_quality.py",
+      "git_blob": "f5c1b5159dcef48e5f081f48aee0f6905d2cf439"
+    },
+    {
+      "path": "tests/frontend/browser/test_installation.py",
+      "git_blob": "65726fab12ec4b0f95dee1f7e85cb8a257a342f3"
+    },
+    {
+      "path": "tests/frontend/browser/test_navigation.py",
+      "git_blob": "9098add7ada00f5587521660e5a7abb7b6739b85"
+    },
+    {
+      "path": "tests/frontend/browser/test_notification_sources.py",
+      "git_blob": "f99b97063d4b65615c03232213b4dbce6afc7e7b"
+    },
+    {
+      "path": "tests/frontend/browser/test_notifications.py",
+      "git_blob": "a85c51a30979ef861c9d7604f38b63d23638759e"
+    },
+    {
+      "path": "tests/frontend/browser/test_panel_spacing.py",
+      "git_blob": "d259e5aa5d914be2aa998cb38f872a6a83c6c0b4"
+    },
+    {
+      "path": "tests/frontend/browser/test_plan_evidence.py",
+      "git_blob": "9aeea3197e7f15f6fb08685ef90fbaa7e065176d"
+    },
+    {
+      "path": "tests/frontend/browser/test_price_preferences.py",
+      "git_blob": "89dd78cf81d21f8558e2e9f6b6701af4cae7b7a7"
+    },
+    {
+      "path": "tests/frontend/browser/test_price_sources.py",
+      "git_blob": "d9248ca03d179b87c9aa15cbdd9a6499b1066703"
+    },
+    {
+      "path": "tests/frontend/browser/test_savings.py",
+      "git_blob": "29aa4fb249025c1cd0d04cba6f557b0d0c97ff38"
+    },
+    {
+      "path": "tests/frontend/browser/test_solar_imports.py",
+      "git_blob": "7d7fb2150917e3dd3adffbb8fb26c2c06a726d7c"
+    },
+    {
+      "path": "tests/frontend/browser/test_solar_notifications.py",
+      "git_blob": "d0e002242946f89237a12e0ea492bd9878af73b9"
+    },
+    {
+      "path": "tests/frontend/browser/test_storage_migration.py",
+      "git_blob": "3a55893db50b45ad5ce53e25e121cc5cf469c497"
+    },
+    {
+      "path": "tests/frontend/browser/test_supervisor_polling.py",
+      "git_blob": "3c301740eb3e5d05b021441bd6f852c47ef24fd6"
+    },
+    {
+      "path": "tests/frontend/browser/test_thermal.py",
+      "git_blob": "276f52bfa9d4e9b7590875fcaf35474388e357af"
+    },
+    {
+      "path": "tests/frontend/browser/test_thermal_balance.py",
+      "git_blob": "df61cea67a3db06624d9d41f43b9ccd3b7af1180"
+    },
+    {
+      "path": "tests/frontend/unit/__init__.py",
+      "git_blob": "761b77e01b97cf357ff6021487d6ce29fdf66676"
+    },
+    {
+      "path": "tests/frontend/unit/test_page_access.py",
+      "git_blob": "dd211f31f0f3d1251cbd4c3c750dc831d81de2fb"
+    },
+    {
+      "path": "tests/frontend/unit/test_public_routing.py",
+      "git_blob": "ec87b076fe449d3f9a0cb81d216159a812c9ae26"
+    },
+    {
+      "path": "tests/frontend/unit/test_theme_assets.py",
+      "git_blob": "b59ff2b27c18244fe35eee155eecee9ca22f540b"
+    },
+    {
+      "path": "tests/ha_contract/__init__.py",
+      "git_blob": "7d947ba79bd5b861b9a52fd4779b32faf88308a4"
+    },
+    {
+      "path": "tests/ha_contract/support/__init__.py",
+      "git_blob": "6613f76bed74198fe0aaceca4937a532178e4203"
+    },
+    {
+      "path": "tests/ha_contract/support/commands.py",
+      "git_blob": "35f027d8504277dc0e204412b74ca236744d35e0"
+    },
+    {
+      "path": "tests/ha_contract/support/connection.py",
+      "git_blob": "b480355a00038387060a04ddf950ec73342ebf58"
+    },
+    {
+      "path": "tests/ha_contract/support/metadata.py",
+      "git_blob": "f5e7d4e9370a692ce4cd683be3cca9420e8549b7"
+    },
+    {
+      "path": "tests/ha_contract/test_catalogue.py",
+      "git_blob": "12987a1282a1505e5cd37e177d8dd426a91195ef"
+    },
+    {
+      "path": "tests/ha_contract/test_connection.py",
+      "git_blob": "21c269716112b2ca31bcc725ddfecfb392f118d4"
+    },
+    {
+      "path": "tests/ha_contract/test_energy_authority.py",
+      "git_blob": "58813dfba6af839fa16c2d409b6962990cb452b4"
+    },
+    {
+      "path": "tests/ha_contract/test_ev_execution.py",
+      "git_blob": "f341db8ff883162adfe1361bff913c06d52d702d"
+    },
+    {
+      "path": "tests/ha_contract/test_market_prices.py",
+      "git_blob": "d4fff10ea9b17915c6e16adc9657d2790c860f6d"
+    },
+    {
+      "path": "tests/ha_contract/test_observation_inputs.py",
+      "git_blob": "f14033af760351a7ef1dcb3500d435759a475447"
+    },
+    {
+      "path": "tests/ha_contract/test_source_names.py",
+      "git_blob": "d720b07867ae54546954a9ee1d4a51b7ffb1da41"
+    },
+    {
+      "path": "tests/ha_contract/test_supervisor_bootstrap.py",
+      "git_blob": "2ccf0d9d9a7aac8c8baa355a832ce7ed8f69a550"
+    },
+    {
+      "path": "tests/provisioning/__init__.py",
+      "git_blob": "3a4466c16976e115238bc4623c6c87deef856d12"
+    },
+    {
+      "path": "tests/provisioning/support/__init__.py",
+      "git_blob": "7e18e97508b336a635bc8ab5b1cb64681350175f"
+    },
+    {
+      "path": "tests/provisioning/support/registry.py",
+      "git_blob": "7ac2c378aaee96ac94330816ae11f265ae6bc460"
+    },
+    {
+      "path": "tests/provisioning/unit/__init__.py",
+      "git_blob": "761b77e01b97cf357ff6021487d6ce29fdf66676"
+    },
+    {
+      "path": "tests/provisioning/unit/test_acceptance.py",
+      "git_blob": "e4fe410b9e6c8d7ad835782aa552c9fb6f6fed67"
+    },
+    {
+      "path": "tests/provisioning/unit/test_core_onboarding.py",
+      "git_blob": "926cd3ee89d31b63d5222ff3301f4ac5126b597a"
+    },
+    {
+      "path": "tests/provisioning/unit/test_device_examples.py",
+      "git_blob": "7ecc34940f7b31d6d3e6ecd1d8430b951bb13c3a"
+    },
+    {
+      "path": "tests/provisioning/unit/test_examples.py",
+      "git_blob": "9e920ea71d6dc8c0de4868af15d4bc939f242878"
+    },
+    {
+      "path": "tests/release/__init__.py",
+      "git_blob": "f0e5458296240f3996a2dfc8084e1802755084c8"
+    },
+    {
+      "path": "tests/release/test_build_info.py",
+      "git_blob": "c69ddaa659288de46d0ec28fe440e9207d71bae4"
+    },
+    {
+      "path": "tests/release/test_publish_release.py",
+      "git_blob": "74057ae0bd9c13b3c9ef7c3cf737ac9c0b322101"
+    },
+    {
+      "path": "tests/release/test_release_devices.py",
+      "git_blob": "2070699919c847efdf97c8b3459ff20f88ab26e7"
+    },
+    {
+      "path": "tests/supervisor/__init__.py",
+      "git_blob": "d8e921053e3981160c92fccecd2598886694406f"
+    },
+    {
+      "path": "tests/supervisor/support/__init__.py",
+      "git_blob": "3e4b32a782cc74de93e309ef9ed5db91ce68ed60"
+    },
+    {
+      "path": "tests/supervisor/support/examples.py",
+      "git_blob": "35e8201104e3bc68496171ee0474521bfad2a630"
+    },
+    {
+      "path": "tests/supervisor/unit/__init__.py",
+      "git_blob": "761b77e01b97cf357ff6021487d6ce29fdf66676"
+    },
+    {
+      "path": "tests/supervisor/unit/test_acceptance_weather.py",
+      "git_blob": "470e94162fd134f4a34e8294313e2c51ff9f703d"
+    },
+    {
+      "path": "tests/supervisor/unit/test_connection.py",
+      "git_blob": "7b5ea1340e769899d9a6643262468b20c38eadb9"
+    },
+    {
+      "path": "tests/supervisor/unit/test_dev_bundle.py",
+      "git_blob": "bf142bfe011778b4f21de6f2b98b0aeb16332464"
+    },
+    {
+      "path": "tests/supervisor/unit/test_example_bootstrap.py",
+      "git_blob": "813c1ada12c6c236d0513cfdd7e814d1c31b9166"
+    },
+    {
+      "path": "tests/supervisor/unit/test_platform_images.py",
+      "git_blob": "467d434096e40ce8d304f17f5816e5bdb8d49ba5"
+    },
+    {
+      "path": "tests/supervisor/unit/test_runtime_entrypoint.py",
+      "git_blob": "3fd390130d8255694fbb84747b2c7100035b52f9"
+    },
+    {
+      "path": "tests/supervisor/unit/test_store_reload.py",
+      "git_blob": "6ad81d86788dcaf3f2fbd3bd692d7316d4a1740d"
+    },
+    {
+      "path": "tests/supervisor/unit/test_supervised_examples.py",
+      "git_blob": "7a6fe7e838b525e6af13a639593875472ff264a6"
+    },
+    {
+      "path": "tests/supervisor/unit/test_supervisor_acceptance.py",
+      "git_blob": "f43fe540a570fe5a3d61cbb103fb86e611f8a700"
+    },
+    {
+      "path": "tests/supervisor/unit/test_supervisor_development.py",
+      "git_blob": "e4dfadf276d56565f57fdaff295b2711f88db4c2"
+    },
+    {
+      "path": "tests/test_environment/__init__.py",
+      "git_blob": "0472e65ffc27fa70183dde5612bb1b0ad26b1f3a"
+    },
+    {
+      "path": "tests/test_environment/integration/__init__.py",
+      "git_blob": "9da2bb11893f8741bc0112966fd4f92a0f462cdc"
+    },
+    {
+      "path": "tests/test_environment/integration/test_balance_retention.py",
+      "git_blob": "bc6e21f05340ec999b57624b7240bf5bd4d3d0e7"
+    },
+    {
+      "path": "tests/test_environment/integration/test_simulator.py",
+      "git_blob": "ff5fa3d108d1b9a172e2285a0ce5b7d232a15c73"
+    },
+    {
+      "path": "tests/test_environment/integration/test_thermal.py",
+      "git_blob": "38030058d0abe685e1f1623943367b7c004de9c5"
+    },
+    {
+      "path": "tests/test_environment/support/__init__.py",
+      "git_blob": "1cc78a5b25af14e2b793a631b8087962c2b49f31"
+    },
+    {
+      "path": "tests/test_environment/support/sources.py",
+      "git_blob": "4794711ab5f035f4a0a02f67d9e0817460c73e8f"
+    },
+    {
+      "path": "tests/test_environment/unit/__init__.py",
+      "git_blob": "761b77e01b97cf357ff6021487d6ce29fdf66676"
+    },
+    {
+      "path": "tests/test_environment/unit/test_balance_calculation.py",
+      "git_blob": "760da4f4d32d27b83a351f7703e9ec699bb723fd"
+    },
+    {
+      "path": "tests/test_environment/unit/test_development_fixtures.py",
+      "git_blob": "c15c6f15aaebc3565d215bb0963dffad90fe6c04"
+    }
+  ]
+}
