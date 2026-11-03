@@ -15,7 +15,9 @@ def public_reference_plan(plan):
     """Copy a plan's public diagnostic while leaving its immutable stored evidence untouched.
 
     Older plans can retain arbitrary exception values. Only exact owned reference
-    explanations may cross the response boundary, including inside nested plans.
+    explanations may cross the response boundary. This function sanitizes only the
+    top-level ``reference_forecast_issue``. Callers must apply it to each plan they
+    embed in a response.
     """
     if plan is None or not plan.get("reference_forecast_issue"):
         return plan
