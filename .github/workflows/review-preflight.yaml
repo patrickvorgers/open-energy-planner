@@ -117,10 +117,22 @@ jobs:
               path = urlsplit(request.full_url).path
               try:
                   response = original_open(request, *args, **kwargs)
-                  print(json.dumps({'preflight_path': path, 'status': response.status, 'remaining': response.headers.get('X-RateLimit-Remaining')}))
+                  encoding = response.headers.get('Content-Encoding')
+                  print(json.dumps({'preflight_path': path, 'status': response.status, 'remaining': response.headers.get('X-RateLimit-Remaining'), 'encoding': encoding if encoding in (None, 'gzip', 'deflate', 'br') else 'other', 'content_length': response.headers.get('Content-Length')}))
                   return response
               except HTTPError as error:
-                  print(json.dumps({'preflight_path': path, 'http_error': error.code, 'remaining': error.headers.get('X-RateLimit-Remaining'), 'reset': error.headers.get('X-RateLimit-Reset')}))
+                  category = 'unclassified'
+                  try:
+                      message = json.loads(error.read(2048)).get('message', '')
+                      if message == 'Resource not accessible by integration':
+                          category = 'integration_permissions'
+                      elif message == 'Bad credentials':
+                          category = 'bad_credentials'
+                      elif message.startswith('API rate limit exceeded'):
+                          category = 'rate_limit'
+                  except (ValueError, AttributeError):
+                      pass
+                  print(json.dumps({'preflight_path': path, 'http_error': error.code, 'category': category, 'remaining': error.headers.get('X-RateLimit-Remaining'), 'reset': error.headers.get('X-RateLimit-Reset')}))
                   raise
               except URLError as error:
                   print(json.dumps({'preflight_path': path, 'error_class': type(error.reason).__name__, 'verify_code': getattr(error.reason, 'verify_code', None)}))
