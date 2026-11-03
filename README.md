@@ -1,5 +1,11 @@
 # Open Energy Planner
 
+Read the **[OEP documentation](https://patrickvorgers.github.io/open-energy-planner/)**
+for the development preview, a safe first-plan demo and the maintained technical
+guides. The [developer start page](https://patrickvorgers.github.io/open-energy-planner/provisioning/)
+guides local Dev Container provisioning. See [site maintenance](docs/development/DOCUMENTATION-SITE.md)
+for a local preview and publication checks.
+
 > [!WARNING]
 > **Early-stage software**
 >
@@ -70,7 +76,7 @@ describes all persisted tables, fields, relationships, JSON document owners and 
 
 For hands-on testing without a production installation, use the [separate persistent test environment](docs/development/USER-TEST-ENVIRONMENT.md). It includes Home Assistant, two simulated solar sources, a battery, Energy history and sample contract settings.
 
-Open the **[developer start page](https://patrickvorgers.github.io/open-energy-planner/developer/)** to start provisioning. It links to a local VS Code clone and explains the prerequisites. Install VS Code, Dev Containers, Git, Python 3.12 or newer and Docker with Linux containers. Verification needs existing GitHub read access through Git Credential Manager or `GH_TOKEN`/`GITHUB_TOKEN` in your host terminal. Never enter credentials on the start page. Download the original `installation-bundle-amd64` ZIP from a successful Checks candidate merged onto `main`, then check out its matching verified merge. From a host terminal in that checkout, prepare and start the package before choosing **Dev Containers: Reopen in Container**:
+Open the **[developer start page](https://patrickvorgers.github.io/open-energy-planner/provisioning/)** to start provisioning. It links to a local VS Code clone and explains the prerequisites. Install VS Code, Dev Containers, Git, Python 3.12 or newer and Docker with Linux containers. Verification needs existing GitHub read access through Git Credential Manager or `GH_TOKEN`/`GITHUB_TOKEN` in your host terminal. Never enter credentials on the start page. Download the original `installation-bundle-amd64` ZIP from a successful Checks candidate merged onto `main`, then check out its matching verified merge. From a host terminal in that checkout, prepare and start the package before choosing **Dev Containers: Reopen in Container**:
 
 ```console
 python -m script.supervisor.dev prepare --bundle /path/to/installation-bundle-amd64.zip --run-id RUN_ID

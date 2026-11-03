@@ -588,7 +588,7 @@ measured quarter evidence. See the demand and solar forecasting guides.
 
 ### Confirmed phasing: forecast-only consumers before shiftable appliances
 
-First implement Energy-owned individual-consumer discovery, user selection and per-device weather sensitivity, history-based local prediction, residual-household composition without double counting, UI/HA forecast visibility and consistent planning-benefit evaluation. Phase 1 issues no physical commands and requires no task feedback or blueprint. With insufficient device history, retain the existing total-household forecast rather than removing unknown demand. The [demand forecasting guide](../docs/development/DEMAND-FORECASTING.md#phased-individual-consumer-forecasting--24-october-2026) records the implementation and evidence limits.
+First implement Energy-owned individual-consumer discovery, user selection and per-device weather sensitivity, history-based local prediction, residual-household composition without double counting, UI/HA forecast visibility and consistent planning-benefit evaluation. Phase 1 issues no physical commands and requires no task feedback or blueprint. With insufficient device history, retain the existing total-household forecast rather than removing unknown demand. The [demand forecasting guide](../docs/development/DEMAND-FORECASTING.md#individual-consumer-forecasting) records the implementation and evidence limits.
 
 Only afterward implement the shiftable-appliance task, cycle-profile and mandatory feedback/blueprint requirements above. Use a simulated heat-pump consumer to exercise phase 1 in the real-Supervisor Docker developer environment. The simulated dishwasher end-to-end execution specification remains phase-2 acceptance work.
 

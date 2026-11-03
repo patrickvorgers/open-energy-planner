@@ -1,0 +1,65 @@
+name: Documentation and developer pages
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', 'design/**', 'README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'src/open_energy_planner/web/public/fonts/**', 'src/open_energy_planner/web/public/icons/app.svg', 'tests/frontend/**', 'Dockerfile.ui-test', '.github/workflows/pages.yaml']
+  pull_request:
+    paths: ['docs/**', 'design/**', 'README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'src/open_energy_planner/web/public/fonts/**', 'src/open_energy_planner/web/public/icons/app.svg', 'tests/frontend/**', 'Dockerfile.ui-test', '.github/workflows/pages.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.event_name == 'pull_request' || vars.DEVELOPER_PAGES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Build and validate the public documentation
+        run: |
+          python -m pip install -r docs/site/requirements.txt
+          python -m unittest discover -s docs/site -p test_site.py -v
+          python -m mkdocs build --strict --config-file docs/site/mkdocs.yml --site-dir "$PWD/_site"
+      - name: Test desktop and mobile entry flow
+        run: |
+          mkdir -p results/ci
+          docker compose --profile test build ui-tests
+          docker compose run --rm --volume "$PWD/_site:/workspace/_site:ro" ui-tests -m pytest tests/frontend/browser/test_provisioning_start.py tests/frontend/browser/test_documentation_site.py -q --junitxml=results/ci/pages.xml
+      - name: Retain site browser evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pages-browser-evidence
+          path: |
+            results/ci/pages.xml
+            results/ci/documentation-home-*.png
+            results/ci/developer-start-*.png
+      - name: Disable Jekyll processing
+        run: |
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          path: _site
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.publish.outputs.page_url }}
+    concurrency:
+      group: developer-pages
+      cancel-in-progress: false
+    steps:
+      - id: publish
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

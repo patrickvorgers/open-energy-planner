@@ -1,0 +1,54 @@
+site_name: Open Energy Planner
+site_description: Understand your energy. Make your first local plan.
+site_url: https://patrickvorgers.github.io/open-energy-planner/
+docs_dir: ..
+site_dir: ../../.local/documentation/open-energy-planner
+dev_addr: 127.0.0.1:18766
+use_directory_urls: true
+theme:
+  name: null
+  custom_dir: theme
+  static_templates: [404.html]
+plugins:
+  - search:
+      lang: en
+hooks: [hooks.py]
+markdown_extensions:
+  - toc:
+      permalink: true
+  - tables
+  - fenced_code
+  - admonition
+validation:
+  nav:
+    omitted_files: ignore
+  links:
+    not_found: warn
+    anchors: warn
+nav:
+  - Start here: docs/index.md
+  - Use OEP:
+      - Before you start: docs/users/before-you-start.md
+      - Try your first plan: docs/users/first-plan.md
+      - Connect Home Assistant: docs/users/home-assistant.md
+      - Read your plan: docs/users/read-your-plan.md
+      - Troubleshooting: docs/users/troubleshooting.md
+  - Explore the details:
+      - Installation: docs/development/INSTALLATION-PLANNING.md
+      - Contract prices: docs/development/CONTRACT-PRICES.md
+      - Solar forecasts: docs/development/SOLAR-FORECASTING.md
+      - Household demand: docs/development/DEMAND-FORECASTING.md
+      - Appliances: docs/development/SHIFTABLE-APPLIANCES.md
+      - EV charging: docs/development/EV-CHARGING.md
+      - Thermal storage: docs/development/THERMAL-STORAGE.md
+      - Savings: docs/development/SAVINGS.md
+      - Forecast quality: docs/development/FORECAST-QUALITY.md
+  - Develop with OEP:
+      - Dev Container provisioning: provisioning/index.html
+      - Development guide: docs/development/README.md
+      - Architecture: design/TECHNICAL-DESIGN.md
+      - Release boundaries: design/FIRST-RELEASE-SCOPE.md
+      - Supervisor environment: docs/development/DEVELOPER-ENVIRONMENT.md
+      - Tests and CI: docs/development/CI-STAGES.md
+      - Contributing: CONTRIBUTING.md
+      - Documentation site: docs/development/DOCUMENTATION-SITE.md

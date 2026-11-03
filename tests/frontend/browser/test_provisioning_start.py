@@ -12,7 +12,7 @@ import pytest
 @pytest.fixture(scope="module")
 def site():
     """Serve the developer entry page on isolated loopback HTTP and shut down its thread after tests."""
-    directory = Path(__file__).resolve().parents[3] / "docs/developer"
+    directory = Path(__file__).resolve().parents[3] / "docs/site/provisioning"
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=directory)
     )
