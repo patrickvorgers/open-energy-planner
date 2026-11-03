@@ -240,7 +240,7 @@ def test_focused_product_reuse_rejects_missing_or_wider_evidence(
         )
     elif fault == "other_tree":
         evidence.quality["steps"][2]["name"] = (
-            "Selected CI source tree: " + "5" * 40 + " (selected:browser,ci)"
+            "Selected CI source tree: " + "5" * 40 + f" ({evidence.selected_profile})"
         )
     elif fault == "completion_skipped":
         evidence.quality["steps"][1]["conclusion"] = "skipped"
