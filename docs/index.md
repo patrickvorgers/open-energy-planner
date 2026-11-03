@@ -2,7 +2,7 @@
 
 Learn how Open Energy Planner turns your Home Assistant energy data into a local, checked plan. Start with a safe demo, then explore your own installation.
 
-[Try your first plan](users/first-plan.md)
+[Try your first plan](users/first-plan.md){ .primary }
 
 OEP is a development preview. The repository is public. Public HACS installation and a complete product release are not available yet.
 

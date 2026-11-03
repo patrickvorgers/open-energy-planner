@@ -1,33 +1,12 @@
 """Browser validation of the developer entry point without launching VS Code."""
 
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from threading import Thread
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 
-@pytest.fixture(scope="module")
-def site():
-    """Serve the developer entry page on isolated loopback HTTP and shut down its thread after tests."""
-    directory = Path(__file__).resolve().parents[3] / "docs/site/provisioning"
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=directory)
-    )
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
-
-
 @pytest.fixture(params=[{"width": 1280, "height": 900}, {"width": 390, "height": 844}])
-def page(site, request, browser):
+def page(documentation_url, request, browser):
     """Open the module-scoped static site in a fresh context of the shared browser.
 
     Use the requested desktop/mobile viewport and touch setting, wait for the
@@ -37,7 +16,7 @@ def page(site, request, browser):
         viewport=request.param, has_touch=request.param["width"] < 500
     ) as context:
         page = context.new_page()
-        page.goto(site)
+        page.goto(documentation_url + "provisioning/")
         page.locator("#launch[aria-disabled=false]").wait_for()
         yield page
 

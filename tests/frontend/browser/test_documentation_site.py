@@ -1,34 +1,7 @@
 """Exercise the compiled public wiki beneath the actual GitHub Pages project prefix."""
 
-import shutil
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from threading import Thread
-
 import pytest
 from playwright.sync_api import expect
-
-
-@pytest.fixture(scope="module")
-def documentation_url():
-    """Serve only the prebuilt publication artifact at its production project prefix."""
-    artifact = Path("_site").resolve()
-    assert (artifact / "index.html").is_file(), "Build docs/site/mkdocs.yml before browser tests"
-    with TemporaryDirectory(dir="results/ci") as directory:
-        shutil.copytree(artifact, Path(directory) / "open-energy-planner")
-        server = ThreadingHTTPServer(
-            ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=directory)
-        )
-        thread = Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            yield f"http://127.0.0.1:{server.server_port}/open-energy-planner/"
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join()
 
 
 @pytest.fixture(params=[1280, 768, 390])
@@ -90,3 +63,50 @@ def test_articles_remain_readable_without_javascript(documentation_url, browser)
             "link", name="Before you start", exact=True
         ).click()
         expect(page.get_by_role("heading", name="Before you start")).to_be_visible()
+
+
+def test_wiki_and_provisioning_share_the_oep_identity(documentation_page, documentation_url):
+    """Both deployed routes load the OEP fonts, palette, logo and keyboard-visible controls."""
+    page = documentation_page
+    expected = {
+        "background": "rgb(245, 251, 255)",
+        "ink": "rgb(25, 38, 63)",
+        "action": "rgb(0, 109, 166)",
+        "bodyFont": "Outfit",
+        "headingFont": "Space Grotesk",
+        "fieldBorder": "rgb(84, 101, 122)",
+    }
+    for route, action in (("docs/", ".search-form button"), ("provisioning/", "#launch")):
+        page.goto(documentation_url + route)
+        page.mouse.move(0, 0)
+        page.evaluate("document.fonts.ready")
+        appearance = page.evaluate(
+            """action => ({
+                background: getComputedStyle(document.documentElement).backgroundColor,
+                ink: getComputedStyle(document.body).color,
+                fieldBorder: getComputedStyle(document.querySelector('input')).borderTopColor,
+                action: getComputedStyle(document.querySelector(action)).backgroundColor,
+                bodyFont: getComputedStyle(document.body).fontFamily.split(',')[0].replaceAll('"', ''),
+                headingFont: getComputedStyle(document.querySelector('h1')).fontFamily.split(',')[0].replaceAll('"', '')
+            })""",
+            action,
+        )
+        assert appearance == expected
+        assert page.evaluate("document.fonts.check('17px Outfit')")
+        assert page.evaluate("document.fonts.check('32px \"Space Grotesk\"')")
+        logo = page.locator(".site-brand img")
+        expect(logo).to_have_js_property("complete", True)
+        assert logo.evaluate("image => image.naturalWidth > 0")
+        assert logo.evaluate("image => image.currentSrc") == documentation_url + "assets/app.svg"
+    launch = page.get_by_role("link", name="Clone in VS Code", exact=True)
+    expect(launch).to_have_attribute("aria-disabled", "false")
+    assert (
+        launch.bounding_box()["y"] + launch.bounding_box()["height"] <= page.viewport_size["height"]
+    )
+    page.get_by_label("GitHub repository or branch URL").press("Tab")
+    expect(launch).to_be_focused()
+    expect(launch).to_have_css("outline-width", "3px")
+    page.screenshot(
+        path=f"results/ci/provisioning-shared-style-{page.viewport_size['width']}.png",
+        full_page=True,
+    )

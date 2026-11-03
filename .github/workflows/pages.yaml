@@ -40,6 +40,7 @@ jobs:
             results/ci/pages.xml
             results/ci/documentation-home-*.png
             results/ci/developer-start-*.png
+            results/ci/provisioning-shared-style-*.png
       - name: Disable Jekyll processing
         run: |
           touch _site/.nojekyll

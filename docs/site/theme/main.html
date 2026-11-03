@@ -6,6 +6,7 @@
   <meta name="description" content="{{ config.site_description }}">
   <title>{{ page.title }} | {{ config.site_name }}</title>
   <link rel="icon" href="{{ 'assets/app.svg' | url }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ 'docs/assets/courtyard.css' | url }}">
   <link rel="stylesheet" href="{{ 'docs/assets/documentation.css' | url }}">
   <script src="{{ 'docs/assets/documentation.js' | url }}" defer data-root="{{ '.' | url }}"></script>
 </head>
@@ -16,7 +17,7 @@
     <button id="menu-toggle" aria-expanded="false" aria-controls="site-navigation" hidden>Menu</button>
   </header>
   <aside class="sidebar" id="site-navigation">
-    <a class="brand" href="{{ 'docs/' | url }}"><img src="{{ 'assets/app.svg' | url }}" alt="" width="42" height="42"><span>Open Energy<br><strong>Planner</strong></span></a>
+    <a class="brand site-brand" href="{{ 'docs/' | url }}"><img src="{{ 'assets/app.svg' | url }}" alt="" width="42" height="42"><span>Open Energy<br><strong>Planner</strong></span></a>
     <p class="guide-label">Your guide to local energy</p>
     <form class="search-form" role="search">
       <label for="search-query">Search the guide</label>

@@ -36,6 +36,13 @@ readable. Search itself needs JavaScript and browser worker support.
 
 ## Maintain one source
 
+`docs/assets/courtyard.css` owns the shared Courtyard site palette, local Outfit and Space Grotesk
+font loading, logo presentation, buttons, fields and focus states. Both the wiki
+template and provisioning page load it. Reuse the existing app logo and font files
+through the site build. Keep reading/navigation layout in `documentation.css` and
+the installation-entry layout in `docs/site/provisioning/style.css`. Do not copy
+the shared brand definitions into those page styles or load the app's behavior.
+
 Update the user route when a feature changes setup, visible names, defaults,
 supported platforms, everyday behavior, limitations or recovery. Update the
 responsible detailed guide when its contracts change. Do not copy a detailed
