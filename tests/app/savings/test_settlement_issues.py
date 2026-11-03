@@ -29,7 +29,15 @@ PRIVATE_EVIDENCE = (
 
 
 @pytest.mark.parametrize(
-    "fault", ["plan_timestamp", "price_timestamp", "pending", "missing_prices"]
+    "fault",
+    [
+        "plan_timestamp",
+        "price_timestamp",
+        "pending",
+        "missing_prices",
+        "private_contract_reason",
+        "private_continuity_reason",
+    ],
 )
 def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and_logs(
     fault, tmp_path, monkeypatch, caplog
@@ -78,11 +86,18 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
         if fault == "price_timestamp":
             connection.execute(PUBLISHED_PRICES.update().values(end=PRIVATE_EVIDENCE))
     store.put_frames((frame(),), {"bindings": bindings(), "seeds": [], "location": None})
-    if fault == "pending":
+    if fault in {"pending", "private_contract_reason", "private_continuity_reason"}:
 
         def await_private_evidence(_runtime, *_arguments):
-            """Model unrecognized pending evidence text without declaring it safe for public status."""
-            raise PendingSettlement(PRIVATE_EVIDENCE)
+            """Raise unrecognized pending or validation text without declaring retained values public."""
+            if fault == "pending":
+                raise PendingSettlement(PRIVATE_EVIDENCE)
+            reason = (
+                "Contract coverage is missing"
+                if fault == "private_contract_reason"
+                else "Reference continuity requires the missing interval first"
+            )
+            raise ValueError(reason + ": " + PRIVATE_EVIDENCE)
 
         monkeypatch.setattr(HistoricalBonuses, "prepare", await_private_evidence)
     runtime = SavingsRuntime(store, documents, repository)
@@ -121,7 +136,15 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
             assert PRIVATE_EVIDENCE not in processed.issue
             assert "SECRET_PASSWORD" not in processed.issue
             assert "SECRET_TOKEN" not in processed.issue
-            assert processed.attention is (fault in {"plan_timestamp", "price_timestamp"})
+            assert processed.attention is (
+                fault
+                in {
+                    "plan_timestamp",
+                    "price_timestamp",
+                    "private_contract_reason",
+                    "private_continuity_reason",
+                }
+            )
             if fault == "missing_prices":
                 assert processed.issue == "Published price coverage is missing"
             elif fault == "pending":

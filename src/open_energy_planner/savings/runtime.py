@@ -28,7 +28,7 @@ SETTLEMENT_RECORDER_DELAY = timedelta(minutes=10)
 MAX_EVALUATION_VERSIONS = 20
 SHA256_HEX_LENGTH = 64
 
-# Pending evidence has public guidance. Other caught exceptions may contain stored or driver values.
+# Only fixed owned guidance is public. Other caught exceptions may contain stored or driver values.
 PENDING_SETTLEMENT_MESSAGES = (
     "A reset inside the bonus anchor interval prevents exact reconstruction",
     "Confirmed bonus meter disagrees with its historical boundary",
@@ -54,14 +54,23 @@ PENDING_SETTLEMENT_MESSAGES = (
     "Retained forecast cannot bridge the reference metering delay",
     "Validated physical bonus endpoint is unavailable",
 )
+SETTLEMENT_VALIDATION_MESSAGES = (
+    "Contract coverage is missing",
+    "Reference continuity requires the missing interval first",
+)
 
 
 def settlement_issue(error):
     """Project safe evidence guidance without copying retained values or arbitrary exception text."""
+    messages = (
+        PENDING_SETTLEMENT_MESSAGES
+        if isinstance(error, PendingSettlement)
+        else SETTLEMENT_VALIDATION_MESSAGES
+    )
+    for message in messages:
+        if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] == message:
+            return message
     if isinstance(error, PendingSettlement):
-        for message in PENDING_SETTLEMENT_MESSAGES:
-            if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] == message:
-                return message
         return (
             "Settlement is waiting for complete validated evidence. "
             "Existing successful results are retained"
