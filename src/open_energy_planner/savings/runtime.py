@@ -28,6 +28,49 @@ SETTLEMENT_RECORDER_DELAY = timedelta(minutes=10)
 MAX_EVALUATION_VERSIONS = 20
 SHA256_HEX_LENGTH = 64
 
+# Pending evidence has public guidance. Other caught exceptions may contain stored or driver values.
+PENDING_SETTLEMENT_MESSAGES = (
+    "A reset inside the bonus anchor interval prevents exact reconstruction",
+    "Confirmed bonus meter disagrees with its historical boundary",
+    "Confirmed bonus meter is outside its historical interval",
+    "Continuous reference awaits recent metering. No SoC reset was performed",
+    "Historical bonus anchor does not match the export meters or period",
+    "Historical bonus baseline awaits captured export evidence",
+    "Historical bonus baseline awaits completed hourly statistics",
+    "Historical bonus baseline is being read from Home Assistant",
+    "Historical bonus counter archive is unreadable",
+    "Historical bonus export evidence has a gap or changed meters",
+    "Historical bonus history is incomplete or invalid",
+    "Historical bonus history unavailable: history_unavailable",
+    "Historical bonus history unavailable: recorder_unavailable",
+    "Historical bonus history unavailable: unsupported_statistics",
+    "Historical bonus period does not start on a whole UTC hour. Confirm a manual baseline",
+    "Historical exports exceed the confirmed used bonus volume",
+    "No original installation plan covers this interval",
+    "Published price coverage is missing",
+    "Published prices changed during settlement. Retrying",
+    "Reference awaits metering across the installation change",
+    "Reference forecast context is missing",
+    "Retained forecast cannot bridge the reference metering delay",
+    "Validated physical bonus endpoint is unavailable",
+)
+
+
+def settlement_issue(error):
+    """Project safe evidence guidance without copying retained values or arbitrary exception text."""
+    if isinstance(error, PendingSettlement):
+        for message in PENDING_SETTLEMENT_MESSAGES:
+            if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] == message:
+                return message
+        return (
+            "Settlement is waiting for complete validated evidence. "
+            "Existing successful results are retained."
+        )
+    return (
+        "Retained settlement evidence is invalid. Check recorded meter data and published prices. "
+        "Existing successful results are retained."
+    )
+
 
 def version(value):
     """Hash finite detached settlement inputs without connection or provider details."""
@@ -236,7 +279,7 @@ class SavingsRuntime:
                 state = advance(physical_context(plan), frame, bindings, state)["state"]
                 self.documents.write(name, state)
             except (ValueError, KeyError, TypeError) as error:
-                self.physical_issue = str(error)
+                self.physical_issue = settlement_issue(error)
                 return
         self.physical_issue = None
 
@@ -352,7 +395,7 @@ class SavingsRuntime:
                 state = continuation
                 self.issue = None
             except (ValueError, KeyError, TypeError) as error:
-                self.issue = str(error)
+                self.issue = settlement_issue(error)
                 self.attention = not isinstance(error, PendingSettlement)
                 return
         head["price_cursor"] = price_cursor

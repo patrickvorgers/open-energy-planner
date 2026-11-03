@@ -22,9 +22,73 @@ from open_energy_planner.optimization.calculation.consumption import (
 from .installation.model import InstallationProblem
 from .installation.validation import DEFAULT_VALIDATION_TOLERANCE, validate
 from .optimization.domain import SolveResult, Status, Strategy
+from .runtime.diagnostics.logging import failure_trace, owned_validation_message
 from .runtime.diagnostics.planning_notifications import explain_planning_problem
 
 _LOGGER = logging.getLogger(__name__)
+
+# Fixed reasons from independent installation/EV/thermal validation and command mapping.
+VALIDATION_MESSAGES = (
+    "AC conservation",
+    "Appliance start identities",
+    "Appliance time window",
+    "Aware appliance start",
+    "Battery identities",
+    "Battery reserve",
+    "Battery terminal bounds",
+    "Bonus result shape",
+    "Bonus settlement",
+    "Clipping requires saturated AC output",
+    "Clipping requires saturated storage acceptance",
+    "Committed appliance disappeared",
+    "Committed appliance start changed",
+    "Control group command changed",
+    "Converter bounds",
+    "DC conservation",
+    "Disabled PV produces",
+    "EV AC energy",
+    "EV command group",
+    "EV conversion energy",
+    "EV finite nonnegative charge",
+    "EV fixed power",
+    "EV identities",
+    "EV interrupted command group",
+    "EV minimum power",
+    "EV multiple partial stops",
+    "EV partial stop",
+    "EV power limit",
+    "EV target overcharge",
+    "EV time window",
+    "Financial totals",
+    "Finite battery energy",
+    "Fractional device command",
+    "Grid bound",
+    "Grid direction",
+    "Installation plan shape",
+    "Inverter identities",
+    "Missing bonus evidence",
+    "PV and battery command identities collide",
+    "PV available energy",
+    "PV control permission",
+    "PV identities",
+    "Stored energy conservation",
+    "Thermal AC energy",
+    "Thermal command identity collides with another device",
+    "Thermal finite physical evidence",
+    "Thermal fixed heater power",
+    "Thermal heat balance",
+    "Thermal heating before readiness",
+    "Thermal heating before state admission",
+    "Thermal identities",
+    "Thermal physical bounds",
+    "Thermal physical shortfall",
+    "Thermal quarter control",
+    "Thermal refined control interval",
+    "Thermal unmet draw before state admission",
+    "Thermal unmet draw requires exhausted heat",
+    "Undeclared PV clipping",
+    "Whole-watt command",
+)
 
 
 def encode(value):
@@ -231,11 +295,17 @@ class PlanningService:
                     "terminal_method": "initial_stock_grid_replacement",
                 }
             return PlanningOutcome(document, "validated")
-        except ValueError:
+        except ValueError as error:
             _LOGGER.warning(
-                "Calculated plan failed validation. No partial plan will be published. Check the input and solver diagnostics."
+                "Calculated plan failed validation (%s). No partial plan will be published. Check the input and solver diagnostics.",
+                owned_validation_message(error, VALIDATION_MESSAGES)
+                or "unrecognized candidate data",
             )
-            _LOGGER.debug("Rejected planning candidate diagnostics", exc_info=True)
+            _LOGGER.debug(
+                "Rejected planning candidate diagnostics (%s).\n%s",
+                type(error).__name__,
+                failure_trace(error),
+            )
             return PlanningOutcome(None, "candidate_rejected")
         except (TypeError, RuntimeError, IndexError, KeyError):
             _LOGGER.exception(
@@ -460,8 +530,11 @@ class PlanningCoordinator:
                     self._set_status("failed", outcome.reason or "no_usable_plan")
             except PublicationSuperseded as error:
                 _LOGGER.info(
-                    "Plan discarded before publication (%s). No partial plan was activated. Rechecking the latest inputs.",
+                    "Plan discarded before publication (%s). No partial plan was activated. %s",
                     str(error) or "inputs_changed",
+                    "Rechecking the latest inputs."
+                    if snapshot is not self.latest and self.latest is not None
+                    else "Waiting for the next valid input refresh.",
                 )
                 if snapshot is self.latest:
                     self.invalidate(str(error) or "publication_inputs_expired")

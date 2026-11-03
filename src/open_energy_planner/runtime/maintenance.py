@@ -4,7 +4,6 @@ import asyncio
 import hmac
 import logging
 import os
-import traceback
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -16,6 +15,7 @@ from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.frontend.assets import is_public
 from open_energy_planner.frontend.assets import register as register_assets
 from open_energy_planner.ingress import INGRESS_PEER, prefix
+from open_energy_planner.runtime.diagnostics.logging import failure_trace
 from open_energy_planner.storage.adapters.lifecycle.files import BootstrapDurabilityError
 from open_energy_planner.storage.adapters.lifecycle.maintenance import (
     JOURNAL_FILE,
@@ -60,14 +60,6 @@ ACTIVE_PHASES = frozenset(
         MigrationPhase.RESTARTING,
     }
 )
-
-
-def failure_trace(error):
-    """Retain stack locations for diagnosis without source lines, locals or driver exception text."""
-    return "\n".join(
-        f"{frame.filename}:{frame.lineno}: {frame.name}"
-        for frame in traceback.extract_tb(error.__traceback__)
-    )
 
 
 class MaintenanceHost:

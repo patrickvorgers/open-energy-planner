@@ -1,6 +1,7 @@
 """Verify timestamped application lifecycle evidence and actual graceful process termination."""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -23,7 +24,46 @@ from open_energy_planner.runtime.diagnostics.logging import (
     BackgroundLog,
     UTCFormatter,
     register_lifecycle,
+    request_error_message,
 )
+
+
+@pytest.mark.parametrize("payload", ["Safe rejection. SECRET", ["SECRET"], {"token": "SECRET"}])
+def test_request_failure_requires_an_exact_owned_message(payload, caplog):
+    """Similar text and non-string exception arguments never become public or logged payloads."""
+    logger = logging.getLogger("open_energy_planner.request_test")
+    try:
+        raise ValueError(payload)
+    except ValueError as error:
+        result = request_error_message(
+            error,
+            logger=logger,
+            operation="Settings save",
+            safe_messages=("Safe rejection.",),
+            fallback="Refresh settings before retrying.",
+        )
+    assert result == "Refresh settings before retrying."
+    assert "SECRET" not in caplog.text
+    assert "ValueError" in caplog.text
+    assert "test_request_failure_requires_an_exact_owned_message" in caplog.text
+
+
+def test_malformed_json_is_not_logged_as_an_application_defect(caplog):
+    """Invalid user JSON gets owned advice without noisy ERROR logs or echoing private input."""
+    logger = logging.getLogger("open_energy_planner.request_test")
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        try:
+            json.loads("SECRET invalid JSON")
+        except json.JSONDecodeError as error:
+            result = request_error_message(
+                error,
+                logger=logger,
+                operation="Settings save",
+                fallback="Check the settings request.",
+            )
+    assert result == "Check the settings request."
+    assert [record.levelno for record in caplog.records] == [logging.DEBUG]
+    assert "SECRET" not in caplog.text
 
 
 def test_lifecycle_messages_bracket_resources_and_graceful_stop(caplog):

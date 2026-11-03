@@ -1,14 +1,55 @@
 """Timestamp container diagnostics and report application lifecycle without storing another log archive."""
 
+import json
 import logging
 import os
 import sys
 import time
+import traceback
 from copy import copy
 
 from aiohttp import ClientError, ClientResponseError
 
 from open_energy_planner.core.units import SECONDS_PER_MINUTE
+
+
+def failure_trace(error):
+    """Retain the full stack locations without source lines, locals or private exception values."""
+    return "\n".join(
+        f"{frame.filename}:{frame.lineno}: {frame.name}"
+        for frame in traceback.extract_tb(error.__traceback__)
+    )
+
+
+def owned_validation_message(error, messages):
+    """Return a canonical reviewed literal only when the exception has exactly that sole argument."""
+    for message in messages:
+        if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] == message:
+            return message
+    return None
+
+
+def request_error_message(error, *, logger, operation, safe_messages=(), fallback):
+    """Return only owned validation text and diagnose unmatched failures without disclosing values.
+
+    Each request owner explicitly admits its fixed public validation messages.
+    Return the canonical message, never exception text. A broad exception catch
+    can also include storage/driver defects, so unmatched messages stay private.
+    """
+    message = owned_validation_message(error, safe_messages)
+    if message is not None:
+        logger.debug("%s rejected: %s", operation, message)
+        return message
+    if isinstance(error, json.JSONDecodeError):
+        logger.debug("%s rejected: Invalid JSON", operation)
+        return fallback
+    logger.error(
+        "%s failed (%s). Returning the public recovery explanation.\n%s",
+        operation,
+        type(error).__name__,
+        failure_trace(error),
+    )
+    return fallback
 
 
 def failure_reason(error):

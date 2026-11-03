@@ -18,6 +18,10 @@ INTEGRATION_DISCOVERY_RETRY_SECONDS = 30
 LOG = logging.getLogger(__name__)
 
 
+class SupervisorAuthenticationRejected(ValueError):
+    """The Supervisor explicitly rejected the supplied app authentication token."""
+
+
 async def connect(pairing, token, address, port, pin, *, ui_url=None):
     """Retry the custom integration bootstrap through Supervisor, retaining no user HA token.
 
@@ -69,8 +73,11 @@ async def connect(pairing, token, address, port, pin, *, ui_url=None):
                     if (await websocket.receive_json())["type"] != "auth_required":
                         raise ValueError("Unexpected Supervisor authentication handshake")
                     await websocket.send_json({"type": "auth", "access_token": token})
-                    if (await websocket.receive_json())["type"] != "auth_ok":
-                        raise ValueError("Supervisor authentication rejected")
+                    authentication = await websocket.receive_json()
+                    if authentication["type"] == "auth_invalid":
+                        raise SupervisorAuthenticationRejected
+                    if authentication["type"] != "auth_ok":
+                        raise ValueError("Unexpected Supervisor authentication result")
                     number = 0
                     while True:
                         number += 1
@@ -123,6 +130,13 @@ async def connect(pairing, token, address, port, pin, *, ui_url=None):
                             )
                             connected_once, last_issue = True, None
                         await asyncio.sleep(INTEGRATION_DISCOVERY_RETRY_SECONDS)
+                await asyncio.sleep(PAIRING_RETRY_SECONDS)
+            except SupervisorAuthenticationRejected:
+                report_problem(
+                    "Supervisor authentication rejected",
+                    "Automatic pairing is pending. Check the app's Supervisor token and permissions, then restart the app if they changed.",
+                    boundary="Supervisor authentication unavailable",
+                )
                 await asyncio.sleep(PAIRING_RETRY_SECONDS)
             except (ClientError, TimeoutError, ValueError, KeyError, TypeError) as error:
                 report_problem(

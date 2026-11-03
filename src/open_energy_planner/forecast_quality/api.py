@@ -10,7 +10,7 @@ from aiohttp import web
 from open_energy_planner.forecast_quality.bindings import bindings
 from open_energy_planner.forecast_quality.history import HistoryArchive
 from open_energy_planner.home_assistant.names import display_plan, energy_source_names, source_names
-from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, request_error_message
 
 from ..storage.adapters.documents import SqlDocuments
 from ..storage.writes import complete_write
@@ -23,6 +23,33 @@ from .daily import (
     forecast_context,
 )
 from .evidence import evidence
+
+# Only these reviewed owned literals may cross the public error boundary.
+PUBLIC_VALIDATION_MESSAGES = (
+    "Expected bounded immutable hourly history",
+    "Expected forecast-history object",
+    "Expected normalized energy hours",
+    "Export statistics decrease. Confirm a manual baseline",
+    "Forecast history request changed",
+    "Forecast history source or range changed",
+    "Forecast measurement binding changed",
+    "History boundary is not a completed hour",
+    "History components do not match aggregate meter",
+    "History must use UTC hour boundaries",
+    "History requires a sensor identity",
+    "Incomplete export history. Confirm a manual baseline",
+    "Invalid energy history value",
+    "Invalid export meter",
+    "Invalid history component",
+    "Invalid history components",
+    "Invalid history fields",
+    "Invalid history row",
+    "Invalid history size",
+    "Invalid history timestamp",
+    "Price timestamps require a timezone",
+    "Unordered or duplicate history",
+    "Unsupported history unit/request",
+)
 
 MAX_HISTORY_BODY_BYTES = 1024 * 1024
 
@@ -140,7 +167,15 @@ def register(app, plans, demand, solar, catalogue, lock):
                 if cancellation:
                     raise cancellation
         except (KeyError, TypeError, ValueError, OverflowError) as error:
-            raise web.HTTPBadRequest(text=str(error)) from None
+            raise web.HTTPBadRequest(
+                text=request_error_message(
+                    error,
+                    logger=logging.getLogger(__name__),
+                    operation="Forecast history",
+                    safe_messages=PUBLIC_VALIDATION_MESSAGES,
+                    fallback="Forecast history could not be accepted. Refresh the requested history and inspect application diagnostics.",
+                )
+            ) from None
         return web.json_response({"accepted": True})
 
     async def view(request):
