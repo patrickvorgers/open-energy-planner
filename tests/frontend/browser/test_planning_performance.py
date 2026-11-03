@@ -83,3 +83,62 @@ def test_daily_calculation_chart_dialog_and_day_navigation(app_page):
     page.get_by_role("button", name="View calculation at").first.click()
     expect(dialog.locator("#calculation-summary")).to_contain_text("could not be loaded")
     expect(dialog).not_to_contain_text("private details")
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_rejected_candidates_do_not_report_timeout_as_the_publication_cause(app_page):
+    """Rejected candidates retain their rejection outcome, while genuine no-candidate timeouts stay visible."""
+    page, url = app_page
+    discover(page, url)
+    response = page.request.get(
+        url + "/v1/planning-performance", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert response.status == 200
+    evidence = response.json()
+    reasons = ("candidate_rejected", "consumption_objective_rejected", "time_limit")
+    for row, reason in zip(evidence["calculations"], reasons, strict=True):
+        row.update(reason=reason, stop_reason="time_limit", plan_id=None)
+    details = {}
+    for row in evidence["calculations"]:
+        detail = page.request.get(
+            url + "/v1/planning-performance/" + row["id"],
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        assert detail.status == 200
+        details[row["id"]] = {**detail.json(), **row}
+
+    def respond(route):
+        """Supply explicit presentation evidence through the same daily and detail wire contracts."""
+        identity = route.request.url.rsplit("/", 1)[-1].split("?", 1)[0]
+        route.fulfill(json=details.get(identity, evidence))
+
+    page.route("**/v1/planning-performance**", respond)
+    page.goto(url + "/planning-performance")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    rows = page.locator(".performance-row")
+    expect(rows).to_have_count(3)
+    dialog = page.get_by_role("dialog")
+    for index in range(3):
+        row = rows.nth(index)
+        expect(row).to_contain_text("No plan published")
+        if index < 2:
+            expect(row).not_to_contain_text("Time budget reached")
+        else:
+            expect(row).to_contain_text("Time budget reached")
+        row.get_by_role("button", name="View calculation at").click()
+        summary = dialog.locator("#calculation-summary")
+        expect(summary).to_contain_text("No plan published")
+        if index < 2:
+            expect(summary).not_to_contain_text("Time budget reached")
+        else:
+            expect(summary).to_contain_text("Time budget reached")
+        if index == 0:
+            captures = Path("results/ci/planning-performance")
+            captures.mkdir(parents=True, exist_ok=True)
+            width = page.viewport_size["width"]
+            page.screenshot(path=str(captures / f"rejected-detail-{width}.png"), full_page=False)
+        page.get_by_role("button", name="Close", exact=True).click()
+        if index == 0:
+            page.evaluate("window.scrollTo({top: 0, left: 0, behavior: 'instant'})")
+            page.screenshot(path=str(captures / f"rejected-overview-{width}.png"), full_page=True)

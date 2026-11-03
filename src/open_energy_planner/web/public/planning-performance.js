@@ -20,6 +20,7 @@ async function api(path) {
 function outcome(row) {
  if (row.reason === "published") return row.stop_reason === "time_limit" ? "Plan available: Time budget reached" : "Plan available";
  if (row.reason.includes("changed") || row.reason.includes("expired") || row.reason.includes("unavailable")) return "Not published: Inputs changed or became unavailable";
+ if (row.reason === "candidate_rejected" || row.reason === "consumption_objective_rejected") return "No plan published";
  return row.stop_reason?.includes("time_limit") || row.stop_reason === "worker_timeout" ? "No plan published: Time budget reached" : "No plan published";
 }
 /** Native dialog preserves focus, Escape dismissal and background inertness. */
