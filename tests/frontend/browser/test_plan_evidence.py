@@ -9,6 +9,239 @@ from playwright.sync_api import expect
 from tests.frontend.browser.helpers import TOKEN
 
 
+@pytest.fixture
+def automatic_plan_overview(app_page):
+    """Serve immutable synthetic plan versions while controlling publication and browser time."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    original = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()["plans"][0]
+    comparison = page.request.get(
+        url + f"/v1/plans/{original['plan_id']}/comparison", headers=headers
+    ).json()
+    beginning = datetime.fromisoformat(
+        comparison["plan"]["input_snapshot"]["problem"]["intervals"][0]["start"]
+    )
+    older = {**original, "plan_id": "older-plan"}
+    newer = {**original, "plan_id": "newly-published-plan", "strategy": "minimize consumption"}
+    older_comparison = deepcopy(comparison)
+    older_comparison["plan"].update(plan_id=older["plan_id"], strategy="minimize consumption")
+    new_comparison = deepcopy(comparison)
+    new_comparison["plan"].update(plan_id=newer["plan_id"], strategy=newer["strategy"])
+    new_comparison["plan"]["input_snapshot"]["tariff_evidence"][0]["buy_price"] = 0.91
+    state = {
+        "page": page,
+        "beginning": beginning,
+        "plans": [original, older],
+        "newer": newer,
+        "comparisons": {
+            original["plan_id"]: comparison,
+            older["plan_id"]: older_comparison,
+            newer["plan_id"]: new_comparison,
+        },
+        "comparison_reads": [],
+        "failed_plans": set(),
+        "poll_reads": 0,
+        "hold_poll": False,
+        "held_polls": [],
+        "current_buy_price": 0.3,
+    }
+
+    def plan_listing(route):
+        """Expose a publication only when the controlled archive makes it available."""
+        if "limit=1" in route.request.url and "limit=20" not in route.request.url:
+            state["poll_reads"] += 1
+            if state["hold_poll"]:
+                state["held_polls"].append(route)
+                return
+            route.fulfill(json={"plans": state["plans"][:1], "next_before": None})
+        else:
+            route.fulfill(json={"plans": state["plans"], "next_before": None})
+
+    def plan_comparison(route):
+        """Count actual detail loads and allow a temporary failure of a newly published plan."""
+        plan_id = route.request.url.rsplit("/", 2)[1]
+        state["comparison_reads"].append(plan_id)
+        if plan_id in state["failed_plans"]:
+            route.fulfill(status=503, body="Temporary archive failure")
+        else:
+            route.fulfill(json=state["comparisons"][plan_id])
+
+    def current_prices(route):
+        """Use independent current prices so a publication must reload both kinds of chart data."""
+        intervals = deepcopy(comparison["plan"]["input_snapshot"]["tariff_evidence"])
+        for interval in intervals:
+            interval["buy_price"] = state["current_buy_price"]
+        route.fulfill(
+            json={"as_of": beginning.isoformat(), "currency": "EUR", "intervals": intervals}
+        )
+
+    page.clock.install(time=beginning)
+    page.clock.pause_at(beginning + timedelta(minutes=14))
+    page.add_init_script(
+        "window.forceHidden = false; Object.defineProperty(document, 'hidden', {get: () => window.forceHidden});"
+    )
+    page.route("**/v1/plans?**", plan_listing)
+    page.route("**/v1/plans/*/comparison", plan_comparison)
+    page.route("**/v1/prices/inputs", current_prices)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    page.wait_for_load_state("networkidle")
+    page.evaluate("window.initialPlanChart = Chart.getChart(document.getElementById('plan-chart'))")
+    return state
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_current_plan_moves_at_quarter_boundary_without_reloading_data(automatic_plan_overview):
+    """Exact quarter rollover clips elapsed advice while an unchanged plan keeps its chart and data."""
+    state = automatic_plan_overview
+    page, beginning = state["page"], state["beginning"]
+    original_reads = list(state["comparison_reads"])
+    page.clock.run_for(59999)
+    assert page.evaluate("window.initialPlanChart.scales.x.min") == beginning.timestamp() * 1000
+    page.clock.run_for(1)
+    expected_start = (beginning + timedelta(minutes=15)).timestamp() * 1000
+    assert (
+        page.evaluate("""() => ['plan-chart', 'reference-chart', 'self-consumption-chart',
+        'forecast-chart', 'price-chart', 'current-price-chart'].map(id =>
+        Chart.getChart(document.getElementById(id)).scales.x.min)""")
+        == [expected_start] * 6
+    )
+    assert state["comparison_reads"] == original_reads
+    assert page.evaluate(
+        "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
+    automatic_plan_overview,
+):
+    """A new archive identity replaces current chart values and keeps the chosen six-hour range."""
+    state = automatic_plan_overview
+    page = state["page"]
+    page.get_by_role("button", name="Next 6 hours", exact=True).click()
+    state["plans"].insert(0, state["newer"])
+    state["current_buy_price"] = 0.88
+    page.clock.run_for(15000)
+    expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
+    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    assert page.evaluate("""() => ['price-chart', 'current-price-chart'].map(id =>
+        Chart.getChart(document.getElementById(id)).data.datasets[1].data[0].y)""") == [0.91, 0.88]
+    assert (
+        page.evaluate("""() => {
+        const graph = Chart.getChart(document.getElementById('plan-chart'));
+        return graph.scales.x.max - graph.scales.x.min;
+    }""")
+        == 6 * 3600000
+    )
+    expect(page.get_by_role("button", name="Next 6 hours", exact=True)).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    page.screenshot(path=f"results/ci/planning-auto-refresh-{page.viewport_size['width']}.png")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_historical_selection_survives_publication_and_quarter_rollover(automatic_plan_overview):
+    """Historical chart data and its original time range remain selected while new advice arrives."""
+    state = automatic_plan_overview
+    page = state["page"]
+    page.locator("#plan-version").select_option("older-plan")
+    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    before = page.evaluate("""() => {
+        window.historicalChart = Chart.getChart(document.getElementById('plan-chart'));
+        return {start: window.historicalChart.scales.x.min,
+            data: window.historicalChart.data.datasets.map(dataset => dataset.data)};
+    }""")
+    original_reads = list(state["comparison_reads"])
+    state["plans"].insert(0, state["newer"])
+    page.clock.run_for(60000)
+    expect(page.locator("#plan-version option")).to_have_count(3)
+    expect(page.locator("#plan-version")).to_have_value("older-plan")
+    assert (
+        page.evaluate("""() => ({start: window.historicalChart.scales.x.min,
+        data: window.historicalChart.data.datasets.map(dataset => dataset.data)})""")
+        == before
+    )
+    assert state["comparison_reads"] == original_reads
+    assert page.evaluate(
+        "window.historicalChart === Chart.getChart(document.getElementById('plan-chart'))"
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_failed_new_plan_comparison_retries_without_another_publication(automatic_plan_overview):
+    """A transient detail failure retries the same newly listed plan and finally replaces its chart."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["plans"].insert(0, state["newer"])
+    state["failed_plans"].add("newly-published-plan")
+    page.clock.run_for(15000)
+    expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
+    expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
+    assert page.evaluate(
+        "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
+    )
+    state["failed_plans"].clear()
+    page.clock.run_for(15000)
+    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert state["comparison_reads"].count("newly-published-plan") == 2
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_hidden_page_resumes_once_and_slow_poll_keeps_user_selection(automatic_plan_overview):
+    """Hidden views pause polling and one slow resumed request cannot overwrite a later historical choice."""
+    state = automatic_plan_overview
+    page = state["page"]
+    page.evaluate("window.forceHidden = true")
+    page.clock.run_for(30000)
+    assert state["poll_reads"] == 0
+    state["plans"].insert(0, state["newer"])
+    state["hold_poll"] = True
+    with page.expect_request("**/v1/plans?limit=1"):
+        page.evaluate(
+            "window.forceHidden = false; document.dispatchEvent(new Event('visibilitychange'))"
+        )
+    page.clock.run_for(3000)
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    assert len(state["held_polls"]) == 1
+    assert state["poll_reads"] == 1
+    page.locator("#plan-version").select_option("older-plan")
+    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    reads = list(state["comparison_reads"])
+    state["held_polls"][0].fulfill(json={"plans": state["plans"][:1], "next_before": None})
+    expect(page.locator("#plan-version option")).to_have_count(3)
+    expect(page.locator("#plan-version")).to_have_value("older-plan")
+    assert state["comparison_reads"] == reads
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_cached_page_restore_restarts_one_poll_and_updates_the_time_window(automatic_plan_overview):
+    """Page exit stops timers and restoration immediately catches up without duplicate polling intervals."""
+    state = automatic_plan_overview
+    page = state["page"]
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}))")
+    page.clock.run_for(900000)
+    assert state["poll_reads"] == 0
+    assert (
+        page.evaluate("window.initialPlanChart.scales.x.min")
+        == state["beginning"].timestamp() * 1000
+    )
+    with page.expect_response("**/v1/plans?limit=1"):
+        page.evaluate(
+            "window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}))"
+        )
+    expected_start = (state["beginning"] + timedelta(minutes=15)).timestamp() * 1000
+    assert page.evaluate("window.initialPlanChart.scales.x.min") == expected_start
+    assert state["poll_reads"] == 1
+    with page.expect_response("**/v1/plans?limit=1"):
+        page.clock.run_for(15000)
+    assert state["poll_reads"] == 2
+
+
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize(
     "kinds",

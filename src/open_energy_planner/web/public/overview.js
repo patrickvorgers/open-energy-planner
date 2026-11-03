@@ -7,8 +7,11 @@ import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
 const CONNECTED_MESSAGE = "Connected: Historical views never change active commands.";
+const PLAN_REFRESH_MILLISECONDS = 15000;
+const PLAN_READ_TIMEOUT_MILLISECONDS = 5000;
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, periodRequest = 0;
+let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
 const evaluationVersions = new Map();
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
@@ -17,8 +20,8 @@ const valueText = (value, unit) => unit === "%" ? percentage(value, false) : uni
 const strategies = {"minimize cost": "Minimize cost", "minimize consumption": "Minimize consumption"};
 const statuses = {optimal: "Optimal", feasible: "Feasible"};
 /** Read authenticated app JSON. Never persist the standalone administration token. */
-async function api(path) {
-    const response = await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store"});
+async function api(path, signal) {
+    const response = await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store", signal});
     if (!response.ok) throw new Error(response.status === 401 ? "Enter the app administration token to continue." : `Cannot read this view (${response.status}).`);
     return response.json();
 }
@@ -37,6 +40,7 @@ const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad
 const INTERVAL_BAR_FILL = 0.9;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 const MILLISECONDS_PER_MINUTE = 60000;
+const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
 const MAX_TIME_AXIS_LABELS = 6;
 const FORECAST_PRICE_DASH = [2, 4];
 let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0;
@@ -211,8 +215,8 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
     applyRange();
 }
 /**
- * Set shared axes without changing frozen data: the latest covering plan starts
- * at the current quarter. Historical advice starts at its original containing quarter.
+ * Set shared axes without changing frozen data: the latest plan starts at the
+ * current quarter, including after its last interval. Historical advice starts at its original containing quarter.
  * Partial bars keep their actual timestamps. End after the selected hours or at the
  * original last endpoint for full horizon. All labels fall on quarter boundaries.
  * Savings and realization charts keep their independent date ranges.
@@ -220,18 +224,22 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
 function applyRange() {
     const first = inspectSteps[0]?.start, end = inspectSteps.at(-1)?.end;
     const now = Date.now();
-    const currentPlan = $("plan-version").selectedIndex === 0 && first <= now && now < end;
-    const start = first == null ? undefined : Math.floor((currentPlan ? now : first) / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
+    const currentQuarter = Math.floor(now / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
+    const currentPlan = $("plan-version").selectedIndex === 0 && first <= now;
+    const start = first == null ? undefined : currentPlan ? currentQuarter : Math.floor(first / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
     for (const [id, instance] of charts) {
         if (["savings-chart", "realization-chart"].includes(id)) continue;
         if (id === "current-price-chart") {
-            instance.options.scales.x.min = currentPriceWindow?.start;
-            instance.options.scales.x.max = planningHours && currentPriceWindow ? currentPriceWindow.start + planningHours * 3600000 : currentPriceWindow?.end;
+            const priceStart = currentPriceWindow ? Math.max(currentPriceWindow.start, currentQuarter) : undefined;
+            const priceEnd = currentPriceWindow ? Math.max(currentPriceWindow.end, priceStart + QUARTER_MILLISECONDS) : undefined;
+            instance.options.scales.x.min = priceStart;
+            instance.options.scales.x.max = planningHours && priceStart != null ? priceStart + planningHours * MILLISECONDS_PER_HOUR : priceEnd;
             instance.update(); continue;
         }
         const bars = instance.data.datasets.find((dataset) => dataset.type === "bar")?.data;
+        const fullEnd = end == null ? bars?.at(-1)?.end : Math.max(Math.ceil(end / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS, start + QUARTER_MILLISECONDS);
         instance.options.scales.x.min = start ?? bars?.[0]?.start;
-        instance.options.scales.x.max = planningHours && start != null ? start + planningHours * 3600000 : end == null ? bars?.at(-1)?.end : Math.ceil(end / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
+        instance.options.scales.x.max = planningHours && start != null ? start + planningHours * MILLISECONDS_PER_HOUR : fullEnd;
     }
     // Set all windows before synchronizing comparison axes from their joint visible data.
     for (const instance of charts.values()) instance.update();
@@ -445,6 +453,7 @@ async function showPlan() {
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
         $("overview-status").textContent = CONNECTED_MESSAGE;
+        renderedPlanId = id;
         return true;
     } catch (error) {
         if (request === selectionRequest) {
@@ -458,12 +467,34 @@ async function showPlan() {
 /** Page original plan identities without activating them. */
 async function plans(older = false) {
     const data = await api(`v1/plans?limit=20${older && cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`);
+    planRefreshEnabled = true;
     if (!older) $("plan-version").replaceChildren();
     for (const plan of data.plans) {
         const option = document.createElement("option"); option.value = plan.plan_id; option.textContent = `${when(plan.generated_at)}: ${strategies[plan.strategy] || "Unknown"}`; $("plan-version").append(option);
     }
     cursor = data.next_before; $("older-plans").hidden = !cursor;
     if (!older) return showPlan();
+}
+/** Follow completed publications while preserving a deliberately selected historical plan. */
+async function refreshLatestPlan() {
+    if (!planRefreshEnabled || planRefreshBusy || overviewLoads || document.hidden || location.hash === "#savings") return;
+    planRefreshBusy = true;
+    const selector = $("plan-version"), previousLatest = selector.options[0]?.value || "";
+    try {
+        const data = await api("v1/plans?limit=1", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), latest = data.plans[0];
+        if (!latest || overviewLoads || previousLatest !== (selector.options[0]?.value || "")) return;
+        const selected = selector.value, followingLatest = selected === previousLatest;
+        if (latest.plan_id !== previousLatest) {
+            [...selector.options].find(option => option.value === latest.plan_id)?.remove();
+            const option = document.createElement("option");
+            option.value = latest.plan_id;
+            option.textContent = `${when(latest.generated_at)}: ${strategies[latest.strategy] || "Unknown"}`;
+            selector.prepend(option);
+            selector.value = followingLatest ? latest.plan_id : selected;
+        }
+        if (followingLatest && renderedPlanId !== latest.plan_id) await Promise.all([showPlan(), currentPrices()]);
+    } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
+    finally { planRefreshBusy = false; }
 }
 /** Use local calendar boundaries as aware API instants. Absent coverage never becomes zero savings. */
 async function savings() {
@@ -572,11 +603,32 @@ async function currentPrices() {
 }
 /** Refresh independent views. Only the plan reader reports success, preserving newer selection errors. */
 async function load() {
+    overviewLoads++;
     try {
         await Promise.all([plans(), savings(), currentPrices()]);
     }
     catch (error) { $("overview-status").textContent = error.message; }
+    finally { overviewLoads--; }
 }
+let planRefreshTimer, quarterRefreshTimer;
+/** Advance live axes at UTC quarter boundaries, independently of solver completion. */
+function advancePlanningWindow() {
+    if (!document.hidden) applyRange();
+    quarterRefreshTimer = setTimeout(advancePlanningWindow, QUARTER_MILLISECONDS - Date.now() % QUARTER_MILLISECONDS);
+}
+/** Keep one publication poll and one aligned clock after a back-forward cache restore. */
+function startPlanRefresh() {
+    clearInterval(planRefreshTimer); clearTimeout(quarterRefreshTimer);
+    planRefreshTimer = setInterval(refreshLatestPlan, PLAN_REFRESH_MILLISECONDS);
+    quarterRefreshTimer = setTimeout(advancePlanningWindow, QUARTER_MILLISECONDS - Date.now() % QUARTER_MILLISECONDS);
+}
+startPlanRefresh();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { applyRange(); refreshLatestPlan(); } });
+window.addEventListener("pagehide", () => { clearInterval(planRefreshTimer); clearTimeout(quarterRefreshTimer); });
+window.addEventListener("pageshow", event => {
+    if (!event.persisted) return;
+    startPlanRefresh(); applyRange(); refreshLatestPlan();
+});
 $("overview-connect").addEventListener("submit", (event) => { event.preventDefault(); token = $("overview-token").value; $("overview-token").value = ""; load(); });
 $("plan-version").addEventListener("change", showPlan);
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
