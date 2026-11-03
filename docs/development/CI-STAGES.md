@@ -13,11 +13,10 @@ It installs the central development dependencies, Ruff and pytest, without
 building Docker images or installing app and HA dependencies. Trusted signature
 verification remains a separate automatic check.
 
-While the repository has fewer than 10 GitHub stars, manually start CodeRabbit
-with a PR comment containing `@coderabbitai review` after every new head. Do not
-request reviews for Dependabot PRs, which retain their documented exception.
-Verify actual completed current-head analysis. Do not assume automatic review,
-even after the star threshold is reached. Keep the PR in Draft while assessing
+Automatic and incremental CodeRabbit reviews are disabled. Positive label and
+description-keyword opt-ins are also empty because they could otherwise trigger
+reviews even with automatic review disabled. This policy applies to every star
+count and paid plan. Keep the PR in Draft while assessing
 findings and batching corrections. The trusted base workflow returns newly
 opened, reopened, revised or retargeted PRs to Draft. This includes PRs opened
 with GitHub's normal Ready option. Title and description edits do not reset
@@ -53,15 +52,124 @@ PR diff, not the default after each correction. Latest-head review and dispositi
 of every finding remain mandatory. Once candidate CI starts, keep that candidate
 frozen unless a new finding or failure requires a correction.
 
+## Follow the intended merge order
+
+Develop Drafts and run independent local Codex reviews in parallel. Agree on one
+merge queue before requesting final CodeRabbit reviews. Review availability is
+not a reason to review a later PR before its predecessor has merged.
+
+For a queue of PR A followed by PR B, finish A's review, required candidate CI,
+guarded merge and required main validation first. Then include that actual main
+in B, resolve conflicts and run Quick, affected regression tests and CodeQL on
+the updated head. Reassess material changes with an independent reviewer. Only
+then freeze B's head and base and request its final CodeRabbit review. Complete
+B's selected candidate CI before merging B. Repeat this sequence for the next PR.
+
+Do not request a second review while the first is running or push speculative
+base updates during a final review. If main advances before merge, synchronize
+and validate again. A review of an older head is not review evidence for the new
+head. The coordinator records the actual queue in PR discussions or the active
+coordination chat, not in maintained product documentation.
+
+The preflight verifies that the selected current main commit is an ancestor of
+the frozen head and rechecks the current base and head before emitting a command.
+It cannot prove the human queue order. The operator must still confirm that all
+preceding PRs have completed the required merge and main checks.
+
+## Prepare one final CodeRabbit review
+
+Keep every PR within **150 changed files**. All files count, including binary,
+removed and renamed files. Split a 151-file PR. Do not hide files with provider
+path filters to fit the limit.
+
+This is the repository's PR ceiling, not a guarantee that every provider plan
+processes 150 files. CodeRabbit documents 150 files for Essentials and 100–300
+for open-source repositories depending on popularity. Inspect the actual review's
+processed and excluded files against the PR inventory. Split smaller when the
+provider's applicable limit would leave a partial review.
+
+First obtain successful current-head Quick checks, GitHub Verified PR commits and
+CodeQL. Evaluate genuine findings and document any evidence-based disposition.
+Then use one independent local Codex context to review the Draft and record the
+reviewed SHA, evidence and finding dispositions in the PR. This is not Codex Cloud
+review and must not post `@codex review`. Cloud review remains optional and needs
+an explicit human request for that service and PR. Do not repeat independent
+review on every push. Batch corrections, run affected checks and reassess material
+scope changes before consuming another external review.
+
+After the preceding queued merge is complete, include and test the actual current
+main before freezing the final head and base. Run **Manual CodeRabbit review preflight** from
+`main` with the PR number, expected head/base and independent Codex review SHA.
+Affirm that the independent review and finding disposition are complete. The
+reviewed SHA must be the final head or an earlier commit in the complete PR
+history. Later correction commits are allowed. A rebase that removes that SHA
+requires a fresh valid independent review reference. The preflight uses only
+trusted main code and read-only metadata. It checks the file inventory, current
+Quick/signature/CodeQL results, resolved discussions, existing CodeRabbit activity
+and trusted same-head manual request markers.
+
+The successful job summary contains the manual comment to post after rechecking
+the frozen head and the shared queue:
+
+```text
+@coderabbitai review
+<!-- oep-coderabbit-head:<current-head-sha> -->
+```
+
+The summary does not request a review, reserve quota or durably lock a request.
+Two successful preflights can still lead two people to post the command. The
+workflow concurrency group serializes preflights, not provider review capacity.
+All chats must coordinate one queue and use actual provider availability, not a
+hardcoded hourly allowance. Keep this conservative procedure during paid months
+too. Never remove a request marker, push an empty commit or retry autonomously to
+evade the duplicate guard. A rate-limited request needs deliberate operator
+handling after the provider reports capacity again and the prerequisites are
+rechecked.
+
+For that deliberate recovery, inspect the actual provider result and current
+repository/account capacity or reset without making another review request.
+Confirm that the previous request did not run a substantive review. Recheck the
+exact current head and base, Quick/signature/CodeQL results, finding disposition
+and the absence of a running or completed substantive CodeRabbit review. Reuse
+the existing preflight summary and head marker, and consciously post the same
+manual command only when capacity is actually available. The normal preflight
+still refuses the existing marker. This is an explicit operator recovery outside
+that duplicate blocker, not a successful preflight rerun or an automatic retry.
+
+Native automatic, incremental, positive-label and description-keyword triggers
+are disabled. GitHub cannot prevent a person with access from directly posting a
+CodeRabbit command. The operator attestations are not machine proof of independent
+review quality or finding correctness. No preflight receipt is a merge credential.
+Candidate admission separately enforces the file limit and actual current-head
+check evidence. It requires a substantive CodeRabbit result with completed scope,
+workspace, analysis, feedback and publication phases. A green skipped or
+rate-limited provider check does not meet that requirement. Unknown provider
+output fails closed and requires investigation instead of weakening the gate.
+Completed phases alone do not prove substantive coverage of every changed file;
+the operator must also check the actual review scope and exclusions.
+
+Dependabot retains its documented CodeRabbit exception. Do not request manual
+CodeRabbit reviews for it. Its file limit, signatures, CodeQL, compatibility and
+required CI evidence still apply.
+
 ## Request candidate CI
+
+Ready for review starts candidate CI, not another CodeRabbit review. Native
+automatic review routes stay disabled, while the explicit manual command remains
+available. Admission reuses substantive review evidence for the exact same head,
+even if a later automatic metadata check is skipped. It reads the complete check
+history and still rejects later pending or failed reviews. A new head must obtain
+its own completed review before admission. A Ready transition must not be used to
+spend another review on an already reviewed, unchanged commit.
 
 First complete CodeRabbit review of the current head and address all findings,
 including comments outside the diff. Resolve evaluated discussions, including
 outdated threads. Then select **Ready for review**. That transition automatically
 requests one candidate run without a CI label. For this repository Ready means
 ready for final candidate validation, rather than the start of bot review.
-The candidate gate requires passing Quick checks, GitHub Verified PR commits and
-a successful completed CodeRabbit check from the actual GitHub Apps on that head.
+The candidate gate requires a complete changed-file inventory within the 150-file
+limit, passing Quick checks, GitHub Verified PR commits, CodeQL and a substantive
+completed CodeRabbit check from the actual GitHub Apps on that head.
 The established Dependabot review exception remains in effect. An API outage,
 missing evidence, pending review, wrong app or changed PR fails before image builds.
 The gate checks the current base and head before and after reading the evidence.
@@ -75,7 +183,8 @@ resolved comments are allowed. A completed current-head review is always require
 
 Keep the candidate frozen. A new commit cancels the obsolete candidate through
 the trusted readiness workflow, returns the PR to Draft and runs cheap
-checks again. Request CodeRabbit manually when required above. After completing corrections and current-head
+checks again. Follow the final-review procedure above rather than requesting
+CodeRabbit on every push. After completing corrections and current-head
 review, choose Ready again. An early Ready transition with missing evidence fails
 before image builds. Complete the missing work and make a fresh Ready transition.
 There is no polling workflow, periodic run, special disposition comment or

@@ -186,6 +186,7 @@ def test_ready_and_manual_retry_use_the_same_current_head_gate(action):
         "draft": False,
         "head": {"sha": "2" * 40},
         "base": {"sha": "1" * 40},
+        "changed_files": 3,
     }
     checks = [
         {
@@ -200,8 +201,23 @@ def test_ready_and_manual_retry_use_the_same_current_head_gate(action):
             (1, "Quick checks", 15368),
             (2, "GitHub Verified PR commits", 15368),
             (3, "CodeRabbit", 347564),
+            (4, "CodeQL", 57789),
         ]
     ]
+    checks[2]["output"] = {
+        "title": "Finished",
+        "summary": (
+            "Result: Success - Review completed\n\n"
+            "| Prepare review scope | Completed | 1s |\n"
+            "| Prepare repository workspace | Completed | 1s |\n"
+            "| Run analysis checks | Completed | 1s |\n"
+            "| Generate review feedback | Completed | 1s |\n"
+            "| Publish review results | Completed | 1s |\n"
+        ),
+    }
+    checks.append(
+        {**checks[2], "id": 5, "conclusion": "skipped", "output": {"title": "Review skipped"}}
+    )
     client = Evidence(current, checks)
     assert check(event, "owner/planner", client) == "2" * 40
     checks[2]["status"] = "in_progress"
