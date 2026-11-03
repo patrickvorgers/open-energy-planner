@@ -129,6 +129,11 @@ def preflight(repository, number, head, base, reviewed, client):
             raise VerificationError(
                 "Review preflight requires the selected open Draft against main"
             )
+        main_object = client.get(f"repos/{repository}/git/ref/heads/main").get("object")
+        if not isinstance(main_object, dict) or main_object.get("sha") != base:
+            raise VerificationError(
+                "Selected base is not the live main tip. Update the PR and retest"
+            )
         return current
 
     current = current_pr()

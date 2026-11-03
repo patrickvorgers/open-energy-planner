@@ -79,6 +79,9 @@ class Evidence:
         self.pr_reads = 0
         self.changed = None
         self.unresolved = False
+        self.main_ref = {"object": {"sha": BASE}}
+        self.main_reads = 0
+        self.changed_main_ref = None
         self.comparison = {"merge_base_commit": {"sha": BASE}, "status": "ahead"}
         self.calls = []
 
@@ -88,6 +91,11 @@ class Evidence:
         if path == f"repos/{REPOSITORY}/pulls/12":
             self.pr_reads += 1
             return deepcopy(self.changed if self.pr_reads > 1 and self.changed else self.current)
+        if path == f"repos/{REPOSITORY}/git/ref/heads/main":
+            self.main_reads += 1
+            if self.main_reads > 1 and self.changed_main_ref is not None:
+                return deepcopy(self.changed_main_ref)
+            return deepcopy(self.main_ref)
         if path == f"repos/{REPOSITORY}/compare/{BASE}...{HEAD}?per_page=1":
             return deepcopy(self.comparison)
         assert path.startswith(f"repos/{REPOSITORY}/commits/{HEAD}/check-runs?")
@@ -190,6 +198,27 @@ def test_current_main_must_be_included_before_final_review(comparison):
     with pytest.raises(VerificationError, match="current main"):
         run(client)
     assert not any("check-runs?" in path for _, path in client.calls)
+
+
+@pytest.mark.parametrize(
+    "main_ref", [{"object": {"sha": "4" * 40}}, {}, {"object": None}, {"object": {}}]
+)
+def test_stale_or_unproven_live_main_rejects_an_otherwise_included_base(main_ref):
+    """Matching PR metadata and ancestry cannot authorize review after main has moved."""
+    client = Evidence()
+    client.main_ref = main_ref
+    with pytest.raises(VerificationError, match="live main"):
+        run(client)
+    assert not any("/compare/" in path for _, path in client.calls)
+
+
+def test_main_moving_during_evidence_reads_rejects_unchanged_pr_metadata():
+    """A final live-ref read rejects a newer main even while the PR payload still reports the old base."""
+    client = Evidence()
+    client.changed_main_ref = {"object": {"sha": "4" * 40}}
+    with pytest.raises(VerificationError, match="live main"):
+        run(client)
+    assert client.pr_reads == client.main_reads == 2
 
 
 @pytest.mark.parametrize("count", [151, 0, -1, None, True, "3"])
