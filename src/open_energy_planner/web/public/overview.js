@@ -268,6 +268,42 @@ for (const button of document.querySelectorAll("[data-hours]")) button.addEventL
     applyRange();
 });
 view();
+/** Emphasize the existing incremental comparison without inventing a value or hiding a loss. */
+function renderSmartBenefit(value, currency, period = "Whole original plan. Expected, not measured.") {
+    const known = typeof value === "number" && Number.isFinite(value);
+    const zero = known && money(Math.abs(value)) === money(0);
+    const state = !known ? "unavailable" : zero ? "zero" : value > 0 ? "positive" : "negative";
+    $("smart-benefit-value").closest("section").dataset.state = state;
+    $("smart-benefit-label").textContent = state === "negative" ? "Extra expected cost from smart planning" : state === "zero" ? "No extra expected savings from smart planning" : "Extra expected savings from smart planning";
+    $("smart-benefit-value").textContent = known ? money(zero ? 0 : Math.abs(value)) : "-";
+    $("smart-benefit-currency").textContent = currency;
+    $("smart-benefit-period").textContent = period;
+}
+
+/** Keep the original cost and optional benefit readable, with non-cash components in native disclosure. */
+function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
+    const host = $(id), expanded = host.querySelector("details")?.open || false;
+    const totals = document.createElement("dl");
+    const metric = (parent, label, value) => {
+        const field = document.createElement("div"), name = document.createElement("dt"), amount = document.createElement("dd");
+        name.textContent = label; amount.textContent = `${money(value)} ${currency}`;
+        field.append(name, amount); parent.append(field);
+    };
+    metric(totals, costs?.economic_cost == null ? "Expected costs unavailable" : "Expected economic cost", costs?.economic_cost);
+    if (showBenefit) metric(totals, "Expected benefit versus without battery", benefit);
+    const details = document.createElement("details"), summary = document.createElement("summary"), breakdown = document.createElement("dl");
+    summary.textContent = "Cost breakdown"; details.open = expanded;
+    const cash = costs && [costs.purchase, costs.sale, costs.bonus].every(value => typeof value === "number" && Number.isFinite(value)) ? costs.purchase - costs.sale - costs.bonus : null;
+    metric(breakdown, "Net grid cash cost", cash);
+    metric(breakdown, "Wear", costs?.wear);
+    metric(breakdown, "Battery value change (not cash)", costs?.inventory_change);
+    details.append(summary, breakdown);
+    host.replaceChildren(totals, details);
+    if (!showBenefit) {
+        const note = document.createElement("p"); note.textContent = "Baseline without storage"; host.append(note);
+    }
+}
+
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
  * Render both frozen reference balances, original whole-plan costs and factual
@@ -280,6 +316,9 @@ view();
  */
 async function showPlan() {
     const request = ++selectionRequest, id = $("plan-version").value;
+    renderSmartBenefit(null, "", id ? "Loading original plan comparison…" : "No plan selected.");
+    for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
+    $("expected-benefit").textContent = "";
     planEvidence = null;
     $("inspect-time").disabled = true;
     $("inspect-values").textContent = id ? "Loading original interval values…" : "No plan selected.";
@@ -314,11 +353,12 @@ async function showPlan() {
         for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
         const baseline = withoutBattery?.comparison;
         const self = selfConsumption?.comparison;
-        const describeCosts = (costs) => costs ? `Expected economic cost for the whole original plan: ${money(costs.economic_cost)} ${currency}: Net grid cash cost: ${money(costs.purchase - costs.sale - costs.bonus)} ${currency}: Wear: ${money(costs.wear)} ${currency}: Battery value change: ${money(costs.inventory_change)} ${currency} (not cash)` : "Expected costs unavailable";
-        $("reference-costs").textContent = describeCosts(baseline?.reference_costs) + ": Baseline without storage";
-        $("self-consumption-costs").textContent = describeCosts(self?.reference_costs) + `: Expected benefit versus without battery: ${money(selfConsumption?.expected_savings_vs_without_battery)} ${currency}.`;
-        $("ems-costs").textContent = describeCosts(baseline?.ems_costs || self?.ems_costs) + `: Expected benefit versus without battery: ${money(baseline?.expected_savings)} ${currency}.`;
-        let message = `Original expected benefit versus without battery over this horizon: ${money(baseline?.expected_savings)} ${currency}: Includes storage and OEP. Excludes investment costs. All graph costs use the original contract.`;
+        renderScenarioCosts("reference-costs", baseline?.reference_costs, currency);
+        renderScenarioCosts("self-consumption-costs", self?.reference_costs, currency, selfConsumption?.expected_savings_vs_without_battery, true);
+        renderScenarioCosts("ems-costs", baseline?.ems_costs || self?.ems_costs, currency, baseline?.expected_savings, true);
+        const period = planEvidence?.period;
+        renderSmartBenefit(self?.expected_savings, currency, period ? `From ${when(period.start)} to ${when(period.end)}: Whole original plan. Expected, not measured.` : undefined);
+        let message = "The comparison without battery includes storage and OEP. Excludes investment costs. All graph costs use the original contract.";
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
         if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
         if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
@@ -447,6 +487,7 @@ async function showPlan() {
         $("overview-status").textContent = CONNECTED_MESSAGE;
         return true;
     } catch (error) {
+        if (request === selectionRequest) renderSmartBenefit(null, "", "Original plan comparison unavailable.");
         if (request === selectionRequest) {
             $("overview-status").textContent = error.message;
             $("plan-evidence-status").textContent = $("evidence-issue").textContent = `Original evidence could not be loaded. ${error.message}`;
