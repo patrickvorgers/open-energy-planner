@@ -158,13 +158,14 @@ def test_exact_tested_merge_reuses_original_attempt_and_bundle(evidence):
     assert evidence.run_reads == 2
 
 
-@pytest.fixture
-def focused_product_evidence(evidence, monkeypatch):
-    """Describe a product candidate with exact browser coverage and both original artifact kinds."""
+@pytest.fixture(params=["ci", "selected:browser,ci"])
+def focused_product_evidence(evidence, monkeypatch, request):
+    """Describe exact CI-only or browser coverage with both original artifact kinds."""
+    evidence.selected_profile = request.param
     evidence.quality["steps"][0]["name"] = "Selected native and integration suites"
     evidence.quality["steps"][1]["name"] = "Selected CI suite completion"
     evidence.quality["steps"][2]["name"] = (
-        "Selected CI source tree: " + TREE + " (selected:browser,ci)"
+        "Selected CI source tree: " + TREE + f" ({request.param})"
     )
     reports = {**evidence.bundle, "id": 121, "name": "test-reports-amd64"}
     evidence.artifacts = {"total_count": 2, "artifacts": [evidence.bundle, reports]}
@@ -172,7 +173,7 @@ def focused_product_evidence(evidence, monkeypatch):
     def base_policy(base, tested, *, selector):
         """Classify the actual first-parent change independently of the candidate's marker."""
         assert (base, tested, selector) == (BASE, MERGE, "candidate_reuse_profile")
-        return "selected:browser,ci"
+        return request.param
 
     monkeypatch.setattr("script.ci.check_main_ci_reuse.base_test_only_profile", base_policy)
     return evidence
@@ -187,7 +188,7 @@ def test_exact_focused_product_reuses_original_bundle_and_reports(focused_produc
         "tested_tree": TREE,
         "installation_artifact_id": "120",
         "installation_build": "90.2",
-        "candidate_profile": "selected:browser,ci",
+        "candidate_profile": evidence.selected_profile,
         "test_report_artifact_id": "121",
     }
 
@@ -223,7 +224,7 @@ def test_focused_product_reuse_rejects_missing_or_wider_evidence(
         )
     elif fault == "other_tree":
         evidence.quality["steps"][2]["name"] = (
-            "Selected CI source tree: " + "5" * 40 + " (selected:browser,ci)"
+            "Selected CI source tree: " + "5" * 40 + f" ({evidence.selected_profile})"
         )
     elif fault == "completion_skipped":
         evidence.quality["steps"][1]["conclusion"] = "skipped"
@@ -698,7 +699,7 @@ def test_skipped_full_marker_does_not_hide_successful_focused_product(focused_pr
         }
     )
     result = check(evidence.event, REPOSITORY, MERGE, TREE, evidence, NOW)
-    assert result["candidate_profile"] == "selected:browser,ci"
+    assert result["candidate_profile"] == evidence.selected_profile
 
 
 def test_two_successful_conflicting_tree_markers_remain_ambiguous(evidence):
