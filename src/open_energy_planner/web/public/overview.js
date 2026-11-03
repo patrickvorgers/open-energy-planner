@@ -12,6 +12,7 @@ const PLAN_READ_TIMEOUT_MILLISECONDS = 5000;
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, periodRequest = 0;
 let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
+let priceRefreshPending = false;
 const evaluationVersions = new Map();
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
@@ -286,7 +287,7 @@ view();
  * 1000, positive import and negative export. Missing grid evidence leaves null EMS
  * line gaps. Rebuild tables, inspector and charts without changing active commands.
  */
-async function showPlan() {
+async function showPlan(signal) {
     const request = ++selectionRequest, id = $("plan-version").value;
     planEvidence = null;
     $("inspect-time").disabled = true;
@@ -296,7 +297,7 @@ async function showPlan() {
     $("evidence-time").textContent = ""; $("evidence-issue").textContent = id ? "Loading original plan evidence…" : "No plan selected.";
     if (!id) { $("overview-status").textContent = CONNECTED_MESSAGE; return true; }
     try {
-        const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison`);
+        const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison`, signal);
         if (request !== selectionRequest) return false;
         const plan = data.plan;
         const comparison = data.comparison, valuation = data.valuation;
@@ -492,7 +493,12 @@ async function refreshLatestPlan() {
             selector.prepend(option);
             selector.value = followingLatest ? latest.plan_id : selected;
         }
-        if (followingLatest && renderedPlanId !== latest.plan_id) await Promise.all([showPlan(), currentPrices()]);
+        const needsPlan = renderedPlanId !== latest.plan_id;
+        if (followingLatest && (needsPlan || priceRefreshPending)) {
+            const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
+            const [, pricesUpdated] = await Promise.all([needsPlan ? showPlan(signal) : true, currentPrices(signal)]);
+            priceRefreshPending = pricesUpdated !== true;
+        }
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
     finally { planRefreshBusy = false; }
 }
@@ -577,10 +583,10 @@ function selectOriginal(id) {
     location.hash = "planning"; view(); $("plan-version").value = id; showPlan(); $("plan-heading").scrollIntoView({behavior: "smooth"});
 }
 /** Read current saved tariff inputs without waiting for a plan or changing frozen plan evidence. */
-async function currentPrices() {
+async function currentPrices(signal) {
     const request = ++priceRequest;
     try {
-        const data = await api("v1/prices/inputs");
+        const data = await api("v1/prices/inputs", signal);
         if (request !== priceRequest) return;
         const intervals = data.intervals || [], buy = [], sell = [], market = [], total = [];
         for (const interval of intervals) {
@@ -593,12 +599,14 @@ async function currentPrices() {
         $("current-price-chart").closest(".chart-wrap").hidden = !intervals.length;
         chart("current-price-chart", series, {unit: `${data.currency || "EUR"}/kWh`});
         $("current-price-status").textContent = data.issue ? `Current prices unavailable: ${optionLabel(data.issue)}` : `Saved contract rates as of: ${when(data.as_of)}: ${intervals.some(interval => interval.bonus_issue) ? "Bonus eligibility unavailable: Missing values remain gaps." : data.has_bonus ? "Bonus volume is not applied in this preview." : "No bonus applies in this period."}${data.coverage === "shortened_horizon" ? " Market-price coverage ends early." : ""}`;
+        return true;
     } catch (error) {
         if (request !== priceRequest) return;
         currentPriceWindow = null;
         $("current-price-chart").closest(".chart-wrap").hidden = true;
         chart("current-price-chart", [], {unit: "EUR/kWh"});
         $("current-price-status").textContent = error.message;
+        return false;
     }
 }
 /** Refresh independent views. Only the plan reader reports success, preserving newer selection errors. */
@@ -630,7 +638,7 @@ window.addEventListener("pageshow", event => {
     startPlanRefresh(); applyRange(); refreshLatestPlan();
 });
 $("overview-connect").addEventListener("submit", (event) => { event.preventDefault(); token = $("overview-token").value; $("overview-token").value = ""; load(); });
-$("plan-version").addEventListener("change", showPlan);
+$("plan-version").addEventListener("change", () => showPlan());
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
 $("period").addEventListener("submit", (event) => { event.preventDefault(); savings(); });
 $("evaluation-version").addEventListener("change", savings);

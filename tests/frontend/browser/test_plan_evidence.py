@@ -40,6 +40,11 @@ def automatic_plan_overview(app_page):
         },
         "comparison_reads": [],
         "failed_plans": set(),
+        "failed_prices": False,
+        "hold_comparison": False,
+        "held_comparisons": [],
+        "hold_prices": False,
+        "held_prices": [],
         "poll_reads": 0,
         "hold_poll": False,
         "held_polls": [],
@@ -61,13 +66,21 @@ def automatic_plan_overview(app_page):
         """Count actual detail loads and allow a temporary failure of a newly published plan."""
         plan_id = route.request.url.rsplit("/", 2)[1]
         state["comparison_reads"].append(plan_id)
-        if plan_id in state["failed_plans"]:
+        if state["hold_comparison"]:
+            state["held_comparisons"].append(route)
+        elif plan_id in state["failed_plans"]:
             route.fulfill(status=503, body="Temporary archive failure")
         else:
             route.fulfill(json=state["comparisons"][plan_id])
 
     def current_prices(route):
         """Use independent current prices so a publication must reload both kinds of chart data."""
+        if state["hold_prices"]:
+            state["held_prices"].append(route)
+            return
+        if state["failed_prices"]:
+            route.fulfill(status=503, body="Temporary price read failure")
+            return
         intervals = deepcopy(comparison["plan"]["input_snapshot"]["tariff_evidence"])
         for interval in intervals:
             interval["buy_price"] = state["current_buy_price"]
@@ -140,7 +153,9 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     expect(page.get_by_role("button", name="Next 6 hours", exact=True)).to_have_attribute(
         "aria-pressed", "true"
     )
-    page.screenshot(path=f"results/ci/planning-auto-refresh-{page.viewport_size['width']}.png")
+    page.locator("figure").filter(has=page.locator("#plan-chart")).screenshot(
+        path=f"results/ci/planning-auto-refresh-{page.viewport_size['width']}.png"
+    )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -172,23 +187,102 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-def test_failed_new_plan_comparison_retries_without_another_publication(automatic_plan_overview):
-    """A transient detail failure retries the same newly listed plan and finally replaces its chart."""
+@pytest.mark.parametrize("failed_view", ["plan", "prices"])
+def test_failed_new_plan_comparison_retries_without_another_publication(
+    automatic_plan_overview, failed_view
+):
+    """Retry a failed publication read without another identity or unnecessary successful-plan redraw."""
     state = automatic_plan_overview
     page = state["page"]
     state["plans"].insert(0, state["newer"])
-    state["failed_plans"].add("newly-published-plan")
+    state["current_buy_price"] = 0.88
+    if failed_view == "plan":
+        state["failed_plans"].add("newly-published-plan")
+    else:
+        state["failed_prices"] = True
     page.clock.run_for(15000)
-    expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
-    assert page.evaluate(
-        "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
-    )
+    if failed_view == "plan":
+        expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
+        assert page.evaluate(
+            "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
+        )
+    else:
+        expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
+        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        page.evaluate(
+            "window.publishedPlanChart = Chart.getChart(document.getElementById('plan-chart'))"
+        )
     state["failed_plans"].clear()
+    state["failed_prices"] = False
     page.clock.run_for(15000)
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    assert state["comparison_reads"].count("newly-published-plan") == 2
+    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    assert (
+        page.evaluate(
+            "Chart.getChart(document.getElementById('current-price-chart')).data.datasets[1].data[0].y"
+        )
+        == 0.88
+    )
+    assert state["comparison_reads"].count("newly-published-plan") == (
+        2 if failed_view == "plan" else 1
+    )
+    if failed_view == "prices":
+        assert page.evaluate(
+            "window.publishedPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
+        )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("hung_view", ["comparison", "prices"])
+def test_hung_publication_read_times_out_before_the_next_completed_plan(
+    automatic_plan_overview, hung_view
+):
+    """The read deadline cancels a hanging batch so a later completed publication can load."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["plans"].insert(0, state["newer"])
+    state["hold_" + hung_view] = True
+    held_path = (
+        "/v1/plans/newly-published-plan/comparison"
+        if hung_view == "comparison"
+        else "/v1/prices/inputs"
+    )
+    with page.expect_event(
+        "requestfailed", predicate=lambda request: request.url.endswith(held_path), timeout=8000
+    ) as cancelled:
+        page.clock.run_for(15000)
+        page.clock.run_for(5001)
+    assert cancelled.value.failure
+    assert len(state["held_comparisons" if hung_view == "comparison" else "held_prices"]) == 1
+    if hung_view == "comparison":
+        expect(page.locator("#overview-status")).not_to_contain_text("Connected")
+    else:
+        expect(page.locator("#current-price-chart")).to_be_hidden()
+    state["held_comparisons" if hung_view == "comparison" else "held_prices"][0].fulfill(
+        status=503, body="Late response after cancellation"
+    )
+    page.wait_for_load_state("networkidle")
+    state["hold_" + hung_view] = False
+    later = {**state["newer"], "plan_id": "later-completed-plan", "strategy": "minimize cost"}
+    details = deepcopy(state["comparisons"]["newly-published-plan"])
+    details["plan"].update(plan_id=later["plan_id"], strategy=later["strategy"])
+    details["plan"]["input_snapshot"]["tariff_evidence"][0]["buy_price"] = 0.73
+    state["comparisons"][later["plan_id"]] = details
+    state["plans"].insert(0, later)
+    with page.expect_response("**/v1/plans/later-completed-plan/comparison", timeout=8000):
+        # Reach the next poll without skipping past that request's new deadline.
+        page.clock.run_for(15000 - 5001)
+    expect(page.locator("#plan-version")).to_have_value("later-completed-plan")
+    expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert (
+        page.evaluate(
+            "Chart.getChart(document.getElementById('price-chart')).data.datasets[1].data[0].y"
+        )
+        == 0.73
+    )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
