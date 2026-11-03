@@ -1,5 +1,7 @@
 """Resolve presentation names independently of source identity and archived calculations."""
 
+from open_energy_planner.savings.diagnostics import public_reference_plan
+
 
 def source_name(metadata, fallback):
     """Prefer Energy's explicit name, then the HA device and sensor, never an opaque identity."""
@@ -51,13 +53,14 @@ def display_devices(devices, catalogue):
 
 
 def display_plan(plan, catalogue):
-    """Copy only display metadata, matching stable IDs through the plan's frozen source links.
+    """Project safe display metadata, matching stable IDs through the plan's frozen source links.
 
     The original plan, forecast references, metering bindings and numerical values
     remain untouched. Removed sources retain the names captured in that plan.
     """
     if plan is None:
         return None
+    plan = public_reference_plan(plan)
     names = energy_source_names(catalogue)
     links = dict(plan.get("display_sources", {}))
     bindings = plan.get("comparison_bindings", {})

@@ -410,10 +410,12 @@ class SolarRuntime:
         return True
 
     def failed(self, job, now):
-        """Back off current-input failures without overwriting newer configuration diagnostics."""
+        """Return whether this failure received backoff, without changing newer-input diagnostics."""
         if job[0] == self.key(now):
             self.failed_key, self.retry_after = job[0], now + timedelta(minutes=MODEL_RETRY_MINUTES)
             self.issue = "solar_forecast_unusable"
+            return True
+        return False
 
     def active_model(self, source_id):
         """Name the actual per-source predictor, not a combined forecast's mixed calibration label."""
