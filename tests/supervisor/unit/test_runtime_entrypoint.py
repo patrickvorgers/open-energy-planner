@@ -56,4 +56,7 @@ def test_public_demo_entrypoint_preserves_startup_and_ingress(monkeypatch, tmp_p
         "discovery_options": None,
         "ingress_peer": "172.30.32.2" if supervised else None,
     }
-    assert calls[1] == (application, {"host": "127.0.0.1", "port": 8100, "print": None})
+    assert calls[1] == (
+        application,
+        {"host": "127.0.0.1", "port": 8100, "shutdown_timeout": 60, "print": None},
+    )

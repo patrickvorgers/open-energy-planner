@@ -108,8 +108,6 @@ jobs:
 def test_review_preflight_owns_only_trusted_main_metadata_reads():
     """The declared preflight has no automatic trigger, contributor execution or write permissions."""
     path = Path(__file__).resolve().parents[2] / ".github/workflows/review-preflight.yaml"
-    if not path.exists():
-        pytest.skip("The independently introduced review preflight is not present yet")
     assert not admission_violations(path.read_text(), REVIEW_PREFLIGHT_PROTOCOL)
 
 
