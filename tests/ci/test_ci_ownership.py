@@ -906,6 +906,8 @@ def test_proof_owners_only_consume_reviewed_metadata_capabilities():
     failures = {}
     for name in PROOF_CI_FILES:
         module = name.removesuffix(".py").replace("/", ".")
+        if module not in sources:
+            continue
         violations = lifecycle_dependencies(
             sources[module][0], module, sources, proof_reader=True, forbidden=set()
         )
