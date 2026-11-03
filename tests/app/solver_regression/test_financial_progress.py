@@ -52,6 +52,10 @@ def test_native_progress_leaves_independent_negative_cost_and_budget_unchanged(m
     assert result.financial_started_seconds >= result.build_seconds
     if broken:
         assert result.first_candidate_seconds is None
+    else:
+        assert result.first_candidate_seconds is not None
+        assert result.first_candidate_seconds >= result.financial_started_seconds
+        assert result.first_candidate_seconds == result.progress[0].elapsed_seconds
 
 
 def test_broken_sample_collection_does_not_reject_native_candidate(monkeypatch):
