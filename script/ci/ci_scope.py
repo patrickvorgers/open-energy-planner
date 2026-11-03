@@ -115,6 +115,7 @@ PROOF_CI_FILES = frozenset(
         "check_main_ci_reuse",
         "check_suite_completion",
         "check_provenance",
+        "review_preflight",
         "scope_report",
         "ci_scope",
         "ci_groups",
@@ -124,6 +125,7 @@ PROOF_CI_FILES = frozenset(
 
 HA_CI_FILES = frozenset({"script/ci/ha_suites.py", "script/ci/ha_shard.py"})
 ADMISSION_WORKFLOW = ".github/workflows/ci-admission.yaml"
+REVIEW_METADATA_FILES = frozenset({".coderabbit.yaml", ".github/workflows/review-preflight.yaml"})
 
 
 # Most-specific directories win. New files inherit their area's reviewed contract.
@@ -370,7 +372,7 @@ def path_profile(path):
         return focused_profile("unit-app")
     if name_is_shared_root(path) and path.name in APP_ROOT_PROFILES:
         return APP_ROOT_PROFILES[path.name]
-    if name in PROOF_CI_FILES or name == ADMISSION_WORKFLOW:
+    if name in PROOF_CI_FILES or name == ADMISSION_WORKFLOW or name in REVIEW_METADATA_FILES:
         return "ci"
     if name in HA_CI_FILES:
         return focused_profile("ha")
@@ -562,7 +564,12 @@ def performance_queries_path(path):
         ".github/workflows/checks.yaml",
     }:
         return True
-    if name in PROOF_CI_FILES or name in HA_CI_FILES or name == ADMISSION_WORKFLOW:
+    if (
+        name in PROOF_CI_FILES
+        or name in HA_CI_FILES
+        or name == ADMISSION_WORKFLOW
+        or name in REVIEW_METADATA_FILES
+    ):
         return False
     if name.startswith("script/ci/"):
         return True
