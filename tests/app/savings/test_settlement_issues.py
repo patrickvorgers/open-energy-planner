@@ -135,6 +135,7 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
             record for record in caplog.records if record.message.startswith("Settlement ")
         ]
         assert status_logs
+        assert all(".." not in record.message for record in status_logs)
         assert all(
             record.levelno == (logging.WARNING if runtime.attention else logging.INFO)
             for record in status_logs

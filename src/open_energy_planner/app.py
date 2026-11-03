@@ -21,7 +21,16 @@ from open_energy_planner.home_assistant.observation_wire import (
     parse_configuration,
     parse_report,
 )
-from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, register_lifecycle
+from open_energy_planner.runtime.diagnostics.logging import (
+    BackgroundLog,
+    register_lifecycle,
+    request_error_message,
+)
+from open_energy_planner.savings.diagnostics import (
+    REFERENCE_FORECAST_MESSAGES,
+    REFERENCE_FORECAST_UNAVAILABLE,
+    public_reference_plan,
+)
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import (
     DEFAULT_HISTORY_LIMIT,
     SqlPlanRepository,
@@ -208,13 +217,15 @@ def create_app(
                     document["reference_forecast"] = await asyncio.to_thread(
                         comparison, document, reference_start
                     )
-                except (ValueError, TypeError, KeyError) as error:
-                    document["reference_forecast_issue"] = str(error)
-                except Exception as error:
-                    logging.getLogger(__name__).exception(
-                        "Reference forecast failed. Plan publication continues"
+                # Optional reference defects cannot block publication. The helper logs a value-free stack.
+                except Exception as error:  # noqa: BLE001
+                    document["reference_forecast_issue"] = request_error_message(
+                        error,
+                        logger=_LOGGER,
+                        operation="Reference forecast",
+                        safe_messages=REFERENCE_FORECAST_MESSAGES,
+                        fallback=REFERENCE_FORECAST_UNAVAILABLE,
                     )
-                    document["reference_forecast_issue"] = str(error)
                 from .home_assistant.names import comparison_names
 
                 document["comparison_names"] = comparison_names(
@@ -887,7 +898,7 @@ def create_app(
             raise web.HTTPServiceUnavailable(text="Plan archive unavailable or invalid") from None
         if plan is None:
             raise web.HTTPNotFound(text="Archived plan not found")
-        return web.json_response(plan)
+        return web.json_response(public_reference_plan(plan))
 
     app.router.add_get("/v1/plans", plan_history)
     app.router.add_get("/v1/plans/{plan_id}", archived_plan)

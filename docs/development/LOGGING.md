@@ -65,6 +65,10 @@ Unknown failures are ERROR with the exception type and complete stack locations,
 without exception values, source lines or locals. This keeps both the HTTP
 response and its server diagnostics free of credentials and private URLs.
 
+Reference-forecast failures store only owned public advice. Older plans may
+retain arbitrary error text. Public plan projections replace unrecognized
+reference errors with safe recovery advice without rewriting archived evidence.
+
 ## Verification
 
 Exercise first failure, identical repeat, changed failure and recovery. Assert

@@ -64,11 +64,11 @@ def settlement_issue(error):
                 return message
         return (
             "Settlement is waiting for complete validated evidence. "
-            "Existing successful results are retained."
+            "Existing successful results are retained"
         )
     return (
         "Retained settlement evidence is invalid. Check recorded meter data and published prices. "
-        "Existing successful results are retained."
+        "Existing successful results are retained"
     )
 
 
