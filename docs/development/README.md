@@ -46,7 +46,12 @@ log levels, failure/recovery deduplication, privacy and truthful acceptance logs
 ### What the quality job runs
 
 CodeRabbit is the only required automated review service and must cover the latest
-PR head. Codex Cloud review is optional and starts only on an explicit human
+PR head. After Quick, signature and CodeQL checks pass, use an independent local
+Codex context to review the Draft, batch corrections and retest. Prepare one final
+manual CodeRabbit request through the trusted-main read-only preflight. The
+150-file limit counts every changed file. Automatic review triggers are disabled
+regardless of plan or star count. Follow the [review procedure](CI-STAGES.md#prepare-one-final-coderabbit-review).
+Codex Cloud review is optional and starts only on an explicit human
 request for that service and PR. Automatic Codex review is disabled for this
 repository. A general request to inspect a PR does not authorize a cloud review.
 Do not automatically post or repeat Codex review commands after commits. Keep
