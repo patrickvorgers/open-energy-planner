@@ -489,6 +489,7 @@ async function refreshLatestPlan() {
         if (!latest || overviewLoads || previousLatest !== (selector.options[0]?.value || "")) return;
         const selected = selector.value, followingLatest = selected === previousLatest;
         if (latest.plan_id !== previousLatest) {
+            priceRead ??= currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
             [...selector.options].find(option => option.value === latest.plan_id)?.remove();
             const option = document.createElement("option");
             option.value = latest.plan_id;

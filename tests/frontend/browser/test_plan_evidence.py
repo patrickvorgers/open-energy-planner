@@ -276,7 +276,7 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_historical_selection_survives_publication_and_quarter_rollover(automatic_plan_overview):
-    """Historical chart data and its original time range remain selected while new advice arrives."""
+    """New advice refreshes current prices while historical chart data and its time range stay selected."""
     state = automatic_plan_overview
     page = state["page"]
     page.locator("#plan-version").select_option("older-plan")
@@ -288,7 +288,11 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     }""")
     original_reads = list(state["comparison_reads"])
     state["plans"].insert(0, state["newer"])
-    page.clock.run_for(60000)
+    state["current_buy_price"] = 0.88
+    page.clock.run_for(15000)
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
+        .data.datasets[1].data[0].y === 0.88""")
+    page.clock.run_for(45000)
     expect(page.locator("#plan-version option")).to_have_count(3)
     expect(page.locator("#plan-version")).to_have_value("older-plan")
     assert (
