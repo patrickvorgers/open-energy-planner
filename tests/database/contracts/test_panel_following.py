@@ -199,8 +199,8 @@ def test_follow_update_outage_unlink_and_relink_preserve_converter_and_originals
                 "1400 Wp at 125° with 25° tilt, 1800 Wp at 275° with 40° tilt. "
                 "Current settings: "
                 "1400 Wp at 80° with 25° tilt, 1800 Wp at 275° with 40° tilt."
-                " This notification disappears automatically after 5 minutes."
             )
+            assert following["auto_clear_minutes"] == 5
         async with TestClient(
             TestServer(
                 create_app(tmp_path, TOKEN, source="home_assistant", database_url=panel_database)
@@ -261,9 +261,7 @@ def test_cancelled_acknowledged_unlink_still_announces_manual_ownership(tmp_path
                 for notice in payload["notifications"]
                 if notice["code"] == "solar_panel_settings_manual"
             )
-            assert manual_notice["message"].endswith(
-                "This notification disappears automatically after 5 minutes."
-            )
+            assert manual_notice["auto_clear_minutes"] == 5
 
     asyncio.run(scenario())
 

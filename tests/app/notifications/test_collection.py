@@ -1,12 +1,36 @@
 """Prove shared problem lifecycle and ownership without any OEP-specific cause codes."""
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
 from open_energy_planner.notifications.collection import NotificationCenter
 from open_energy_planner.notifications.model import Lifecycle, NoticeText, Notification
+
+
+def test_temporary_lifetime_is_optional_source_owned_presentation():
+    """Expose the declared lifetime without timing out notices or altering permanent warnings."""
+    cause = Notification("example", "updated", NoticeText("Updated", "Settings accepted"))
+    assert "auto_clear_minutes" not in cause.document("example")
+    temporary = replace(cause, auto_clear_minutes=5)
+    center = NotificationCenter()
+    center.register("example", lambda: (temporary,))
+    assert center.document()["notifications"][0]["auto_clear_minutes"] == 5
+    assert center.document()["notifications"][0]["key"] == "example"
+
+
+@pytest.mark.parametrize("minutes", [0, -1, True, "5", 1.5])
+def test_temporary_lifetime_rejects_invalid_minutes(minutes):
+    """Malformed duration hints cannot enter the trusted notification projection."""
+    with pytest.raises(ValueError, match="positive whole-minute"):
+        Notification(
+            "example",
+            "updated",
+            NoticeText("Updated", "Settings accepted"),
+            auto_clear_minutes=minutes,
+        )
 
 
 def test_source_confirms_recovery_without_dismissal_or_domain_rules():

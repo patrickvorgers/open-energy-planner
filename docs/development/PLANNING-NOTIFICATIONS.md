@@ -68,6 +68,12 @@ and an optional aware episode start. Serialization adds the source `owner`, fall
 role and freshness. `level` and `blocks` are independent. An informative waiting condition
 can block planning while a warning about corrected statistics does not.
 
+Sources may supply positive whole-minute `auto_clear_minutes` presentation metadata
+for temporary confirmations. Both notification views show a clock badge with this
+lifetime and a hover/focus explanation instead of repeating expiry prose. It is
+not a countdown. The source still owns actual removal. The browser never clears
+notices on a timer. Notices marked stale hide the badge until their source can be read.
+
 Sources return a complete tuple of current notices. An empty tuple is confirmed
 resolution for that source. `None` means unknown. Exceptions and invalid source
 results also mean unknown and retain the source's last-known notices as stale.

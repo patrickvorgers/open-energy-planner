@@ -164,12 +164,47 @@ function renderCenter(payload, warning = "") {
             title.href = target.href;
             if (document.body.classList.contains("workspace-shell")) title.target = "oep-workspace-content";
         }
-        item.append(title);
+        const heading = document.createElement("div");
+        heading.className = "notification-heading";
+        heading.append(title);
+        appendTemporaryIndicator(heading, notice);
+        item.append(heading);
         appendExplanation(item, notice.message);
         centerItems.append(item);
     }
     if (center.hidden) popup.hidePopover();
     else if (focusedItem) popup.querySelector("button").focus();
+}
+
+/** Explain a source-owned temporary lifetime without hiding unresolved or unreadable notices. */
+function appendTemporaryIndicator(container, notice) {
+    if (!notice.auto_clear_minutes || notice.stale) return;
+    const badge = document.createElement("span"), tooltip = document.createElement("span");
+    badge.className = "notification-expiry";
+    badge.tabIndex = 0;
+    badge.setAttribute("role", "img");
+    const explanation = `Temporary notification. Disappears automatically after ${notice.auto_clear_minutes} minutes.`;
+    badge.setAttribute("aria-label", explanation);
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M12 8v4l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0");
+    icon.append(path);
+    tooltip.className = "notification-expiry-tooltip";
+    tooltip.setAttribute("aria-hidden", "true");
+    tooltip.hidden = true;
+    tooltip.textContent = explanation;
+    for (const event of ["pointerenter", "focus"]) badge.addEventListener(event, () => { tooltip.hidden = false; });
+    for (const event of ["pointerleave", "blur"]) badge.addEventListener(event, () => { tooltip.hidden = true; });
+    badge.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || tooltip.hidden) return;
+        tooltip.hidden = true;
+        event.preventDefault();
+        event.stopPropagation();
+    });
+    badge.append(icon, document.createTextNode(`${notice.auto_clear_minutes} min`), tooltip);
+    container.append(badge);
 }
 
 /** Keep actionable resource identities visible as inert paragraphs, without raw diagnostic dumps. */
@@ -210,7 +245,11 @@ function render(payload, warning = "") {
         const article = window.document.createElement("article"), title = window.document.createElement("h2");
         article.className = `planning-notice${notice.level === "info" ? " informational" : notice.level === "error" ? " notification-error" : ""}`;
         title.textContent = notice.title;
-        article.append(title);
+        const heading = document.createElement("div");
+        heading.className = "notification-heading";
+        heading.append(title);
+        appendTemporaryIndicator(heading, notice);
+        article.append(heading);
         appendExplanation(article, notice.message);
         if (notice.since) {
             const since = window.document.createElement("p");
@@ -265,6 +304,7 @@ export async function refreshNotifications(session, focus = false) {
             (item.state != null && !["active", "recovering"].includes(item.state)) ||
             (item.blocks != null && (!Array.isArray(item.blocks) || item.blocks.some(value => typeof value !== "string" || !value.trim()))) ||
             (item.stale != null && typeof item.stale !== "boolean") ||
+            (item.auto_clear_minutes != null && (!Number.isSafeInteger(item.auto_clear_minutes) || item.auto_clear_minutes <= 0)) ||
             (item.fallback != null && typeof item.fallback !== "boolean") ||
             (item.since != null && (typeof item.since !== "string" || !Number.isFinite(Date.parse(item.since)))))) throw new Error("Invalid planning status");
         const unavailable = result.unavailable_sources ?? [];

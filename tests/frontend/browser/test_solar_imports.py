@@ -223,17 +223,30 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
     expect(page.locator("#installation-summary")).to_contain_text("115")
     with page.expect_response("**/v1/notifications"):
         page.clock.fast_forward(16000)
-    expiry_message = "This notification disappears automatically after 5 minutes."
-    expect(page.get_by_role("region", name="Notifications", exact=True)).to_contain_text(
-        expiry_message
-    )
+    expiry_label = "Temporary notification. Disappears automatically after 5 minutes."
+    banner = page.get_by_role("region", name="Notifications", exact=True)
+    badge = banner.get_by_role("img", name=expiry_label, exact=True)
+    expect(badge).to_have_text("5 min" + expiry_label)
+    badge.focus()
+    expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
     page.locator(".notification-toggle").click()
     popup = page.get_by_role("dialog", name="Notifications", exact=True)
-    expect(popup).to_contain_text(expiry_message)
+    badge = popup.get_by_role("img", name=expiry_label, exact=True)
+    expect(badge).to_be_visible()
+    if page.viewport_size["width"] < 500:
+        badge.tap()
+    else:
+        badge.hover()
+    expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
     mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
     popup.screenshot(
         path=f"results/ci/solar-panel-notice-expiry-{page.viewport_size['width']}-{mode}.png"
     )
+    badge.focus()
+    badge.press("Escape")
+    expect(badge.locator(".notification-expiry-tooltip")).to_be_hidden()
+    expect(badge).to_be_focused()
+    expect(popup).to_be_visible()
     popup.get_by_role("button", name="Close notifications", exact=True).click()
     installation_area(page, 1, edit=True)
     expect(angle).to_have_value("115")

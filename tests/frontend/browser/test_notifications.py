@@ -404,9 +404,15 @@ def test_malformed_status_cannot_clear_last_known_notice_or_follow_external_acti
     popup = page.get_by_role("dialog", name="Notifications", exact=True)
     expect(popup).to_contain_text("Export bonus needs attention")
     assert popup.get_by_role("link").count() == 0
+    expect(popup.locator(".notification-expiry")).to_have_count(0)
     page.wait_for_function(
         "document.getElementById('integration-version-status').hasAttribute('title')"
     )
+    result["notifications"][0]["auto_clear_minutes"] = "5"
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
+    expect(popup).to_contain_text("last known notifications")
+    expect(popup.locator(".notification-expiry")).to_have_count(0)
     result["notifications"] = None
     page.clock.fast_forward(16000)
     expect(popup).to_contain_text("last known notifications")

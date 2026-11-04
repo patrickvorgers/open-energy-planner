@@ -38,9 +38,10 @@ provider snapshot has been accepted. Only fresh complete discovery explicitly co
 the forecast link is absent enables manual editing. OEP preserves the last geometry
 and shows an informational notice. Relinking automatically adopts HA geometry,
 locks panel fields and explains replacement of previous manual values.
-These informational change confirmations state that they disappear automatically
-after five minutes. Panel-setting availability warnings remain until OEP confirms
-recovery.
+These informational change confirmations show a clock badge labelled **5 min**.
+Hover, focus or tap the badge to read that the notification disappears automatically
+after five minutes. This is the notification lifetime, not a countdown. Panel-setting
+availability warnings have no clock badge and remain until OEP confirms recovery.
 Before the first save, complete HA metadata fills previously blank linked geometry
 and follows further provider updates without replacing physical inverter drafts.
 Removing that still-unsaved link retains visible planes and physical drafts and
