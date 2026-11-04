@@ -153,6 +153,8 @@ repeats the same original optimizer costs and benefit, rather than summing
 alternative scenarios. Cash cost,
 wear and non-cash stored-energy value remain in the keyboard-accessible Cost
 breakdown disclosure. Its expanded state survives a read-only refresh.
+Economic cost is net grid cash cost plus wear minus the signed battery value
+change. A positive stored-energy value change reduces economic cost and is not cash.
 Each graph identifies its original expected economic cost, net grid cash, wear and
 inventory change. Self-consumption and OEP also show expected benefit versus the
 same no-battery baseline. Negative benefit remains negative. These are horizon

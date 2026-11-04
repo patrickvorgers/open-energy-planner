@@ -313,7 +313,9 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
     metric(breakdown, "Net grid cash cost", cash);
     metric(breakdown, "Wear", costs?.wear);
     metric(breakdown, "Battery value change (not cash)", costs?.inventory_change);
-    details.append(summary, breakdown);
+    const explanation = document.createElement("p");
+    explanation.textContent = "Economic cost = net grid cash cost + wear - battery value change. A positive value change reduces economic cost. Battery value change is not cash.";
+    details.append(summary, breakdown, explanation);
     host.replaceChildren(totals, details);
     if (!showBenefit) {
         const note = document.createElement("p"); note.textContent = "Baseline without storage"; host.append(note);
