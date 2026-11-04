@@ -43,17 +43,15 @@ Follow the [code documentation standard](CODE-DOCUMENTATION.md) for required doc
 ### What the quality job runs
 
 CodeRabbit is the only required automated review service and must cover the latest
-PR head. After Quick, signature and CodeQL checks pass, use an independent local
-Codex context to review the Draft, batch corrections and retest. Prepare one final
+PR head. After Quick, signature and CodeQL checks pass, inspect your own changes,
+batch corrections and retest. Prepare one final
 manual CodeRabbit request through the trusted-main read-only preflight. The
 150-file limit counts every changed file. Automatic review triggers are disabled
 regardless of plan or star count. Follow the [review procedure](CI-STAGES.md#prepare-one-final-coderabbit-review).
-Codex Cloud review is optional and starts only on an explicit human
-request for that service and PR. Automatic Codex review is disabled for this
-repository. A general request to inspect a PR does not authorize a cloud review.
-Do not automatically post or repeat Codex review commands after commits. Keep
-evaluating findings already posted by either service. The existing Dependabot
-exception remains: no mandatory CodeRabbit or Codex Cloud review, with CI,
+CodeRabbit provides the independent review. Do not add a separate local Codex
+reviewer, reviewer subagent or Codex Cloud review stage. Keep automatic Codex
+reviews disabled and evaluate findings already posted by any reviewer.
+The existing Dependabot exception remains: no mandatory CodeRabbit review, with CI,
 verified commits and compatibility/regression assessment still required. See
 [the contribution policy](../../CONTRIBUTING.md).
 

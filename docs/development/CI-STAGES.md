@@ -54,16 +54,18 @@ frozen unless a new finding or failure requires a correction.
 
 ## Follow the intended merge order
 
-Develop Drafts and run independent local Codex reviews in parallel. Agree on one
+Develop Drafts and run builder checks in parallel. Agree on one
 merge queue before requesting final CodeRabbit reviews. Review availability is
 not a reason to review a later PR before its predecessor has merged.
 
 For a queue of PR A followed by PR B, finish A's review, required candidate CI,
-guarded merge and required main validation first. Then include that actual main
+and guarded merge first. Then include that actual main
 in B, resolve conflicts and run Quick, affected regression tests and CodeQL on
-the updated head. Reassess material changes with an independent reviewer. Only
+the updated head. Inspect material changes and batch corrections. Only
 then freeze B's head and base and request its final CodeRabbit review. Complete
-B's selected candidate CI before merging B. Repeat this sequence for the next PR.
+B's selected candidate CI before merging B. CodeRabbit review may run while A's
+main CI is pending. A's required main checks must succeed before B becomes Ready,
+requests candidate CI or merges. Repeat this sequence for the next PR.
 
 Do not request a second review while the first is running or push speculative
 base updates during a final review. If main advances before merge, synchronize
@@ -74,7 +76,8 @@ coordination chat, not in maintained product documentation.
 The preflight verifies that the selected current main commit is an ancestor of
 the frozen head and rechecks the current base and head before emitting a command.
 It cannot prove the human queue order. The operator must still confirm that all
-preceding PRs have completed the required merge and main checks.
+preceding PRs have merged before requesting review, and verify their successful
+main checks before Ready, candidate CI or merge.
 
 ## Prepare one final CodeRabbit review
 
@@ -90,20 +93,17 @@ provider's applicable limit would leave a partial review.
 
 First obtain successful current-head Quick checks, GitHub Verified PR commits and
 CodeQL. Evaluate genuine findings and document any evidence-based disposition.
-Then use one independent local Codex context to review the Draft and record the
-reviewed SHA, evidence and finding dispositions in the PR. This is not Codex Cloud
-review and must not post `@codex review`. Cloud review remains optional and needs
-an explicit human request for that service and PR. Do not repeat independent
-review on every push. Batch corrections, run affected checks and reassess material
-scope changes before consuming another external review.
+Inspect your own changes, batch corrections, run affected checks and reassess
+material scope changes before consuming an external review. CodeRabbit provides
+the independent PR review. Do not add a separate local Codex reviewer, reviewer
+subagent or Codex Cloud review stage. Existing findings from any reviewer still
+require evidence-based disposition.
 
 After the preceding queued merge is complete, include and test the actual current
 main before freezing the final head and base. Run **Manual CodeRabbit review preflight** from
-`main` with the PR number, expected head/base and independent Codex review SHA.
-Affirm that the independent review and finding disposition are complete. The
-reviewed SHA must be the final head or an earlier commit in the complete PR
-history. Later correction commits are allowed. A rebase that removes that SHA
-requires a fresh valid independent review reference. The preflight uses only
+`main` with the PR number and expected head/base. Affirm that existing findings
+are dispositioned. No Codex review SHA or independent-Codex attestation is needed.
+The preflight uses only
 trusted main code and read-only metadata. It checks the file inventory, current
 Quick/signature/CodeQL results, resolved discussions, existing CodeRabbit activity
 and trusted same-head manual request markers.
@@ -138,8 +138,8 @@ that duplicate blocker, not a successful preflight rerun or an automatic retry.
 
 Native automatic, incremental, positive-label and description-keyword triggers
 are disabled. GitHub cannot prevent a person with access from directly posting a
-CodeRabbit command. The operator attestations are not machine proof of independent
-review quality or finding correctness. No preflight receipt is a merge credential.
+CodeRabbit command. The operator attestation is not machine proof of finding
+correctness. No preflight receipt is a merge credential.
 Candidate admission separately enforces the file limit and actual current-head
 check evidence. It requires a substantive CodeRabbit result with completed scope,
 workspace, analysis, feedback and publication phases. A green skipped or

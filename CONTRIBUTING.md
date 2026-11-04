@@ -8,9 +8,9 @@ AI-assisted development also follows the repository [AI development agreements](
 
 CodeRabbit is the only mandatory automated reviewer. Before merging, its review must be complete for the latest PR head commit, and every finding must be evaluated and addressed. Any new commit, including documentation-only changes, requires CodeRabbit review of the new head. Passing CI, an older review or an unavailable CodeRabbit service does not meet this requirement. Recheck the head SHA immediately before merging.
 
-Codex Cloud review is optional and runs only on an explicit human request for that service and PR. Keep automatic Codex reviews disabled for this repository. Do not routinely request or repeat Codex Cloud reviews after commits. A general request to check a PR does not authorize a cloud review. Existing findings from any reviewer still require evaluation and resolution.
+CodeRabbit provides the independent PR review. Do not add a separate local Codex reviewer, reviewer subagent or Codex Cloud review stage. Builders still inspect their own changes, run affected tests and evaluate every existing finding from any reviewer. Keep automatic Codex reviews disabled.
 
-Temporary exception: PRs authored by `dependabot[bot]` do not require CodeRabbit review, and manual CodeRabbit reviews must not be requested for them. Codex Cloud review is also optional and requires an explicit user request. Passing CI, verified commits, dependency compatibility and regression-coverage assessment remain required. Any existing findings must still be evaluated and addressed.
+Temporary exception: PRs authored by `dependabot[bot]` do not require CodeRabbit review, and manual CodeRabbit reviews must not be requested for them. Passing CI, verified commits, dependency compatibility and regression-coverage assessment remain required. Any existing findings must still be evaluated and addressed.
 
 All documentation, directory/file names, code, comments, UI text and tests use English. Original revisions remain accessible through Git. Maintained specifications are in `design/`. Product and site documentation describe current behavior and help future maintenance. Keep delivery history, PR/review references and temporary test receipts in PRs or CI artifacts. Update existing guides instead of creating a report for each change. See the [maintained-guide policy](docs/development/CODE-DOCUMENTATION.md#maintained-guides).
 
@@ -29,19 +29,17 @@ regression tests before each push. Group related review corrections into one
 tested push. Build and review in Draft. Keep each PR within 150 changed files,
 including binary, removed and renamed files. Split a larger PR before review.
 First wait for current-head Quick, verified commits and CodeQL to pass and
-evaluate their findings. Then use one independent local Codex context to review
-the Draft. Record the reviewed commit SHA and finding dispositions in the PR.
-Batch corrections and retest instead of restarting independent review on every
-push. This local review is distinct from the optional Codex Cloud service above.
+evaluate their findings. Inspect your own changes, batch corrections and retest.
+CodeRabbit provides the independent review after those builder checks.
 
-Develop Drafts and run independent local Codex reviews in parallel, but request
+Develop Drafts and run builder checks in parallel, but request
 final CodeRabbit reviews in the intended merge order. Wait for the preceding PR
-to merge and finish its required main checks. Include that actual main in this
+to merge. Include that actual main in this
 PR, resolve conflicts, retest affected behavior and wait for current-head Quick,
 signature and CodeQL checks. Reassess material changes before final review.
 Only after that work is complete, freeze the final head and base. Run the
 **Manual CodeRabbit review preflight** workflow from `main`, with those SHAs,
-the independent Codex review SHA and affirmative review/disposition attestations.
+and an affirmative existing-finding-disposition attestation.
 Follow its job summary to request one manual CodeRabbit review. Automatic,
 incremental, label and description-keyword review triggers are disabled regardless
 of star count or paid plan. Retain the Dependabot exception above. All chats share
@@ -50,6 +48,9 @@ automatically. The read-only preflight neither spends nor reserves review quota.
 Always verify actual completed current-head analysis, not merely a green provider
 status. See [review and CI stages](docs/development/CI-STAGES.md) for the procedure
 and its limits.
+CodeRabbit review may run while the preceding merge's main CI is pending.
+Wait for that main CI to succeed before choosing Ready, requesting candidate CI
+or merging the next PR.
 After latest-head review and disposition of every finding, resolve the evaluated
 threads and choose **Ready for review** to start one selected candidate automatically.
 A PR returns to Draft when opened, reopened, given a new commit or retargeted.

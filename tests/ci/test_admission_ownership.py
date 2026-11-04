@@ -65,13 +65,6 @@ REVIEW_PREFLIGHT_PROTOCOL = """on:
       expected_base:
         required: true
         type: string
-      codex_reviewed_sha:
-        required: true
-        type: string
-      independent_codex_review_done:
-        required: true
-        default: false
-        type: boolean
       findings_dispositioned:
         required: true
         default: false

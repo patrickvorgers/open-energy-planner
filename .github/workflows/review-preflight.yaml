@@ -14,15 +14,6 @@ on:
         description: Current PR base SHA
         required: true
         type: string
-      codex_reviewed_sha:
-        description: Independently reviewed commit within this PR history
-        required: true
-        type: string
-      independent_codex_review_done:
-        description: Independent Codex context review completed before the final correction batch
-        required: true
-        default: false
-        type: boolean
       findings_dispositioned:
         description: Genuine findings evaluated and corrections batched and retested
         required: true
