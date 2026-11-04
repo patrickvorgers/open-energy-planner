@@ -610,6 +610,7 @@ def test_planning_time_edges_fill_plot_and_forecast_colors_are_distinct(app_page
         hours=intervals[-1]["duration_h"]
     )
     expected_start = first.replace(minute=first.minute // 15 * 15, second=0, microsecond=0)
+    page.clock.set_fixed_time(first)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

@@ -422,7 +422,7 @@ Open proposal: shared timeline for prices, flows, SoC and modes with selected-pe
 - STORAGE-19: External storage is a required configurable option, not contingent on SQLite performance. SQLAlchemy belongs in the app storage adapter. Support/test SQLite locally and PostgreSQL, MariaDB or MySQL externally for equivalent behaviour, migrations/reconstruction. Not every dialect or direct HA database access.
 - STORAGE-20: Exactly one active backend. Changing with existing data requires an explicit SQLAlchemy transfer of all OEP tables (including forecast-selection evidence) that preserves configuration/history and rebuilds the target tables, overwriting their previous content. The app restarts exclusively on the verified target and no longer requires the source database. Never silently fail over to an empty local archive. Document external database backup/restore rather than assuming HA backs it up. Retain plan/failure rules on storage faults.
 
-Use the [storage measurement method](storage-study-2026-10-17/REPORT.md) to assess compact measurement layouts. Measurement-only fixtures do not establish a whole-system history budget.
+Assess compact measurement layouts against the current shared schema with representative interval data, retention, indexes and complete application workloads. Measurement-only fixtures do not establish a whole-system history budget.
 
 Open: supported database/driver versions, snapshot cadence, backup consistency/restore checks/procedures and budgets. HA OS handles HA/app backup. External databases require appropriate backup. Stored history retention is decided. Build visualizations from saved data. Permanent chart images are not the primary data store.
 
