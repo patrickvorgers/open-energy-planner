@@ -738,3 +738,47 @@ def test_every_reviewer_requires_base_inclusion(candidate, kody_candidate, provi
 
     with pytest.raises(VerificationError):
         check(event, REPOSITORY, MissingBase(current, checks))
+
+
+@pytest.mark.parametrize("action", ["ready_for_review", "labeled"])
+def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, action):
+    """Ready metadata does not invalidate substantive Kody evidence for the unchanged head."""
+    event, current, checks = kody_candidate
+    event["action"] = action
+    checks.append(
+        {
+            **checks[2],
+            "id": 5,
+            "conclusion": "skipped",
+            "output": {
+                "title": "Code Review Skipped",
+                "summary": "No New Commits (No changes detected since last review)",
+            },
+        }
+    )
+    assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
+
+
+@pytest.mark.parametrize("earlier", ["missing", "failure", "in_progress", "skipped"])
+def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate, earlier):
+    """A no-change skip needs real success and cannot hide an actual later failed or pending attempt."""
+    event, current, checks = kody_candidate
+    metadata = {
+        **checks[2],
+        "id": 6,
+        "conclusion": "skipped",
+        "output": {
+            "title": "Code Review Skipped",
+            "summary": "No New Commits (No changes detected since last review)",
+        },
+    }
+    if earlier == "missing":
+        checks.pop(2)
+    else:
+        attempt = {**checks[2], "id": 5, "conclusion": earlier}
+        if earlier == "in_progress":
+            attempt.update(status="in_progress", conclusion=None)
+        checks.append(attempt)
+    checks.append(metadata)
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, Evidence(current, checks))

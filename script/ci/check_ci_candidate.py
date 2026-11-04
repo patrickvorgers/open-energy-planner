@@ -108,6 +108,14 @@ def latest_check(checks, name, app_id):
             and (
                 app_id == GITHUB_ACTIONS_APP_ID
                 or (app_id == CODERABBIT_APP_ID and row.get("status") == "completed")
+                or (
+                    app_id == KODY_APP_ID
+                    and row.get("status") == "completed"
+                    and isinstance(row.get("output"), dict)
+                    and row["output"].get("title") == "Code Review Skipped"
+                    and row["output"].get("summary")
+                    == "No New Commits (No changes detected since last review)"
+                )
             )
         )
     ]

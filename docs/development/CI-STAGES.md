@@ -159,7 +159,12 @@ The candidate workflow validates `Kody Code Review` from GitHub App `413034`
 (`kody-ai`). It requires a completed successful check with the provider's
 `Code Review Complete` title and successful review-publication summary. Starting,
 skipped, warning, failed, unknown and older-head results do not qualify. The
-latest Kody attempt supersedes earlier Kody evidence on that head. Either provider
+latest substantive Kody attempt supersedes earlier Kody evidence on that head.
+A completed `Code Review Skipped` check whose summary is exactly
+`No New Commits (No changes detected since last review)` is metadata from the
+unchanged revision. It preserves an earlier substantive success on that same
+head, but cannot supply missing review evidence or hide a later pending or
+failed review. Other skipped or unknown results still fail admission. Either provider
 may satisfy admission independently of the other provider's availability.
 The CodeRabbit-specific preflight and manual command above remain specific to
 CodeRabbit. They are not prerequisites for choosing Kody-ai.
