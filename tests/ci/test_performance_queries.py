@@ -83,6 +83,7 @@ def test_fail_safe_is_full_without_automatic_performance(monkeypatch, failure):
         "pyproject.toml",
         "compose.yaml",
         "Dockerfile.native-test",
+        "requirements.lock",
     ],
 )
 def test_complete_diff_cannot_drop_performance_owners(monkeypatch, path, status):

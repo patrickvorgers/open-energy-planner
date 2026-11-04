@@ -1038,13 +1038,25 @@ The immutable base selects performance checks for storage and SQL owners,
 including nested domain storage, schema/lifecycle code and moves out of those
 areas. Changes anywhere in the shared `tests/database/support/` directory or the
 database conftest retain both database groups, without a fixture filename list.
-Changes to performance cases, the native image, database dependencies and the
-CI execution/selection harness also retain the group. Both sides of a move are classified.
+Changes to performance cases, the native image, `requirements.lock`, database
+dependencies and the shared database environment retain the group. CI controllers,
+workflows and selection metadata alone do not add query measurements. Shared
+execution and unknown CI owners still retain their full functional coverage.
+Both sides of a move are classified, so a simultaneous query or fixture change
+cannot lose its volume checks because the PR also changes CI.
 Shared Python fixture consumers are retained from both immutable revisions.
 An architectural regression rejects ORM imports outside SQL adapters or an
 adapter whose policy omits either functional database or performance coverage.
 New queries need volume assertions for their own access pattern. Running the
 existing price and settlement cases alone is not proof for an unrelated query.
+
+An update confined to the one SHA-pinned `actions/setup-python` reference in
+`checks.yaml` selects CI regressions. The selector compares immutable Git blobs
+and requires every other workflow byte to remain identical. It does not read the
+working copy or trust a PR label. Changing the Python version, runner, permissions,
+commands or another action, adding or deleting the workflow, an ambiguous setup
+reference or unavailable comparison evidence retains the normal full route.
+Mixed changes retain the union of every affected owner's required suites.
 
 Central Python composition changes keep the original `full` matrix without
 inferring query impact from that breadth. SQLAlchemy ownership remains enforced

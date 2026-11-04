@@ -64,6 +64,7 @@ These instructions apply to the entire repository. Read the requirements, releas
 ## Database query performance
 
 - Keep large-volume query checks in `tests/database/performance/`, selected as `performance-queries`. Keep independent small correctness cases in `tests/database/contracts/`. Do not move rollback, index repair, migration, period-boundary or persistence correctness out of the functional suite. Query, SQL/storage, schema, backend/dependency and performance-fixture changes retain the performance group. The original matrix, including `full`, excludes query performance. Add it independently only for recognized query, schema, backend and performance-harness owners. Unknown or unreadable impact falls back to `full` without performance. No nightly schedule is required. Every selected group needs successful current-tree execution evidence. Main reuse must independently confirm the first-parent performance decision and reject omitted required volume evidence. See the CI matrix for the exact owners.
+- CI controllers and workflows alone do not request query-performance measurements. Preserve their functional routes. The native test image, production dependency lock, database environment and measured query/fixture owners retain volume checks. A setup-python action pin update may select CI alone only when immutable before/after workflow blobs prove that exactly one pinned reference and its comment changed, with all other workflow text identical. Additions, removals and broader edits retain their normal routes.
 
 ## Pull request review lifecycle
 
