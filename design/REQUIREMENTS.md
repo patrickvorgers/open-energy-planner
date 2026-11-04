@@ -531,8 +531,9 @@ ticks from their joint visible signed stacks. Recalculate on time-window, plan,
 legend and size changes. SoC remains on its own fixed percentage axis.
 
 UI-20 also requires two expected reference balances: default without battery versus
-OEP, and continuous battery self-consumption beside OEP. Keep the
-existing continuous evaluated-savings policy unchanged and explicitly labelled.
+OEP, and future battery self-consumption beside OEP. Both future battery
+scenarios start from the same measured stock and opening bonus budgets. Keep the
+separate continuous historical evaluated-savings policy unchanged and explicitly labelled.
 Use identical frozen external forecasts, physical converter limits and original
 price inputs. Show the reference above the optimized balance and the factual
 explanation below. Available solar/household forecasts and spot-market, import and
