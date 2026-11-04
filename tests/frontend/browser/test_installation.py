@@ -75,7 +75,9 @@ def test_energy_names_refresh_without_discarding_source_drafts(app_page):
     expect(selector.locator("option").first).to_contain_text("South roof")
     selector.select_option("1")
     draft = (
-        page.locator("#solar-rows fieldset").nth(1).get_by_label("Panel capacity (kWp)", exact=True)
+        page.locator("#solar-rows > fieldset")
+        .nth(1)
+        .get_by_label("Panel capacity (kWp)", exact=True)
     )
     draft.fill("4.25")
     original = read_settings(page, url)
@@ -105,7 +107,7 @@ def test_hybrid_converter_name_refresh_keeps_battery_draft(app_page):
     grid(page)
     for index in range(2):
         page.locator("#installation-solar").select_option(str(index))
-        source = page.locator("#solar-rows fieldset").nth(index)
+        source = page.locator("#solar-rows > fieldset").nth(index)
         source.get_by_label("Panel capacity (kWp)", exact=True).fill("3")
         source.get_by_text("Shared inverter settings", exact=True).click()
         source.get_by_label("Inverter ID", exact=True).fill(f"converter{index}")
@@ -432,7 +434,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
     grid(page)
     for index, (name, hybrid) in enumerate((("roof", True), ("shed", False))):
         page.locator("#installation-solar").select_option(str(index))
-        item = page.locator("#solar-rows fieldset").nth(index)
+        item = page.locator("#solar-rows > fieldset").nth(index)
         expect(item.get_by_label("Production energy sensor", exact=True)).to_be_disabled()
         item.get_by_label("Panel capacity (kWp)", exact=True).fill("3")
         item.get_by_text("Shared inverter settings", exact=True).click()
@@ -525,7 +527,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
     assert read_settings(page, url)["installation"] == before["installation"]
     installation_area(page, 1, edit=True)
     page.locator("#installation-solar").select_option("0")
-    item = page.locator("#solar-rows fieldset").first
+    item = page.locator("#solar-rows > fieldset").first
     item.get_by_label("Panel capacity (kWp)", exact=True).fill("4")
     item.get_by_label("Allow proposed solar on/off commands", exact=True).check()
     page.get_by_role("button", name="Save installation", exact=True).click()
@@ -538,6 +540,9 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
     # Energy membership changes are reflected without a second add/remove editor.
     reduced = discover(page, url, devices=True)
     reduced["suggestions"]["solar_sources"] = ["sensor.roof"]
+    reduced["suggestions"]["solar_configurations"] = [
+        reduced["suggestions"]["solar_configurations"][0]
+    ]
     reduced["suggestions"]["batteries"] = reduced["suggestions"]["batteries"][:1]
     reduced["suggestions"]["terms"] = [
         energy_term
@@ -554,7 +559,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
     expect(page.get_by_role("button", name="Add battery", exact=True)).to_have_count(0)
     expect(page.get_by_role("button", name="Remove solar source", exact=True)).to_have_count(0)
     installation_area(page, 1)
-    expect(page.locator("#solar-rows fieldset")).to_have_count(1)
+    expect(page.locator("#solar-rows > fieldset")).to_have_count(1)
     expect(page.get_by_label("Production energy sensor", exact=True)).to_be_disabled()
     installation_area(page, 2)
     expect(page.locator("#battery-rows fieldset")).to_have_count(1)
@@ -568,6 +573,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
     assert retained["solar"]["sources"][0]["source_id"] == after["solar"]["sources"][0]["source_id"]
     # A removed hybrid creates an unconfirmed converter draft. Saving strategy must not persist it.
     reduced["suggestions"]["solar_sources"] = []
+    reduced["suggestions"]["solar_configurations"] = []
     reduced["suggestions"]["solar"] = False
     reduced["suggestions"]["terms"] = [
         energy_term
@@ -651,6 +657,9 @@ def test_configured_grid_and_solar_remain_visible_without_measurements_or_histor
     page, url = app_page
     body = discover(page, url)
     body["suggestions"].update(solar=True, solar_sources=["sensor.roof"])
+    body["suggestions"]["solar_configurations"] = [
+        {"entity_id": "sensor.roof", "providers": [], "issue": "solar_configuration_not_available"}
+    ]
     body["suggestions"]["terms"].append({"entity_id": "sensor.roof", "sign": 1})
     body["entities"] = [
         entity for entity in body["entities"] if entity["entity_id"] != "sensor.roof"
@@ -831,12 +840,12 @@ def test_installation_design_reveals_invalid_unselected_source_before_advancing(
     discover(page, url, devices=True)
     connect(page)
     grid(page)
-    first = page.locator("#solar-rows fieldset").first
+    first = page.locator("#solar-rows > fieldset").first
     first.get_by_label("Panel capacity (kWp)", exact=True).fill("3")
     first.get_by_label("Inverter AC rating (kW)", exact=True).fill("3")
     page.get_by_role("button", name="Continue", exact=True).click()
     expect(page.locator("#installation-solar")).to_have_value("1")
-    second = page.locator("#solar-rows fieldset").nth(1)
+    second = page.locator("#solar-rows > fieldset").nth(1)
     expect(second.get_by_label("Panel capacity (kWp)", exact=True)).to_be_visible()
     assert read_settings(page, url)["installation"] is None
     expect(page.get_by_role("button", name="Save installation", exact=True)).to_be_hidden()
@@ -870,6 +879,10 @@ def test_installation_lists_four_solar_sources_and_all_grid_meters(app_page):
         )
     hints = body["suggestions"]
     hints["solar_sources"].extend(["sensor.terrace", "sensor.carport"])
+    hints["solar_configurations"].extend(
+        {"entity_id": entity, "providers": [], "issue": "solar_configuration_not_available"}
+        for entity in ("sensor.terrace", "sensor.carport")
+    )
     hints["grid_power_entities"].append("sensor.grid2")
     hints["terms"].extend(
         {"entity_id": "sensor." + name, "sign": sign}
@@ -904,13 +917,15 @@ def test_installation_lists_four_solar_sources_and_all_grid_meters(app_page):
     expect(page.locator("#installation-solar option")).to_have_count(4)
     for index in range(4):
         page.locator("#installation-solar").select_option(str(index))
-        source = page.locator("#solar-rows fieldset").nth(index)
+        source = page.locator("#solar-rows > fieldset").nth(index)
         expect(source.get_by_label("Inverter ID", exact=True)).to_be_hidden()
         source.get_by_label("Panel capacity (kWp)", exact=True).fill(str(index + 1))
         source.get_by_label("Inverter AC rating (kW)", exact=True).fill("3")
     page.locator("#installation-solar").select_option("0")
     expect(
-        page.locator("#solar-rows fieldset").first.get_by_label("Panel capacity (kWp)", exact=True)
+        page.locator("#solar-rows > fieldset").first.get_by_label(
+            "Panel capacity (kWp)", exact=True
+        )
     ).to_have_value("1")
     ids = page.locator('#solar-rows [data-key="inverter_id"]').evaluate_all(
         "items => items.map(input => input.value)"
@@ -966,12 +981,12 @@ def test_installation_duplicate_solar_names_keep_distinct_hybrid_choices(app_pag
     )
     for index in range(2):
         page.locator("#installation-solar").select_option(str(index))
-        source = page.locator("#solar-rows fieldset").nth(index)
+        source = page.locator("#solar-rows > fieldset").nth(index)
         source.get_by_label("Panel capacity (kWp)", exact=True).fill("3")
         source.get_by_label("Inverter AC rating (kW)", exact=True).fill("3")
         source.get_by_label("Hybrid inverter with battery connection", exact=True).check()
     inverter = (
-        page.locator("#solar-rows fieldset")
+        page.locator("#solar-rows > fieldset")
         .nth(1)
         .locator('[data-key="inverter_id"]')
         .input_value()

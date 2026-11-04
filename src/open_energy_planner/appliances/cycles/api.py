@@ -1,12 +1,87 @@
 """Authenticated task transport. The application service owns lifecycle and physical execution stays in HA."""
 
+import logging
 from datetime import UTC, datetime
 
 from aiohttp import web
 
 from open_energy_planner.appliances.cycles import history as historical
 from open_energy_planner.appliances.cycles.model import instant
+from open_energy_planner.runtime.diagnostics.logging import request_error_message
 from open_energy_planner.storage.writes import complete_write
+
+# Only these reviewed owned literals may cross the public error boundary.
+PUBLIC_VALIDATION_MESSAGES = (
+    "A complete measured cycle profile is required",
+    "A stable completed cycle identity is required",
+    "A stable readiness request identity is required",
+    "A timezone-aware timestamp is required",
+    "An appliance operation must be an object",
+    "An immutable cycle profile is required",
+    "Appliance forecast exceeds household boundary",
+    "Appliance forecast expired",
+    "Appliance settings changed. Reload before saving",
+    "Archived cycle evidence is incomplete. Retained profile is unchanged",
+    "Completed cycle identity reused with different evidence",
+    "Completed work cannot be cancelled",
+    "Completion requires confirmed actual start",
+    "Confirm that this attempt cannot execute later",
+    "Cycle duration needs at least one quarter and at most twelve hours",
+    "Cycle endpoint missing",
+    "Cycle evidence must describe a completed measured run",
+    "Cycle history does not cover the complete run",
+    "Cycle history has gaps, resets or coarse observations",
+    "Cycle weighting requires chronological evidence",
+    "Enable shifting and resolve the open task before editing",
+    "Enable shifting and wait for automatic learning or save a manual cycle profile first",
+    "Enable shifting first",
+    "Enter a duration of 15 to 720 minutes and positive energy in kWh",
+    "Execution feedback has an invalid event time",
+    "Fine cumulative energy history is required",
+    "Finish-before deadline must be in the next seven days",
+    "History must use the current Home Assistant Energy power sensor",
+    "History needs ordered completed intervals at the declared resolution",
+    "History progress changed. Refresh before continuing",
+    "History scan must be initialized for this source",
+    "History source range changed. Retained learning is unchanged",
+    "History target cannot move backwards",
+    "Hourly estimate has a counter reset",
+    "Hourly estimate has a history gap",
+    "Hourly estimate needs complete finite hourly counter evidence",
+    "Hourly samples exceed the requested batch",
+    "Invalid appliance history quantity type",
+    "Invalid appliance history sample",
+    "Invalid appliance task identity",
+    "Invalid appliance time window",
+    "Invalid deadline field",
+    "Invalid deadline timezone",
+    "Invalid history provenance",
+    "Invalid history scan phase",
+    "Invalid hourly cycle duration",
+    "Invalid hourly history bounds",
+    "Invalid retained cycle weight",
+    "Invalid task/attempt identity",
+    "Manual average power exceeds 20000 W",
+    "Only processing accepts history bounds",
+    "Readiness identity reused with different times",
+    "Resolve the open task before changing its deadline",
+    "Resolve the open task before changing shift permission",
+    "Select this consumer in Appliances settings first",
+    "Shift permission must be boolean",
+    "Start feedback contradicts execution state",
+    "Start request expired, superseded, paused or already claimed",
+    "This appliance already has an unresolved task",
+    "Too many appliance history samples",
+    "Too many cycle observations",
+    "Too many execution events",
+    "Too many shiftable appliances",
+    "Unknown appliance task",
+    "Unknown or stale appliance task/attempt",
+    "Unsupported appliance operation or fields",
+    "Unsupported cycle history resolution",
+    "Unsupported execution feedback",
+    "Use local time without an offset",
+)
 
 
 def register(app, service, repository, live, lock):
@@ -237,7 +312,15 @@ def register(app, service, repository, live, lock):
                 }
                 return web.json_response(response)
         except (ValueError, TypeError, KeyError, OverflowError) as error:
-            raise web.HTTPBadRequest(text=str(error)) from None
+            raise web.HTTPBadRequest(
+                text=request_error_message(
+                    error,
+                    logger=logging.getLogger(__name__),
+                    operation="Appliance request",
+                    safe_messages=PUBLIC_VALIDATION_MESSAGES,
+                    fallback="Appliance request could not be completed. Refresh appliance status before retrying.",
+                )
+            ) from None
 
     app.router.add_get("/v1/appliances", state)
     app.router.add_post("/v1/appliances/{operation}", mutate)

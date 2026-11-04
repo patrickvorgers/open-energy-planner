@@ -78,7 +78,7 @@ class SolarPanel:
 
 @dataclass(frozen=True)
 class SolarImport:
-    """Original read-only HA adapter configuration retained beside editable OEP geometry."""
+    """Accepted read-only HA panel configuration retained in immutable OEP provenance."""
 
     adapter: str
     entry_id: str

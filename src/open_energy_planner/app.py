@@ -14,14 +14,23 @@ from open_energy_planner.contracts.api import ContractAPI
 from open_energy_planner.contracts.bonus_history import BonusBudgetPreview, BonusHistory
 from open_energy_planner.contracts.planning_basis import ContractBasisSource
 from open_energy_planner.contracts.storage import ContractStore
-from open_energy_planner.core.units import BYTES_PER_KIB
+from open_energy_planner.core.units import BYTES_PER_KIB, SECONDS_PER_MINUTE
 from open_energy_planner.home_assistant.observation_wire import (
     configuration_document,
     observation_status,
     parse_configuration,
     parse_report,
 )
-from open_energy_planner.runtime.diagnostics.logging import register_lifecycle
+from open_energy_planner.runtime.diagnostics.logging import (
+    BackgroundLog,
+    register_lifecycle,
+    request_error_message,
+)
+from open_energy_planner.savings.diagnostics import (
+    REFERENCE_FORECAST_MESSAGES,
+    REFERENCE_FORECAST_UNAVAILABLE,
+    public_reference_plan,
+)
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import (
     DEFAULT_HISTORY_LIMIT,
     SqlPlanRepository,
@@ -76,6 +85,7 @@ WEATHER_RETRY_SECONDS = 1800
 PRICE_SCHEDULE_POLL_SECONDS = 30
 WEATHER_REFRESH_SECONDS = 3600
 DATABASE_URL_UNSET = object()
+_LOGGER = logging.getLogger(__name__)
 
 
 def create_app(
@@ -207,13 +217,15 @@ def create_app(
                     document["reference_forecast"] = await asyncio.to_thread(
                         comparison, document, reference_start
                     )
-                except (ValueError, TypeError, KeyError) as error:
-                    document["reference_forecast_issue"] = str(error)
-                except Exception as error:
-                    logging.getLogger(__name__).exception(
-                        "Reference forecast failed. Plan publication continues"
+                # Optional reference defects cannot block publication. The helper logs a value-free stack.
+                except Exception as error:  # noqa: BLE001
+                    document["reference_forecast_issue"] = request_error_message(
+                        error,
+                        logger=_LOGGER,
+                        operation="Reference forecast",
+                        safe_messages=REFERENCE_FORECAST_MESSAGES,
+                        fallback=REFERENCE_FORECAST_UNAVAILABLE,
                     )
-                    document["reference_forecast_issue"] = str(error)
                 from .home_assistant.names import comparison_names
 
                 document["comparison_names"] = comparison_names(
@@ -261,6 +273,8 @@ def create_app(
         return explain_measurements(
             live, reason, setup_catalogue.value
         ) or explain_planning_problem(reason)
+
+    from .optimization.performance import register as register_performance
 
     planner = PlanningCoordinator(
         PlanningService(solver or ProcessSolver()), publish, explain=explain_problem
@@ -398,6 +412,15 @@ def create_app(
 
     app.cleanup_ctx.append(archive_lifecycle)
 
+    planner.record_calculation = register_performance(
+        app,
+        SqlDocuments(repository.engine, "planning"),
+        lambda: (
+            (setup_catalogue.value or {}).get("timezone")
+            or ("UTC" if source == "synthetic" else None)
+        ),
+    )
+
     pairing = Pairing(directory, repository.state["instance_id"])
     register_pairing(app, pairing)
     if discovery_options is not None:
@@ -432,6 +455,11 @@ def create_app(
             if contract_input:
                 live.basis_source = contract_basis
             live.refresh(force=True)
+        _LOGGER.info(
+            "Configuration saved (%s). Updated settings are now active%s.",
+            type(candidate).__name__,
+            ". Planning prerequisites have been rechecked" if live else "",
+        )
         if cancellation is not None:
             raise cancellation
 
@@ -464,6 +492,7 @@ def create_app(
 
     async def demand_lifecycle(_app):
         """Fit and archive in a background thread. Never block HTTP/HA on model work or provider fetching."""
+        forecast_logger = BackgroundLog(_LOGGER, "Household demand forecast update")
 
         async def update():
             """Capture consistent input versions and install only still-current archived results."""
@@ -476,12 +505,29 @@ def create_app(
                     if job is not None:
                         result = await build_demand(job)
                         async with lock:
-                            demand.install(result, datetime.now(UTC))
+                            if (
+                                demand.install(result, datetime.now(UTC))
+                                and demand.forecast is not None
+                            ):
+                                forecast_logger.success(
+                                    f"A new consumption forecast is available. Model status: {demand.model_status.replace('_', ' ')}."
+                                )
                 except Exception:
-                    logging.getLogger(__name__).exception("Demand forecast update failed")
                     async with lock:
-                        if job is not None:
-                            demand.failed(job[0], datetime.now(UTC))
+                        failure_recorded = job is not None and demand.failed(
+                            job[0], datetime.now(UTC)
+                        )
+                        retry_seconds = (
+                            (demand.retry_after - datetime.now(UTC)).total_seconds()
+                            if failure_recorded
+                            and demand.retry_after
+                            and demand.retry_after > datetime.now(UTC)
+                            else FORECAST_WORKER_POLL_SECONDS
+                        )
+                    forecast_logger.exception(
+                        "The previous forecast keeps its original validity. Check storage and forecast status if this persists.",
+                        retry_seconds=max(FORECAST_WORKER_POLL_SECONDS, round(retry_seconds)),
+                    )
                 await asyncio.sleep(FORECAST_WORKER_POLL_SECONDS)
 
         task = asyncio.create_task(update())
@@ -499,6 +545,7 @@ def create_app(
         async def weather_lifecycle(_app):
             """Fetch temperature independently from planning, with hourly success and 30-minute failure retries."""
             async with weather_factory() as weather_source:
+                weather_logger = BackgroundLog(_LOGGER, "Temperature weather refresh")
 
                 async def update_weather():
                     """Use HA's current location. Missing weather leaves calendar models available."""
@@ -519,11 +566,25 @@ def create_app(
                                 async with lock:
                                     if live.report and live.report.location == location:
                                         demand.weather(temperatures)
+                                        if temperatures:
+                                            weather_logger.success(
+                                                f"Received {len(temperatures)} temperature hours. Next refresh in {WEATHER_REFRESH_SECONDS / SECONDS_PER_MINUTE:g} minutes."
+                                            )
+                                        else:
+                                            weather_logger.unavailable(
+                                                "Calendar consumption forecasting remains available without temperature data.",
+                                                reason="no usable temperature hours",
+                                                retry_seconds=WEATHER_REFRESH_SECONDS,
+                                            )
                                 delay = WEATHER_REFRESH_SECONDS
-                            except Exception:
-                                logging.getLogger(__name__).warning(
-                                    "Temperature source unavailable. Retaining calendar demand forecast",
-                                    exc_info=True,
+                            except Exception as error:
+                                weather_logger.exception(
+                                    "Existing valid forecasts retain their expiry. Calendar consumption forecasting does not require fresh temperature data.",
+                                    retry_seconds=WEATHER_RETRY_SECONDS,
+                                    expected=isinstance(error, ValueError),
+                                    reason="invalid weather data"
+                                    if isinstance(error, ValueError)
+                                    else None,
                                 )
                         else:
                             delay = PRICE_SCHEDULE_POLL_SECONDS
@@ -546,14 +607,20 @@ def create_app(
             nonlocal prices
             async with price_factory(repository.engine) as prices:
                 prices.persistence_lock = savings_mutation_lock
+                price_logger = BackgroundLog(_LOGGER, "Market price refresh")
 
                 async def update_prices():
                     """Check due source requests without blocking HTTP. Diagnose unexpected failures."""
                     while True:
                         try:
                             await prices.refresh(datetime.now(UTC))
+                            if price_logger.failure_key is not None:
+                                price_logger.success("Price refresh processing is running again.")
                         except Exception:
-                            logging.getLogger(__name__).exception("Price refresh failed")
+                            price_logger.exception(
+                                "Previously accepted prices keep their original expiry. Check source and storage status.",
+                                retry_seconds=PRICE_SCHEDULE_POLL_SECONDS,
+                            )
                         await asyncio.sleep(PRICE_SCHEDULE_POLL_SECONDS)
 
                 task = asyncio.create_task(update_prices())
@@ -831,7 +898,7 @@ def create_app(
             raise web.HTTPServiceUnavailable(text="Plan archive unavailable or invalid") from None
         if plan is None:
             raise web.HTTPNotFound(text="Archived plan not found")
-        return web.json_response(plan)
+        return web.json_response(public_reference_plan(plan))
 
     app.router.add_get("/v1/plans", plan_history)
     app.router.add_get("/v1/plans/{plan_id}", archived_plan)

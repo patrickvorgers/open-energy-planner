@@ -62,6 +62,11 @@ export class InstallationLayout {
         this.ready = ready;
         this.wizard = !config.installation?.version;
         this.editing = keepStrategy ? previousEditing : ready && this.wizard;
+        this.refreshNames(config);
+    }
+
+    /** Retain control ownership while registering fields created by metadata recovery. */
+    captureControls() {
         const previous = this.controls;
         this.controls = new Map();
         for (const control of find("wizard").elements) {
@@ -69,12 +74,12 @@ export class InstallationLayout {
                 this.controls.set(control, previous.get(control) ?? this.saveState.locked.get(control) ?? control.disabled);
             }
         }
-        this.refreshNames(config);
     }
 
     /** Refresh labels and facts only, retaining selected devices, editor values and saved revisions. */
     refreshNames(config) {
         if (!this.config) return;
+        this.captureControls();
         this.config = {...this.config, catalogue: config.catalogue, devices: config.devices};
         for (const [selector, container, kind] of [["installation-solar", "solar-rows", "solar"], ["installation-battery", "battery-rows", "battery"]]) {
             const selectedEntity = find(selector).selectedOptions[0]?.dataset.entity;
@@ -233,6 +238,8 @@ export class InstallationLayout {
             heading.textContent = find(selector).selectedOptions[0]?.dataset.name || heading.textContent;
         }
         list.className = "settings-summary";
+        const ownership = root?.querySelector("[data-panel-ownership]");
+        if (ownership) summaryFact(list, "Panel settings", ownership.textContent);
         const panelLists = new Map(), panelSections = [];
         if (this.area === 1) for (const group of root?.querySelectorAll(".solar-panel") || []) {
             const section = document.createElement("section"), title = document.createElement("h3"), facts = document.createElement("dl");

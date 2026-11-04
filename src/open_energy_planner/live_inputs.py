@@ -89,13 +89,23 @@ class LiveInputs:
         self.last_basis = self.last_quarter = None
         self.planner.invalidate("waiting_for_measurements")
         self.repository.invalidate_plan()
+        _LOGGER.info(
+            "Measurement configuration loaded (%d selected inputs). Waiting for a fresh Home Assistant capture before planning.",
+            len(configuration.bindings),
+        )
 
     def receive(self, report):
         """Accept a strictly newer capture and refresh readiness. Reject reordered reports."""
         if self.report is not None and report.captured_at <= self.report.captured_at:
             raise ValueError("Observation reports must advance capture time")
+        first_capture = self.report is None
         self.report = report
         self.refresh()
+        if first_capture:
+            _LOGGER.info(
+                "Home Assistant observation stream received (%d readings). Planning prerequisites have been checked.",
+                len(report.readings),
+            )
 
     def refresh(self, *, force=False):
         """Validate every capture, but solve on quarters or throttled material changes.
@@ -146,19 +156,50 @@ class LiveInputs:
                 and (versions != self.last_basis or self.deviated(snapshot, now))
             )
         ):
+            changed = (
+                ", ".join(
+                    label
+                    for label, previous, current in zip(
+                        (
+                            "configuration",
+                            "demand/solar forecasts",
+                            "market prices",
+                            "appliance requests",
+                            "EV charging",
+                            "thermal storage",
+                        ),
+                        self.last_basis,
+                        versions,
+                        strict=True,
+                    )
+                    if previous != current
+                )
+                if self.last_basis is not None
+                else ""
+            )
             reason = (
-                "explicit request"
+                "an explicit settings or user request"
                 if force
-                else "ready inputs"
+                else "all required inputs are ready"
                 if self.last_submission is None
-                else "quarter boundary"
+                else "a new quarter-hour started"
                 if quarter != self.last_quarter
-                else "new source version"
+                else f"updated {changed}"
                 if versions != self.last_basis
-                else "material measurement deviation"
+                else "measurements differ materially from the current plan"
             )
             _LOGGER.info(
-                "Planning requested (%s). Last submission %s", reason, self.last_submission
+                "Planning requested: %s. %s",
+                reason,
+                f"Previous request was {elapsed:.0f} seconds ago."
+                if elapsed is not None
+                else "This is the first ready request.",
+            )
+            _LOGGER.debug(
+                "Planning input snapshot %s. Measurement version: %s. Future input versions: %s.",
+                snapshot.snapshot_id,
+                snapshot.measurement_version,
+                versions,
             )
             self.last_submission, self.last_basis, self.last_quarter = now, versions, quarter
             self.planner.submit(snapshot)

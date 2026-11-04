@@ -66,20 +66,6 @@ async def running_forecasts(path, *, weather_factory=None):
 async def configure_forecasts(session, url, *, solar_definition=None):
     """Select a battery-free 5-kW installation and explicit no-PV configuration over HTTP."""
     solar_definition = solar_definition or {"sources": [], "inverters": []}
-    async with session.put(url + "/v1/solar", json=solar_definition) as response:
-        assert response.status == 200, await response.text()
-    async with session.put(
-        url + "/v1/installation",
-        json={
-            "grid_power_entity": "sensor.grid",
-            "import_limit_w": 5000,
-            "export_limit_w": 5000,
-            "inverters": [],
-            "batteries": [],
-        },
-    ) as response:
-        assert response.status == 200, await response.text()
-        state = await response.json()
     from tests.ha_contract.support.metadata import setup_metadata
 
     metadata = setup_metadata()
@@ -101,9 +87,31 @@ async def configure_forecasts(session, url, *, solar_definition=None):
         terms=terms,
         solar=bool(solar_definition["sources"]),
         solar_sources=[source["entity_id"] for source in solar_definition["sources"]],
+        solar_configurations=[
+            {
+                "entity_id": source["entity_id"],
+                "providers": [],
+                "issue": "solar_configuration_not_available",
+            }
+            for source in solar_definition["sources"]
+        ],
     )
     async with session.post(url + "/v1/ha/catalogue", json=metadata) as response:
         assert response.status == 200, await response.text()
+    async with session.put(url + "/v1/solar", json=solar_definition) as response:
+        assert response.status == 200, await response.text()
+    async with session.put(
+        url + "/v1/installation",
+        json={
+            "grid_power_entity": "sensor.grid",
+            "import_limit_w": 5000,
+            "export_limit_w": 5000,
+            "inverters": [],
+            "batteries": [],
+        },
+    ) as response:
+        assert response.status == 200, await response.text()
+        state = await response.json()
     await observe_forecasts(session, url, state["measurement_config"])
     return state
 

@@ -1,5 +1,6 @@
 """Freeze one pre-midnight forecast context per HA calendar day in the shared database."""
 
+import logging
 from copy import deepcopy
 from datetime import UTC, date, datetime, time, timedelta
 from math import fsum
@@ -14,6 +15,7 @@ DAILY_CAPTURE_POLL_SECONDS = 5
 MAX_CAPTURE_GAP_SECONDS = DAILY_CAPTURE_POLL_SECONDS * 2
 DAY_PAGE_SIZE = 20
 INDEX_NAME = "quality-days.json"
+_LOGGER = logging.getLogger(__name__)
 
 
 def calendar_day(day):
@@ -111,11 +113,21 @@ class DailyForecastArchive:
             return
         record = self.pending
         name = "quality-day-" + record["day"] + ".json"
+        created = False
         with self.documents.transaction():
             if not self.documents.exists(name):
                 self.documents.write(name, record)
                 index = self.documents.read(INDEX_NAME) if self.documents.exists(INDEX_NAME) else []
                 self.documents.write(INDEX_NAME, sorted(set(index) | {record["day"]}, reverse=True))
+                created = True
+        if created:
+            _LOGGER.info(
+                "Daily forecast evidence archived for %s. Midnight capture: %s.",
+                record["day"],
+                "complete"
+                if not record.get("capture_issue")
+                else "incomplete. Review forecast quality coverage",
+            )
         self.pending = None
 
     def observe(self, now, timezone, context):

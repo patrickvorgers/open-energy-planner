@@ -1,5 +1,6 @@
 """Independent shadow-plan economics, evidence limits and consistent model promotion."""
 
+import logging
 from dataclasses import replace
 from datetime import timedelta
 
@@ -173,7 +174,7 @@ def test_consistent_meaningful_financial_advantage_is_required():
         learned_is_better([windows[0]] * 3, Strategy.COST)
 
 
-def test_durable_preferences_restore_but_never_cross_configuration_families(tmp_path):
+def test_durable_preferences_restore_but_never_cross_configuration_families(tmp_path, caplog):
     """Three retained profitable windows restore preference. A changed family starts at baseline without altering plans."""
     from open_energy_planner.forecast_selection.runtime import ModelSelection
     from open_energy_planner.forecast_selection.storage import SelectionStore
@@ -207,11 +208,21 @@ def test_durable_preferences_restore_but_never_cross_configuration_families(tmp_
             "eligibility_issue": None,
         }
         original = {"strategy": "minimize cost", "currency": "EUR"}
+        caplog.set_level(logging.INFO, logger="open_energy_planner.forecast_selection.runtime")
+        malformed = {**choice, "family_id": "malformed"}
+        del malformed["scope"]
+        with pytest.raises(KeyError):
+            runtime.process(original, [choice, malformed], START + timedelta(days=8))
+        assert not runtime.preferences
+        assert not any("Forecast model selection" in message for message in caplog.messages)
         runtime.process(original, [choice], START + timedelta(days=8))
         assert runtime.preferences == {"known": True}
         assert runtime.rows[0]["completed_windows"] == 3
+        runtime.process(original, [choice], START + timedelta(days=8))
+        assert sum("Forecast model selection" in message for message in caplog.messages) == 1
         runtime.process(original, [{**choice, "family_id": "changed"}], START + timedelta(days=8))
         assert runtime.preferences == {"changed": False}
+        assert sum("Forecast model selection" in message for message in caplog.messages) == 2
         assert repository.state["plan"] is None
         assert len(SelectionStore(documents).state["families"]["known"]["windows"]) == 3
     finally:
