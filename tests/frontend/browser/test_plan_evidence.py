@@ -149,7 +149,7 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        .data.datasets[1].data[0].y === 0.88""")
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
     assert page.evaluate("""() => ['price-chart', 'current-price-chart'].map(id =>
         Chart.getChart(document.getElementById(id)).data.datasets[1].data[0].y)""") == [0.91, 0.88]
     assert (
@@ -189,7 +189,7 @@ def test_current_prices_recover_independently_of_plan_selection(automatic_plan_o
     state["current_buy_price"] = 0.88
     page.clock.run_for(15000)
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        .data.datasets[1].data[0].y === 0.88""")
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
     expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
     assert state["comparison_reads"] == comparisons
     expect(page.locator("#plan-version")).to_have_value(
@@ -237,7 +237,7 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
         "!Chart.getChart(document.getElementById('current-price-chart')).isDatasetVisible(1)"
     )
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        .data.datasets[1].data[0].y === 0.88""")
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
     assert state["comparison_reads"].count(current) == comparisons + (failed_view == "plan")
     if failed_view == "prices":
         assert page.evaluate("""window.reloadedPlanChart ===
@@ -290,7 +290,7 @@ def test_poll_retry_preserves_an_active_manual_price_read(automatic_plan_overvie
         }
     )
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        .data.datasets[1].data[0].y === 0.88""")
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
     expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
     assert len(state["held_prices"]) == 1
 
@@ -321,7 +321,7 @@ def test_pending_price_retry_reads_after_publication_detection(automatic_plan_ov
     state["current_buy_price"] = 0.88
     state["held_polls"][0].fulfill(json={"plans": state["plans"][:1], "next_before": None})
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        .data.datasets[1].data[0].y === 0.88""")
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
     assert page.evaluate("window.priceReads") == 1
 
 
@@ -380,7 +380,7 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     state["current_buy_price"] = 0.88
     page.clock.run_for(15000)
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        .data.datasets[1].data[0].y === 0.88""")
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
     page.clock.run_for(45000)
     expect(
         page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True)
@@ -841,6 +841,7 @@ def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
     page.get_by_text("Understand this plan", exact=True).click()
     page.get_by_text("Selected interval details", exact=True).click()
     expect(page.locator("#evidence-issue")).to_contain_text("Loading")
+    expect(page.locator("#smart-benefit-value")).to_have_text("-")
     expect(page.locator("#inspect-time")).to_be_disabled()
     page.locator("#inspect-time").dispatch_event("input")
     expect(page.locator("#evidence-issue")).to_contain_text("Loading")
@@ -852,6 +853,7 @@ def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
     held[0].fulfill(status=503, body="Temporary archive read failure")
     expect(page.locator("#evidence-issue")).to_contain_text("could not be loaded")
     expect(page.locator("#plan-evidence-status")).to_contain_text("could not be loaded")
+    expect(page.locator("#smart-benefit-value")).to_have_text("-")
     expect(page.locator("#inspect-time")).to_be_disabled()
     page.unroute("**/v1/plans/*/comparison")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
@@ -906,6 +908,7 @@ def test_plan_detail_failure_survives_initial_load_and_recovers(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
+    expect(page.locator("#smart-benefit-value")).to_have_text("-")
     page.unroute("**/v1/plans/*/comparison")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")

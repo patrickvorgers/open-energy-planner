@@ -134,6 +134,27 @@ in `tests/frontend/browser/test_plan_evidence.py` inspect cards, move between in
 original prices after contract corrections and enforce responsive layout.
 
 The planning page shows all three scenario balances without a comparison selector.
+The graphs appear in optimizer, battery self-consumption and no-battery baseline
+order. Each graph has its own financial header. The self-consumption scenario
+aims for zero on the meter within battery and converter limits. It does not
+guarantee zero grid exchange.
+The no-battery baseline retains planned EV and thermal loads. It is not an
+entirely unplanned household.
+The optimizer header leads with the extra expected saving from smart planning compared
+with battery self-consumption, directly from the original self-consumption
+comparison. A negative result is labelled as extra expected cost. Zero remains
+neutral, including amounts that round to zero at the displayed currency precision.
+Missing comparisons stay unavailable. This amount covers the whole original plan
+and does not change with chart zoom. It is not a measured or annualized return.
+Each scenario header shows its expected economic cost as a readable amount
+and names the complete original plan period. Current price inputs follow the
+three scenario graphs and a compact optimizer-only result summary. The summary
+repeats the same original optimizer costs and benefit, rather than summing
+alternative scenarios. Cash cost,
+wear and non-cash stored-energy value remain in the keyboard-accessible Cost
+breakdown disclosure. Its expanded state survives a read-only refresh.
+Economic cost is net grid cash cost plus wear minus the signed battery value
+change. A positive stored-energy value change reduces economic cost and is not cash.
 Each graph identifies its original expected economic cost, net grid cash, wear and
 inventory change. Self-consumption and OEP also show expected benefit versus the
 same no-battery baseline. Negative benefit remains negative. These are horizon

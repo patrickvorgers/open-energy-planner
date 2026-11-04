@@ -284,6 +284,44 @@ for (const button of document.querySelectorAll("[data-hours]")) button.addEventL
     applyRange();
 });
 view();
+/** Emphasize the existing incremental comparison without inventing a value or hiding a loss. */
+function renderSmartBenefit(value, currency, period = "Whole original plan. Expected, not measured.") {
+    const known = typeof value === "number" && Number.isFinite(value);
+    const zero = known && money(Math.abs(value)) === money(0);
+    const state = !known ? "unavailable" : zero ? "zero" : value > 0 ? "positive" : "negative";
+    for (const region of document.querySelectorAll(".planning-benefit")) region.dataset.state = state;
+    for (const label of document.querySelectorAll('[data-smart-benefit="label"]')) label.textContent = state === "negative" ? "Extra expected cost from smart planning" : state === "zero" ? "No extra expected savings from smart planning" : "Extra expected savings from smart planning";
+    for (const amount of document.querySelectorAll('[data-smart-benefit="value"]')) amount.textContent = known ? money(zero ? 0 : Math.abs(value)) : "-";
+    for (const unit of document.querySelectorAll('[data-smart-benefit="currency"]')) unit.textContent = currency;
+    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = period;
+}
+
+/** Keep the original cost and optional benefit readable, with non-cash components in native disclosure. */
+function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
+    const host = $(id), expanded = host.querySelector("details")?.open || false;
+    const totals = document.createElement("dl");
+    const metric = (parent, label, value) => {
+        const field = document.createElement("div"), name = document.createElement("dt"), amount = document.createElement("dd");
+        name.textContent = label; amount.textContent = `${money(value)} ${currency}`;
+        field.append(name, amount); parent.append(field);
+    };
+    metric(totals, costs?.economic_cost == null ? "Expected costs unavailable" : "Expected economic cost", costs?.economic_cost);
+    if (showBenefit) metric(totals, "Expected benefit versus without battery", benefit);
+    const details = document.createElement("details"), summary = document.createElement("summary"), breakdown = document.createElement("dl");
+    summary.textContent = "Cost breakdown"; details.open = expanded;
+    const cash = costs && [costs.purchase, costs.sale, costs.bonus].every(value => typeof value === "number" && Number.isFinite(value)) ? costs.purchase - costs.sale - costs.bonus : null;
+    metric(breakdown, "Net grid cash cost", cash);
+    metric(breakdown, "Wear", costs?.wear);
+    metric(breakdown, "Battery value change (not cash)", costs?.inventory_change);
+    const explanation = document.createElement("p");
+    explanation.textContent = "Economic cost = net grid cash cost + wear - battery value change. A positive value change reduces economic cost. Battery value change is not cash.";
+    details.append(summary, breakdown, explanation);
+    host.replaceChildren(totals, details);
+    if (!showBenefit) {
+        const note = document.createElement("p"); note.textContent = "Baseline without storage"; host.append(note);
+    }
+}
+
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
  * Render both frozen reference balances, original whole-plan costs and factual
@@ -296,6 +334,9 @@ view();
  */
 async function showPlan(signal) {
     const request = ++selectionRequest, id = $("plan-version").value;
+    renderSmartBenefit(null, "", id ? "Loading original plan comparison…" : "No plan selected.");
+    for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs", "optimizer-total-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
+    $("expected-benefit").textContent = "";
     planEvidence = null;
     $("inspect-time").disabled = true;
     $("inspect-values").textContent = id ? "Loading original interval values…" : "No plan selected.";
@@ -330,16 +371,17 @@ async function showPlan(signal) {
         for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
         const baseline = withoutBattery?.comparison;
         const self = selfConsumption?.comparison;
-        const describeCosts = (costs) => costs ? `Expected economic cost for the whole original plan: ${money(costs.economic_cost)} ${currency}: Net grid cash cost: ${money(costs.purchase - costs.sale - costs.bonus)} ${currency}: Wear: ${money(costs.wear)} ${currency}: Battery value change: ${money(costs.inventory_change)} ${currency} (not cash)` : "Expected costs unavailable";
-        $("reference-costs").textContent = describeCosts(baseline?.reference_costs) + ": Baseline without storage";
-        $("self-consumption-costs").textContent = describeCosts(self?.reference_costs) + `: Expected benefit versus without battery: ${money(selfConsumption?.expected_savings_vs_without_battery)} ${currency}.`;
-        $("ems-costs").textContent = describeCosts(baseline?.ems_costs || self?.ems_costs) + `: Expected benefit versus without battery: ${money(baseline?.expected_savings)} ${currency}.`;
-        let message = `Original expected benefit versus without battery over this horizon: ${money(baseline?.expected_savings)} ${currency}: Includes storage and OEP. Excludes investment costs. All graph costs use the original contract.`;
+        renderScenarioCosts("reference-costs", baseline?.reference_costs, currency);
+        renderScenarioCosts("self-consumption-costs", self?.reference_costs, currency, selfConsumption?.expected_savings_vs_without_battery, true);
+        for (const costId of ["ems-costs", "optimizer-total-costs"]) renderScenarioCosts(costId, baseline?.ems_costs || self?.ems_costs, currency, baseline?.expected_savings, true);
+        const period = planEvidence?.period;
+        renderSmartBenefit(self?.expected_savings, currency, period ? `From ${when(period.start)} to ${when(period.end)}: Whole original plan. Expected, not measured.` : undefined);
+        let message = "Benefits versus without battery include storage and OEP. Excludes investment costs.";
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
         if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
         if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
         if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
-        $("expected-benefit").textContent = message + " Horizon expectations are not evaluated lifetime savings. See Savings for evaluated self-consumption results.";
+        $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
         const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
         for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row($("expected-cost-rows"), [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
         const ems = [], reference = [], bareReference = [], buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
@@ -464,6 +506,7 @@ async function showPlan(signal) {
         renderedPlanId = id;
         return true;
     } catch (error) {
+        if (request === selectionRequest) renderSmartBenefit(null, "", "Original plan comparison unavailable.");
         if (request === selectionRequest) {
             renderedPlanId = null;
             $("overview-status").textContent = error.message;
