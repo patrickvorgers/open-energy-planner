@@ -312,7 +312,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     expect(page.locator("#quality-charts")).to_contain_text("Relative daily error: 2.0%")
     expect(page.locator("#quality-charts table")).to_contain_text("Eligible")
     expected_hour = page.evaluate(
-        "value => new Date(value).toLocaleString(undefined, {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/Amsterdam', timeZoneName: 'short'})",
+        "value => new Date(value).toLocaleString(undefined, {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/Amsterdam'})",
         start.isoformat(),
     )
     expect(page.locator("#quality-charts table")).to_contain_text(expected_hour)
