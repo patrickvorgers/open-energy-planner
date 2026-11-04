@@ -122,7 +122,7 @@ def test_follow_update_outage_unlink_and_relink_preserve_converter_and_originals
         SolarStore(SqlDocuments(owner.engine, "solar")).save(original)
 
     async def scenario():
-        """Exercise both metadata and configuration transport with actual SQLite persistence."""
+        """Exercise metadata and configuration transport with real persistence on each backend."""
         async with TestClient(
             TestServer(
                 create_app(tmp_path, TOKEN, source="home_assistant", database_url=panel_database)
@@ -187,9 +187,19 @@ def test_follow_update_outage_unlink_and_relink_preserve_converter_and_originals
             assert relinked["solar"]["inverters"] == document(original)["inverters"]
             notices = await client.get("/v1/notifications", headers=HEADERS)
             assert notices.status == 200
-            text = await notices.text()
-            assert "Previous manual settings" in text
-            assert "125" in text and "80" in text
+            payload = await notices.json()
+            following = next(
+                notice
+                for notice in payload["notifications"]
+                if notice["code"] == "solar_panel_settings_following"
+            )
+            assert following["message"] == (
+                "Home Assistant panel settings are now followed. "
+                "Previous manual settings: "
+                "1400 Wp at 125° with 25° tilt, 1800 Wp at 275° with 40° tilt. "
+                "Current settings: "
+                "1400 Wp at 80° with 25° tilt, 1800 Wp at 275° with 40° tilt."
+            )
         async with TestClient(
             TestServer(
                 create_app(tmp_path, TOKEN, source="home_assistant", database_url=panel_database)
