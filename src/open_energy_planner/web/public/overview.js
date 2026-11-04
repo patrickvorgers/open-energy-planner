@@ -37,6 +37,7 @@ function row(parent, values) {
     parent.append(tr);
 }
 const charts = new Map();
+const hiddenPriceSeries = new Set();
 const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad"];
 const INTERVAL_BAR_FILL = 0.9;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
@@ -124,7 +125,8 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
 }};
 /**
  * Render series into canvas id, destroying its previous chart, removing its tooltip
- * and rebuilding its accessible legend. Points/segments are timed lines with null
+ * and rebuilding its accessible legend. Current-price series retain their visibility.
+ * Points/segments are timed lines with null
  * gaps. Price points retain their published/forecast kind for interval-specific strokes.
  * Balance intervals are projected onto quarter-hour bars with explicit coverage.
  * axis: "soc" uses the right-hand 0–100% axis. utcDays selects UTC date labels.
@@ -153,7 +155,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         }
         if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd})));
         const color = s.color || palette[index % palette.length];
-        return {label: s.name, data: values, type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, borderColor: color, backgroundColor: color, borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
+        return {label: s.name, data: values, hidden: id === "current-price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, borderColor: color, backgroundColor: color, borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
         type: "line", data: {datasets}, plugins: [intervalWidths, calendarDays],
@@ -201,8 +203,13 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
     charts.set(id, result);
     series.forEach((s, index) => {
         const label = document.createElement("label"), input = document.createElement("input");
-        input.type = "checkbox"; input.checked = true;
-        input.addEventListener("change", () => { result.setDatasetVisibility(index, input.checked); applyRange(); });
+        input.type = "checkbox"; input.checked = result.isDatasetVisible(index);
+        input.addEventListener("change", () => {
+            if (id === "current-price-chart") {
+                if (input.checked) hiddenPriceSeries.delete(s.name); else hiddenPriceSeries.add(s.name);
+            }
+            result.setDatasetVisibility(index, input.checked); applyRange();
+        });
         const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = datasets[index].backgroundColor; swatch.setAttribute("aria-hidden", "true");
         label.append(input, swatch, document.createTextNode(s.name)); legend.append(label);
     });
@@ -484,7 +491,6 @@ async function refreshLatestPlan() {
     const selector = $("plan-version"), previousLatest = selector.options[0]?.value || "";
     let priceRead;
     try {
-        if (priceRefreshPending) priceRead = currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
         const data = await api("v1/plans?limit=1", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), latest = data.plans[0];
         if (!latest || overviewLoads || previousLatest !== (selector.options[0]?.value || "")) return;
         const selected = selector.value, followingLatest = selected === previousLatest;
@@ -503,7 +509,10 @@ async function refreshLatestPlan() {
             await Promise.all([showPlan(signal), priceRead ??= currentPrices(signal)]);
         }
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
-    finally { await Promise.allSettled([priceRead]); planRefreshBusy = false; }
+    finally {
+        if (!priceRead && priceRefreshPending) priceRead = currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
+        await Promise.allSettled([priceRead]); planRefreshBusy = false;
+    }
 }
 /** Use local calendar boundaries as aware API instants. Absent coverage never becomes zero savings. */
 async function savings(signal) {

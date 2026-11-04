@@ -205,6 +205,7 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
     """Retry the same latest plan or prices after a failed manual reload without redrawing good data."""
     state = automatic_plan_overview
     page = state["page"]
+    page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
     current = state["plans"][0]["plan_id"]
     state["current_buy_price"] = 0.88
     if failed_view == "plan":
@@ -229,12 +230,48 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
     expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
     expect(page.locator("#plan-evidence-status")).not_to_contain_text("could not be loaded")
     expect(page.locator("#plan-version")).to_have_value(current)
+    expect(
+        page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True)
+    ).not_to_be_checked()
+    assert page.evaluate(
+        "!Chart.getChart(document.getElementById('current-price-chart')).isDatasetVisible(1)"
+    )
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
         .data.datasets[1].data[0].y === 0.88""")
     assert state["comparison_reads"].count(current) == comparisons + (failed_view == "plan")
     if failed_view == "prices":
         assert page.evaluate("""window.reloadedPlanChart ===
             Chart.getChart(document.getElementById('plan-chart'))""")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_pending_price_retry_reads_after_publication_detection(automatic_plan_overview):
+    """A pending price retry reads the new snapshot after archive detection, once per poll."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["failed_prices"] = True
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
+    page.wait_for_load_state("networkidle")
+    state["failed_prices"] = False
+    state["hold_poll"] = True
+    page.evaluate("""() => {
+        const originalFetch = window.fetch;
+        window.priceReads = 0;
+        window.fetch = (input, options) => {
+            if (String(input).includes('/v1/prices/inputs')) window.priceReads++;
+            return originalFetch(input, options);
+        };
+    }""")
+    with page.expect_request("**/v1/plans?limit=1"):
+        page.clock.run_for(15000)
+    assert page.evaluate("window.priceReads") == 0
+    state["plans"].insert(0, state["newer"])
+    state["current_buy_price"] = 0.88
+    state["held_polls"][0].fulfill(json={"plans": state["plans"][:1], "next_before": None})
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
+        .data.datasets[1].data[0].y === 0.88""")
+    assert page.evaluate("window.priceReads") == 1
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -281,6 +318,7 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     page = state["page"]
     page.locator("#plan-version").select_option("older-plan")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
     before = page.evaluate("""() => {
         window.historicalChart = Chart.getChart(document.getElementById('plan-chart'));
         return {start: window.historicalChart.scales.x.min,
@@ -293,6 +331,12 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
         .data.datasets[1].data[0].y === 0.88""")
     page.clock.run_for(45000)
+    expect(
+        page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True)
+    ).not_to_be_checked()
+    assert page.evaluate(
+        "!Chart.getChart(document.getElementById('current-price-chart')).isDatasetVisible(1)"
+    )
     expect(page.locator("#plan-version option")).to_have_count(3)
     expect(page.locator("#plan-version")).to_have_value("older-plan")
     assert (
