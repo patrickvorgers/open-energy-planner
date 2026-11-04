@@ -1,6 +1,7 @@
 """Daily chart bounds retain installation-local days and original numeric evidence."""
 
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -11,17 +12,37 @@ from tests.frontend.browser.helpers import TOKEN, discover
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
-@pytest.mark.parametrize("day,hours", [("2026-02-12", 24), ("2026-03-29", 23), ("2026-10-25", 25)])
-def test_daily_bounds_and_optional_calculations(app_page, day, hours):
-    """Both plots fill a complete HA day across DST while optional runs preserve their values."""
+@pytest.mark.parametrize(
+    "day,hours,timezone",
+    [
+        ("2026-02-12", 24, "Europe/Amsterdam"),
+        ("2026-03-29", 23, "Europe/Amsterdam"),
+        ("2026-10-25", 25, "Europe/Amsterdam"),
+        ("2026-09-05", 24, "America/Santiago"),
+        ("2026-09-06", 23, "America/Santiago"),
+        ("2026-04-05", 24.5, "Australia/Lord_Howe"),
+    ],
+)
+def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone):
+    """Both plots fill an HA day across DST while optional runs preserve their values.
+
+    Discovery defaults to Europe/Amsterdam. Explicit overrides cover a missing
+    local midnight and half-hour DST. Three calculation rows and synthetic
+    UTC-hourly quality rows preserve their original timestamps and values.
+    """
     page, url = app_page
-    discover(page, url)
-    start = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo("Europe/Amsterdam")).astimezone(UTC)
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    discover(page, url, timezone=timezone)
+    start = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo(timezone)).astimezone(UTC)
     end = start + timedelta(hours=hours)
+    fixture_day = datetime.now(ZoneInfo("Europe/Amsterdam")).date().isoformat()
     evidence = page.request.get(
-        url + "/v1/planning-performance", headers={"Authorization": f"Bearer {TOKEN}"}
+        url + f"/v1/planning-performance?day={fixture_day}",
+        headers={"Authorization": f"Bearer {TOKEN}"},
     ).json()
     evidence["day"] = day
+    evidence["timezone"] = timezone
     for row, minutes in zip(evidence["calculations"], (480, 485, 495), strict=True):
         row["started_at"] = (start + timedelta(minutes=minutes)).isoformat()
     page.route("**/v1/planning-performance**", lambda route: route.fulfill(json=evidence))
@@ -29,6 +50,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours):
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator(".performance-row")).to_have_count(3)
+    expect(page.locator("#performance-status")).to_have_text("")
     extra = page.get_by_label("Show additional calculations between quarter hours")
     expect(extra).not_to_be_checked()
     canvas = page.locator("#performance-chart")
@@ -81,7 +103,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours):
             "error_kwh": None,
             "evaluation_issue": None,
         }
-        for index in range(hours)
+        for index in range(ceil(hours))
     ]
     source = {
         "id": "household",
@@ -92,7 +114,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours):
             "error_kwh": None,
             "evaluation_issue": None,
         },
-        "coverage": {"hours": hours, "measured_hours": 0, "paired_hours": 0},
+        "coverage": {"hours": ceil(hours), "measured_hours": 0, "paired_hours": 0},
         "rows": rows,
         "metrics": {},
         "issued_at": start.isoformat(),
@@ -105,7 +127,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours):
         "end": end.isoformat(),
         "as_of": end.isoformat(),
         "captured_at": start.isoformat(),
-        "timezone": "Europe/Amsterdam",
+        "timezone": timezone,
         "issues": [],
         "series": [source],
         "current_models": {},
@@ -127,8 +149,34 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours):
     assert_bounds(canvas, start, end)
     points = canvas.evaluate("canvas => Chart.getChart(canvas).data.datasets[0].data")
     assert points[0] == {"x": (start + timedelta(minutes=30)).timestamp() * 1000, "y": 1}
-    assert points[-1]["x"] == (end - timedelta(minutes=30)).timestamp() * 1000
-    assert len(points) == hours
+    last_start = start + timedelta(hours=ceil(hours) - 1)
+    last_end = last_start + timedelta(hours=1)
+    assert points[-1]["x"] == (last_start + (end - last_start) / 2).timestamp() * 1000
+    assert len(points) == ceil(hours)
+    geometry = canvas.evaluate("""canvas => {
+        const chart=Chart.getChart(canvas);
+        return chart.getDatasetMeta(0).data.map(bar=>({
+            left:bar.x-bar.width/2,right:bar.x+bar.width/2,
+            minimum:chart.chartArea.left,maximum:chart.chartArea.right
+        }));
+    }""")
+    for bar in geometry:
+        assert bar["left"] >= bar["minimum"] - 0.01
+        assert bar["right"] <= bar["maximum"] + 0.01
+    if hours != int(hours):
+        expected_title = page.evaluate(
+            """async ({start,end}) => {
+                const {when}=await import('/setup/display.js');
+                return `${when(start)} to ${when(end,{hour:'2-digit',minute:'2-digit'})}`;
+            }""",
+            {"start": last_start.isoformat(), "end": last_end.isoformat()},
+        )
+        canvas.evaluate("""canvas => {
+            const chart=Chart.getChart(canvas),index=chart.data.datasets[0].data.length-1;
+            chart.tooltip.setActiveElements([{datasetIndex:0,index}],{x:0,y:0});chart.update();
+        }""")
+        assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == [expected_title]
+    assert not errors
     page.screenshot(path=str(capture / f"quality-{day}-{width}.png"), full_page=True)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
@@ -143,3 +191,33 @@ def assert_bounds(canvas, start, end):
     assert bounds["max"] == end.timestamp() * 1000
     assert bounds["first"] == pytest.approx(bounds["left"])
     assert bounds["last"] == pytest.approx(bounds["right"])
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_skipped_calendar_date_remains_responsive(app_page):
+    """Apia skipped 2011-12-30 entirely, so no zero-duration chart or tick loop may be created."""
+    page, url = app_page
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    discover(page, url, timezone="Pacific/Apia")
+    page.route(
+        "**/v1/planning-performance**",
+        lambda route: route.fulfill(
+            json={"day": "2011-12-30", "timezone": "Pacific/Apia", "calculations": []}
+        ),
+    )
+    page.goto(url + "/planning-performance?day=2011-12-30")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    summary = page.locator("#performance-summary")
+    expect(summary).to_have_text(
+        "The selected calendar day does not exist in the Home Assistant installation timezone."
+    )
+    expect(page.locator("#performance-status")).to_have_text("")
+    page.get_by_label("Show additional calculations between quarter hours").check()
+    expect(summary).to_have_text(
+        "The selected calendar day does not exist in the Home Assistant installation timezone."
+    )
+    assert page.locator("#performance-chart").evaluate("canvas => !Chart.getChart(canvas)")
+    expect(page.locator(".performance-row")).to_have_count(0)
+    assert not errors

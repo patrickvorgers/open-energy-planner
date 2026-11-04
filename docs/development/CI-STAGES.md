@@ -55,14 +55,14 @@ frozen unless a new finding or failure requires a correction.
 ## Follow the intended merge order
 
 Develop Drafts and run independent local Codex reviews in parallel. Agree on one
-merge queue before requesting final CodeRabbit reviews. Review availability is
+merge queue before requesting final automated reviews. Review availability is
 not a reason to review a later PR before its predecessor has merged.
 
 For a queue of PR A followed by PR B, finish A's review, required candidate CI,
 guarded merge and required main validation first. Then include that actual main
 in B, resolve conflicts and run Quick, affected regression tests and CodeQL on
 the updated head. Reassess material changes with an independent reviewer. Only
-then freeze B's head and base and request its final CodeRabbit review. Complete
+then freeze B's head and base and request its final automated review. Complete
 B's selected candidate CI before merging B. Repeat this sequence for the next PR.
 
 Do not request a second review while the first is running or push speculative

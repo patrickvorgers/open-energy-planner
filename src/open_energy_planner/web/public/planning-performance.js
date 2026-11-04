@@ -1,6 +1,7 @@
 /** Read-only measured calculation history. Missing progress never becomes a fictional first plan. */
 import "./chart_theme.js";
-import {when, money, percentage, localDate, localInstant, nextDate, useHomeAssistantTimezone} from "./display.js";
+import {when, money, percentage, localDate, nextDate, useHomeAssistantTimezone} from "./display.js";
+import {calendarDayStart} from "./chart_days.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
 const find = id => document.getElementById(id);
@@ -57,7 +58,13 @@ async function detail(row) {
 function render() {
  chart?.destroy();
  const day = find("performance-day").value || localDate();
- const minimum = Date.parse(localInstant(day)), maximum = Date.parse(localInstant(nextDate(day)));
+ const minimum = calendarDayStart(day), maximum = calendarDayStart(nextDate(day));
+ if (maximum <= minimum) {
+  chart=null;
+  find("performance-list").replaceChildren(); find("performance-legend").replaceChildren();
+  find("performance-summary").textContent="The selected calendar day does not exist in the Home Assistant installation timezone.";
+  return;
+ }
  // Recorded starts identify quarter-minute runs, not their unrecorded trigger cause.
  const plottedRows = rows.filter(row => find("performance-extra").checked || new Date(row.started_at).getUTCMinutes() % 15 === 0);
  find("performance-summary").textContent = rows.length ? `${rows.length} completed calculations: Longest ${seconds(Math.max(...rows.map(row=>row.duration_seconds)))}.` : "No completed calculations were recorded for this day. History begins after this feature is installed.";

@@ -35,7 +35,7 @@ Batch corrections and retest instead of restarting independent review on every
 push. This local review is distinct from the optional Codex Cloud service above.
 
 Develop Drafts and run independent local Codex reviews in parallel, but request
-final CodeRabbit reviews in the intended merge order. Wait for the preceding PR
+final automated reviews in the intended merge order. Wait for the preceding PR
 to merge and finish its required main checks. Include that actual main in this
 PR, resolve conflicts, retest affected behavior and wait for current-head Quick,
 signature and CodeQL checks. Reassess material changes before final review.
@@ -69,8 +69,8 @@ the PR. Focused `--profile` and `--documentation-only` runs remain valid local c
 An informal local result does not replace the candidate merge gate. Candidate CI retains Ruff
 and formatting and executes the suites selected by the immutable base policy.
 Those suites include native/planner, database, app smoke, Home Assistant handoff
-and desktop/mobile browser checks when required by the matrix. CodeRabbit
-supplements executable checks and requires the GitHub App to have repository access.
+and desktop/mobile browser checks when required by the matrix. CodeRabbit or
+Kody-ai supplements executable checks and requires its GitHub App to have repository access.
 
 GitHub-hosted execution is the default and requires no developer-owned runner.
 Only the personal repository owner can apply `ci-runner: prefer-local` before
@@ -84,8 +84,8 @@ for the one-time registration, read-only availability credential and location la
 
 Contributors need no CI labels for the normal GitHub-hosted route. Ready attests
 that all findings, including outside-diff comments, were evaluated and addressed.
-The admission gate verifies current-head Quick, signatures, CodeRabbit and no
-unresolved discussions. Use `ci: run` only for a deliberate retry on a frozen,
+The admission gate verifies current-head Quick, signatures, CodeQL, a substantive
+CodeRabbit or Kody-ai review and no unresolved discussions. Use `ci: run` only for a deliberate retry on a frozen,
 reviewed candidate. It cannot bypass those gates. No periodic checks or automatic
 retries of failed tests are scheduled.
 
