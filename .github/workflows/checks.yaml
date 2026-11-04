@@ -136,7 +136,7 @@ jobs:
         env:
           OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || (steps.scope.outputs.documentation_only == 'true' && 'documentation' || 'full') }}
         run: python script/ci/ci.py --prebuilt --stage preflight --profile "$OEP_CI_PROFILE"
-      - name: Documentation, provenance, Ruff and CI routing checks
+      - name: Documentation, Ruff and CI routing checks
         if: steps.scope.outputs.documentation_only == 'true'
         run: python script/ci/ci.py --documentation-only --prebuilt --stage tests
       - name: Native checks, planner scenarios, app smoke and real HA handoff
