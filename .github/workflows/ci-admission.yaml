@@ -1,17 +1,10 @@
 name: Candidate admission and evidence
 on:
   workflow_call:
-    secrets:
-      OEP_RUNNER_READ_TOKEN:
-        description: Optional read-only repository runner availability credential.
-        required: false
     outputs:
       reuse:
         description: Validated reuse of an identical successful candidate.
         value: ${{ jobs.candidate.outputs.reuse }}
-      runner_labels:
-        description: Validated personal capacity or GitHub-hosted fallback labels.
-        value: ${{ jobs.candidate.outputs.runner_labels }}
 
 jobs:
   candidate:
@@ -23,7 +16,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       reuse: ${{ steps.reuse.outputs.reuse }}
-      runner_labels: ${{ steps.admission.outputs.runner_labels }}
     permissions:
       contents: read
       # Read candidate identities and original artifacts only in the admission job.
@@ -36,10 +28,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Require current reviewed PR candidate
-        id: admission
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OEP_RUNNER_READ_TOKEN: ${{ secrets.OEP_RUNNER_READ_TOKEN }}
         run: python3 -m script.ci.check_ci_candidate
       - uses: ./.github/actions/quick-checks
       - name: Reuse an identical validated main merge when proven

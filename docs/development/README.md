@@ -46,18 +46,18 @@ log levels, failure/recovery deduplication, privacy and truthful acceptance logs
 
 ### What the quality job runs
 
-CodeRabbit is the only required automated review service and must cover the latest
-PR head. After Quick, signature and CodeQL checks pass, use an independent local
-Codex context to review the Draft, batch corrections and retest. Prepare one final
-manual CodeRabbit request through the trusted-main read-only preflight. The
+CodeRabbit is the preferred independent reviewer. Check fresh included capacity
+before requesting review and use Kody-ai only after a confirmed CodeRabbit rate
+limit. A substantive review from either provider must cover the latest PR head.
+After Quick, signature and CodeQL checks pass, inspect your own changes, batch
+corrections and retest. When choosing CodeRabbit, prepare one final manual request
+through the trusted-main read-only preflight. The
 150-file limit counts every changed file. Automatic review triggers are disabled
 regardless of plan or star count. Follow the [review procedure](CI-STAGES.md#prepare-one-final-coderabbit-review).
-Codex Cloud review is optional and starts only on an explicit human
-request for that service and PR. Automatic Codex review is disabled for this
-repository. A general request to inspect a PR does not authorize a cloud review.
-Do not automatically post or repeat Codex review commands after commits. Keep
-evaluating findings already posted by either service. The existing Dependabot
-exception remains: no mandatory CodeRabbit or Codex Cloud review, with CI,
+The selected provider supplies the independent review. Do not add a separate local Codex
+reviewer, reviewer subagent or Codex Cloud review stage. Keep automatic Codex
+reviews disabled and evaluate findings already posted by any reviewer.
+The existing Dependabot exception remains: no mandatory automated review, with CI,
 verified commits and compatibility/regression assessment still required. See
 [the contribution policy](../../CONTRIBUTING.md).
 
@@ -112,11 +112,9 @@ regression checks this invariant on every full and documentation-only run.
 Update both pins together. The persistent real-Supervisor developer installation has
 its own upgrade lifecycle and is not upgraded by the ephemeral CI recipe.
 Existing daemon settings are retained when enabling the feature. Local Docker
-settings are never changed. Optional personal Windows/Linux runners use a
-separate Buildx container instead of changing or restarting the host daemon.
-The workflow keeps the same test selection and artifacts. See
-[personal runner execution](CI-STAGES.md#personal-runner-execution) for owner-only
-labels, availability fallback and setup. Separate scopes hold the app, native,
+settings are never changed. All CI jobs use
+[GitHub-hosted execution](CI-STAGES.md#github-hosted-execution).
+Separate scopes hold the app, native,
 Home Assistant and browser layers. The native recipe builds once with three tags
 for the native, provisioning and database suites, avoiding duplicate image exports.
 Dependency/base-image layers can survive source changes. Docker still hashes
