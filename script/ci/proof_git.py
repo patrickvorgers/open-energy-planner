@@ -234,6 +234,16 @@ def immutable_test_sources(revision, root):
     return sources
 
 
+def immutable_blob(blob, root="."):
+    """Read one immutable Git blob without checkout, filters or candidate execution."""
+    return subprocess.check_output(
+        ["git", "cat-file", "blob", sha(blob)],
+        cwd=root,
+        stderr=subprocess.DEVNULL,
+        timeout=GIT_TIMEOUT_SECONDS,
+    )
+
+
 def raw_changes(base, tested, root):
     """Read every changed regular-file record without external diff or text conversion hooks."""
     return subprocess.check_output(

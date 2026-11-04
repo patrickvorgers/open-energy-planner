@@ -55,14 +55,14 @@ frozen unless a new finding or failure requires a correction.
 ## Follow the intended merge order
 
 Develop Drafts and run independent local Codex reviews in parallel. Agree on one
-merge queue before requesting final CodeRabbit reviews. Review availability is
+merge queue before requesting final automated reviews. Review availability is
 not a reason to review a later PR before its predecessor has merged.
 
 For a queue of PR A followed by PR B, finish A's review, required candidate CI,
 guarded merge and required main validation first. Then include that actual main
 in B, resolve conflicts and run Quick, affected regression tests and CodeQL on
 the updated head. Reassess material changes with an independent reviewer. Only
-then freeze B's head and base and request its final CodeRabbit review. Complete
+then freeze B's head and base and request its final automated review. Complete
 B's selected candidate CI before merging B. Repeat this sequence for the next PR.
 
 Do not request a second review while the first is running or push speculative
@@ -75,6 +75,36 @@ The preflight verifies that the selected current main commit is an ancestor of
 the frozen head and rechecks the current base and head before emitting a command.
 It cannot prove the human queue order. The operator must still confirm that all
 preceding PRs have completed the required merge and main checks.
+
+## Choose the reviewer before requesting a review
+
+Agents apply this order to each explicit automated-review request after the
+current-head cheap checks and coordinated merge slot are ready:
+
+1. Post `@coderabbitai rate limit` on the PR and wait for CodeRabbit's fresh reply.
+   This checks included review availability without starting a review, as
+   documented in [CodeRabbit's rate-limit guide](https://docs.coderabbit.ai/management/rate-limits).
+   Use the actual response for this request. Do not infer capacity from a fixed
+   plan allowance, an earlier review or a stale reply from another PR.
+2. If included capacity is available, follow the existing CodeRabbit preflight
+   and request one CodeRabbit review of the frozen head.
+3. If CodeRabbit explicitly reports no included capacity, request Kody-ai once
+   using `@kody start-review` with `<!-- oep-kody-head:<current-head-sha> -->`.
+   A positive availability check does not reserve capacity. If the subsequent
+   CodeRabbit request is explicitly rate-limited, switch to the same Kody route
+   without retrying CodeRabbit.
+
+Record the availability reply and chosen reviewer in the PR. Recheck the frozen
+head and base before sending either review command. Never launch both reviews
+in parallel, repeat an existing request or enable usage billing or paid credits.
+An unavailable status reply, provider outage or generic failure is not evidence
+of quota exhaustion. Stop and report that condition instead of guessing or
+silently switching providers. The existing Dependabot exception remains.
+
+This is the order agents use when requesting reviews. It does not change the
+candidate-admission rules. A completed substantive review of the current head
+from either CodeRabbit or Kody-ai remains valid for Ready, CI and merge. All
+findings from every reviewer still require evaluation, replies and resolution.
 
 ## Prepare one final CodeRabbit review
 
@@ -121,28 +151,25 @@ Two successful preflights can still lead two people to post the command. The
 workflow concurrency group serializes preflights, not provider review capacity.
 All chats must coordinate one queue and use actual provider availability, not a
 hardcoded hourly allowance. Keep this conservative procedure during paid months
-too. Never remove a request marker, push an empty commit or retry autonomously to
-evade the duplicate guard. A rate-limited request needs deliberate operator
-handling after the provider reports capacity again and the prerequisites are
-rechecked.
+too. Never remove a request marker, push an empty commit or retry CodeRabbit
+automatically to evade the duplicate guard. A confirmed rate limit selects the
+Kody-ai fallback described above after the frozen identities and prerequisites
+are rechecked.
 
-For that deliberate recovery, inspect the actual provider result and current
-repository/account capacity or reset without making another review request.
-Confirm that the previous request did not run a substantive review. Recheck the
-exact current head and base, Quick/signature/CodeQL results, finding disposition
-and the absence of a running or completed substantive CodeRabbit review. Reuse
-the existing preflight summary and head marker, and consciously post the same
-manual command only when capacity is actually available. The normal preflight
-still refuses the existing marker. This is an explicit operator recovery outside
-that duplicate blocker, not a successful preflight rerun or an automatic retry.
+For that fallback, inspect the actual availability reply or rate-limit result
+and confirm that no substantive review ran. Recheck the exact current head and
+base, Quick/signature/CodeQL results, finding disposition and the absence of
+running or completed provider work. Request Kody-ai once with its own head
+marker. Do not repeat the existing CodeRabbit request or wait for its quota to
+refill when Kody-ai can review the frozen revision.
 
 Native automatic, incremental, positive-label and description-keyword triggers
 are disabled. GitHub cannot prevent a person with access from directly posting a
 CodeRabbit command. The operator attestations are not machine proof of independent
 review quality or finding correctness. No preflight receipt is a merge credential.
 Candidate admission separately enforces the file limit and actual current-head
-check evidence. It requires a substantive CodeRabbit result with completed scope,
-workspace, analysis, feedback and publication phases. A green skipped or
+check evidence. It accepts either a substantive CodeRabbit result with completed scope,
+workspace, analysis, feedback and publication phases, or a substantive Kody-ai result. A green skipped or
 rate-limited provider check does not meet that requirement. Unknown provider
 output fails closed and requires investigation instead of weakening the gate.
 Completed phases alone do not prove substantive coverage of every changed file;
@@ -152,27 +179,52 @@ Dependabot retains its documented CodeRabbit exception. Do not request manual
 CodeRabbit reviews for it. Its file limit, signatures, CodeQL, compatibility and
 required CI evidence still apply.
 
+## Kody-ai alternative
+
+Kody-ai can satisfy the same latest-head automated-review prerequisite as CodeRabbit.
+The candidate workflow validates `Kody Code Review` from GitHub App `413034`
+(`kody-ai`). It requires a completed successful check with the provider's
+`Code Review Complete` title and successful review-publication summary. Starting,
+skipped, warning, failed, unknown and older-head results do not qualify. The
+latest substantive Kody attempt supersedes earlier Kody evidence on that head.
+A completed `Code Review Skipped` check whose summary is exactly
+`No New Commits (No changes detected since last review)` is metadata from the
+unchanged revision. It preserves an earlier substantive success on that same
+head, but cannot supply missing review evidence or hide a later pending or
+failed review. Other skipped or unknown results still fail admission. Either provider
+may satisfy admission independently of the other provider's availability.
+The CodeRabbit-specific preflight and manual command above remain specific to
+CodeRabbit. They are not prerequisites for choosing Kody-ai.
+
+The same independent local review, coordinated merge order, current-head cheap
+checks and finding-disposition requirements apply to either reviewer. Inspect
+actual scope and exclusions. Address findings from both providers when both ran.
+A successful check does not prove that all findings have been addressed.
+
 ## Request candidate CI
 
 Ready for review starts candidate CI, not another CodeRabbit review. Native
 automatic review routes stay disabled, while the explicit manual command remains
 available. Admission reuses substantive review evidence for the exact same head,
 even if a later automatic metadata check is skipped. It reads the complete check
-history and still rejects later pending or failed reviews. A new head must obtain
+history and rejects later pending or failed attempts from the selected provider. A new head must obtain
 its own completed review before admission. A Ready transition must not be used to
 spend another review on an already reviewed, unchanged commit.
 
-First complete CodeRabbit review of the current head and address all findings,
+First complete a CodeRabbit or Kody-ai review of the current head and address all findings,
 including comments outside the diff. Resolve evaluated discussions, including
 outdated threads. Then select **Ready for review**. That transition automatically
 requests one candidate run without a CI label. For this repository Ready means
 ready for final candidate validation, rather than the start of bot review.
 The candidate gate requires a complete changed-file inventory within the 150-file
 limit, passing Quick checks, GitHub Verified PR commits, CodeQL and a substantive
-completed CodeRabbit check from the actual GitHub Apps on that head.
+completed CodeRabbit or Kody-ai check from its actual GitHub App on that head.
 The established Dependabot review exception remains in effect. An API outage,
 missing evidence, pending review, wrong app or changed PR fails before image builds.
 The gate checks the current base and head before and after reading the evidence.
+Every reviewer route must also prove that the frozen head includes the intended
+base through the GitHub comparison API. Missing, divergent or unavailable ancestry
+evidence fails admission.
 
 Admission also reads every review-thread page and rejects unresolved threads.
 The review check proves review completion, and thread resolution proves
@@ -512,7 +564,7 @@ The trusted workflow activates after this change reaches main. Local regression
 tests cover classification, stale events, label replacement and its privilege
 boundary before activation.
 
-Candidate admission, latest-head CodeRabbit review, evaluation and replies for
+Candidate admission, latest-head CodeRabbit or Kody-ai review, evaluation and replies for
 all findings, GitHub Verified commits and the final head/base identity checks
 are mandatory for every route. The matrix selects executable tests. It never
 weakens review or merge requirements. The Dependabot exception remains unchanged.
@@ -1038,13 +1090,28 @@ The immutable base selects performance checks for storage and SQL owners,
 including nested domain storage, schema/lifecycle code and moves out of those
 areas. Changes anywhere in the shared `tests/database/support/` directory or the
 database conftest retain both database groups, without a fixture filename list.
-Changes to performance cases, the native image, database dependencies and the
-CI execution/selection harness also retain the group. Both sides of a move are classified.
+Changes to performance cases, the native image, `requirements.lock`, database
+dependencies and the shared database environment retain the group. CI controllers,
+workflows and selection metadata alone do not add query measurements. Shared
+execution and unknown CI owners still retain their full functional coverage.
+Both sides of a move are classified, so a simultaneous query or fixture change
+cannot lose its volume checks because the PR also changes CI.
 Shared Python fixture consumers are retained from both immutable revisions.
 An architectural regression rejects ORM imports outside SQL adapters or an
 adapter whose policy omits either functional database or performance coverage.
 New queries need volume assertions for their own access pattern. Running the
 existing price and settlement cases alone is not proof for an unrelated query.
+
+An update confined to the one SHA-pinned `actions/setup-python` reference in
+`checks.yaml` selects CI regressions. The selector compares immutable Git blobs
+and requires every other workflow byte to remain identical. It does not read the
+working copy or trust a PR label. Changing the Python version, runner, permissions,
+commands or another action, adding or deleting the workflow, an ambiguous setup
+reference or unavailable comparison evidence retains the normal full route.
+The reference must belong to a block-style workflow step. Matching text inside
+scripts or other scalar values never qualifies. Ambiguous YAML syntax before the
+reference conservatively retains full validation.
+Mixed changes retain the union of every affected owner's required suites.
 
 Central Python composition changes keep the original `full` matrix without
 inferring query impact from that breadth. SQLAlchemy ownership remains enforced

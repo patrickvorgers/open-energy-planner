@@ -20,6 +20,7 @@ CHECKS_PER_PAGE = 100
 MAX_CHECK_PAGES = 10
 GITHUB_ACTIONS_APP_ID = 15368
 CODERABBIT_APP_ID = 347564
+KODY_APP_ID = 413034
 CODEQL_APP_ID = 57789
 MAX_PR_FILES = 150
 PREREQUISITE_CHECKS = (
@@ -27,6 +28,20 @@ PREREQUISITE_CHECKS = (
     ("GitHub Verified PR commits", GITHUB_ACTIONS_APP_ID),
     ("CodeQL", CODEQL_APP_ID),
 )
+
+
+def require_included_base(repository, head, base, client):
+    """Require the selected current main revision in the frozen head before final review."""
+    comparison = client.get(f"repos/{repository}/compare/{base}...{head}?per_page=1")
+    common = comparison.get("merge_base_commit")
+    if (
+        not isinstance(common, dict)
+        or common.get("sha") != base
+        or comparison.get("status") not in {"ahead", "identical"}
+    ):
+        raise VerificationError(
+            "Include the current main in this PR and retest before final review"
+        )
 
 
 def changed_files(repository, number, current, client):
@@ -93,6 +108,14 @@ def latest_check(checks, name, app_id):
             and (
                 app_id == GITHUB_ACTIONS_APP_ID
                 or (app_id == CODERABBIT_APP_ID and row.get("status") == "completed")
+                or (
+                    app_id == KODY_APP_ID
+                    and row.get("status") == "completed"
+                    and isinstance(row.get("output"), dict)
+                    and row["output"].get("title") == "Code Review Skipped"
+                    and row["output"].get("summary")
+                    == "No New Commits (No changes detected since last review)"
+                )
             )
         )
     ]
@@ -140,6 +163,32 @@ def require_coderabbit_review(checks):
         raise VerificationError(
             "CodeRabbit scope, workspace, analysis or feedback did not complete"
         )
+
+
+def require_automated_review(checks):
+    """Accept substantive current-head CodeRabbit or Kody evidence from the actual provider app.
+
+    Provider completion does not dispose of findings. The caller still checks all
+    review threads, and the operator must evaluate outside-diff feedback too.
+    """
+    try:
+        require_coderabbit_review(checks)
+        return
+    except VerificationError as error:
+        coderabbit_error = str(error)
+    latest = latest_check(checks, "Kody Code Review", KODY_APP_ID)
+    if latest and latest.get("status") == "completed" and latest.get("conclusion") == "success":
+        output = latest.get("output")
+        if (
+            isinstance(output, dict)
+            and output.get("title") == "Code Review Complete"
+            and output.get("summary")
+            == "Review finished successfully. Suggestions (if any) were posted as PR/file comments."
+        ):
+            return
+    raise VerificationError(
+        f"No completed current-head CodeRabbit or Kody-ai review. CodeRabbit: {coderabbit_error}"
+    )
 
 
 def runner_labels(event, repository):
@@ -271,11 +320,12 @@ def check(event, repository, client):
         return current
 
     current = current_pr()
+    require_included_base(repository, head, base, client)
     file_count = changed_files(repository, number, current, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
     if current.get("user", {}).get("login") != "dependabot[bot]":
-        require_coderabbit_review(checks)
+        require_automated_review(checks)
     require_resolved_threads(repository, number, client)
     final_count = current_pr().get("changed_files")
     if type(final_count) is not int or final_count != file_count:
