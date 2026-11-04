@@ -96,7 +96,14 @@ function graph(source, index, inProgress) {
     canvas.id = `quality-chart-${index}`; canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", `${source.title}: Original predicted and measured hourly energy`);
     const plot = document.createElement("div"); plot.className = "chart-plot";
     wrap.className = "chart-wrap"; wrap.append(canvas); plot.append(wrap); article.append(plot); find("quality-charts").append(article);
-    const datasets = [["Predicted", "predicted_kwh", "#5d70bc"], ["Measured", "measured_kwh", "#078b80"]].map(([label, field, color]) => ({label, type: "bar", order: 1, backgroundColor: `${color}66`, borderColor: color, data: source.rows.map((row) => ({x: Date.parse(row.start), y: row[field]}))}));
+    // Clip only the plotted interval. Original hourly timestamps still describe the complete evidence.
+    const positions = source.rows.map(row => {
+        const start = Date.parse(row.start), end = Date.parse(row.end);
+        const left = Math.max(start, Date.parse(displayedDay.start)), right = Math.min(end, Date.parse(displayedDay.end));
+        return {original: (start + end) / 2, midpoint: (left + right) / 2, fraction: (right - left) / (end - start)};
+    });
+    // Original sample spacing keeps full-hour bar widths independent of clipped edge intervals.
+    const datasets = [["Predicted", "predicted_kwh", "#5d70bc"], ["Measured", "measured_kwh", "#078b80"]].map(([label, field, color]) => ({label, type: "bar", order: 1, backgroundColor: `${color}66`, borderColor: color, data: source.rows.map((row, index) => ({x: positions[index].original, y: row[field]}))}));
     const lines = datasets.map(dataset => ({...dataset, type: "line", order: 0, backgroundColor: dataset.borderColor, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, fill: false, spanGaps: false, tension: 0}));
     const alignment = {id: "quality-bar-centres",
     /** Move line-point x coordinates in pixels onto grouped bar centres after layout.
@@ -106,10 +113,17 @@ function graph(source, index, inProgress) {
     afterDatasetsUpdate(chart) {
         datasets.forEach((dataset, datasetIndex) => {
             const bars = chart.getDatasetMeta(datasetIndex).data;
+            bars.forEach((bar, index) => {
+                const {original, midpoint, fraction} = positions[index];
+                if (fraction >= 1) return;
+                const centre = chart.scales.x.getPixelForValue(original);
+                bar.x = chart.scales.x.getPixelForValue(midpoint) + (bar.x - centre) * fraction;
+                bar.width *= fraction;
+            });
             chart.getDatasetMeta(datasetIndex + datasets.length).data.forEach((point, pointIndex) => { point.x = bars[pointIndex].x; });
         });
     }};
-    const chart = new Chart(canvas, {type: "bar", plugins: [alignment, calendarDays], data: {datasets: [...datasets, ...lines]}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "index", intersect: false}, scales: {x: {type: "linear", min: source.rows[0] ? Date.parse(source.rows[0].start) - HOUR_MILLISECONDS / 2 : undefined, max: source.rows.length ? Date.parse(source.rows.at(-1).start) + HOUR_MILLISECONDS / 2 : undefined, afterBuildTicks: (scale) => { const first = Math.ceil(scale.min / HOUR_MILLISECONDS), last = Math.floor(scale.max / HOUR_MILLISECONDS), stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_LABELS - 1))); scale.ticks = []; for (let hour = first; hour <= last; hour += stride) scale.ticks.push({value: hour * HOUR_MILLISECONDS}); }, ticks: {stepSize: HOUR_MILLISECONDS, maxTicksLimit: MAX_TIME_LABELS, callback: calendarTime}}, y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per completed hour (kWh)"}}}, plugins: {legend: {display: false}, tooltip: {filter: item => item.dataset.type === "bar", bodyFont: {family: "monospace"}, callbacks: {title: (items) => { const row = source.rows[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`; }, label: (item) => `${item.dataset.label.padEnd(10)}${item.parsed.y == null ? "Unavailable" : `${item.parsed.y.toFixed(3).padStart(9)} kWh`}`, afterBody: (items) => source.rows[items[0].dataIndex].evaluation_issue || "Eligible for descriptive accuracy"}}}}});
+    const chart = new Chart(canvas, {type: "bar", plugins: [alignment, calendarDays], data: {datasets: [...datasets, ...lines]}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "index", intersect: false}, scales: {x: {type: "linear", offset: false, min: Date.parse(displayedDay.start), max: Date.parse(displayedDay.end), afterBuildTicks: (scale) => { const first = Math.ceil(scale.min / HOUR_MILLISECONDS), last = Math.floor(scale.max / HOUR_MILLISECONDS), stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_LABELS - 1))); scale.ticks = []; for (let hour = first; hour <= last; hour += stride) scale.ticks.push({value: hour * HOUR_MILLISECONDS}); }, ticks: {stepSize: HOUR_MILLISECONDS, maxTicksLimit: MAX_TIME_LABELS, callback: calendarTime}}, y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per completed hour (kWh)"}}}, plugins: {legend: {display: false}, tooltip: {filter: item => item.dataset.type === "bar", bodyFont: {family: "monospace"}, callbacks: {title: (items) => { const row = source.rows[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`; }, label: (item) => `${item.dataset.label.padEnd(10)}${item.parsed.y == null ? "Unavailable" : `${item.parsed.y.toFixed(3).padStart(9)} kWh`}`, afterBody: (items) => source.rows[items[0].dataIndex].evaluation_issue || "Eligible for descriptive accuracy"}}}}});
     charts.push(chart);
     const controls = document.createElement("div");
     controls.className = "chart-legend quality-evidence-controls";
