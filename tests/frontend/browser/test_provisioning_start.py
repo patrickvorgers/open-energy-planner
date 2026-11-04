@@ -78,7 +78,11 @@ def test_default_launch_and_responsive_content(page):
 
 
 def test_branch_url_and_recovery_from_invalid_input(page):
-    """Enter branch, invalid and corrected URLs. Preserve valid branch targeting and recover the launch button after correction."""
+    """Explain URL limits, preserve slash-containing branches and recover from invalid input.
+
+    The page fixture supplies fresh desktop/mobile contexts with the default repository loaded.
+    """
+    assert page.get_by_text("Folder URLs are unsupported.", exact=False).is_visible()
     field = page.get_by_label("GitHub repository or branch URL")
     field.fill("https://github.com/someone/open-energy-planner/tree/feature/new-flow")
     assert repository_from_link(page) == {

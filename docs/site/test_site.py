@@ -64,8 +64,25 @@ class DocumentationSiteTests(unittest.TestCase):
             "[outside](../../../private.txt)",
             "[external](https://example.org/guide)",
             "[section](#first-plan)",
+            "![example](../../README.md)",
         ):
             self.assertEqual(hooks.on_page_markdown(source, page, self.config, self.files), source)
+
+    def test_linked_image_rewrites_only_its_outer_source_target(self):
+        """Keep the image unchanged while sending its unpublished repository target to GitHub."""
+        page = SimpleNamespace(file=SimpleNamespace(src_uri="docs/development/README.md"))
+        source = "[![Build](https://example.org/badge.svg)](../../README.md)"
+        self.assertEqual(
+            hooks.on_page_markdown(source, page, self.config, self.files),
+            "[![Build](https://example.org/badge.svg)]"
+            "(https://github.com/patrickvorgers/open-energy-planner/blob/main/README.md)",
+        )
+
+    def test_linked_image_keeps_its_published_guide_target(self):
+        """A linked image pointing to a maintained guide stays local for the site renderer."""
+        page = SimpleNamespace(file=SimpleNamespace(src_uri="docs/development/README.md"))
+        source = "[![Savings](https://example.org/badge.svg)](SAVINGS.md)"
+        self.assertEqual(hooks.on_page_markdown(source, page, self.config, self.files), source)
 
 
 if __name__ == "__main__":

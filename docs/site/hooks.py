@@ -26,7 +26,7 @@ SOURCE_PATTERNS = (
     "docs/assets/SITE-LICENSES.txt",
     "design/*.md",
 )
-LINK = re.compile(r"(?<![!`])\[([^\]]+)\]\(([^)]+)\)")
+LINK = re.compile(r"(?<![!`])\[(!\[[^\]]*\]\([^)]*\)|[^\[\]]+)\]\(([^)]+)\)")
 
 
 def on_files(files, config):
