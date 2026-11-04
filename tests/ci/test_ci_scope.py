@@ -94,6 +94,7 @@ def git_diff(monkeypatch):
 
     monkeypatch.setattr("script.ci.proof_git.subprocess.check_output", read_diff)
     monkeypatch.setattr("script.ci.ci_scope.immutable_test_sources", lambda *args: {})
+    monkeypatch.setattr("script.ci.ci_scope.immutable_blob", lambda *args: b"")
     return changes
 
 
