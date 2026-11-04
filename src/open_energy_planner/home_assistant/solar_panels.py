@@ -39,7 +39,7 @@ def panel_settings(catalogue, entity_id, previous=None):
     Persisted imports preserve ownership through restart until HA confirms otherwise.
     """
     retained = previous.ha_imports if previous is not None else ()
-    unknown = PanelSettings(PanelState.UNAVAILABLE if retained else PanelState.MANUAL, retained)
+    unknown = PanelSettings(PanelState.UNAVAILABLE, retained)
     body = catalogue.get("data")
     if not body or catalogue["stale"] or body["suggestions"]["energy_status"] != "ready":
         return unknown

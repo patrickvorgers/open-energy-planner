@@ -292,7 +292,7 @@ function addSolar(old = {}) {
         add.onclick = () => { addPanel(); node.dispatchEvent(new Event("input", {bubbles: true})); };
         geometry.append(add);
     };
-    const ownership = config.panel_settings?.[old.entity_id] || {managed: Boolean(old.ha_imports?.length), state: old.ha_imports?.length ? "unavailable" : "manual"};
+    const ownership = config.panel_settings?.[old.entity_id] || {managed: true, state: "unavailable"};
     renderGeometry(ownership.managed && !old.capacity_w && !old.panels?.length
         ? [{capacity_w: null, azimuth: null, tilt: null}]
         : editableSolarPanels(old));
@@ -647,7 +647,7 @@ function validateVisible() {
             const container = step === 1 ? "solar-rows" : step === 2 ? "battery-rows" : null;
             if (container) {
                 const selector = step === 1 ? "installation-solar" : "installation-battery";
-                $(selector).value = String([...$(container).children].indexOf(input.closest("fieldset")));
+                $(selector).value = String([...$(container).children].findIndex(row => row.contains(input)));
                 layout.selectDevice(selector, container);
             }
             input.reportValidity(); return false;

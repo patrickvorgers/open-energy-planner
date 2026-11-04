@@ -252,6 +252,9 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
     expect(angle).to_be_enabled()
     expect(angle).to_have_value("120")
     angle.fill("135")
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("Reload before saving")
+    expect(angle).to_have_value("135")
     page.get_by_role("button", name="Cancel", exact=True).click()
     installation_area(page, 1, edit=True)
     angle.fill("140")
@@ -331,6 +334,13 @@ def test_unrelated_save_preserves_panel_watts_and_configuration_version(
         terms=[
             {"entity_id": "sensor.incoming", "sign": 1},
             {"entity_id": "sensor.roof", "sign": 1},
+        ],
+        solar_configurations=[
+            {
+                "entity_id": "sensor.roof",
+                "providers": [],
+                "issue": "solar_configuration_not_available",
+            }
         ],
     )
     headers = {"Authorization": f"Bearer {TOKEN}"}

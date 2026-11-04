@@ -33,7 +33,8 @@ Each saved group keeps its name, capacity, azimuth and tilt together. Names do n
 determine geometry. Temporary outages, stale discovery and missing or incomplete
 provider metadata retain accepted geometry and HA ownership, including after restart.
 OEP warns that settings cannot be refreshed. A first unreadable link has no assumed
-capacity, azimuth or tilt. Only fresh complete discovery explicitly confirming that
+capacity, azimuth or tilt. Unknown ownership also remains read-only before any
+provider snapshot has been accepted. Only fresh complete discovery explicitly confirming that
 the forecast link is absent enables manual editing. OEP preserves the last geometry
 and shows an informational notice. Relinking automatically adopts HA geometry,
 locks panel fields and explains replacement of previous manual values.

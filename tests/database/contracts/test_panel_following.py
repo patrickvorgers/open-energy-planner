@@ -3,7 +3,7 @@
 import asyncio
 from contextlib import closing
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -264,22 +264,37 @@ def test_unavailable_first_link_does_not_invent_panel_geometry(tmp_path, panel_d
 
     async def scenario():
         """Keep a missing installation explicit through real discovery and attempted solar writes."""
-        async with TestClient(
-            TestServer(
-                create_app(tmp_path, TOKEN, source="home_assistant", database_url=panel_database)
-            )
-        ) as client:
+        app = create_app(tmp_path, TOKEN, source="home_assistant", database_url=panel_database)
+        handler = next(
+            route.handler.__self__
+            for route in app.router.routes()
+            if route.method == "POST" and route.resource.canonical == "/v1/ha/catalogue"
+        )
+        async with TestClient(TestServer(app)) as client:
+            candidate = document(manual_configuration())
+            candidate["expected_version"] = None
+            response = await client.put("/v1/solar", headers=HEADERS, json=candidate)
+            assert response.status == 400
+            assert (await settings(client))["solar"] is None
             current = await upload(client, discovery(issue="solar_configuration_incomplete"))
             assert current["solar"] is None
             assert current["panel_settings"]["sensor.array"] == {
                 "state": "unavailable",
                 "managed": True,
             }
-            candidate = document(manual_configuration())
-            candidate["expected_version"] = None
             response = await client.put("/v1/solar", headers=HEADERS, json=candidate)
             assert response.status == 400
             assert "Wait for complete Home Assistant panel settings" in await response.text()
+            assert (await settings(client))["solar"] is None
+            handler.catalogue.updated -= timedelta(minutes=16)
+            stale = await settings(client)
+            assert stale["catalogue"]["stale"] is True
+            assert stale["panel_settings"]["sensor.array"] == {
+                "state": "unavailable",
+                "managed": True,
+            }
+            response = await client.put("/v1/solar", headers=HEADERS, json=candidate)
+            assert response.status == 400
             assert (await settings(client))["solar"] is None
 
     asyncio.run(scenario())
