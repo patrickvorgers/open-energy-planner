@@ -1081,6 +1081,9 @@ and requires every other workflow byte to remain identical. It does not read the
 working copy or trust a PR label. Changing the Python version, runner, permissions,
 commands or another action, adding or deleting the workflow, an ambiguous setup
 reference or unavailable comparison evidence retains the normal full route.
+The reference must belong to a block-style workflow step. Matching text inside
+scripts or other scalar values never qualifies. Ambiguous YAML syntax before the
+reference conservatively retains full validation.
 Mixed changes retain the union of every affected owner's required suites.
 
 Central Python composition changes keep the original `full` matrix without

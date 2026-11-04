@@ -471,16 +471,57 @@ def name_is_shared_root(path):
     return str(path).startswith("src/open_energy_planner/") and len(path.parts) == 3
 
 
+def workflow_step_reference(text, position):
+    """Recognize a block-style step field, conservatively rejecting ambiguous YAML prefixes."""
+    parents = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        reference = offset == position
+        offset += len(line)
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "\t" in line:
+            return False
+        indentation = len(line) - len(line.lstrip(" "))
+        while parents and parents[-1][0] >= indentation:
+            parents.pop()
+        if parents and parents[-1][2]:
+            continue
+        if reference:
+            return (
+                len(parents) == 4
+                and [parent[1] for parent in parents][::2] == ["jobs", "steps"]
+                and parents[-1][1] == "-"
+                and indentation == parents[-1][0] + 2
+            )
+        field = re.fullmatch(
+            r" *(?P<item>- )?(?P<key>[A-Za-z_][A-Za-z0-9_-]*):(?P<value>[^\r\n]*)[\r\n]*", line
+        )
+        if field is None:
+            return False
+        value = field["value"].strip()
+        # shortcut: quoted, tagged and complex flow prefixes keep full CI until explicitly supported.
+        if value.startswith(("'", '"', "&", "*", "!", "{")) or (
+            value.startswith("[")
+            and re.fullmatch(r"\[[A-Za-z0-9_, .-]*\](?: +#.*)?", value) is None
+        ):
+            return False
+        if field["item"]:
+            parents.append((indentation, "-", False))
+            indentation += 2
+        parents.append((indentation, field["key"], bool(value and not value.startswith("#"))))
+    return False
+
+
 def setup_python_reference_only(old_blob, new_blob, root):
     """Recognize one pinned setup action update in otherwise identical immutable workflow text."""
-    normalized = [
-        re.subn(
-            SETUP_PYTHON_REFERENCE,
-            r"\1PIN",
-            immutable_blob(blob.decode("ascii"), root).decode("utf-8"),
-        )
-        for blob in (old_blob, new_blob)
-    ]
+    normalized = []
+    for blob in (old_blob, new_blob):
+        text = immutable_blob(blob.decode("ascii"), root).decode("utf-8")
+        matches = list(re.finditer(SETUP_PYTHON_REFERENCE, text))
+        if len(matches) != 1 or not workflow_step_reference(text, matches[0].start()):
+            return False
+        normalized.append(re.subn(SETUP_PYTHON_REFERENCE, r"\1PIN", text))
     return normalized[0] == normalized[1] and normalized[0][1] == 1
 
 

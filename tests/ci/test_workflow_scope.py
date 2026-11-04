@@ -1,6 +1,7 @@
 """Classify immutable workflow changes by their actual impact without narrowing mixed PRs."""
 
-from pathlib import PurePosixPath
+import re
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -79,6 +80,42 @@ def test_setup_python_pin_only_uses_ci_and_immutable_blobs(workflow_trees):
     reasons = []
     assert select_profile(base, tested, root, reasons=reasons) == "ci"
     assert reasons == [("ci", ".github/workflows/checks.yaml")]
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "jobs:\n  quality:\n    steps:\n      - run: |\n          uses: actions/setup-python@"
+        + "a" * 40
+        + "\n",
+        "jobs:\n  quality:\n    steps:\n      - run: >-\n          uses: actions/setup-python@"
+        + "a" * 40
+        + "\n",
+        "jobs:\n  quality:\n    steps:\n      - name: '\n        uses: actions/setup-python@"
+        + "a" * 40
+        + "\n        '\n",
+        "jobs:\n  quality:\n    env:\n      uses: actions/setup-python@" + "a" * 40 + "\n",
+        "description: |\n  jobs:\n    quality:\n      steps:\n        - name: Example\n          uses: actions/setup-python@"
+        + "a" * 40
+        + "\n",
+    ],
+)
+def test_scalar_and_non_step_references_keep_full(workflow_trees, workflow):
+    """Matching action text in executable scalars or unrelated mappings cannot narrow functional CI."""
+    root, tree = workflow_trees
+    base = tree(workflow)
+    tested = tree(workflow.replace("a" * 40, "b" * 40))
+    assert select_profile(base, tested, root) == "full"
+
+
+def test_real_workflow_setup_python_update_keeps_ci_route(workflow_trees):
+    """The maintained workflow's block scalars, conditions and earlier checkout step remain supported."""
+    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/checks.yaml").read_text()
+    updated = re.sub(r"(uses: actions/setup-python@)[0-9a-f]{40}", r"\g<1>" + "b" * 40, workflow)
+    root, tree = workflow_trees
+    base = tree(workflow)
+    tested = tree(updated)
+    assert select_profile(base, tested, root) == "ci"
 
 
 @pytest.mark.parametrize(
