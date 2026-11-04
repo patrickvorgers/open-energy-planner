@@ -220,11 +220,9 @@ jobs:
             results/ci/selection.json
             results/ci/preflight-*.log
             results/ci/price-history-*.json
-            results/ci/software-version-*.png
-            results/ci/storage-migration-*.png
+            results/ci/**/*.png
             results/ci/supervisor-*.json
             results/ci/supervisor-failure.log
-            results/ci/supervisor-*.png
           if-no-files-found: warn
           retention-days: 14
 

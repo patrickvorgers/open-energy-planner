@@ -6,6 +6,7 @@ from math import isfinite
 
 from open_energy_planner.demand.calculation.model import EnergyTerm
 from open_energy_planner.home_assistant.names import display_devices
+from open_energy_planner.home_assistant.solar_panels import validate_panel_settings
 from open_energy_planner.installation.calculation.annual_estimate import annual_estimate
 from open_energy_planner.solar.wire import validate_configuration_suggestions
 
@@ -261,6 +262,10 @@ class HACatalogue:
             or now - self.updated > timedelta(minutes=CATALOGUE_MAX_AGE_MINUTES),
             "refresh_pending": self.requested is not None,
         }
+
+    def validate_panel_settings(self, candidate, current, now):
+        """Keep write-time panel ownership consistent with the same discovery used for reconciliation."""
+        validate_panel_settings(candidate, current, self.current(now))
 
     def validate_membership(self, kind, configuration):
         """Reject independent device membership once HA has supplied its authoritative Energy sources."""

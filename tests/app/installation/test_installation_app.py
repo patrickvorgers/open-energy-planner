@@ -1,7 +1,8 @@
 """Production live bootstrap over authenticated HTTP, with no synthetic installation/basis injection."""
 
 import asyncio
-from contextlib import asynccontextmanager
+import logging
+from contextlib import asynccontextmanager, closing
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -24,6 +25,8 @@ from open_energy_planner.planning import InputSnapshot
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.service import PriceService
 from open_energy_planner.prices.storage.adapters.store import PriceStore
+from open_energy_planner.savings.model import PendingSettlement
+from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 from tests.app.contract.support.settings import settings
 from tests.app.demand.test_demand_app import definition
 from tests.app.planning.test_live_app import TOKEN, Solver
@@ -103,6 +106,10 @@ async def observe(session, url, configuration, *, unavailable=None):
         pytest.param(0, False, FileNotFoundError, id="reference-document-missing"),
         pytest.param(0, False, OSError, id="reference-document-io-failure"),
         pytest.param(0, False, SQLAlchemyError, id="reference-database-failure"),
+        pytest.param(0, False, ValueError, id="reference-value-failure"),
+        pytest.param(0, False, KeyError, id="reference-key-failure"),
+        pytest.param(0, False, TypeError, id="reference-type-failure"),
+        pytest.param(0, False, PendingSettlement, id="reference-awaits-evidence"),
     ],
 )
 def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_measurements(
@@ -110,17 +117,37 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
 ):
     """Live settings produce plans despite optional reference faults. Energy charge links create a retained second battery configuration."""
     if reference_error:
-        from open_energy_planner.savings import forecast_state
+        from open_energy_planner.savings import forecast
 
-        def fail_reference(*_args):
+        original_comparison = forecast.comparison
+
+        def fail_reference(*arguments, **keywords):
             """Emulate a failed reference read without breaking the independently healthy plan archive."""
-            raise reference_error("Reference storage unavailable")
+            if keywords.get("without_battery"):
+                return original_comparison(*arguments, **keywords)
+            raise reference_error(
+                "Reference forecast context is missing"
+                if reference_error is PendingSettlement
+                else "postgresql://private:SECRET_PASSWORD@private.invalid/archive?token=SECRET_TOKEN"
+            )
 
-        monkeypatch.setattr(forecast_state, "initial_state", fail_reference)
+        monkeypatch.setattr(forecast, "comparison", fail_reference)
 
     async def scenario():
         """Use real HTTP, physical forecasting and HiGHS. Only external weather and market responses are fixtures."""
         now = datetime.now(UTC)
+        from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+        stale_reference = {
+            "end": (now - timedelta(days=3)).isoformat(),
+            "reference_stored": {f"bat{index}": 0 for index in range(count)},
+            "actual_stored": {f"bat{index}": 1 for index in range(count)},
+            "capacities": {f"bat{index}": 2 for index in range(count)},
+        }
+        with closing(SqlPlanRepository(tmp_path)) as archive:
+            SqlDocuments(archive.engine, "savings").write(
+                "physical-reference.json", stale_reference
+            )
         start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
         price = PriceSeries(
             "fixture",
@@ -203,8 +230,6 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                         ],
                     }
                     physical["inverters"][0]["hybrid"] = True
-                async with session.put(url + "/v1/solar", json=solar_definition) as response:
-                    assert response.status == 200, await response.text()
                 async with session.put(url + "/v1/installation", json=physical) as response:
                     assert response.status == 200, await response.text()
                     state = await response.json()
@@ -238,6 +263,14 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                     solar_sources=[
                         source_item["entity_id"] for source_item in solar_definition["sources"]
                     ],
+                    solar_configurations=[
+                        {
+                            "entity_id": source_item["entity_id"],
+                            "providers": [],
+                            "issue": "solar_configuration_not_available",
+                        }
+                        for source_item in solar_definition["sources"]
+                    ],
                     batteries=[
                         {
                             "energy_entity": battery_item["energy_entity"],
@@ -250,6 +283,8 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                     ],
                 )
                 async with session.post(url + "/v1/ha/catalogue", json=metadata) as response:
+                    assert response.status == 200, await response.text()
+                async with session.put(url + "/v1/solar", json=solar_definition) as response:
                     assert response.status == 200, await response.text()
                 previous_revision = state["measurement_config"]["revision"]
                 async with session.get(url + "/v1/snapshot") as response:
@@ -269,24 +304,77 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                 plan = state["plan"]
                 WirePlan.parse(plan, config["revision"])
                 assert plan["device_commands"] is True
+                if not reference_error:
+                    archived = read_plan(tmp_path, plan["plan_id"])
+                    reference = archived["reference_forecast"]
+                    assert reference["reference_start"] == {
+                        "stored": None,
+                        "counters": {},
+                        "status": "measured_common_start",
+                        "estimated": False,
+                    }
+                    assert "reference_forecast_issue" not in archived
+                    with closing(SqlPlanRepository(tmp_path)) as archive:
+                        assert (
+                            SqlDocuments(archive.engine, "savings").read("physical-reference.json")
+                            == stale_reference
+                        )
                 if reference_error:
                     archived = read_plan(tmp_path, plan["plan_id"])
-                    assert archived["reference_forecast_issue"] == "Reference storage unavailable"
+                    expected_issue = (
+                        "Reference forecast context is missing"
+                        if reference_error is PendingSettlement
+                        else "Reference forecast is unavailable. Plan publication continues. Inspect application diagnostics."
+                    )
+                    assert archived["reference_forecast_issue"] == expected_issue
                     assert "reference_forecast" not in archived
                     async with session.get(
                         url + "/v1/plans/" + plan["plan_id"] + "/comparison"
                     ) as response:
                         assert response.status == 200
-                        assert (await response.json())["comparison_issue"] == (
-                            "Reference storage unavailable"
+                        comparison = await response.json()
+                        assert comparison["comparison_issue"] == expected_issue
+                        assert comparison["plan"]["reference_forecast_issue"] == expected_issue
+                    async with session.get(url + "/v1/plans/" + plan["plan_id"]) as response:
+                        assert response.status == 200
+                        assert (await response.json())["reference_forecast_issue"] == expected_issue
+                    if reference_error is not PendingSettlement:
+                        assert any(
+                            record.name == "open_energy_planner.app"
+                            and record.levelno == logging.ERROR
+                            and reference_error.__name__ in record.message
+                            and "fail_reference" in record.message
+                            for record in caplog.records
                         )
-                    assert any(
-                        record.name == "open_energy_planner.app"
-                        and record.exc_info
-                        and "Reference forecast failed. Plan publication continues"
-                        in record.message
-                        for record in caplog.records
-                    )
+                    assert "SECRET_PASSWORD" not in caplog.text
+                    assert "SECRET_TOKEN" not in caplog.text
+                    assert "private.invalid" not in caplog.text
+                    if reference_error is ValueError:
+                        retained = {
+                            **archived,
+                            "plan_id": plan["plan_id"] + "-retained",
+                            "reference_forecast_issue": (
+                                "postgresql://private:SECRET_PASSWORD@private.invalid/archive?token=SECRET_TOKEN"
+                            ),
+                        }
+                        with closing(SqlPlanRepository(tmp_path)) as archive:
+                            archive.state["plan"] = retained
+                            archive.save()
+                            for suffix in ("", "/comparison"):
+                                async with session.get(
+                                    url + "/v1/plans/" + retained["plan_id"] + suffix
+                                ) as response:
+                                    assert response.status == 200
+                                    text = await response.text()
+                                    assert "SECRET_PASSWORD" not in text
+                                    assert "SECRET_TOKEN" not in text
+                                    assert "private.invalid" not in text
+                                    result = await response.json()
+                                    if suffix:
+                                        assert result["comparison_issue"] == expected_issue
+                                        result = result["plan"]
+                                    assert result["reference_forecast_issue"] == expected_issue
+                            assert archive.get_plan(retained["plan_id"]) == retained
                 assert len(plan["steps"]) >= 120
                 assert len(plan["input_snapshot"]["problem"]["batteries"]) == count
                 values = plan["input_snapshot"]["problem"]["terminal_valuations"]

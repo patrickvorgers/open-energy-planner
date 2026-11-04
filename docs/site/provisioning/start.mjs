@@ -9,8 +9,10 @@ export function launchUrl(value) {
   }
   parts[1] = parts[1].replace(/\.git$/, "");
   if (!parts[1]) throw new Error("Enter a repository name.");
-  const repository = "https://github.com/" + parts.join("/");
-  const command = "vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=" + encodeURIComponent(repository);
+  const repository = "https://github.com/" + parts.slice(0, 2).join("/");
+  const branch = parts.length > 2 ? decodeURIComponent(parts.slice(3).join("/")) : "";
+  const command = "vscode://vscode.git/clone?url=" + encodeURIComponent(repository) +
+    (branch ? "&ref=" + encodeURIComponent(branch) : "");
   return "https://vscode.dev/redirect?url=" + encodeURIComponent(command);
 }
 

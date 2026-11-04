@@ -1,8 +1,11 @@
 """Own isolated app sites and responsive browser contexts, sharing only the Chromium process."""
 
 import asyncio
+import shutil
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
@@ -23,6 +26,26 @@ from tests.frontend.browser.helpers import (
     SAVINGS_BROWSER_TIME_ZONE,
     TOKEN,
 )
+
+
+@pytest.fixture(scope="session")
+def documentation_url():
+    """Serve the compiled wiki and provisioning assets together at the production project prefix."""
+    artifact = Path("_site").resolve()
+    assert (artifact / "index.html").is_file(), "Build docs/site/mkdocs.yml before browser tests"
+    with TemporaryDirectory(dir="results/ci") as directory:
+        shutil.copytree(artifact, Path(directory) / "open-energy-planner")
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=directory)
+        )
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}/open-energy-planner/"
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 @pytest.fixture
@@ -139,6 +162,10 @@ def app_site(request):
                 if str(getattr(request, "param", "")).startswith("prices")
                 else None,
             )
+            if getattr(request, "param", None) == "planning_performance":
+                from tests.frontend.browser.performance_fixture import seed
+
+                seed(Path(directory))
             if ingress:
                 pairing = application[PAIRING_KEY]
                 pairing.supervisor_secret = "browser-supervisor-private-proof"

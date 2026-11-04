@@ -640,3 +640,79 @@ def test_statistics_prefix_and_correction_provenance_survive_backend_transfer(ro
     origin = restored.provenance(invalid.seeds[0])
     assert origin["supersedes"] == confirmed.version
     assert origin["statistics"]["rejected_digest"] == "b" * 64
+
+
+def test_calculation_day_evidence_transfers_without_source_dependency(route):
+    """Each backend route retains failed calculation evidence with unknown timing and no progress."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.optimization.performance import CalculationHistory
+    from open_energy_planner.synthetic import capture
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    SqlPlanRepository(root / "target", engine=target)
+    started = datetime(2026, 10, 25, 1, 30, tzinfo=UTC)
+    history = CalculationHistory(SqlDocuments(source, "planning"))
+    history.record(
+        capture(started), None, started, started + timedelta(seconds=2), "planning_error"
+    )
+    expected = history.day("2026-10-25", "Europe/Amsterdam")
+    original_detail = history.detail(expected[0]["id"])
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    actual = CalculationHistory(SqlDocuments(target, "planning")).day(
+        "2026-10-25", "Europe/Amsterdam"
+    )
+    assert actual == expected
+    restored = CalculationHistory(SqlDocuments(target, "planning"))
+    assert restored.detail(actual[0]["id"]) == original_detail
+    assert "progress" not in actual[0]
+    assert restored.detail(actual[0]["id"])["progress"] == []
+    assert actual[0]["first_candidate_seconds"] is None
+
+
+def test_finite_calculation_progress_transfers_without_source_dependency(route):
+    """Every backend route retains exact independently specified zero, negative cost and finite bound samples."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.optimization.domain import SolveResult, SolveSample, Status
+    from open_energy_planner.optimization.performance import CalculationHistory
+    from open_energy_planner.planning import PlanningOutcome
+    from open_energy_planner.synthetic import capture
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    SqlPlanRepository(root / "target", engine=target)
+    started = datetime(2026, 10, 25, 1, 30, tzinfo=UTC)
+    result = SolveResult(
+        Status.FEASIBLE,
+        None,
+        "time_limit",
+        1,
+        3,
+        -0.6,
+        progress=(SolveSample(2, 0, None), SolveSample(4, -0.5, -0.6)),
+        first_candidate_seconds=2,
+        time_limit_seconds=120,
+    )
+    history = CalculationHistory(SqlDocuments(source, "planning"))
+    history.record(
+        capture(started),
+        PlanningOutcome(None, "candidate_rejected", result),
+        started,
+        started + timedelta(seconds=4),
+        "candidate_rejected",
+    )
+    identity = history.day("2026-10-25", "Europe/Amsterdam")[0]["id"]
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = CalculationHistory(SqlDocuments(target, "planning"))
+    assert "progress" not in restored.day("2026-10-25", "Europe/Amsterdam")[0]
+    assert restored.detail(identity)["progress"] == [
+        {"elapsed_seconds": 2, "objective": 0, "best_bound": None},
+        {"elapsed_seconds": 4, "objective": -0.5, "best_bound": -0.6},
+    ]
+    assert restored.detail(identity)["first_candidate_seconds"] == 2

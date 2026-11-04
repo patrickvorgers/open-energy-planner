@@ -1,33 +1,12 @@
 """Browser validation of the developer entry point without launching VS Code."""
 
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from threading import Thread
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 
-@pytest.fixture(scope="module")
-def site():
-    """Serve the developer entry page on isolated loopback HTTP and shut down its thread after tests."""
-    directory = Path(__file__).resolve().parents[3] / "docs/developer"
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=directory)
-    )
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
-
-
 @pytest.fixture(params=[{"width": 1280, "height": 900}, {"width": 390, "height": 844}])
-def page(site, request, browser):
+def page(documentation_url, request, browser):
     """Open the module-scoped static site in a fresh context of the shared browser.
 
     Use the requested desktop/mobile viewport and touch setting, wait for the
@@ -37,7 +16,7 @@ def page(site, request, browser):
         viewport=request.param, has_touch=request.param["width"] < 500
     ) as context:
         page = context.new_page()
-        page.goto(site)
+        page.goto(documentation_url + "provisioning/")
         page.locator("#launch[aria-disabled=false]").wait_for()
         yield page
 
@@ -54,34 +33,67 @@ def test_browser_cases_start_without_cookies_or_web_storage(page):
 
 
 def repository_from_link(page):
-    """Decode the displayed VS Code clone link and require the expected Dev Containers command."""
-    redirect = page.get_by_role("link", name="Open in VS Code").get_attribute("href")
+    """Decode the displayed local-clone command without opening an external application."""
+    redirect = page.get_by_role("link", name="Clone in VS Code").get_attribute("href")
     command = parse_qs(urlsplit(redirect).query)["url"][0]
-    assert command.startswith("vscode://ms-vscode-remote.remote-containers/cloneInVolume?")
-    return parse_qs(urlsplit(command).query)["url"][0]
+    assert command.startswith("vscode://vscode.git/clone?")
+    return parse_qs(urlsplit(command).query)
 
 
 def test_default_launch_and_responsive_content(page):
-    """Load the default page on desktop/mobile. Require the right repository, English content and usable overflow-free layout."""
-    assert repository_from_link(page) == "https://github.com/patrickvorgers/open-energy-planner"
+    """Show AMD64 guidance before the VS Code installation link and keep cloning usable without overflow.
+
+    The page fixture supplies fresh desktop and mobile browser contexts.
+    """
+    assert repository_from_link(page) == {
+        "url": ["https://github.com/patrickvorgers/open-energy-planner"]
+    }
     assert page.locator("html").get_attribute("lang") == "en"
+    platform_requirement = page.get_by_text("Use an AMD64 (x86-64) environment.", exact=False)
+    assert platform_requirement.is_visible()
+    assert (
+        platform_requirement.bounding_box()["y"]
+        < page.get_by_role("link", name="VS Code", exact=True).bounding_box()["y"]
+    )
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.get_by_text("If the button does not open VS Code").click()
+    assert page.get_by_text("Git: Clone", exact=True).is_visible()
+    assert page.get_by_role("link", name="package preparation").get_attribute("href") == (
+        "https://github.com/patrickvorgers/open-energy-planner/blob/main/"
+        "docs/development/DEVELOPER-ENVIRONMENT.md#start-and-stop"
+    )
     assert page.get_by_text(
-        "Dev Containers: Clone Repository in Container Volume...", exact=True
+        "python -m script.supervisor.dev prepare "
+        "--bundle /path/to/installation-bundle-amd64.zip --run-id RUN_ID",
+        exact=True,
     ).is_visible()
+    assert page.get_by_text("python -m script.supervisor.dev start", exact=True).is_visible()
+    assert page.get_by_role("link", name="the local OEP test installation").get_attribute(
+        "href"
+    ) == ("http://localhost:7123/app/local_open_energy_planner")
+    assert page.get_by_text(".local/dev/developer.json", exact=True).is_visible()
+    page.screenshot(
+        path=f"results/ci/developer-start-{page.viewport_size['width']}.png", full_page=True
+    )
 
 
 def test_branch_url_and_recovery_from_invalid_input(page):
-    """Enter branch, invalid and corrected URLs. Preserve valid branch targeting and recover the launch button after correction."""
+    """Explain URL limits, preserve slash-containing branches and recover from invalid input.
+
+    The page fixture supplies fresh desktop/mobile contexts with the default repository loaded.
+    """
+    assert page.get_by_text("Folder URLs are unsupported.", exact=False).is_visible()
     field = page.get_by_label("GitHub repository or branch URL")
     field.fill("https://github.com/someone/open-energy-planner/tree/feature/new-flow")
-    assert repository_from_link(page).endswith("/tree/feature/new-flow")
+    assert repository_from_link(page) == {
+        "url": ["https://github.com/someone/open-energy-planner"],
+        "ref": ["feature/new-flow"],
+    }
     field.fill("https://github.com/someone/project?token=not-a-real-token")
     assert page.get_by_role("alert").is_visible()
     assert page.locator("#launch").get_attribute("href") is None
     field.fill("https://github.com/someone/project.git")
-    assert repository_from_link(page) == "https://github.com/someone/project"
+    assert repository_from_link(page) == {"url": ["https://github.com/someone/project"]}
     assert not page.get_by_role("alert").is_visible()
 
 

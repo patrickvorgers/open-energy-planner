@@ -257,7 +257,7 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `demand` | `DemandStore`: selected consumption sources/settings. Forecast values and fitted model parameters. | `configuration-<version>.json`, `forecast-<version>.json`. `current.json` selects configuration. |
 | `solar` | `SolarStore`: per-source configuration, forecasts/models, weather/history blocks and receipt times. | Content-addressed kind/version documents. Unchanged daily `block-<hash>.json` reused by manifests. `current.json` selects configuration. |
 | `prices` | `PriceStore`: normalized source series with original receipt/issue/expiry times, published/forecast flags and resolution. | Immutable `<version>.json`. `current.json` is the list of current series references. No raw provider payloads or API secrets. |
-| `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. |
+| `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
 | `savings` | `SavingsRuntime` and `PlanValuations`: capture cursor, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
 
 These are module-owned JSON contracts, not additional SQL columns. Follow the
@@ -270,23 +270,28 @@ list of exact planes with `panel_id`, `capacity_w` in Wp, `azimuth` in degrees
 clockwise from north and `tilt` in degrees. Plane capacities must sum to the source
 capacity. They describe geometry behind the existing source meter, not new meters
 or physical inverter connections. Empty planes retain the manual orientation
-convention. `ha_imports` retains the original normalized snapshots separately from
-editable planes. Each contains adapter identity, HA config-entry identity, original
+convention. `ha_imports` retains the accepted normalized snapshots separately from
+the active planes. Each contains adapter identity, HA config-entry identity, original
 planes and optional `inverter_limit_w` in W. This limit is provider model metadata,
 not proof of physical wiring. Credentials are excluded. Immutable configuration
-versions preserve import provenance after edits. `current.json` changes only on
-explicit save. Empty optional geometry/provenance fields are omitted from the
+versions preserve original provenance. `current.json` changes after explicit save
+or accepted HA panel reconciliation. Empty optional geometry/provenance fields are omitted from the
 canonical version input so unchanged saved manual definitions retain their identity.
 Each plane may also contain a display `name` of at most 200 characters. Missing
 names default to empty text and empty names are omitted from canonical version
 input, preserving existing archived identities. Names are retained in editable
 planes and original HA snapshots. They do not change stable `panel_id` values or
-the source accuracy family. Renaming remains an explicit configuration save.
+the source accuracy family. Manual renaming requires an explicit save. HA-owned names
+follow accepted discovery with the rest of the geometry.
 
 The HA catalogue's optional `suggestions.solar_configurations` list associates each
 Energy production `entity_id` with normalized `providers` and an availability
-`issue`. Only complete unambiguous groups seed new drafts. Later catalogue refreshes
-do not overwrite saved OEP geometry. This discovery metadata belongs to the existing
+`issue`. Complete unambiguous groups seed new drafts and reconcile saved geometry.
+Nonempty persisted `ha_imports` preserves HA ownership during missing or stale
+discovery and restart. Only an explicit absent-link result from fresh complete
+discovery clears it, retaining the last planes for manual editing. Incomplete links
+remain read-only and never invent geometry. Relinking replaces manual planes and
+archives a new configuration. Physical converter settings remain independent. This discovery metadata belongs to the existing
 catalogue contract and does not add tables, columns or a second source registry.
 
 Solar source objects also contain `forecast_source`, one of `automatic`, `pvwatts`,
@@ -672,6 +677,13 @@ new query shape or materially larger payload is introduced.
 
 ### Plan comparison chart projections
 
+New plans retain `reference_forecast.reference_start.status` as
+`measured_common_start`, `stored` as null, empty `counters` and `estimated` false.
+Null stock means use the measured battery `initial_kwh` in the same plan, not
+unknown or zero energy. Both strategies also use the plan's opening bonus budgets.
+The forecast does not read or reset the continuous historical settlement checkpoint.
+Legacy archived starts and their outcomes remain unchanged and replayable.
+
 New `reference_forecast.reference` interval JSON can include deterministic
 `inverters` (converter ID, AC import/export kWh) and `solar` (source ID, used DC
 kWh) alongside retained grid/battery outcomes. These optional facts use the same
@@ -680,6 +692,13 @@ rows remain readable. Chart replay must match saved grid/stock outcomes first.
 `scenarios` in the comparison API is a read-only projection, not another database
 or a reset of continuous settlement state. Both forecast references and original
 spot/import/export tariff evidence are described in [plan evidence](PLAN-EVIDENCE.md).
+
+An optional `reference_forecast_issue` stores fixed owned recovery advice when
+the original plan could be published without its comparison forecast. New writes
+never store arbitrary exception values in this field. Older archived values stay
+unchanged for hash-checked reconstruction and transfer. Public plan responses
+project unrecognized issue text to safe advice, including nested comparison and
+forecast-quality context. This projection changes no financial or physical data.
 
 
 ## Forecast model decision documents
@@ -1062,3 +1081,19 @@ limit per bucket. `SqlAlchemySelectionStore` retains initialization, index repai
 atomic ingestion and decision writes. This ownership change does not alter any
 table, column, type, index, row representation, unit or archived JSON contract.
 The functional migration suite remains responsible for transfer of every table.
+
+
+### Planning calculation history
+
+`CalculationHistory` in `optimization/performance.py` owns `planning` keys `calculations-YYYY-MM-DD.json` in `oep_documents`. The date is the UTC start date. Each atomically appended array row stores opaque `id`, aware `started_at` and `finished_at`, whole-round `duration_seconds`, nullable actual `time_limit_seconds`, original `snapshot_id`, `strategy`, `intervals` count, publication `reason`, nullable native `stop_reason`, published `plan_id` and contract `currency`. No credentials or raw provider failures enter the document.
+
+`calculations-<UTC-date>.json` arrays retain summary rows without `progress`. Each separate `calculation-<id>.json` document retains the full observation, including its bounded `progress` curve. Both writes share one transaction. The authenticated daily endpoint returns summaries. The detail endpoint loads one record by validated opaque ID when requested.
+
+Nullable `build_seconds`, `solve_seconds` and `financial_started_seconds` are worker-relative durations. Nullable `worker_start_seconds` aligns the worker with the coordinator. Nullable `first_candidate_seconds` is whole-round elapsed time and requires an observed finite incumbent during final financial search, including a retained service-stage seed. `progress` contains up to 256 observations with whole-round `elapsed_seconds`, finite currency-valued `objective` and nullable finite `best_bound`. Service priorities are already fixed. Native feasibility is distinct from publication. No old archives are rewritten or backfilled.
+
+The existing composite primary key supports direct daily lookup. Local days read adjacent UTC partitions and filter aware starts. No new table, index or foreign key is introduced. `plan_id` is descriptive evidence. Shared database transfer retains and verifies these documents with all other data. Restart and source-independent transfer regressions use the shared SQLite, PostgreSQL, MariaDB and MySQL matrices.
+
+Retention is explicit: completed calculation evidence remains in the active database alongside original plans, without automatic deletion. This preserves requested historical day lookup. There is no additional retention setting. Separating curves from the index bounds ordinary daily response/write size by summary count rather than sample count. Database transfer preserves both the index and individual observations.
+
+
+Optional calculation recording uses one serialized background writer. The coordinator only captures a detached summary and at most 256 samples, then enqueues without waiting for SQL. Up to 32 pending observations bound memory. Queue saturation logs an unrecorded observation rather than delaying planning or fabricating a history row. Individual write failures are contained and later writes continue. Normal shutdown stops planning, drains queued observations and only then closes the shared archive engine. Forced termination or storage failure cannot guarantee retained diagnostics. This changes no device command, solver budget or existing history.

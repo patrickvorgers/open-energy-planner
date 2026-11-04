@@ -92,6 +92,8 @@ class Evidence:
         if path == "repos/owner/planner/pulls/12":
             self.pr_reads += 1
             return deepcopy(self.changed if self.changed and self.pr_reads > 1 else self.current)
+        if path == f"repos/{REPOSITORY}/compare/{BASE}...{HEAD}?per_page=1":
+            return {"merge_base_commit": {"sha": BASE}, "status": "ahead"}
         assert path.startswith(
             f"repos/owner/planner/commits/{HEAD}/check-runs?filter=all&per_page=100&page="
         )
@@ -312,3 +314,180 @@ def test_incomplete_or_ambiguous_api_data_cannot_admit_candidate(candidate, evid
     client.get = get
     with pytest.raises(VerificationError):
         check(event, REPOSITORY, client)
+
+
+@pytest.fixture
+def kody_candidate(candidate):
+    """Replace CodeRabbit with independently specified successful Kody provider evidence."""
+    event, current, checks = deepcopy(candidate)
+    checks[2].update(
+        name="Kody Code Review",
+        app={"id": 413034},
+        output={
+            "title": "Code Review Complete",
+            "summary": "Review finished successfully. Suggestions (if any) were posted as PR/file comments.",
+        },
+    )
+    return event, current, checks
+
+
+def test_kody_review_alone_admits_candidate(kody_candidate):
+    """A substantive Kody review satisfies the same current-head admission as CodeRabbit."""
+    event, current, checks = kody_candidate
+    assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
+
+
+@pytest.mark.parametrize("other_status", ["skipped", "failure", "in_progress"])
+@pytest.mark.parametrize("provider", ["CodeRabbit", "Kody Code Review"])
+def test_either_completed_provider_is_sufficient(candidate, kody_candidate, provider, other_status):
+    """An unavailable alternative provider does not invalidate the completed selected reviewer."""
+    event, current, checks = candidate if provider == "CodeRabbit" else kody_candidate
+    alternative = deepcopy(kody_candidate[2][2] if provider == "CodeRabbit" else candidate[2][2])
+    alternative.update(id=5, conclusion=other_status, status="completed")
+    if other_status == "in_progress":
+        alternative.update(status="in_progress", conclusion=None)
+    checks.append(alternative)
+    assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "wrong_app",
+        "wrong_head",
+        "pending",
+        "failed",
+        "skipped",
+        "neutral",
+        "starting",
+        "warnings",
+        "missing_output",
+        "unknown_summary",
+    ],
+)
+def test_kody_requires_real_current_head_completion(kody_candidate, fault):
+    """Kody skips, warnings, forged checks and unfinished work cannot replace a review."""
+    event, current, checks = kody_candidate
+    review = checks[2]
+    if fault == "missing":
+        checks.pop(2)
+    elif fault == "wrong_app":
+        review["app"]["id"] = 999
+    elif fault == "wrong_head":
+        review["head_sha"] = "3" * 40
+    elif fault == "pending":
+        review.update(status="in_progress", conclusion=None)
+    elif fault in {"failed", "skipped", "neutral"}:
+        review["conclusion"] = {"failed": "failure"}.get(fault, fault)
+    elif fault == "starting":
+        review["output"]["title"] = "Code Review Starting"
+    elif fault == "warnings":
+        review["output"]["title"] = "Code Review Completed with Warnings"
+    elif fault == "missing_output":
+        review.pop("output")
+    else:
+        review["output"]["summary"] = "Review skipped."
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, Evidence(current, checks))
+
+
+@pytest.mark.parametrize("status", ["in_progress", "failure", "skipped"])
+def test_latest_kody_attempt_supersedes_old_success(kody_candidate, status):
+    """A later incomplete Kody attempt prevents reuse of its earlier successful review."""
+    event, current, checks = kody_candidate
+    latest = {**checks[2], "id": 5, "status": "completed", "conclusion": status}
+    if status == "in_progress":
+        latest.update(status="in_progress", conclusion=None)
+    checks.append(latest)
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, Evidence(current, checks))
+
+
+def test_kody_does_not_bypass_open_findings(kody_candidate):
+    """Successful Kody evidence cannot admit a candidate with unresolved discussions."""
+    event, current, checks = kody_candidate
+
+    class OpenFinding(Evidence):
+        """Serve one unresolved review thread independent of the selected provider."""
+
+        def post(self, path, payload):
+            """Return a complete page containing an actionable unresolved thread."""
+            response = super().post(path, payload)
+            response["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] = [
+                {"id": "finding", "isResolved": False}
+            ]
+            return response
+
+    with pytest.raises(VerificationError, match="threads"):
+        check(event, REPOSITORY, OpenFinding(current, checks))
+
+
+@pytest.mark.parametrize("provider", ["CodeRabbit", "Kody-ai"])
+@pytest.mark.parametrize("fault", ["diverged", "missing", "wrong-base", "behind", "outage"])
+def test_every_reviewer_requires_base_inclusion(candidate, kody_candidate, provider, fault):
+    """Neither reviewer can admit a head without trusted proof that it contains the intended base."""
+    event, current, checks = candidate if provider == "CodeRabbit" else kody_candidate
+
+    class MissingBase(Evidence):
+        """Return independently malformed or unavailable ancestry evidence."""
+
+        def get(self, path):
+            """Keep ordinary evidence valid while breaking only the base comparison."""
+            if "/compare/" not in path:
+                return super().get(path)
+            if fault == "outage":
+                raise VerificationError("Comparison unavailable")
+            return {
+                "merge_base_commit": None
+                if fault == "missing"
+                else {"sha": "3" * 40 if fault == "wrong-base" else BASE},
+                "status": fault if fault in {"diverged", "behind"} else "ahead",
+            }
+
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, MissingBase(current, checks))
+
+
+@pytest.mark.parametrize("action", ["ready_for_review", "labeled"])
+def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, action):
+    """Ready metadata does not invalidate substantive Kody evidence for the unchanged head."""
+    event, current, checks = kody_candidate
+    event["action"] = action
+    checks.append(
+        {
+            **checks[2],
+            "id": 5,
+            "conclusion": "skipped",
+            "output": {
+                "title": "Code Review Skipped",
+                "summary": "No New Commits (No changes detected since last review)",
+            },
+        }
+    )
+    assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
+
+
+@pytest.mark.parametrize("earlier", ["missing", "failure", "in_progress", "skipped"])
+def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate, earlier):
+    """A no-change skip needs real success and cannot hide an actual later failed or pending attempt."""
+    event, current, checks = kody_candidate
+    metadata = {
+        **checks[2],
+        "id": 6,
+        "conclusion": "skipped",
+        "output": {
+            "title": "Code Review Skipped",
+            "summary": "No New Commits (No changes detected since last review)",
+        },
+    }
+    if earlier == "missing":
+        checks.pop(2)
+    else:
+        attempt = {**checks[2], "id": 5, "conclusion": earlier}
+        if earlier == "in_progress":
+            attempt.update(status="in_progress", conclusion=None)
+        checks.append(attempt)
+    checks.append(metadata)
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, Evidence(current, checks))

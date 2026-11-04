@@ -11,26 +11,13 @@ from script.ci.check_ci_candidate import (
     current_checks,
     latest_check,
     require_coderabbit_review,
+    require_included_base,
     require_prerequisites,
 )
 from script.ci.check_commit_signatures import GitHub, VerificationError, sha
 from script.ci.pr_readiness import require_resolved_threads
 
 MAX_PAGES = 10
-
-
-def require_included_base(repository, head, base, client):
-    """Require the selected current main revision in the frozen head before final review."""
-    comparison = client.get(f"repos/{repository}/compare/{base}...{head}?per_page=1")
-    common = comparison.get("merge_base_commit")
-    if (
-        not isinstance(common, dict)
-        or common.get("sha") != base
-        or comparison.get("status") not in {"ahead", "identical"}
-    ):
-        raise VerificationError(
-            "Include the current main in this PR and retest before final review"
-        )
 
 
 def require_pr_history(repository, number, current, client):

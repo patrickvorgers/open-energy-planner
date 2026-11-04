@@ -3,8 +3,9 @@
 The [planning notifications guide](PLANNING-NOTIFICATIONS.md) describes actionable
 app warnings, recovery, authenticated status reads and deduplicated diagnostics.
 
-Start the [real Supervisor developer environment](DEVELOPER-ENVIRONMENT.md) with
-`python -m script.supervisor.dev start`. It supplies actual Supervisor/Core, OEP, simulated
+Prepare an original successful CI installation bundle as described in the
+[real Supervisor developer environment guide](DEVELOPER-ENVIRONMENT.md#start-and-stop),
+then run `python -m script.supervisor.dev start`. It supplies actual Supervisor/Core, OEP, simulated
 devices and recent Energy history without a personal HA OS VM. The Dev Container
 uses this same environment. Existing fast CI remains separate from interactive
 startup.
@@ -40,18 +41,23 @@ batched review corrections and exact-candidate merge policy.
 
 Follow the [code documentation standard](CODE-DOCUMENTATION.md) for required docstrings, comments, domain contracts and documentation review. Disabling a generic docstring-coverage percentage does not remove the obligation to document code properly.
 
+Follow the [application logging guideline](LOGGING.md) for actionable messages,
+log levels, failure/recovery deduplication, privacy and truthful acceptance logs.
+
 ### What the quality job runs
 
-CodeRabbit is the only required automated review service and must cover the latest
-PR head. After Quick, signature and CodeQL checks pass, inspect your own changes,
-batch corrections and retest. Prepare one final
-manual CodeRabbit request through the trusted-main read-only preflight. The
+CodeRabbit is the preferred independent reviewer. Check fresh included capacity
+before requesting review and use Kody-ai only after a confirmed CodeRabbit rate
+limit. A substantive review from either provider must cover the latest PR head.
+After Quick, signature and CodeQL checks pass, inspect your own changes, batch
+corrections and retest. When choosing CodeRabbit, prepare one final manual request
+through the trusted-main read-only preflight. The
 150-file limit counts every changed file. Automatic review triggers are disabled
 regardless of plan or star count. Follow the [review procedure](CI-STAGES.md#prepare-one-final-coderabbit-review).
-CodeRabbit provides the independent review. Do not add a separate local Codex
+The selected provider supplies the independent review. Do not add a separate local Codex
 reviewer, reviewer subagent or Codex Cloud review stage. Keep automatic Codex
 reviews disabled and evaluate findings already posted by any reviewer.
-The existing Dependabot exception remains: no mandatory CodeRabbit review, with CI,
+The existing Dependabot exception remains: no mandatory automated review, with CI,
 verified commits and compatibility/regression assessment still required. See
 [the contribution policy](../../CONTRIBUTING.md).
 
@@ -186,11 +192,13 @@ Pylint, security/secrets scanning, workflow/container/YAML analysis and GitHub-c
 
 ## First start
 
-Install Git, Docker with Compose, VS Code and the Dev Containers extension. Clone the private repository using your GitHub account, open its root in VS Code, and choose **Dev Containers: Reopen in Container**.
+Install Python 3.12 or newer, Git, Docker with Compose, VS Code and the Dev Containers extension. The repository is public. Package verification still needs GitHub read access through Git Credential Manager or `GH_TOKEN`/`GITHUB_TOKEN` in a host terminal. Never enter credentials on the start page.
 
-The optional static [developer start page](../developer/index.html) offers the browser-to-VS-Code entry pattern used by HA/DAO: enter a repository/branch URL and open the Dev Container clone flow. A direct [Open in Dev Containers link](https://vscode.dev/redirect?url=vscode%3A%2F%2Fms-vscode-remote.remote-containers%2FcloneInVolume%3Furl%3Dhttps%253A%252F%252Fgithub.com%252Fpatrickvorgers%252Fopen-energy-planner) also needs no hosted page. Browser/VS Code clone/trust prompts remain the developer's responsibility. The successful CLI receipt covers a fresh ordinary checkout, not the graphical container-volume flow.
+The host terminal and VS Code must both resolve `python` to Python 3.12 or newer. Check `python --version` before preparing the package. On Debian or Ubuntu, install `python-is-python3` only when `python3 --version` already reports a supported version. Alternatively, create a host virtual environment with `python3 -m venv .local/host-venv`, activate it with `. .local/host-venv/bin/activate`, and launch VS Code with `code .` from that terminal. Close existing VS Code processes first so the new process inherits the activated environment. A shell alias alone does not satisfy the Dev Container's host `initializeCommand`.
 
-To view the page locally, run `python -m http.server 8765 --bind 127.0.0.1 --directory docs/developer`, then open `http://127.0.0.1:8765`. To publish later, select GitHub Pages source **GitHub Actions** and set repository variable `DEVELOPER_PAGES_ENABLED=true`. Intended URL: `https://patrickvorgers.github.io/open-energy-planner/developer/`. Hosting requires an eligible plan or public repository and is currently disabled. Only three public static files are published, never design/measurement archives or developer credentials. The page launches local installation. It does not run provisioning on GitHub.
+The public [developer start page](https://patrickvorgers.github.io/open-energy-planner/provisioning/) opens VS Code's ordinary Git clone flow for a repository or branch. Clone into a local folder and prepare the original successful CI installation bundle on the host. Run `python -m script.supervisor.dev start` on the host to provision the environment and copy its private login details into the checkout, then choose **Dev Containers: Reopen in Container**. Use the matching verified merge checkout for persistent provisioning. Unmerged branches remain available for editing and focused tests, not persistent source installation. The container-volume clone flow cannot perform the required host preparation. Browser/VS Code clone/trust prompts remain the developer's responsibility. See [package selection and preparation](DEVELOPER-ENVIRONMENT.md#start-and-stop).
+
+The public [documentation site](https://patrickvorgers.github.io/open-energy-planner/) and [provisioning entry](https://patrickvorgers.github.io/open-energy-planner/provisioning/) share one Pages artifact. The provisioning source lives under `docs/site/provisioning/`. GitHub Pages uses source **GitHub Actions** and repository variable `DEVELOPER_PAGES_ENABLED=true`. The **Documentation and developer pages** workflow checks the site and provisioning entry before publishing main. See [documentation-site maintenance](DOCUMENTATION-SITE.md) for the full local preview, publication boundary and browser checks. The site guides local installation. It does not run provisioning on GitHub.
 
 The Dev Container starts the real Supervisor environment, installs the normal OEP app and integration, completes HA onboarding and loads simulated devices and history. Provisioning fills only missing sample settings and preserves existing settings, partial configuration and HA identities. No production HA settings are copied. See the [developer environment guide](DEVELOPER-ENVIRONMENT.md) for the host-only start command and source-update workflow.
 
@@ -203,8 +211,8 @@ The privileged developer container owns a private inner Docker engine. The host 
 - `python script/ci/setup.py`: inside the Dev Container, repeat native/UI quality checks. Actual Supervisor provisioning uses `python -m script.supervisor.provision_supervisor` inside that container.
 - `docker compose --profile test build ui-tests` and `docker compose run --rm ui-tests`: Chromium checks at desktop/mobile sizes, without launching VS Code. Full CI includes these tests.
 - `python script/ci/ci.py`: from a host with Docker, run the same full isolated suite as GitHub Actions. It builds the app and both test runtimes, runs Ruff/format/native scenarios/smoke and actual HA handoff, then removes only its uniquely named test project.
-- `python -m script.supervisor.dev start`: from the host, repeat onboarding and stage current sources while preserving existing state. Do not run the host launcher inside the Dev Container.
-- After editing app or integration sources, repeat the host start command. The provisioner rebuilds the changed local app and reloads the changed integration; unchanged source is reused.
+- `python -m script.supervisor.dev start`: from the host, repeat onboarding with the accepted CI package while preserving existing state. Do not run the host launcher inside the Dev Container.
+- After editing app or integration sources, run focused tests or disposable Supervisor acceptance. Persistent startup rejects changed tracked sources. Reopening the Dev Container also runs host `prepare` through `initializeCommand` and rejects tracked-file edits, including documentation and tests, even after a successful earlier preparation. Save your edits on a separate branch or worktree before returning this checkout to the clean verified merge matching the accepted package. From that host checkout, run `python -m script.supervisor.dev prepare` without package options to validate and reuse the intact accepted cache, then reopen the Dev Container. Reopening directly also validates and reuses that cache through `initializeCommand`. Cache reuse needs no GitHub access or unexpired artifact. If the cache is unavailable, first run `python -m script.supervisor.dev prepare --bundle /path/to/installation-bundle-amd64.zip --run-id RUN_ID` with the original matching archive and run ID. Keep the separate edited checkout for focused tests. Do not discard edits or replace persistent sources with an unmerged branch. Update the persistent environment only after merge, using the original successful matching CI bundle as described in the [developer environment guide](DEVELOPER-ENVIRONMENT.md#start-and-stop).
 
 CI writes fresh JUnit files to ignored `results/ci/`. The HA suite uses its own framework runtime and must not be skipped silently in the full pipeline. Native tests run without a network. No tests require production credentials or physical equipment.
 

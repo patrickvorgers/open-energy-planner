@@ -53,8 +53,10 @@ Calendar charts share compact day headings, alternating pale backgrounds and
 midnight separators. Day boundaries use the Home Assistant installation timezone,
 including 23-hour and 25-hour daylight-saving days, independently of the browser.
 Headings use Today or Tomorrow where space permits and compact dates on mobile.
-The headings carry the weekday and date. Shared compact clock ticks include
-timezone names to distinguish repeated autumn hours without repeating the date.
+The headings carry the weekday and date. Shared compact clock ticks show
+installation time without timezone names. Date/time tooltips also omit timezone
+names. Repeated autumn hours keep their actual timestamp positions even when
+their displayed clock times match.
 Full dates remain available as accessible labels. Clipped edge days occupy only
 their visible time. Archived UTC daily savings retain UTC calendar boundaries.
 Relative appliance-cycle charts retain their elapsed-time axis. Bands do not

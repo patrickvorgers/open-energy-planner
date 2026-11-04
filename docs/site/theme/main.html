@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ config.site_description }}">
+  <title>{{ page.title }} | {{ config.site_name }}</title>
+  <link rel="icon" href="{{ 'assets/app.svg' | url }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ 'docs/assets/courtyard.css' | url }}">
+  <link rel="stylesheet" href="{{ 'docs/assets/documentation.css' | url }}">
+  <script src="{{ 'docs/assets/documentation.js' | url }}" defer data-root="{{ '.' | url }}"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="mobile-header">
+    <a href="{{ 'docs/' | url }}" aria-label="Open Energy Planner documentation"><img src="{{ 'assets/app.svg' | url }}" alt="" width="32" height="32"> OEP guide</a>
+    <button id="menu-toggle" aria-expanded="false" aria-controls="site-navigation" hidden>Menu</button>
+  </header>
+  <aside class="sidebar" id="site-navigation">
+    <a class="brand site-brand" href="{{ 'docs/' | url }}"><img src="{{ 'assets/app.svg' | url }}" alt="" width="42" height="42"><span>Open Energy<br><strong>Planner</strong></span></a>
+    <p class="guide-label">Your guide to local energy</p>
+    <form class="search-form" role="search">
+      <label for="search-query">Search the guide</label>
+      <input id="search-query" type="search" autocomplete="off" placeholder="Try “first plan”" aria-controls="search-results" disabled>
+      <button type="submit">Search</button>
+      <span id="search-status" role="status">Loading local search…</span>
+    </form>
+    <nav aria-label="Documentation">
+      {% for item in nav %}
+        {% if item.children %}
+          <section class="nav-group"><h2>{{ item.title }}</h2>
+          {% for child in item.children %}<a href="{{ child.url | url }}" {% if child.active %}aria-current="page"{% endif %}>{{ child.title }}</a>{% endfor %}
+          </section>
+        {% else %}
+          <a href="{{ item.url | url }}" {% if item.active %}aria-current="page"{% endif %}>{{ item.title }}</a>
+        {% endif %}
+      {% endfor %}
+    </nav>
+    <p class="sidebar-footer">Local intelligence.<br>Better use of your energy.</p>
+  </aside>
+  <div class="reading-shell">
+    <header class="reading-header"><a href="{{ 'docs/' | url }}">Documentation</a><span>Understand. Configure. Plan.</span></header>
+    <section id="search-panel" class="search-panel" aria-labelledby="search-heading" hidden>
+      <h2 id="search-heading">Search the guide</h2><div id="search-results"></div>
+      <button id="search-close" type="button">Back to the article</button>
+    </section>
+    <div class="article-layout">
+      {% if page.toc %}<details class="mobile-contents"><summary>On this page</summary><nav aria-label="Article sections">{% for heading in page.toc %}{% for child in heading.children %}<a href="{{ child.url }}">{{ child.title }}</a>{% endfor %}{% endfor %}</nav></details>{% endif %}
+      <main id="content" tabindex="-1" class="article {% if page.file.src_uri == 'docs/index.md' %}home{% endif %}">{{ page.content }}</main>
+      {% if page.toc %}<aside class="contents"><nav aria-label="On this page"><h2>On this page</h2>{% for heading in page.toc %}{% for child in heading.children %}<a href="{{ child.url }}">{{ child.title }}</a>{% endfor %}{% endfor %}</nav></aside>{% endif %}
+    </div>
+    <footer class="page-footer"><p>Open Energy Planner<br><span>Local energy planning for Home Assistant.</span></p><p><a href="{{ 'LICENSE' | url }}">AGPL-3.0-only</a><br><a href="{{ 'docs/assets/SITE-LICENSES.txt' | url }}">Third-party notices</a></p></footer>
+  </div>
+</body>
+</html>

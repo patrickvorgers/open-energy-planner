@@ -10,6 +10,7 @@ from aiohttp import web
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import display_plan
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, request_error_message
 
 from ..storage.adapters.documents import SqlDocuments
 from ..storage.writes import complete_write
@@ -19,6 +20,45 @@ from .repricing import PlanValuations
 from .runtime import SavingsRuntime, quarter
 from .scenarios import scenarios
 from .storage.adapters.sqlalchemy import SettlementStore
+
+# Only these reviewed owned literals may cross the public error boundary.
+PUBLIC_VALIDATION_MESSAGES = (
+    "Expected bounded immutable hourly history",
+    "Expected normalized energy hours",
+    "Export statistics decrease. Confirm a manual baseline",
+    "Grid import measurement is required",
+    "Grid settlement meters do not match Energy configuration",
+    "History boundary is not a completed hour",
+    "History components changed",
+    "History components do not match aggregate meter",
+    "History must use UTC hour boundaries",
+    "History requires a sensor identity",
+    "History source changed",
+    "Incomplete export history. Confirm a manual baseline",
+    "Invalid energy history value",
+    "Invalid export meter",
+    "Invalid history component",
+    "Invalid history components",
+    "Invalid history fields",
+    "Invalid history row",
+    "Invalid history size",
+    "Invalid history timestamp",
+    "Invalid settlement batch",
+    "Invalid settlement channels",
+    "Invalid settlement energy",
+    "Invalid settlement frame",
+    "Invalid settlement identity",
+    "Invalid settlement interval",
+    "Invalid settlement response",
+    "Price timestamps require a timezone",
+    "Settlement batch has gaps or overlaps",
+    "Settlement channels do not match requested Energy bindings",
+    "Settlement frame does not end on a requested quarter boundary",
+    "Settlement request changed",
+    "Settlement response outside requested coverage",
+    "Unordered or duplicate history",
+    "Unsupported history unit/request",
+)
 
 SAVINGS_WORKER_SECONDS = 30
 _LOGGER = logging.getLogger(__name__)
@@ -93,7 +133,15 @@ def register(
                 if cancelled:
                     raise cancelled
             except (ValueError, TypeError, KeyError) as error:
-                raise web.HTTPBadRequest(text=str(error)) from None
+                raise web.HTTPBadRequest(
+                    text=request_error_message(
+                        error,
+                        logger=logging.getLogger(__name__),
+                        operation="Settlement history",
+                        safe_messages=PUBLIC_VALIDATION_MESSAGES,
+                        fallback="Settlement history could not be accepted. Refresh the requested history and inspect application diagnostics.",
+                    )
+                ) from None
         return web.json_response({"accepted": True})
 
     def bonus_history_request():
@@ -144,7 +192,15 @@ def register(
                     raise cancelled
             except (ValueError, TypeError, KeyError) as error:
                 runtime.bonus.issue = "Historical bonus history is incomplete or invalid"
-                raise web.HTTPBadRequest(text=str(error)) from None
+                raise web.HTTPBadRequest(
+                    text=request_error_message(
+                        error,
+                        logger=logging.getLogger(__name__),
+                        operation="Settlement history",
+                        safe_messages=PUBLIC_VALIDATION_MESSAGES,
+                        fallback="Settlement history could not be accepted. Refresh the requested history and inspect application diagnostics.",
+                    )
+                ) from None
         return web.json_response({"accepted": True})
 
     async def overview(request):
@@ -215,7 +271,12 @@ def register(
                     comparison, plan
                 )
         except (ValueError, KeyError, TypeError) as error:
-            result["comparison_issue"] = str(error)
+            result["comparison_issue"] = request_error_message(
+                error,
+                logger=_LOGGER,
+                operation="Original plan comparison",
+                fallback="Original plan comparison is unavailable. Inspect application diagnostics. Measure-based settlement remains independent.",
+            )
         result["scenarios"] = await asyncio.to_thread(scenarios, plan, result.get("comparison"))
         if result.get("comparison_issue"):
             result["scenarios"]["self_consumption"]["issue"] = result["comparison_issue"]
@@ -230,6 +291,8 @@ def register(
 
     async def worker():
         """Advance at most one day per round. Keep errors visible without stopping planning."""
+        settlement_logger = BackgroundLog(_LOGGER, "Settlement processing")
+        last_state = None
         while True:
             try:
                 async with lock:
@@ -245,10 +308,33 @@ def register(
                     )
                     if cancelled:
                         raise cancelled
+                state = runtime.issue, runtime.attention
+                if state != last_state:
+                    if runtime.issue:
+                        _LOGGER.log(
+                            logging.WARNING if runtime.attention else logging.INFO,
+                            "Settlement %s: %s. Planning continues independently. Next check in %d seconds.",
+                            "needs attention" if runtime.attention else "waiting",
+                            runtime.issue,
+                            SAVINGS_WORKER_SECONDS,
+                        )
+                    elif last_state is not None and last_state[0] is not None:
+                        _LOGGER.info(
+                            "Settlement evidence is usable again. Chronological processing continues."
+                        )
+                    last_state = state
+                if runtime.issue is None:
+                    settlement_logger.success(
+                        "Measured settlement processing is running independently of planning."
+                    )
             except Exception:
                 runtime.issue = "Settlement processing failed. Inspect application logs"
                 runtime.attention = True
-                _LOGGER.exception("Settlement processing failed. Planning remains independent")
+                last_state = runtime.issue, runtime.attention
+                settlement_logger.exception(
+                    "The last successful financial results are retained. Planning continues independently. Check settlement and storage diagnostics.",
+                    retry_seconds=SAVINGS_WORKER_SECONDS,
+                )
             await asyncio.sleep(SAVINGS_WORKER_SECONDS)
 
     async def evaluations(request):

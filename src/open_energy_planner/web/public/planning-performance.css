@@ -1,0 +1,37 @@
+/* Reuse OEP's shell, palette and type. One full-width chart and list share the canvas edges. */
+.performance-workspace {font-variant-numeric:tabular-nums}
+.performance-workspace h1 {font-size:1.5rem}
+.performance-workspace main>section {margin-block:24px}
+.performance-workspace .toolbar {display:flex;align-items:end;flex-wrap:wrap;gap:16px}
+.performance-workspace .toolbar label {margin:0}
+.performance-plot {height:260px;position:relative;width:100%}
+.performance-list {display:grid;gap:0}
+.performance-row {display:grid;grid-template-columns:1fr 1fr auto;align-items:center;gap:16px;padding:12px 0;border-bottom:1px solid var(--border,#d9e2e8)}
+.performance-row p {margin:0}
+.performance-row .performance-duration {text-align:right}
+.performance-workspace button {min-height:44px}
+#calculation-detail {position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;box-sizing:border-box;width:min(880px,calc(100% - 40px));max-height:90dvh;padding:24px;border:1px solid var(--border,#d9e2e8);border-radius:16px;background:var(--surface,#fff);color:var(--text,#132d43);overflow:auto}
+#calculation-detail::backdrop {background:rgb(10 25 40 / .45)}
+#calculation-detail header {display:flex;justify-content:space-between;align-items:start;gap:16px}
+#calculation-detail h2 {margin-top:0}
+#calculation-detail dl {display:grid;grid-template-columns:1fr 1fr;gap:16px}
+#calculation-detail dt {font-size:.875rem}
+#calculation-detail dd {margin:4px 0 0}
+#calculation-detail td:not(:first-child),#calculation-detail th:not(:first-child) {text-align:right}
+@media(max-width:640px) {
+ .performance-plot {height:200px}
+ .performance-row {grid-template-columns:1fr auto;gap:8px}
+ .performance-row button {grid-column:2;grid-row:1 / 3}
+ .performance-row .performance-duration {text-align:left}
+ #calculation-detail {position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;box-sizing:border-box;width:100%;height:100dvh;max-height:100dvh;max-width:none;margin:0;border:0;border-radius:0;padding:20px}
+ #calculation-detail dl {grid-template-columns:1fr}
+}
+
+.performance-workspace #connect {max-width:560px}
+.performance-workspace h2 {font-size:1.125rem}
+.performance-workspace .toolbar input {width:200px}
+@media(max-width:640px) {.performance-workspace .toolbar input {width:170px}}
+
+.performance-workspace .sidebar .nav-label {font-size:12px}
+@media(min-width:641px) and (max-width:1100px) {.performance-workspace .sidebar {padding-left:16px;padding-right:16px}}
+@media(max-width:640px) {.workspace.performance-workspace .workspace-main {padding-left:20px;padding-right:20px}.performance-plot {height:240px}}
