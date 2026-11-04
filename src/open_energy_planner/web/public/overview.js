@@ -510,7 +510,7 @@ async function refreshLatestPlan() {
         }
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
     finally {
-        if (!priceRead && priceRefreshPending) priceRead = currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
+        if (!priceRead && priceRefreshPending && !overviewLoads) priceRead = currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
         await Promise.allSettled([priceRead]); planRefreshBusy = false;
     }
 }
@@ -634,7 +634,9 @@ async function load() {
     overviewLoads++;
     try {
         const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
-        await Promise.all([plans(false, signal), savings(signal), currentPrices(signal)]);
+        const results = await Promise.allSettled([plans(false, signal), savings(signal), currentPrices(signal)]);
+        const failure = results.find(result => result.status === "rejected");
+        if (failure) throw failure.reason;
     }
     catch (error) { $("overview-status").textContent = error.message; }
     finally { overviewLoads--; }

@@ -245,6 +245,57 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("manual_timing", ["before_poll", "during_poll"])
+def test_poll_retry_preserves_an_active_manual_price_read(automatic_plan_overview, manual_timing):
+    """A poll cannot replace manual prices while another overview read fails or archive polling resumes."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["failed_prices"] = True
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
+    page.wait_for_load_state("networkidle")
+    if manual_timing == "before_poll":
+        page.clock.run_for(14000)
+        page.route(
+            "**/v1/plans?limit=20",
+            lambda route: route.fulfill(status=503, body="Archive unavailable"),
+        )
+    else:
+        state["hold_poll"] = True
+        with page.expect_request("**/v1/plans?limit=1"):
+            page.clock.run_for(15000)
+    state["failed_prices"] = False
+    state["hold_prices"] = True
+    with page.expect_response("**/v1/plans?limit=20"), page.expect_request("**/v1/prices/inputs"):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    if manual_timing == "before_poll":
+        page.clock.run_for(1000)
+        assert state["poll_reads"] == 0
+    else:
+        with page.expect_event(
+            "requestfinished", predicate=lambda request: "limit=1" in request.url
+        ):
+            state["held_polls"][0].fulfill(json={"plans": state["plans"][:1], "next_before": None})
+        page.evaluate("Promise.resolve()")
+    assert len(state["held_prices"]) == 1
+    current = state["plans"][0]["plan_id"]
+    intervals = deepcopy(state["comparisons"][current]["plan"]["input_snapshot"]["tariff_evidence"])
+    for interval in intervals:
+        interval["buy_price"] = 0.88
+    state["held_prices"][0].fulfill(
+        json={
+            "as_of": state["beginning"].isoformat(),
+            "currency": "EUR",
+            "intervals": intervals,
+        }
+    )
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
+        .data.datasets[1].data[0].y === 0.88""")
+    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    assert len(state["held_prices"]) == 1
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_pending_price_retry_reads_after_publication_detection(automatic_plan_overview):
     """A pending price retry reads the new snapshot after archive detection, once per poll."""
     state = automatic_plan_overview
