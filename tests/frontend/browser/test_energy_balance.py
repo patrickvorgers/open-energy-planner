@@ -205,6 +205,9 @@ def test_balance_axis_bounds_change_after_real_legend_and_time_controls(app_page
         start="2026-10-23T07:00:00Z", load_kwh=100
     )
     fixture["expected_flows"][-1]["grid_import"] = 102
+    page.clock.set_fixed_time(
+        datetime.fromisoformat(fixture["input_snapshot"]["problem"]["intervals"][0]["start"])
+    )
     response["plan"]["input_snapshot"]["problem"] = fixture["input_snapshot"]["problem"]
     response["plan"]["expected_flows"] = fixture["expected_flows"]
     response["comparison"], response["scenarios"] = None, {}
@@ -244,6 +247,9 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     fixture = physical_plan()
     body["plan"]["input_snapshot"]["problem"] = fixture["input_snapshot"]["problem"]
     body["plan"]["expected_flows"] = fixture["expected_flows"]
+    page.clock.set_fixed_time(
+        datetime.fromisoformat(fixture["input_snapshot"]["problem"]["intervals"][0]["start"])
+    )
     body["comparison"] = None
     body["scenarios"] = {}
     errors = []
