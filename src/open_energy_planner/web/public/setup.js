@@ -188,14 +188,14 @@ function row(container, collection, title, old = {}) {
 function solarSuggestion(entity) {
     return config.catalogue.data.suggestions.solar_configurations?.find(item => item.entity_id === entity && item.issue === null);
 }
-/** Seed only a new source. Saved OEP values always take precedence over subsequent HA discovery. */
+/** Seed a new source from complete HA geometry before its physical converter is confirmed. */
 function suggestedSolarSource(entity_id) {
     const suggestion = solarSuggestion(entity_id);
     if (!suggestion) return {entity_id};
     const panels = structuredClone(suggestion.providers.flatMap(provider => provider.panels));
     return {entity_id, panels, capacity_w: panels.reduce((total, panel) => total + panel.capacity_w, 0), orientation: "south", ha_imports: structuredClone(suggestion.providers)};
 }
-/** Build one detected PV editor. Imported planes remain editable without changing the original HA configuration. */
+/** Build one detected PV editor with HA-owned geometry and independently editable converter settings. */
 function addSolar(old = {}) {
     old = { ...old, source_id: old.source_id || config.devices.find((d) => d.kind === "solar" && d.energy_entity === old.entity_id).id };
     const inverter =
@@ -214,8 +214,9 @@ function addSolar(old = {}) {
     const forecastHelp = document.createElement("p");
     forecastHelp.textContent = "Automatic compares the same completed days against measured production. PVWatts remains active while evidence is collected or the selected source is unavailable. HA forecasts require a supported provider and compatible production metering. ML requires sufficient history.";
     node.append(forecastHelp);
-    const geometry = document.createElement("div");
+    const geometry = document.createElement("fieldset");
     geometry.className = "solar-geometry";
+    geometry.setAttribute("aria-label", "Panel geometry");
     node.append(geometry);
     /** Insert one exact plane without deriving any values from its display name. */
     const addPanel = (panel = {}) => {
@@ -281,7 +282,7 @@ function addSolar(old = {}) {
     const renderGeometry = panels => {
         geometry.replaceChildren();
         const explanation = document.createElement("p");
-        explanation.textContent = "Each panel group has one azimuth and tilt. Changes here affect OEP only. Saved settings are kept when Home Assistant refreshes.";
+        explanation.setAttribute("data-panel-ownership", "");
         geometry.append(explanation);
         panels.forEach(addPanel);
         const add = document.createElement("button");
@@ -291,31 +292,37 @@ function addSolar(old = {}) {
         add.onclick = () => { addPanel(); node.dispatchEvent(new Event("input", {bubbles: true})); };
         geometry.append(add);
     };
-    renderGeometry(editableSolarPanels(old));
-    const importStatus = config.catalogue.data.suggestions.solar_configurations?.find(item => item.entity_id === old.entity_id);
-    if (importStatus?.issue && !old.panels?.length) {
-        const explanation = document.createElement("p");
-        explanation.textContent = {
-            solar_configuration_not_available: "No solar forecast configuration is linked to this production meter in Home Assistant. Enter the panel settings below.",
-            solar_configuration_unsupported: "The selected Home Assistant forecast provider is not supported for configuration import. Enter the panel settings below.",
-            solar_configuration_incomplete: "The selected solar configuration is incomplete. Review it in Home Assistant or enter all panel settings here.",
-            solar_configuration_ambiguous: "The same forecast is assigned to multiple production meters. Review the assignments in Home Assistant before importing.",
-        }[importStatus.issue];
-        geometry.prepend(explanation);
-    }
-    if (solarSuggestion(old.entity_id)) {
-        const reload = document.createElement("button");
-        reload.type = "button";
-        reload.className = "secondary";
-        reload.textContent = "Use Home Assistant panel settings";
-        reload.onclick = () => {
-            const proposal = suggestedSolarSource(old.entity_id);
-            editor.old = {...editor.old, ha_imports: proposal.ha_imports};
+    const ownership = config.panel_settings?.[old.entity_id] || {managed: true, state: "unavailable"};
+    let followDraftGeometry = ownership.managed;
+    renderGeometry(ownership.managed && !old.capacity_w && !old.panels?.length
+        ? [{capacity_w: null, azimuth: null, tilt: null}]
+        : editableSolarPanels(old));
+    /** Populate unsaved HA-owned geometry on recovery without replacing manual or physical drafts. */
+    editor.updateOwnership = (state, changed = false) => {
+        const savedSource = config.solar?.sources.some(source => source.entity_id === editor.old.entity_id);
+        if (!state.managed) {
+            followDraftGeometry = false;
+            if (!savedSource && editor.old.ha_imports?.length) editor.old = {...editor.old, ha_imports: []};
+        }
+        const proposal = state.state === "following" && followDraftGeometry && !savedSource
+            ? suggestedSolarSource(editor.old.entity_id) : null;
+        const emptyGeometry = [...geometry.querySelectorAll("[data-key]")].every(control => control.value === "");
+        if (proposal?.panels?.length && (editor.old.ha_imports?.length || emptyGeometry)
+            && JSON.stringify(editor.old.ha_imports || []) !== JSON.stringify(proposal.ha_imports)) {
+            editor.old = {...editor.old, ...proposal};
             renderGeometry(proposal.panels);
-            node.dispatchEvent(new Event("input", {bubbles: true}));
-        };
-        node.append(reload);
-    }
+        }
+        changed ||= !savedSource && state.managed && !followDraftGeometry;
+        geometry.disabled = state.managed;
+        geometry.querySelector("[data-panel-ownership]").textContent = (state.managed
+            ? state.state === "unavailable"
+                ? editor.old.capacity_w ? "Home Assistant panel settings could not be refreshed. Last accepted settings are retained. Edit the source configuration in Home Assistant."
+                    : "Waiting for complete Home Assistant panel settings. No panel geometry has been assumed."
+                : "Managed by Home Assistant (Forecast.Solar). Panel settings are followed automatically. Edit them in Home Assistant."
+            : "Manual panel settings. No forecast configuration is linked in Home Assistant.")
+            + (changed ? " Home Assistant panel settings changed. Your draft is retained. Reload saved settings before saving." : "");
+    };
+    editor.updateOwnership(ownership);
     const converterDetails = document.createElement("details"), converterSummary = document.createElement("summary");
     converterSummary.textContent = "Shared inverter settings";
     converterDetails.append(converterSummary);
@@ -331,7 +338,7 @@ function addSolar(old = {}) {
         node,
         "Inverter AC rating (kW)",
         "rating",
-        inverter.ac_limit_w ? inverter.ac_limit_w / 1000 : old.ha_imports?.length === 1 && old.ha_imports[0].inverter_limit_w ? old.ha_imports[0].inverter_limit_w / 1000 : "",
+        inverter.ac_limit_w ? inverter.ac_limit_w / 1000 : "",
         { type: "number", min: "0.001", required: true },
     );
     field(
@@ -655,7 +662,7 @@ function validateVisible() {
             const container = step === 1 ? "solar-rows" : step === 2 ? "battery-rows" : null;
             if (container) {
                 const selector = step === 1 ? "installation-solar" : "installation-battery";
-                $(selector).value = String([...$(container).children].indexOf(input.closest("fieldset")));
+                $(selector).value = String([...$(container).children].findIndex(row => row.contains(input)));
                 layout.selectDevice(selector, container);
             }
             input.reportValidity(); return false;
@@ -706,8 +713,18 @@ async function refreshSourceNames() {
     const previous = config;
     const state = await api("/v1/setup");
     if (!state.catalogue?.data || !installationReady || saveState.busy || previous !== config) return;
+    const panelsChanged = state.solar?.version !== config.solar?.version;
+    if (panelsChanged && !layout.editing && !installationDirty()) {
+        await load();
+        return;
+    }
     config.catalogue = state.catalogue;
     config.devices = state.devices;
+    config.panel_settings = state.panel_settings;
+    for (const editor of solarRows) {
+        const ownership = state.panel_settings?.[editor.old.entity_id];
+        if (ownership) editor.updateOwnership(ownership, panelsChanged);
+    }
     const hybrids = solarRows.map(({node}) => values(node)).filter(source => source.hybrid);
     for (const select of document.querySelectorAll("#wizard select[data-key]")) {
         for (const option of select.options) {

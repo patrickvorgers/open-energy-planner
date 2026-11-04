@@ -121,6 +121,10 @@ def discover(
                 ("charge1", -1),
             )
         )
+    body["suggestions"]["solar_configurations"] = [
+        {"entity_id": entity, "providers": [], "issue": "solar_configuration_not_available"}
+        for entity in body["suggestions"]["solar_sources"]
+    ]
     response = page.request.post(
         url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
     )
