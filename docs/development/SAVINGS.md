@@ -148,12 +148,14 @@ fault notification. Persistent configuration/data errors are reported separately
 The evaluator checks the selected price again before committing. A changed price
 cannot silently commit a stale interval or lose its correction event.
 
-New expected comparisons continue the independent reference's last evaluated
-state and counter budgets. The short Recorder delay may be bridged using retained
-forecasts for at most one hour, explicitly marked estimated. Longer gaps and
-unresolved hardware transitions make the comparison unavailable without blocking
-an otherwise valid control plan. Before the first evaluated state, expectations
-are explicitly provisional and start both scenarios from the same current SoC.
+New expected comparisons start self-consumption and OEP at the same measured
+battery stock and the same initial bonus budgets frozen in the plan. They use
+the same start, horizon, physical installation, tariffs and external forecasts.
+Their economic cost difference is the expected extra saving from choosing OEP
+now, including remaining battery value. Negative savings remain visible.
+Historical metering gaps cannot block this future comparison. Original archived
+continuous-start forecasts retain their original outcomes and interpretation.
+This common forecast start never changes historical settlement or its counters.
 
 Contract corrections also reprice frozen expected EMS and reference flows in
 bounded batches of twenty plans. Original wholesale knowledge, times and physical
@@ -263,20 +265,12 @@ measurements and previously successful financial revisions remain unchanged.
 Database-backend transfer copies the checkpoint with all other app documents.
 
 A missing, late or aggregate bonus seed can prevent financial settlement without
-preventing physical advancement. A new plan continues the independent stock and
-retains physical balance bars and SoC. Its reference costs and expected benefit
-are `null` when the matching bonus baseline cannot be proven. The UI displays the
-financial issue beside the available physical chart. Unknown quota is never zero.
-Opening counters must also match the new plan's frozen bonus-evidence version.
-A newly saved baseline cannot borrow an older successful financial quota while
-background replay has not yet recorded the new version.
-Separate repricing may still value EMS flows without inventing a reference budget.
-
-Physical failures remain blocking: missing channels, battery endpoints, original
-installation context or an interval gap stop at the last valid checkpoint. Only
-the existing one-hour retained-forecast bridge may cover Recorder delay, explicitly
-marked estimated. `/v1/snapshot.savings_status.physical_issue` distinguishes physical
-failures from financial `issue`. The recovery below separately handles later seeds and repairs
+preventing physical advancement. Historical settlement still requires measured
+channels, battery endpoints and original installation context. An interval gap
+stops historical progression at the last valid checkpoint. The future plan's
+common measured start is independent of this checkpoint.
+`/v1/snapshot.savings_status.physical_issue` distinguishes physical failures from
+financial `issue`. The recovery below separately handles later seeds and repairs
 a financial baseline only with sufficient historical evidence.
 
 ## Historical bonus opening balances

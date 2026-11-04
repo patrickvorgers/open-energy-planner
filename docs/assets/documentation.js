@@ -71,8 +71,8 @@ if (window.Worker) {
         if (words) worker.postMessage({query: words.join(" ")});
     });
     document.querySelector(".search-form").addEventListener("submit", () => {
-        if (panel.hidden) return;
         closeMenu();
+        if (panel.hidden) return;
         document.getElementById("search-heading").scrollIntoView();
         document.getElementById("search-close").focus();
     });

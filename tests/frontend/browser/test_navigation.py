@@ -817,3 +817,29 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
                 )
             ).to_have_count(1)
         page.goto(url + "/appliance-settings" + suffix)
+
+
+@pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
+def test_wiki_help_opens_external_guide_without_leaving_app(app_page):
+    """Desktop, mobile and HA ingress open the public wiki separately from the current app page."""
+    page, url = app_page
+    open_primary_navigation(page)
+    link = page.get_by_role("link", name="Wiki help", exact=True)
+    link.scroll_into_view_if_needed()
+    expect(link).to_be_visible()
+    expect(link).to_have_attribute("href", "https://patrickvorgers.github.io/open-energy-planner/")
+    expect(link).to_have_attribute("rel", "noopener noreferrer")
+    page.context.route(
+        "https://patrickvorgers.github.io/open-energy-planner/",
+        lambda route: route.fulfill(body="<h1>Wiki destination</h1>", content_type="text/html"),
+    )
+    page.screenshot(
+        path=f"results/ci/wiki-help-{page.viewport_size['width']}-{'ingress' in url}.png",
+        full_page=True,
+    )
+    with page.expect_popup() as opened:
+        link.click()
+    popup = opened.value
+    expect(popup).to_have_url("https://patrickvorgers.github.io/open-energy-planner/")
+    expect(page).to_have_url(url + "/setup")
+    popup.close()

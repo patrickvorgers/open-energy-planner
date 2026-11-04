@@ -31,3 +31,7 @@ Check the [release boundaries](../../design/FIRST-RELEASE-SCOPE.md). Back up you
 Home Assistant supplies the timezone. OEP does not have a separate timezone setting. Planning limits are not electrical protection. Missing or stale inputs may prevent a plan, and forecasts do not guarantee a particular outcome.
 
 **Next:** [Try your first plan](first-plan.md).
+
+## Help from the app
+
+Open **Help > Wiki help** in the app navigation to read this guide in a new tab. On a phone, open **Menu** first. Your current app page stays open. The public wiki needs an internet connection.

@@ -80,7 +80,7 @@ run the strict build, publication-boundary tests and focused desktop/tablet/mobi
 browser checks without deploying. Main updates and manual main dispatch publish
 only when `DEVELOPER_PAGES_ENABLED=true`. The `github-pages` environment allows
 only `main`, and the deploy job has the only Pages write and identity permissions.
-Never add a second publisher that replaces this artifact with a partial site.
+Runs share workflow-level concurrency per Git ref. A newer run cancels the older build and publication together. Never add a second publisher that replaces this artifact with a partial site.
 
 Only the generated `_site` directory is uploaded. Source, local databases,
 credentials and build hooks remain outside the site. Before pushing, review new

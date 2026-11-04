@@ -7,6 +7,10 @@ on:
     paths: ['docs/**', 'design/**', 'README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'src/open_energy_planner/web/public/fonts/**', 'src/open_energy_planner/web/public/icons/app.svg', 'tests/frontend/**', 'Dockerfile.ui-test', '.github/workflows/pages.yaml']
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -39,6 +43,7 @@ jobs:
           path: |
             results/ci/pages.xml
             results/ci/documentation-home-*.png
+            results/ci/documentation-search-pending-*.png
             results/ci/developer-start-*.png
             results/ci/provisioning-shared-style-*.png
       - name: Disable Jekyll processing
@@ -58,9 +63,6 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.publish.outputs.page_url }}
-    concurrency:
-      group: developer-pages
-      cancel-in-progress: false
     steps:
       - id: publish
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

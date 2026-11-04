@@ -20,8 +20,10 @@
       it in VS Code's Dev Container. It runs a separate Home Assistant test installation.</p>
     <label for="repository">GitHub repository or branch URL</label>
     <input id="repository" type="url" spellcheck="false" autocomplete="off"
-      value="https://github.com/patrickvorgers/open-energy-planner" aria-describedby="help error">
+      value="https://github.com/patrickvorgers/open-energy-planner" aria-describedby="help privacy error">
     <p id="help">Private repositories require GitHub access inside VS Code. No token belongs in this field.</p>
+    <p class="privacy" id="privacy">Opening the clone link sends the repository URL, including any private
+      repository name, to vscode.dev. This page collects no credentials or analytics. Provisioning runs locally.</p>
     <p id="error" role="alert" hidden></p>
     <a class="primary" id="launch" aria-disabled="true">Clone in VS Code</a>
     <section>
@@ -31,7 +33,9 @@
         <a href="https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers">Dev Containers</a>
         and <a href="https://git-scm.com/downloads">Git</a>. Start
         <a href="https://www.docker.com/products/docker-desktop/">Docker</a> with Linux containers.</li>
-      <li>Install Python 3.12 or newer on your computer. Use the project URL above to clone into
+      <li>Install Python 3.12 or newer as <code>python</code> in both your host terminal and VS Code.
+        Check <code>python --version</code> and follow the <a href="../docs/development/README/#first-start">host interpreter setup</a> if needed.
+        Use the project URL above to clone into
         a local folder. Keep the folder open locally until package preparation finishes.</li>
       <li>Follow <a href="https://github.com/patrickvorgers/open-energy-planner/blob/main/docs/development/DEVELOPER-ENVIRONMENT.md#start-and-stop">package preparation</a>:
         download the original <code>installation-bundle-amd64</code> ZIP from a successful
@@ -61,8 +65,6 @@
           then choose <strong>Dev Containers: Reopen in Container</strong>.</p>
       </details>
     </section>
-    <p class="privacy">The URL is processed in this browser only. This page collects no
-      credentials or analytics. GitHub Pages hosting is optional. Provisioning runs locally.</p>
     <noscript>Enable JavaScript or use the VS Code clone command described above.</noscript>
   </main>
 </body>

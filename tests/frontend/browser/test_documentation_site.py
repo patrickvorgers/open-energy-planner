@@ -110,3 +110,41 @@ def test_wiki_and_provisioning_share_the_oep_identity(documentation_page, docume
         path=f"results/ci/provisioning-shared-style-{page.viewport_size['width']}.png",
         full_page=True,
     )
+
+
+def test_search_submission_closes_menu_before_worker_results(documentation_url, browser):
+    """Submitting pending mobile search uncovers the later results without another menu toggle."""
+    with browser.new_context(viewport={"width": 390, "height": 844}) as context:
+        page = context.new_page()
+        page.add_init_script("""
+            const RealWorker = window.Worker;
+            window.Worker = class extends RealWorker {
+                addEventListener(type, listener, ...options) {
+                    super.addEventListener(type, event => {
+                        if (event.data.results) {
+                            window.deliverSearchResults = () => listener(event);
+                        } else {
+                            listener(event);
+                        }
+                    }, ...options);
+                }
+            };
+        """)
+        page.goto(documentation_url)
+        menu = page.get_by_role("button", name="Menu", exact=True)
+        menu.click()
+        search = page.get_by_role("searchbox", name="Search the guide")
+        expect(search).to_be_enabled()
+        search.fill("first plan")
+        page.get_by_role("button", name="Search", exact=True).click()
+        expect(menu).to_have_attribute("aria-expanded", "false")
+        expect(page.locator("#search-panel")).to_be_hidden()
+        page.wait_for_function("typeof window.deliverSearchResults === 'function'")
+        page.evaluate("window.deliverSearchResults()")
+        expect(page.locator("#search-panel")).to_be_visible()
+        expect(
+            page.locator("#search-results")
+            .get_by_role("link", name="Try your first plan", exact=True)
+            .first
+        ).to_be_visible()
+        page.screenshot(path="results/ci/documentation-search-pending-390.png", full_page=True)
