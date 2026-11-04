@@ -158,6 +158,8 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
     expect(page.locator("#ems-costs details")).to_have_attribute("open", "")
     expect(page.locator("#ems-costs details dd")).to_have_text(["9,25 EUR", "0,00 EUR", "0,00 EUR"])
     expect(page.locator("#ems-costs details")).to_contain_text("Battery value change (not cash)")
-    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    with page.expect_response("**/v1/plans/*/comparison"):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#optimizer-total-costs > dl dd")).to_have_text(["9,25 EUR", "4,96 EUR"])
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#ems-costs details")).to_have_attribute("open", "")

@@ -6,6 +6,8 @@ import secrets
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
+from open_energy_planner.runtime.diagnostics.logging import failure_reason
+
 CREDENTIAL_ENTROPY_BYTES = 48
 SUPERVISOR_TIMEOUT_SECONDS = 15
 WEBSOCKET_HEARTBEAT_SECONDS = 20
@@ -16,6 +18,10 @@ INTEGRATION_DISCOVERY_RETRY_SECONDS = 30
 LOG = logging.getLogger(__name__)
 
 
+class SupervisorAuthenticationRejected(ValueError):
+    """The Supervisor explicitly rejected the supplied app authentication token."""
+
+
 async def connect(pairing, token, address, port, pin, *, ui_url=None):
     """Retry the custom integration bootstrap through Supervisor, retaining no user HA token.
 
@@ -24,6 +30,24 @@ async def connect(pairing, token, address, port, pin, *, ui_url=None):
     Repeated handshakes recover lost HA credentials without changing ownership.
     """
     pairing.supervisor_secret = secrets.token_urlsafe(CREDENTIAL_ENTROPY_BYTES)
+    last_issue = None
+    connected_once = False
+
+    def report_problem(
+        reason, advice, *, boundary="Automatic Home Assistant connection unavailable"
+    ):
+        """Deduplicate unsuccessful bootstrap attempts without exposing private Supervisor replies."""
+        nonlocal last_issue
+        LOG.log(
+            logging.WARNING if reason != last_issue else logging.DEBUG,
+            "%s (%s). %s Retrying in %d seconds.",
+            boundary,
+            reason,
+            advice,
+            PAIRING_RETRY_SECONDS,
+        )
+        last_issue = reason
+
     async with ClientSession(timeout=ClientTimeout(total=SUPERVISOR_TIMEOUT_SECONDS)) as session:
         while True:
             try:
@@ -49,8 +73,11 @@ async def connect(pairing, token, address, port, pin, *, ui_url=None):
                     if (await websocket.receive_json())["type"] != "auth_required":
                         raise ValueError("Unexpected Supervisor authentication handshake")
                     await websocket.send_json({"type": "auth", "access_token": token})
-                    if (await websocket.receive_json())["type"] != "auth_ok":
-                        raise ValueError("Supervisor authentication rejected")
+                    authentication = await websocket.receive_json()
+                    if authentication["type"] == "auth_invalid":
+                        raise SupervisorAuthenticationRejected
+                    if authentication["type"] != "auth_ok":
+                        raise ValueError("Unexpected Supervisor authentication result")
                     number = 0
                     while True:
                         number += 1
@@ -74,34 +101,47 @@ async def connect(pairing, token, address, port, pin, *, ui_url=None):
                             error = result.get("error")
                             error_code = error.get("code") if isinstance(error, dict) else None
                             if error_code == "unknown_command":
-                                LOG.warning(
+                                report_problem(
+                                    "integration not loaded",
                                     "The OEP integration is not loaded in Home Assistant. "
                                     "Its installation cannot be verified. Install the matching "
                                     "integration if needed, then restart Home Assistant Core. "
-                                    "Automatic pairing will retry"
+                                    "Automatic pairing remains pending.",
                                 )
                             elif error_code == "link_failed":
-                                LOG.warning(
+                                report_problem(
+                                    "integration link failed",
                                     "The OEP integration is loaded in Home Assistant, but "
                                     "automatic pairing was not completed. Check the OEP "
-                                    "integration logs in Home Assistant. Automatic pairing will retry"
+                                    "integration logs in Home Assistant.",
                                 )
                             else:
-                                LOG.warning(
+                                report_problem(
+                                    "connection request rejected",
                                     "Home Assistant rejected the automatic OEP connection request. "
                                     "The integration's loaded state could not be verified. "
-                                    "Check the Home Assistant logs. Automatic pairing will retry"
+                                    "Check the Home Assistant logs.",
                                 )
                             break
-                        if number == 1:
+                        if number == 1 and (last_issue is not None or not connected_once):
                             LOG.info(
                                 "The OEP integration is loaded in Home Assistant. "
-                                "The automatic connection request was accepted"
+                                "The automatic connection request was accepted. Normal discovery checks continue"
                             )
+                            connected_once, last_issue = True, None
                         await asyncio.sleep(INTEGRATION_DISCOVERY_RETRY_SECONDS)
                 await asyncio.sleep(PAIRING_RETRY_SECONDS)
-            except (ClientError, TimeoutError, ValueError, KeyError, TypeError):
-                LOG.warning(
-                    "Automatic Supervisor connection unavailable. Retrying without requesting user credentials"
+            except SupervisorAuthenticationRejected:
+                report_problem(
+                    "Supervisor authentication rejected",
+                    "Automatic pairing is pending. Check the app's Supervisor token and permissions, then restart the app if they changed.",
+                    boundary="Supervisor authentication unavailable",
+                )
+                await asyncio.sleep(PAIRING_RETRY_SECONDS)
+            except (ClientError, TimeoutError, ValueError, KeyError, TypeError) as error:
+                report_problem(
+                    failure_reason(error) or "invalid Supervisor response",
+                    "Automatic pairing is pending. Check Supervisor connectivity and the matching OEP integration.",
+                    boundary="Supervisor connection unavailable",
                 )
                 await asyncio.sleep(PAIRING_RETRY_SECONDS)

@@ -40,6 +40,9 @@ batched review corrections and exact-candidate merge policy.
 
 Follow the [code documentation standard](CODE-DOCUMENTATION.md) for required docstrings, comments, domain contracts and documentation review. Disabling a generic docstring-coverage percentage does not remove the obligation to document code properly.
 
+Follow the [application logging guideline](LOGGING.md) for actionable messages,
+log levels, failure/recovery deduplication, privacy and truthful acceptance logs.
+
 ### What the quality job runs
 
 CodeRabbit is the only required automated review service and must cover the latest

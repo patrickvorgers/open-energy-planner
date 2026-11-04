@@ -1,6 +1,7 @@
 """Independent price normalization, precedence, scheduling and archive scenarios."""
 
 import asyncio
+import logging
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -77,6 +78,48 @@ def forecast(now=NOW):
             for index in range(48)
         ),
     )
+
+
+def test_forecast_failure_logs_retry_and_recovery_without_poll_noise(tmp_path, caplog):
+    """Repeated provider outages retain their cadence and private errors never reach normal logs."""
+
+    async def scenario():
+        """Fail twice thirty minutes apart, then recover through actual acceptance and persistence."""
+        calls = []
+
+        class Source:
+            """Return private error text until the third scheduled request succeeds."""
+
+            async def fetch(self, now):
+                """Track real requests independently of the runtime retry constants."""
+                calls.append(now)
+                if len(calls) < 3:
+                    raise PricesUnavailable(
+                        "https://private.invalid/?token=SECRET&latitude=PRIVATE_SITE"
+                    )
+                return forecast(now)
+
+        service = PriceService("NL", None, Source(), make_store(tmp_path, PriceStore))
+        for minute in (0, 1, 29, 30, 31, 59, 60, 61):
+            await service.refresh(NOW + timedelta(minutes=minute))
+        assert calls == [NOW, NOW + timedelta(minutes=30), NOW + timedelta(minutes=60)]
+        assert service.timeline(NOW + timedelta(minutes=60)).status == "ready"
+        assert service.timeline(NOW + timedelta(minutes=61)).status == "shortened_horizon"
+        messages = [
+            record for record in caplog.records if "Price forecast forecast" in record.message
+        ]
+        assert [record.levelno for record in messages] == [
+            logging.WARNING,
+            logging.DEBUG,
+            logging.INFO,
+        ]
+        assert "Retrying in 30 minutes." in messages[0].message
+        assert "recovered" in messages[-1].message
+        assert all(record.exc_info is None for record in messages)
+        assert "SECRET" not in caplog.text and "PRIVATE_SITE" not in caplog.text
+
+    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.prices.service"):
+        asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("value", [None, True, float("nan"), float("inf")])

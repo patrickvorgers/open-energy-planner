@@ -4,7 +4,6 @@ import asyncio
 import hmac
 import logging
 import os
-import traceback
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -16,6 +15,7 @@ from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.frontend.assets import is_public
 from open_energy_planner.frontend.assets import register as register_assets
 from open_energy_planner.ingress import INGRESS_PEER, prefix
+from open_energy_planner.runtime.diagnostics.logging import failure_trace
 from open_energy_planner.storage.adapters.lifecycle.files import BootstrapDurabilityError
 from open_energy_planner.storage.adapters.lifecycle.maintenance import (
     JOURNAL_FILE,
@@ -62,14 +62,6 @@ ACTIVE_PHASES = frozenset(
 )
 
 
-def failure_trace(error):
-    """Retain stack locations for diagnosis without source lines, locals or driver exception text."""
-    return "\n".join(
-        f"{frame.filename}:{frame.lineno}: {frame.name}"
-        for frame in traceback.extract_tb(error.__traceback__)
-    )
-
-
 class MaintenanceHost:
     """Own one runtime, one serialized migration and a private journal. Never hot-swap its stores."""
 
@@ -111,6 +103,7 @@ class MaintenanceHost:
         """Replace private recovery evidence before crossing any externally meaningful boundary."""
         if self.bootstrap_error:
             raise OSError("Private recovery state needs repair before further writes")
+        previous_phase = (self.journal or {}).get("phase")
         journal = {**(self.journal or {}), **changes}
         try:
             write_private(self.root, JOURNAL_FILE, journal)
@@ -119,8 +112,25 @@ class MaintenanceHost:
             self.journal = journal
             self.bootstrap_error = self.durability_error = True
             self.accepting = False
+            logging.getLogger(__name__).error(
+                "Database recovery metadata could not be confirmed durable. Runtime admission is closed. Check OEP storage and restart before retrying recovery."
+            )
             raise
         self.journal = journal
+        if journal.get("phase") != previous_phase:
+            phase = journal.get("phase")
+            logging.getLogger(__name__).log(
+                logging.WARNING
+                if phase in {MigrationPhase.FAILED, MigrationPhase.INTERRUPTED}
+                else logging.INFO,
+                "Database maintenance phase: %s. %s",
+                phase,
+                "Review database recovery options before retrying. Normal operation remains paused."
+                if phase in {MigrationPhase.FAILED, MigrationPhase.INTERRUPTED}
+                else "The selected database is verified and the runtime has started."
+                if phase in {MigrationPhase.COMPLETED, MigrationPhase.RESTORED}
+                else "Normal operation resumes only after database verification and runtime startup.",
+            )
 
     def record_failure(self, message):
         """Keep recovery reachable when recording a failure itself encounters a storage error."""

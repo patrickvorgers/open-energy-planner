@@ -1,6 +1,7 @@
 """Exercise maintenance admission, trust, restart and recovery without production databases."""
 
 import asyncio
+import logging
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -36,6 +37,31 @@ def journal(root, *, released=False, phase="copying", target_url=SECRET_URL):
             "error": None,
         },
     )
+
+
+def test_maintenance_logs_only_durable_phase_changes(tmp_path, monkeypatch, caplog):
+    """Persist phases before announcing them, suppress progress noise and keep database secrets private."""
+    from open_energy_planner.runtime import maintenance
+
+    journal(tmp_path)
+    host = maintenance.MaintenanceHost(tmp_path, TOKEN, create_app, {})
+    with caplog.at_level(logging.INFO, logger=maintenance.__name__):
+        host.record(phase="verifying")
+        host.record(phase="verifying")
+        host.record(phase="failed", error="owned failure")
+        assert read_private(tmp_path, JOURNAL_FILE)["phase"] == "failed"
+
+        def fail_write(*_args):
+            """Reject the next durable phase without altering its existing journal."""
+            raise OSError("private persistence error")
+
+        monkeypatch.setattr(maintenance, "write_private", fail_write)
+        with pytest.raises(OSError):
+            host.record(phase="completed")
+    assert [record.levelno for record in caplog.records] == [logging.INFO, logging.WARNING]
+    assert "verifying" in caplog.messages[0] and "recovery options" in caplog.messages[1]
+    assert "completed" not in caplog.text
+    assert "password-secret" not in caplog.text and "private-user" not in caplog.text
 
 
 def test_gateway_keeps_normal_auth_and_rejects_forged_ingress(tmp_path):

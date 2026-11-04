@@ -1,5 +1,6 @@
 """App-owned automatic model preferences backed by nonoverlapping shadow decisions."""
 
+import logging
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -26,6 +27,7 @@ from .worker import (
 
 EVIDENCE_WAIT_HOURS = 24
 FAILED_CAPTURE_RETRY_MINUTES = 5
+_LOGGER = logging.getLogger(__name__)
 
 
 def variants(installation, demand, solar, contract, strategy, counter_version=None):
@@ -183,7 +185,18 @@ class ModelSelection:
                     ],
                 }
             )
+        previous_preferences = self.preferences
         self.rows, self.preferences, self.issue = rows, preferences, None
+        for row in rows:
+            identity = row["family_id"]
+            if previous_preferences.get(identity) is not preferences[identity]:
+                _LOGGER.info(
+                    "Forecast model selection for %s: %s model. Completed decision evidence windows: %d.",
+                    row["scope"],
+                    row["preferred"],
+                    row["completed_windows"],
+                )
+                _LOGGER.debug("Forecast model family: %s.", identity)
 
     def _advance(self, original, choice, family, now):
         """Retain successful comparisons, retry incomplete evidence and bound failed-window waiting."""
