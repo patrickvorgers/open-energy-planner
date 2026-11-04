@@ -39,7 +39,8 @@ final automated reviews in the intended merge order. Wait for the preceding PR
 to merge and finish its required main checks. Include that actual main in this
 PR, resolve conflicts, retest affected behavior and wait for current-head Quick,
 signature and CodeQL checks. Reassess material changes before final review.
-Only after that work is complete, freeze the final head and base. When choosing
+Only after that work is complete, freeze the final head and base. Admission verifies
+that the frozen head includes the frozen base on every reviewer route. When choosing
 CodeRabbit, run the **Manual CodeRabbit review preflight** workflow from `main`, with those SHAs,
 the independent Codex review SHA and affirmative review/disposition attestations.
 Follow its job summary to request one manual CodeRabbit review. Automatic,
@@ -85,7 +86,7 @@ for the one-time registration, read-only availability credential and location la
 Contributors need no CI labels for the normal GitHub-hosted route. Ready attests
 that all findings, including outside-diff comments, were evaluated and addressed.
 The admission gate verifies current-head Quick, signatures, CodeQL, a substantive
-CodeRabbit or Kody-ai review and no unresolved discussions. Use `ci: run` only for a deliberate retry on a frozen,
+CodeRabbit or Kody-ai review, inclusion of the intended base and no unresolved discussions. Use `ci: run` only for a deliberate retry on a frozen,
 reviewed candidate. It cannot bypass those gates. No periodic checks or automatic
 retries of failed tests are scheduled.
 

@@ -190,6 +190,9 @@ completed CodeRabbit or Kody-ai check from its actual GitHub App on that head.
 The established Dependabot review exception remains in effect. An API outage,
 missing evidence, pending review, wrong app or changed PR fails before image builds.
 The gate checks the current base and head before and after reading the evidence.
+Every reviewer route must also prove that the frozen head includes the intended
+base through the GitHub comparison API. Missing, divergent or unavailable ancestry
+evidence fails admission.
 
 Admission also reads every review-thread page and rejects unresolved threads.
 The review check proves review completion, and thread resolution proves

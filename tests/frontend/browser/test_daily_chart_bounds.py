@@ -1,5 +1,6 @@
 """Daily chart bounds retain installation-local days and original numeric evidence."""
 
+import re
 from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
@@ -151,16 +152,19 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone):
     assert points[0] == {"x": (start + timedelta(minutes=30)).timestamp() * 1000, "y": 1}
     last_start = start + timedelta(hours=ceil(hours) - 1)
     last_end = last_start + timedelta(hours=1)
-    assert points[-1]["x"] == (last_start + (end - last_start) / 2).timestamp() * 1000
+    assert points[-1]["x"] == (last_start + timedelta(minutes=30)).timestamp() * 1000
     assert len(points) == ceil(hours)
     geometry = canvas.evaluate("""canvas => {
         const chart=Chart.getChart(canvas);
         return chart.getDatasetMeta(0).data.map(bar=>({
-            left:bar.x-bar.width/2,right:bar.x+bar.width/2,
+            left:bar.x-bar.width/2,right:bar.x+bar.width/2,width:bar.width,
             minimum:chart.chartArea.left,maximum:chart.chartArea.right
         }));
     }""")
-    for bar in geometry:
+    hourly_width = (geometry[0]["maximum"] - geometry[0]["minimum"]) / hours * 0.8 * 0.9 / 2
+    for index, bar in enumerate(geometry):
+        visible_hours = min(1, hours - index)
+        assert bar["width"] == pytest.approx(hourly_width * visible_hours)
         assert bar["left"] >= bar["minimum"] - 0.01
         assert bar["right"] <= bar["maximum"] + 0.01
     if hours != int(hours):
@@ -221,3 +225,56 @@ def test_skipped_calendar_date_remains_responsive(app_page):
     assert page.locator("#performance-chart").evaluate("canvas => !Chart.getChart(canvas)")
     expect(page.locator(".performance-row")).to_have_count(0)
     assert not errors
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_repeated_local_calculation_times_are_distinct(app_page):
+    """Amsterdam's two 02:00 minutes stay distinguishable in list, actions, dialog and chart tooltip."""
+    page, url = app_page
+    discover(page, url)
+    evidence = page.request.get(
+        url + "/v1/planning-performance", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    evidence["day"] = "2026-10-25"
+    starts = ["2026-10-25T00:00:00Z", "2026-10-25T01:00:00Z", "2026-10-25T08:00:00Z"]
+    for row, started in zip(evidence["calculations"], starts, strict=True):
+        row["started_at"] = started
+    details = {}
+    for row in evidence["calculations"]:
+        detail = page.request.get(
+            url + "/v1/planning-performance/" + row["id"],
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        ).json()
+        detail["started_at"] = row["started_at"]
+        details[row["id"]] = detail
+
+    def respond(route):
+        """Keep the synthetic list and detail instants consistent."""
+        route.fulfill(json=details.get(route.request.url.rsplit("/", 1)[-1], evidence))
+
+    page.route("**/v1/planning-performance**", respond)
+    page.goto(url + "/planning-performance")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator(".performance-row")).to_have_count(3)
+    first = page.get_by_role("button", name=re.compile(r"^View calculation at .*\(1 of 2\)$"))
+    second = page.get_by_role("button", name=re.compile(r"^View calculation at .*\(2 of 2\)$"))
+    expect(first).to_be_visible()
+    expect(second).to_be_visible()
+    expect(page.locator(".performance-row").nth(0)).to_contain_text("(1 of 2)")
+    expect(page.locator(".performance-row").nth(1)).to_contain_text("(2 of 2)")
+    canvas = page.locator("#performance-chart")
+    for index, suffix in ((0, "(1 of 2)"), (1, "(2 of 2)")):
+        canvas.evaluate(
+            """(canvas,index) => {
+            const chart=Chart.getChart(canvas);
+            chart.tooltip.setActiveElements([{datasetIndex:0,index}],{x:0,y:0});chart.update();
+        }""",
+            index,
+        )
+        assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title[0]").endswith(suffix)
+    first.click()
+    expect(page.locator("#calculation-time")).to_contain_text("(1 of 2)")
+    page.get_by_role("button", name="Close", exact=True).click()
+    second.click()
+    expect(page.locator("#calculation-time")).to_contain_text("(2 of 2)")

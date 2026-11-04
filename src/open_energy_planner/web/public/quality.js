@@ -100,9 +100,10 @@ function graph(source, index, inProgress) {
     const positions = source.rows.map(row => {
         const start = Date.parse(row.start), end = Date.parse(row.end);
         const left = Math.max(start, Date.parse(displayedDay.start)), right = Math.min(end, Date.parse(displayedDay.end));
-        return {midpoint: (left + right) / 2, fraction: (right - left) / (end - start)};
+        return {original: (start + end) / 2, midpoint: (left + right) / 2, fraction: (right - left) / (end - start)};
     });
-    const datasets = [["Predicted", "predicted_kwh", "#5d70bc"], ["Measured", "measured_kwh", "#078b80"]].map(([label, field, color]) => ({label, type: "bar", order: 1, backgroundColor: `${color}66`, borderColor: color, data: source.rows.map((row, index) => ({x: positions[index].midpoint, y: row[field]}))}));
+    // Original sample spacing keeps full-hour bar widths independent of clipped edge intervals.
+    const datasets = [["Predicted", "predicted_kwh", "#5d70bc"], ["Measured", "measured_kwh", "#078b80"]].map(([label, field, color]) => ({label, type: "bar", order: 1, backgroundColor: `${color}66`, borderColor: color, data: source.rows.map((row, index) => ({x: positions[index].original, y: row[field]}))}));
     const lines = datasets.map(dataset => ({...dataset, type: "line", order: 0, backgroundColor: dataset.borderColor, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, fill: false, spanGaps: false, tension: 0}));
     const alignment = {id: "quality-bar-centres",
     /** Move line-point x coordinates in pixels onto grouped bar centres after layout.
@@ -113,10 +114,10 @@ function graph(source, index, inProgress) {
         datasets.forEach((dataset, datasetIndex) => {
             const bars = chart.getDatasetMeta(datasetIndex).data;
             bars.forEach((bar, index) => {
-                const {midpoint, fraction} = positions[index];
+                const {original, midpoint, fraction} = positions[index];
                 if (fraction >= 1) return;
-                const centre = chart.scales.x.getPixelForValue(midpoint);
-                bar.x = centre + (bar.x - centre) * fraction;
+                const centre = chart.scales.x.getPixelForValue(original);
+                bar.x = chart.scales.x.getPixelForValue(midpoint) + (bar.x - centre) * fraction;
                 bar.width *= fraction;
             });
             chart.getDatasetMeta(datasetIndex + datasets.length).data.forEach((point, pointIndex) => { point.x = bars[pointIndex].x; });

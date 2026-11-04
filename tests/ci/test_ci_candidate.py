@@ -383,6 +383,8 @@ class Evidence:
         if path == "repos/owner/planner/pulls/12":
             self.pr_reads += 1
             return deepcopy(self.changed if self.changed and self.pr_reads > 1 else self.current)
+        if path == f"repos/{REPOSITORY}/compare/{BASE}...{HEAD}?per_page=1":
+            return {"merge_base_commit": {"sha": BASE}, "status": "ahead"}
         assert path.startswith(
             f"repos/owner/planner/commits/{HEAD}/check-runs?filter=all&per_page=100&page="
         )
@@ -710,3 +712,29 @@ def test_kody_does_not_bypass_open_findings(kody_candidate):
 
     with pytest.raises(VerificationError, match="threads"):
         check(event, REPOSITORY, OpenFinding(current, checks))
+
+
+@pytest.mark.parametrize("provider", ["CodeRabbit", "Kody-ai"])
+@pytest.mark.parametrize("fault", ["diverged", "missing", "wrong-base", "behind", "outage"])
+def test_every_reviewer_requires_base_inclusion(candidate, kody_candidate, provider, fault):
+    """Neither reviewer can admit a head without trusted proof that it contains the intended base."""
+    event, current, checks = candidate if provider == "CodeRabbit" else kody_candidate
+
+    class MissingBase(Evidence):
+        """Return independently malformed or unavailable ancestry evidence."""
+
+        def get(self, path):
+            """Keep ordinary evidence valid while breaking only the base comparison."""
+            if "/compare/" not in path:
+                return super().get(path)
+            if fault == "outage":
+                raise VerificationError("Comparison unavailable")
+            return {
+                "merge_base_commit": None
+                if fault == "missing"
+                else {"sha": "3" * 40 if fault == "wrong-base" else BASE},
+                "status": fault if fault in {"diverged", "behind"} else "ahead",
+            }
+
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, MissingBase(current, checks))

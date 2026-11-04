@@ -30,6 +30,20 @@ PREREQUISITE_CHECKS = (
 )
 
 
+def require_included_base(repository, head, base, client):
+    """Require the selected current main revision in the frozen head before final review."""
+    comparison = client.get(f"repos/{repository}/compare/{base}...{head}?per_page=1")
+    common = comparison.get("merge_base_commit")
+    if (
+        not isinstance(common, dict)
+        or common.get("sha") != base
+        or comparison.get("status") not in {"ahead", "identical"}
+    ):
+        raise VerificationError(
+            "Include the current main in this PR and retest before final review"
+        )
+
+
 def changed_files(repository, number, current, client):
     """Require a complete inventory of at most 150 changed files, without filtering file kinds."""
     count = current.get("changed_files")
@@ -298,6 +312,7 @@ def check(event, repository, client):
         return current
 
     current = current_pr()
+    require_included_base(repository, head, base, client)
     file_count = changed_files(repository, number, current, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
