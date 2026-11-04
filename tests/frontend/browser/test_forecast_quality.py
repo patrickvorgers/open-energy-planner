@@ -358,9 +358,12 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     end_label = page.evaluate(
         "new Date('2026-10-25T01:00:00Z').toLocaleString(undefined, {timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit'})"
     )
-    assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == [
-        f"{local_labels[0]} (1 of 2) to {end_label} (2 of 2)"
-    ]
+    expected_title = [f"{local_labels[0]} (1 of 2) to {end_label} (2 of 2)"]
+    page.wait_for_function(
+        "title => JSON.stringify(Chart.getChart(document.querySelector('#quality-chart-0')).tooltip.title) === JSON.stringify(title)",
+        arg=expected_title,
+    )
+    assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == expected_title
     page.locator("#quality-day").select_option("2026-10-26")
     expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
     page.route(
