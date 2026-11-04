@@ -46,6 +46,12 @@ def test_default_launch_and_responsive_content(page):
         "url": ["https://github.com/patrickvorgers/open-energy-planner"]
     }
     assert page.locator("html").get_attribute("lang") == "en"
+    platform_requirement = page.get_by_text("Use an AMD64 (x86-64) environment.", exact=False)
+    assert platform_requirement.is_visible()
+    assert (
+        platform_requirement.bounding_box()["y"]
+        < page.get_by_role("link", name="VS Code", exact=True).bounding_box()["y"]
+    )
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.get_by_text("If the button does not open VS Code").click()
     assert page.get_by_text("Git: Clone", exact=True).is_visible()
