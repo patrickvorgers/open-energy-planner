@@ -11,7 +11,11 @@ from .reference import dispatch
 
 
 def comparison(plan, reference_start=None, *, without_battery=False):
-    """Simulate price-independent self-consumption over the original plan's identical external inputs."""
+    """Compare future strategies from the plan's measured stock and frozen inputs.
+
+    An explicit reference_start replays legacy archived expectations. New plans
+    share the EMS initial stock and bonus budgets, independently of settlement.
+    """
     if {work["task_id"] for work in plan["input_snapshot"]["problem"].get("appliances", [])} != {
         row["task_id"] for row in plan.get("appliance_schedule", [])
     }:
@@ -27,7 +31,7 @@ def comparison(plan, reference_start=None, *, without_battery=False):
     reference_start = reference_start or {
         "stored": None,
         "counters": {},
-        "status": "provisional_common_start",
+        "status": "measured_common_start",
         "estimated": False,
     }
     stored = (
