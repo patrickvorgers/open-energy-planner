@@ -293,19 +293,34 @@ function addSolar(old = {}) {
         geometry.append(add);
     };
     const ownership = config.panel_settings?.[old.entity_id] || {managed: true, state: "unavailable"};
+    let followDraftGeometry = ownership.managed;
     renderGeometry(ownership.managed && !old.capacity_w && !old.panels?.length
         ? [{capacity_w: null, azimuth: null, tilt: null}]
         : editableSolarPanels(old));
-    /** Refresh ownership without changing any numeric draft or physical converter field. */
+    /** Populate unsaved HA-owned geometry on recovery without replacing manual or physical drafts. */
     editor.updateOwnership = (state, changed = false) => {
+        const savedSource = config.solar?.sources.some(source => source.entity_id === editor.old.entity_id);
+        if (!state.managed) {
+            followDraftGeometry = false;
+            if (!savedSource && editor.old.ha_imports?.length) editor.old = {...editor.old, ha_imports: []};
+        }
+        const proposal = state.state === "following" && followDraftGeometry && !savedSource
+            ? suggestedSolarSource(editor.old.entity_id) : null;
+        const emptyGeometry = [...geometry.querySelectorAll("[data-key]")].every(control => control.value === "");
+        if (proposal?.panels?.length && (editor.old.ha_imports?.length || emptyGeometry)
+            && JSON.stringify(editor.old.ha_imports || []) !== JSON.stringify(proposal.ha_imports)) {
+            editor.old = {...editor.old, ...proposal};
+            renderGeometry(proposal.panels);
+        }
+        changed ||= !savedSource && state.managed && !followDraftGeometry;
         geometry.disabled = state.managed;
         geometry.querySelector("[data-panel-ownership]").textContent = (state.managed
             ? state.state === "unavailable"
-                ? old.capacity_w ? "Home Assistant panel settings could not be refreshed. Last accepted settings are retained. Edit the source configuration in Home Assistant."
+                ? editor.old.capacity_w ? "Home Assistant panel settings could not be refreshed. Last accepted settings are retained. Edit the source configuration in Home Assistant."
                     : "Waiting for complete Home Assistant panel settings. No panel geometry has been assumed."
                 : "Managed by Home Assistant (Forecast.Solar). Panel settings are followed automatically. Edit them in Home Assistant."
             : "Manual panel settings. No forecast configuration is linked in Home Assistant.")
-            + (changed ? " Saved panel settings changed. Your draft is retained. Reload saved settings before saving." : "");
+            + (changed ? " Home Assistant panel settings changed. Your draft is retained. Reload saved settings before saving." : "");
     };
     editor.updateOwnership(ownership);
     const converterDetails = document.createElement("details"), converterSummary = document.createElement("summary");

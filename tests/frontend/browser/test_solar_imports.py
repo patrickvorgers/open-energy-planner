@@ -276,9 +276,11 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
-def test_first_unreadable_link_has_no_assumed_panel_geometry(app_page):
-    """Desktop/mobile display blank locked geometry for an unreadable first link without assuming south or tilt."""
+@pytest.mark.parametrize("recovered_link", ["linked", "removed"])
+def test_first_unreadable_link_has_no_assumed_panel_geometry(app_page, recovered_link):
+    """Desktop/mobile keep first-link geometry blank until recovery, preserving physical drafts through updates and save."""
     page, url = app_page
+    page.clock.install()
     body = discover(page, url)
     body["suggestions"].update(
         solar=True,
@@ -309,6 +311,68 @@ def test_first_unreadable_link_has_no_assumed_panel_geometry(app_page):
         full_page=True,
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    rating = source.get_by_label("Inverter AC rating (kW)", exact=True)
+    rating.fill("2.4")
+    proposal = body["suggestions"]["solar_configurations"][0]
+    proposal.update(
+        issue=None,
+        providers=[
+            {
+                "adapter": "forecast_solar",
+                "entry_id": "synthetic-recovery",
+                "panels": [
+                    {"panel_id": "morning", "capacity_w": 1850, "azimuth": 82, "tilt": 22},
+                    {"panel_id": "evening", "capacity_w": 950, "azimuth": 277, "tilt": 37},
+                ],
+            }
+        ],
+    )
+    assert page.request.post(
+        url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
+    ).ok
+    page.clock.fast_forward(31000)
+    panels = source.locator(".solar-panel")
+    expect(panels).to_have_count(2)
+    angle = panels.first.get_by_label("Azimuth (° clockwise from north)", exact=True)
+    expect(angle).to_have_value("82")
+    expect(angle).to_be_disabled()
+    expect(rating).to_have_value("2.4")
+    assert read_settings(page, url)["solar"] is None
+    proposal["providers"][0]["panels"][0]["azimuth"] = 91
+    assert page.request.post(
+        url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
+    ).ok
+    page.clock.fast_forward(31000)
+    expect(angle).to_have_value("91")
+    expect(rating).to_have_value("2.4")
+    if recovered_link == "removed":
+        proposal.update(issue="solar_configuration_not_available", providers=[])
+        assert page.request.post(
+            url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
+        ).ok
+        page.clock.fast_forward(31000)
+        expect(angle).to_be_enabled()
+        angle.fill("123")
+        expect(rating).to_have_value("2.4")
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    saved = read_settings(page, url)["solar"]
+    assert saved["sources"][0]["capacity_w"] == 2800
+    assert saved["sources"][0]["panels"][0]["azimuth"] == (
+        123 if recovered_link == "removed" else 91
+    )
+    imports = saved["sources"][0]["ha_imports"]
+    if recovered_link == "removed":
+        assert imports == []
+    else:
+        assert len(imports) == 1 and imports[0]["entry_id"] == "synthetic-recovery"
+        assert [
+            (panel["capacity_w"], panel["azimuth"], panel["tilt"]) for panel in imports[0]["panels"]
+        ] == [
+            (1850, 91, 22),
+            (950, 277, 37),
+        ]
+    assert saved["inverters"][0]["ac_limit_w"] == 2400
 
 
 @pytest.mark.parametrize(

@@ -38,6 +38,10 @@ provider snapshot has been accepted. Only fresh complete discovery explicitly co
 the forecast link is absent enables manual editing. OEP preserves the last geometry
 and shows an informational notice. Relinking automatically adopts HA geometry,
 locks panel fields and explains replacement of previous manual values.
+Before the first save, complete HA metadata fills previously blank linked geometry
+and follows further provider updates without replacing physical inverter drafts.
+Removing that still-unsaved link retains visible planes and physical drafts and
+clears only the unaccepted provider association so manual setup can be saved.
 Metadata refresh preserves unsaved drafts and their original version guard. If HA
 changes saved geometry while editing, reload before saving. Cancel reloads accepted
 settings. Immutable configuration versions retain original provider provenance.
