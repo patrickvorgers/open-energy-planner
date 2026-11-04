@@ -51,6 +51,10 @@ def test_root_article_search_and_provisioning(documentation_page, documentation_
         .startswith("https://vscode.dev/redirect?")
     )
 
+    page.get_by_role("link", name="host interpreter setup", exact=True).click()
+    expect(page).to_have_url(documentation_url + "docs/development/#first-start")
+    expect(page.get_by_role("heading", name="First start")).to_be_visible()
+
 
 def test_articles_remain_readable_without_javascript(documentation_url, browser):
     """Read a direct nested article and follow navigation when optional search is unavailable."""
