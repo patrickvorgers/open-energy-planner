@@ -1,7 +1,8 @@
 """Admit HA setup discovery and reconcile current domain ownership without platform installation."""
 
+import logging
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
@@ -10,9 +11,28 @@ from open_energy_planner.home_assistant.catalogue import (
     BATTERY_ENERGY_FIELDS,
     MAX_CATALOGUE_REQUEST_BYTES,
 )
+from open_energy_planner.home_assistant.names import source_names
+from open_energy_planner.home_assistant.solar_panels import (
+    PanelSettings,
+    PanelState,
+    follow_panels,
+    panel_settings,
+)
 from open_energy_planner.installation.api import catalogue as installation_catalogue
 from open_energy_planner.installation.storage import sources
+from open_energy_planner.notifications.model import NoticeText, Notification, Severity
 from open_energy_planner.storage.writes import complete_write
+
+PANEL_CHANGE_NOTICE_MINUTES = 5
+_LOGGER = logging.getLogger(__name__)
+
+
+def panel_summary(source):
+    """Describe the accepted physical planes without exposing provider credentials or location."""
+    return ", ".join(
+        f"{panel.capacity_w:g} Wp at {panel.azimuth:g}° with {panel.tilt:g}° tilt"
+        for panel in source.geometry
+    )
 
 
 class SetupDiscovery:
@@ -42,6 +62,104 @@ class SetupDiscovery:
         self.required = required
         self.contracts = contracts
         self.appliances = appliances
+        self.panel_changes = {}
+
+    def panel_settings(self):
+        """Present last-known ownership separately from whether fresh metadata is currently readable."""
+        now = datetime.now(UTC)
+        current = self.catalogue.current(now)
+        sources = (
+            {source.entity_id: source for source in self.solar.configuration.sources}
+            if self.solar.configuration
+            else {}
+        )
+        entities = set(sources)
+        if current["data"]:
+            entities.update(current["data"]["suggestions"]["solar_sources"])
+        result = {}
+        for entity in sorted(entities):
+            source = sources.get(entity)
+            settings = panel_settings(current, entity, source)
+            if source and follow_panels(source, settings) != source:
+                settings = PanelSettings(PanelState.UNAVAILABLE, source.ha_imports)
+            result[entity] = settings.document()
+        return result
+
+    def panel_notifications(self):
+        """Show current synchronization outages and short acknowledged ownership-change notices."""
+        now = datetime.now(UTC)
+        settings = self.panel_settings()
+        self.panel_changes = {
+            entity: (until, notice)
+            for entity, (until, notice) in self.panel_changes.items()
+            if entity in settings and now < until
+        }
+        names = source_names(self.catalogue.value)
+        result = [notice for until, notice in self.panel_changes.values()]
+        for entity, status in settings.items():
+            if status["state"] == PanelState.UNAVAILABLE:
+                result.append(
+                    Notification(
+                        "solar-panels:unavailable:" + entity,
+                        "solar_panel_settings_unavailable",
+                        NoticeText(
+                            "Panel settings unavailable: " + names.get(entity, "Solar production"),
+                            (
+                                "Panel settings could not be refreshed. Last accepted settings are retained. "
+                                if self.solar.configuration
+                                and any(
+                                    source.entity_id == entity
+                                    for source in self.solar.configuration.sources
+                                )
+                                else "No panel settings have been accepted yet. Waiting for complete Home Assistant settings. "
+                            )
+                            + "Home Assistant remains in control. OEP retries on the next configuration refresh.",
+                            "View panel settings",
+                            "/setup",
+                        ),
+                    )
+                )
+        return tuple(result)
+
+    def record_panel_changes(self, before, after):
+        """Announce accepted transitions only after the shared store acknowledges the new configuration."""
+        now = datetime.now(UTC)
+        names = source_names(self.catalogue.value)
+        previous = {source.entity_id: source for source in before.sources}
+        for source in after.sources:
+            old = previous[source.entity_id]
+            if (old.panels, old.ha_imports) == (source.panels, source.ha_imports):
+                continue
+            if source.ha_imports:
+                message = "Home Assistant panel settings are now followed. "
+                if not old.ha_imports:
+                    message += "Previous manual settings: " + panel_summary(old) + ". "
+                message += "Current settings: " + panel_summary(source) + "."
+                code = "solar_panel_settings_following"
+            else:
+                message = (
+                    "The Forecast.Solar link was removed in Home Assistant. "
+                    "OEP retains the last accepted panel settings. You can now edit them manually."
+                )
+                code = "solar_panel_settings_manual"
+            self.panel_changes[source.entity_id] = (
+                now + timedelta(minutes=PANEL_CHANGE_NOTICE_MINUTES),
+                Notification(
+                    "solar-panels:changed:" + source.source_id,
+                    code,
+                    NoticeText(
+                        "Panel settings changed: "
+                        + names.get(source.entity_id, "Solar production"),
+                        message,
+                        "View panel settings",
+                        "/setup",
+                        Severity.INFO,
+                    ),
+                ),
+            )
+            _LOGGER.info(
+                "Solar panel settings synchronized (%s). Forecast inputs were updated.", code
+            )
 
     async def reconcile(self):
         """Archive source removals and balance updates without inventing device ratings.
@@ -65,7 +183,14 @@ class SetupDiscovery:
         if self.solar.configuration:
             current = self.solar.configuration
             retained = tuple(
-                source_item
+                follow_panels(
+                    source_item,
+                    panel_settings(
+                        self.catalogue.current(datetime.now(UTC)),
+                        source_item.entity_id,
+                        source_item,
+                    ),
+                )
                 for source_item in current.sources
                 if source_item.entity_id in hints["solar_sources"]
             )
@@ -81,9 +206,14 @@ class SetupDiscovery:
                 ),
             )
             if candidate != current:
-                await self.persist(
-                    self.solar.store.save, candidate, self.solar.configure, contract_input=False
-                )
+                try:
+                    await self.persist(
+                        self.solar.store.save, candidate, self.solar.configure, contract_input=False
+                    )
+                finally:
+                    # A drained write can become authoritative before cancellation propagates.
+                    if self.solar.configuration == candidate:
+                        self.record_panel_changes(current, candidate)
         if self.installation.current:
             current = self.installation.current
             retained = []

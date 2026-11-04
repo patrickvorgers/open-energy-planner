@@ -19,8 +19,12 @@ from tests.ha_contract.support.connection import server
         ("unauthorized", "Home Assistant rejected", False),
         ("transport", "Supervisor connection unavailable", False),
         ("malformed", "Supervisor connection unavailable", False),
+        ("auth_invalid", "Supervisor authentication rejected", False),
+        ("handshake", "invalid Supervisor response", False),
+        ("auth_malformed", "invalid Supervisor response", False),
         (None, "automatic connection request was accepted", False),
         ("unknown_command", "automatic connection request was accepted", True),
+        ("auth_invalid", "automatic connection request was accepted", True),
     ],
 )
 def test_supervisor_diagnostics_identify_the_failed_boundary_and_retry(
@@ -28,8 +32,8 @@ def test_supervisor_diagnostics_identify_the_failed_boundary_and_retry(
 ):
     """Unknown commands cannot prove files absent. Recognized failures, transport and accepted requests have distinct messages.
 
-    The recovery case returns unknown_command once, then accepts the next actual
-    WebSocket request. Neither response creates a peer without the separate TLS
+    Recovery cases reject an integration command or authentication once, then
+    accept the next actual WebSocket request. No response creates a peer without the separate TLS
     pairing exchange. Provider error text contains a private sentinel that must
     never reach diagnostics.
     """
@@ -40,6 +44,7 @@ def test_supervisor_diagnostics_identify_the_failed_boundary_and_retry(
         token = "private-supervisor-token"
         private_error = "private-provider-error"
         requests = []
+        connections = []
         pairing = Pairing(tmp_path, "test-installation")
         real_session = ClientSession
 
@@ -54,15 +59,32 @@ def test_supervisor_diagnostics_identify_the_failed_boundary_and_retry(
                 raise web.HTTPUnauthorized()
             connection = web.WebSocketResponse()
             await connection.prepare(request)
+            connections.append(connection)
+            active_failure = None if recovery and len(connections) > 1 else failure
+            if active_failure == "handshake":
+                await connection.send_json({"type": "unexpected", "message": private_error})
+                await connection.close()
+                return connection
             await connection.send_json({"type": "auth_required"})
             assert await connection.receive_json() == {"type": "auth", "access_token": token}
+            if active_failure in {"auth_invalid", "auth_malformed"}:
+                await connection.send_json(
+                    {
+                        "type": "auth_invalid"
+                        if active_failure == "auth_invalid"
+                        else "unexpected",
+                        "message": private_error,
+                    }
+                )
+                await connection.close()
+                return connection
             await connection.send_json({"type": "auth_ok"})
             command = await connection.receive_json()
             assert command["type"] == "open_energy_planner/supervisor_link"
             assert command["secret"] == pairing.supervisor_secret
             assert command["instance_id"] == "test-installation"
             requests.append(command)
-            code = None if recovery and len(requests) > 1 else failure
+            code = active_failure
             response = {"id": command["id"], "type": "result", "success": code is None}
             response.update(
                 {"error": {"code": code, "message": private_error}}
@@ -127,10 +149,21 @@ def test_supervisor_diagnostics_identify_the_failed_boundary_and_retry(
         if failure == "unknown_command":
             assert any("installation cannot be verified" in message for message in messages)
             assert any("restart Home Assistant Core" in message for message in messages)
-        if failure not in ("transport", "malformed"):
+        if failure == "auth_invalid":
+            assert any("Supervisor token and permissions" in message for message in messages)
+            assert any("restart the app" in message for message in messages)
+        if failure in {"handshake", "auth_malformed"}:
+            assert not any("Supervisor token and permissions" in message for message in messages)
+            assert not any("authentication rejected" in message for message in messages)
+            assert not requests
+        if failure not in ("transport", "malformed", "handshake", "auth_malformed"):
             assert not any("Supervisor connection unavailable" in message for message in messages)
         if recovery:
-            assert len(requests) == 2
+            assert len(connections) == 2
+            assert len(requests) == (1 if failure == "auth_invalid" else 2)
+        elif failure in {"auth_invalid", "handshake", "auth_malformed"}:
+            assert not requests
+            assert any("Retrying in 10 seconds" in message for message in messages)
         assert pairing.ui_url == "/app/local_open_energy_planner"
 
     asyncio.run(scenario())

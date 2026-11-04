@@ -200,7 +200,12 @@ authenticated ingress session. Standalone users use the administration token.
 The same responsive page offers original plan versions, expected EMS/reference
 power, energy/battery trajectories, date-filtered costs, coverage, realized
 benefit, original advice and evaluation versions. Original plans are read-only.
-The refresh button obtains newer data without activating an old plan.
+The current plan's charts advance at each quarter boundary while retaining the
+original archived data. The page checks for a newly published plan every 15
+seconds and refreshes its charts when one becomes available. A deliberately
+selected historical plan stays selected. Hidden pages pause these reads and
+check again when visible. The refresh button remains available for a manual
+reload without activating an old plan.
 
 * `POST /v1/settlement`: integration-only bounded, version-matched capture.
 * `GET /v1/savings?start=…&end=…[&revision=…]`: authenticated stored period results.

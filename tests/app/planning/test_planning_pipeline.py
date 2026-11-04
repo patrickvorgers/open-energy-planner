@@ -104,11 +104,16 @@ def test_terminal_side_power_applies_converter_and_cell_losses_once():
 
 @pytest.mark.parametrize("mutation", ["cost", "state", "no_candidate", "infeasible"])
 def test_invalid_or_missing_candidates_never_reach_publication(mutation):
-    """Forge costs/state or return no feasible candidate. Require independent rejection and zero publication calls."""
+    """Reject invalid/missing commands, while retaining their solver outcome for optional calculation history."""
 
     async def scenario():
+        """Keep the independent rejection checks and observe the completed round after its disposition."""
+
         class FaultySolver:
+            """Produce invalid economics/state or an explicitly absent feasible candidate."""
+
             async def solve(self, problem):
+                """Preserve the literal fault values instead of weakening the independent validator."""
                 result = HighsSolver().solve(problem)
                 if mutation == "cost":
                     return replace(
@@ -140,16 +145,28 @@ def test_invalid_or_missing_candidates_never_reach_publication(mutation):
                     None,
                 )
 
-        published = []
+        published, observed = [], []
 
         async def publish(document):
+            """Expose any incorrectly accepted document to the independent zero-publication assertion."""
             published.append(document)
 
-        coordinator = PlanningCoordinator(service(FaultySolver()), publish)
+        async def record(*arguments):
+            """Observe the same result that must remain available even when publication is rejected."""
+            observed.append(arguments)
+
+        coordinator = PlanningCoordinator(
+            service(FaultySolver()), publish, record_calculation=record
+        )
         coordinator.submit(capture(NOW))
         await coordinator.wait()
         assert coordinator.status == "failed"
         assert published == []
+        assert len(observed) == 1
+        assert observed[0][1].document is None and observed[0][1].result is not None
+        assert observed[0][-1] == (
+            "candidate_rejected" if mutation in {"cost", "state"} else mutation
+        )
 
     asyncio.run(scenario())
 
@@ -189,7 +206,7 @@ def test_input_expiring_during_solve_is_rejected_after_validation():
     asyncio.run(scenario())
 
 
-def test_fractional_command_is_rejected_instead_of_silently_rounded():
+def test_fractional_command_is_rejected_instead_of_silently_rounded(caplog):
     """Use capacity requiring fractional watts. Reject projection because rounding would change the validated physical plan."""
 
     async def scenario():
@@ -253,7 +270,31 @@ def test_fractional_command_is_rejected_instead_of_silently_rounded():
         assert outcome.document is None
         assert outcome.reason == "candidate_rejected"
 
-    asyncio.run(scenario())
+    with caplog.at_level(logging.WARNING, logger="open_energy_planner.planning"):
+        asyncio.run(scenario())
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "Whole-watt command" in warnings[0].message
+    assert warnings[0].exc_info is None
+
+
+def test_unknown_solver_validation_error_never_exposes_private_values(caplog):
+    """A native or custom solver ValueError is not automatically a safe validation explanation."""
+
+    class FailedSolver:
+        """Represent a solver failure containing an otherwise private input or connection value."""
+
+        async def solve(self, _problem):
+            """Keep the private payload out of both the warning and diagnostic stack."""
+            raise ValueError("postgresql://user:SECRET@private.invalid/?token=PRIVATE_TOKEN")
+
+    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.planning"):
+        outcome = asyncio.run(service(FailedSolver()).calculate(capture(NOW)))
+    assert outcome.document is None and outcome.reason == "candidate_rejected"
+    assert "unrecognized candidate data" in caplog.text
+    assert "ValueError" in caplog.text and "solve" in caplog.text
+    assert "SECRET" not in caplog.text and "PRIVATE_TOKEN" not in caplog.text
+    assert "private.invalid" not in caplog.text
 
 
 def test_new_inputs_are_coalesced_and_infeasible_old_dispatch_cannot_be_published():
@@ -370,6 +411,12 @@ def test_publication_supersession_preserves_latest_inputs_and_readiness(replacem
         record for record in caplog.records if "Plan discarded before publication" in record.message
     ]
     assert len(discards) == 1
+    if replacement == "new_snapshot":
+        assert "Rechecking the latest inputs." in discards[0].message
+        assert "Waiting" not in discards[0].message
+    else:
+        assert "Waiting for the next valid input refresh." in discards[0].message
+        assert "Rechecking" not in discards[0].message
     assert all(
         record.levelno == logging.INFO and record.exc_info is None for record in caplog.records
     )
@@ -391,6 +438,38 @@ def test_current_publication_failure_remains_a_planning_error(caplog):
     failures = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert len(failures) == 1
     assert failures[0].exc_info[0] is OSError
+    assert not any("Plan published" in message for message in caplog.messages)
+
+
+def test_publication_success_is_logged_only_after_acknowledgement(caplog):
+    """Hold a valid plan at persistence. Announce success only after that write is acknowledged."""
+
+    async def scenario():
+        """Exercise real solving while delaying only the publication acknowledgement."""
+        entered, accepted = asyncio.Event(), asyncio.Event()
+
+        async def publish(document):
+            """Keep the complete validated document pending until persistence accepts it."""
+            assert document["steps"]
+            entered.set()
+            await accepted.wait()
+
+        coordinator = PlanningCoordinator(service(), publish)
+        coordinator.submit(capture(NOW))
+        await asyncio.wait_for(entered.wait(), 5)
+        try:
+            assert coordinator.published is None
+            assert not any("Plan published" in message for message in caplog.messages)
+        finally:
+            accepted.set()
+            await coordinator.wait()
+        assert coordinator.status == "ready"
+        messages = [message for message in caplog.messages if "Plan published" in message]
+        assert len(messages) == 1
+        assert "Validated forecast intervals: 120" in messages[0]
+
+    with caplog.at_level(logging.INFO, logger="open_energy_planner.planning"):
+        asyncio.run(scenario())
 
 
 def test_native_worker_deadline_does_not_prevent_a_later_successful_worker():
