@@ -119,7 +119,14 @@ function graph(source, index, inProgress) {
     if (daily.relative_error_percent != null) paragraph(details, `Relative daily error: ${percentage(daily.relative_error_percent)}`);
 
     const headerRow = document.createElement("tr"); for (const title of ["Hour starts", "Predicted kWh", "Measured kWh", "Error kWh", "Evaluation"]) { const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = title; headerRow.append(cell); } header.append(headerRow);
-    for (const row of source.rows) { const line = document.createElement("tr"); for (const value of [when(row.start), quantity(row.predicted_kwh), quantity(row.measured_kwh), quantity(row.error_kwh), row.evaluation_issue || "Eligible"]) { const cell = document.createElement("td"); cell.textContent = value; line.append(cell); } body.append(line); }
+    const hourLabels = source.rows.map(row => when(row.start)), hourTotals = new Map(), occurrences = new Map();
+    for (const label of hourLabels) hourTotals.set(label, (hourTotals.get(label) || 0) + 1);
+    for (const [index, row] of source.rows.entries()) {
+        const label = hourLabels[index], occurrence = (occurrences.get(label) || 0) + 1;
+        occurrences.set(label, occurrence);
+        const hour = hourTotals.get(label) > 1 ? `${label} (${occurrence} of ${hourTotals.get(label)})` : label;
+        const line = document.createElement("tr"); for (const value of [hour, quantity(row.predicted_kwh), quantity(row.measured_kwh), quantity(row.error_kwh), row.evaluation_issue || "Eligible"]) { const cell = document.createElement("td"); cell.textContent = value; line.append(cell); } body.append(line);
+    }
     table.append(header, body); scroll.className = "table-scroll"; scroll.append(table); details.append(scroll);
     paragraph(details, `Original forecast version: ${source.forecast_version}`, "quality-version");
     paragraph(details, `Latest measurement receipt: ${source.last_received_at ? when(source.last_received_at) : "Unavailable"}`);

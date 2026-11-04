@@ -332,6 +332,22 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     ]
     expect(page.locator("#quality-day")).to_have_value("2026-10-26")
     expect(page.locator("#quality-charts table")).to_have_count(1)
+    # Repeated local hours keep independent rows without exposing timezone names.
+    fold_body = deepcopy(body)
+    fold_body.update(day="2026-10-25", start="2026-10-24T22:00:00Z", end="2026-10-25T23:00:00Z")
+    fold_body["series"][0]["rows"] = [
+        dict(rows[0], start=f"2026-10-25T0{hour}:00:00Z", end=f"2026-10-25T0{hour + 1}:00:00Z")
+        for hour in range(3)
+    ]
+    page.route(
+        "**/v1/forecast-quality/days/2026-10-25", lambda route: route.fulfill(json=fold_body)
+    )
+    page.locator("#quality-day").select_option("2026-10-25")
+    expect(page.locator("#quality-charts tbody tr td:first-child")).to_have_text(
+        ["10/25/2026, 2:00 AM (1 of 2)", "10/25/2026, 2:00 AM (2 of 2)", "10/25/2026, 3:00 AM"]
+    )
+    page.locator("#quality-day").select_option("2026-10-26")
+    expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
     page.route(
         "**/v1/forecast-quality/days/2026-10-26",
         lambda route: route.fulfill(status=503, body="Unavailable"),
