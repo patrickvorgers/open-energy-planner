@@ -384,7 +384,11 @@ def path_profile(path):
         profile = DIRECTORY_PROFILES[directory]
         if name.startswith(directory):
             return profile
-    if name in {".github/workflows/developer-page.yaml", "Dockerfile.ui-test"}:
+    if name in {
+        ".github/workflows/developer-page.yaml",
+        ".github/workflows/pages.yaml",
+        "Dockerfile.ui-test",
+    }:
         return focused_profile("unit-frontend", "browser")
     if name == "Dockerfile.native-test":
         return focused_profile(

@@ -48,6 +48,7 @@ commands = (
         "script",
         "tests/frontend",
         "test_environment",
+        "docs/site",
     ],
     [
         "-m",
@@ -60,6 +61,7 @@ commands = (
         "script",
         "tests/frontend",
         "test_environment",
+        "docs/site",
     ],
     pytest_arguments(
         "native",

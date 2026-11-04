@@ -1,5 +1,12 @@
 # Contributing
 
+Every added or changed feature requires a documentation-site impact assessment.
+Check the beginner route, visible labels, installation/configuration steps,
+defaults, supported platforms, everyday behavior, limitations and troubleshooting.
+Update affected canonical guides in the same PR, or explain why no site update
+is needed. Reviewers must verify that decision. Keep one maintained source.
+See [documentation-site maintenance](docs/development/DOCUMENTATION-SITE.md#maintain-one-source).
+
 Read the [security policy](SECURITY.md) before reporting a vulnerability or
 attaching logs, screenshots or example configurations. Use synthetic inputs
 instead of personal measurements or credentials.

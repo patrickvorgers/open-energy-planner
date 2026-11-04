@@ -114,9 +114,9 @@ def git_diff(monkeypatch):
         "docs/reference.pdf",
         "docs/example.json",
         "docs/data.csv",
-        "docs/developer/index.html",
-        "docs/developer/start.mjs",
-        "docs/developer/style.css",
+        "docs/site/provisioning/index.html",
+        "docs/site/provisioning/start.mjs",
+        "docs/site/provisioning/style.css",
         "docs/extensionless",
     ],
 )
@@ -127,6 +127,17 @@ def test_regular_documentation_changes_use_focused_checks(git_diff, path, modes)
     """All regular docs files and established root Markdown retain documentation-only checks."""
     git_diff.append(raw_change(path, *modes))
     assert documentation_only(BASE, TESTED)
+
+
+@pytest.mark.parametrize(
+    "path", [".github/workflows/developer-page.yaml", ".github/workflows/pages.yaml"]
+)
+def test_pages_publishers_retain_frontend_and_browser_validation(git_diff, path):
+    """The renamed site publisher retains real frontend/browser coverage without platform tests."""
+    from script.ci.ci_scope import selected_suites
+
+    git_diff.append(raw_change(path, "100644", "100644", "M"))
+    assert selected_suites(select_profile(BASE, TESTED)) == {"ci", "unit-frontend", "browser"}
 
 
 @pytest.mark.parametrize("module", ["model.py", "collection.py", "api.py", "serialization.py"])
@@ -319,6 +330,7 @@ def test_native_scope_keeps_lint_and_only_omits_unaffected_suites(monkeypatch, f
         "script",
         "tests/frontend",
         "test_environment",
+        "docs/site",
     ]
     if focused:
         assert len(calls) == 3
@@ -372,6 +384,7 @@ def test_quick_checks_stop_before_any_test_runtime_or_docker_build(monkeypatch, 
                 "script",
                 "tests/frontend",
                 "test_environment",
+                "docs/site",
             ],
             [
                 "-m",
@@ -384,6 +397,7 @@ def test_quick_checks_stop_before_any_test_runtime_or_docker_build(monkeypatch, 
                 "script",
                 "tests/frontend",
                 "test_environment",
+                "docs/site",
             ],
         ]
 
