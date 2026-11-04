@@ -133,9 +133,26 @@ def test_reusable_admission_owns_only_reviewed_proof_operations():
 def test_every_ci_job_uses_fixed_github_hosted_capacity():
     """Every declared runner is a literal hosted label rather than a PR-controlled expression."""
     root = Path(__file__).resolve().parents[2]
-    for path in (root / ".github/workflows").glob("*.yaml"):
+    directory = root / ".github/workflows"
+    workflows = sorted((*directory.glob("*.yaml"), *directory.glob("*.yml")))
+    assert workflows
+    for path in workflows:
         labels = re.findall(r"^\s+runs-on:\s*(.+)$", path.read_text(), re.MULTILINE)
         assert labels and all(label == "ubuntu-24.04" for label in labels), path
+
+
+@pytest.mark.parametrize("extension", ["yaml", "yml"])
+def test_hosted_capacity_guard_rejects_both_workflow_extensions(tmp_path, monkeypatch, extension):
+    """Neither supported workflow extension can hide a personal runner from the actual guard."""
+    workflows = tmp_path / ".github/workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "hosted.yaml").write_text("jobs:\n  check:\n    runs-on: ubuntu-24.04\n")
+    (workflows / f"personal.{extension}").write_text("jobs:\n  check:\n    runs-on: self-hosted\n")
+    monkeypatch.setitem(
+        globals(), "__file__", str(tmp_path / "tests/ci/test_admission_ownership.py")
+    )
+    with pytest.raises(AssertionError):
+        test_every_ci_job_uses_fixed_github_hosted_capacity()
 
 
 @pytest.mark.parametrize(
