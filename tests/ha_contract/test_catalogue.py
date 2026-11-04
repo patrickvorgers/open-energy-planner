@@ -243,6 +243,13 @@ def test_energy_membership_rejects_independent_writes_and_projects_pending_devic
             assert response.status == 400
             assert not list_documents(tmp_path, "installation")
             metadata["suggestions"].update(solar=True, solar_sources=["sensor.roof"])
+            metadata["suggestions"]["solar_configurations"] = [
+                {
+                    "entity_id": "sensor.roof",
+                    "providers": [],
+                    "issue": "solar_configuration_not_available",
+                }
+            ]
             metadata["suggestions"]["terms"].append({"entity_id": "sensor.roof", "sign": 1})
             assert (
                 await client.post("/v1/ha/catalogue", headers=headers, json=metadata)
@@ -331,6 +338,7 @@ def test_energy_membership_rejects_independent_writes_and_projects_pending_devic
             known = [{**device, "configured": True, "configuration": {"capacity_w": 3000}}]
             changed = deepcopy(metadata)
             changed["suggestions"].update(solar=False, solar_sources=[])
+            changed["suggestions"]["solar_configurations"] = []
             changed["suggestions"]["terms"] = changed["suggestions"]["terms"][:1]
             catalogue.receive(changed, datetime.now(UTC))
             assert catalogue.devices(known) == []

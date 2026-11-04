@@ -214,8 +214,6 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                         ],
                     }
                     physical["inverters"][0]["hybrid"] = True
-                async with session.put(url + "/v1/solar", json=solar_definition) as response:
-                    assert response.status == 200, await response.text()
                 async with session.put(url + "/v1/installation", json=physical) as response:
                     assert response.status == 200, await response.text()
                     state = await response.json()
@@ -249,6 +247,14 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                     solar_sources=[
                         source_item["entity_id"] for source_item in solar_definition["sources"]
                     ],
+                    solar_configurations=[
+                        {
+                            "entity_id": source_item["entity_id"],
+                            "providers": [],
+                            "issue": "solar_configuration_not_available",
+                        }
+                        for source_item in solar_definition["sources"]
+                    ],
                     batteries=[
                         {
                             "energy_entity": battery_item["energy_entity"],
@@ -261,6 +267,8 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                     ],
                 )
                 async with session.post(url + "/v1/ha/catalogue", json=metadata) as response:
+                    assert response.status == 200, await response.text()
+                async with session.put(url + "/v1/solar", json=solar_definition) as response:
                     assert response.status == 200, await response.text()
                 previous_revision = state["measurement_config"]["revision"]
                 async with session.get(url + "/v1/snapshot") as response:

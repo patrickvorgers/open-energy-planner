@@ -270,23 +270,28 @@ list of exact planes with `panel_id`, `capacity_w` in Wp, `azimuth` in degrees
 clockwise from north and `tilt` in degrees. Plane capacities must sum to the source
 capacity. They describe geometry behind the existing source meter, not new meters
 or physical inverter connections. Empty planes retain the manual orientation
-convention. `ha_imports` retains the original normalized snapshots separately from
-editable planes. Each contains adapter identity, HA config-entry identity, original
+convention. `ha_imports` retains the accepted normalized snapshots separately from
+the active planes. Each contains adapter identity, HA config-entry identity, original
 planes and optional `inverter_limit_w` in W. This limit is provider model metadata,
 not proof of physical wiring. Credentials are excluded. Immutable configuration
-versions preserve import provenance after edits. `current.json` changes only on
-explicit save. Empty optional geometry/provenance fields are omitted from the
+versions preserve original provenance. `current.json` changes after explicit save
+or accepted HA panel reconciliation. Empty optional geometry/provenance fields are omitted from the
 canonical version input so unchanged saved manual definitions retain their identity.
 Each plane may also contain a display `name` of at most 200 characters. Missing
 names default to empty text and empty names are omitted from canonical version
 input, preserving existing archived identities. Names are retained in editable
 planes and original HA snapshots. They do not change stable `panel_id` values or
-the source accuracy family. Renaming remains an explicit configuration save.
+the source accuracy family. Manual renaming requires an explicit save. HA-owned names
+follow accepted discovery with the rest of the geometry.
 
 The HA catalogue's optional `suggestions.solar_configurations` list associates each
 Energy production `entity_id` with normalized `providers` and an availability
-`issue`. Only complete unambiguous groups seed new drafts. Later catalogue refreshes
-do not overwrite saved OEP geometry. This discovery metadata belongs to the existing
+`issue`. Complete unambiguous groups seed new drafts and reconcile saved geometry.
+Nonempty persisted `ha_imports` preserves HA ownership during missing or stale
+discovery and restart. Only an explicit absent-link result from fresh complete
+discovery clears it, retaining the last planes for manual editing. Incomplete links
+remain read-only and never invent geometry. Relinking replaces manual planes and
+archives a new configuration. Physical converter settings remain independent. This discovery metadata belongs to the existing
 catalogue contract and does not add tables, columns or a second source registry.
 
 Solar source objects also contain `forecast_source`, one of `automatic`, `pvwatts`,
