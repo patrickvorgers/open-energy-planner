@@ -480,6 +480,7 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
     comparison = page.request.get(url + f"/v1/plans/{plan_id}/comparison", headers=headers).json()
     snapshot = comparison["plan"]["input_snapshot"]
     tariffs = snapshot["tariff_evidence"]
+    page.clock.set_fixed_time(datetime.fromisoformat(tariffs[0]["start"]))
     for tariff, kind in zip(tariffs, kinds, strict=True):
         tariff["price_kind"] = kind
         # Source names must not override explicit published/forecast classification.
@@ -964,6 +965,7 @@ def test_current_price_click_does_not_open_original_plan_evidence(app_page):
     plan_id = page.request.get(url + "/v1/plans", headers=headers).json()["plans"][0]["plan_id"]
     plan = page.request.get(url + f"/v1/plans/{plan_id}", headers=headers).json()
     plan_intervals = plan["input_snapshot"]["problem"]["intervals"][:2]
+    page.clock.set_fixed_time(datetime.fromisoformat(plan_intervals[0]["start"]))
     rows = [
         {
             "start": interval["start"],
