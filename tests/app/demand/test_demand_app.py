@@ -76,6 +76,12 @@ def test_demand_http_startup_history_and_real_plan_evidence(tmp_path):
             async with session.post(url + "/v1/demand/history", json=body) as response:
                 assert response.status == 200
             learned = await wait_forecast(session, url, "weekday-hour-v2")
+            assert learned["history_quality"] == {
+                "usable_hours": 840,
+                "corrected_hours": 0,
+                "rejected_hours": 0,
+                "rejected_percentage": 0,
+            }
             assert learned["candidate"]["model"] == "ridge-v2"
             assert learned["ridge_status"] == "shadow_waiting_for_decision_evidence"
             async with session.put(

@@ -24,6 +24,12 @@ In Home Assistant mode, open the app's diagnostics and check the source named by
 
 Keep an original valid plan separate from a failed new round. A visible older plan does not prove its command is still applicable. The [planning notification guide](../development/PLANNING-NOTIFICATIONS.md) explains recovery and action-required states.
 
+## Household energy training excludes hours
+
+OEP excludes unreliable negative household balances from forecast training. Diagnostics and accepted-training logs report usable hours, excluded hours and the excluded percentage. Recorder data remains unchanged. Small excluded shares do not create a notification.
+
+A notification appears when at least 20.0% of complete assessed hours are excluded, after at least 24 complete hours have been assessed. Check the Home Assistant Energy balance for overlapping sources and separately measured devices. OEP retains usable hours and uses the annual-consumption startup estimate when too little history remains.
+
 ## Installation or dependency failure
 
 Keep the first error and record the operating system, Python version and command used. Use the pinned dependencies. If native packages are unavailable on your platform, use the supported isolated developer path. Do not claim platform support from an unverified package workaround.

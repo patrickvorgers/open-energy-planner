@@ -1,6 +1,7 @@
 """Independent household balances, fallback forecasts and chronological model decisions."""
 
 import json
+import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
@@ -19,7 +20,7 @@ from open_energy_planner.demand.calculation.model import (
     TemperatureHour,
 )
 from open_energy_planner.demand.evaluation import compare
-from open_energy_planner.demand.reconstruction import DemandReconstructor
+from open_energy_planner.demand.reconstruction import DemandReconstructor, ReconstructionResult
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
@@ -40,6 +41,96 @@ def channel(entity, deltas):
         total += delta
         rows.append(EnergyHour(START + timedelta(hours=index), total, total))
     return EnergyHistory(entity, tuple(rows))
+
+
+@pytest.mark.parametrize(
+    "usable,rejected,expected,percentage",
+    [
+        (0, 0, False, None),
+        (0, 23, False, 100),
+        (0, 24, True, 100),
+        (19, 4, False, 400 / 23),
+        (19, 5, True, 500 / 24),
+        (81, 19, False, 19),
+        (80, 20, True, 20),
+        (79, 21, True, 21),
+        (1000, 24, False, 2400 / 1024),
+    ],
+)
+def test_notification_requires_twenty_percent_and_a_complete_day(
+    usable, rejected, expected, percentage
+):
+    """Use complete accepted plus rejected hours, with exact inclusive 20-percent and 24-hour boundaries."""
+    accepted = tuple(DemandHour(START + timedelta(hours=index), 1, 1) for index in range(usable))
+    result = ReconstructionResult(accepted, 0, rejected)
+    assert result.notification_required is expected
+    assert result.rejected_percentage == (None if percentage is None else pytest.approx(percentage))
+    assert result.document()["rejected_percentage"] == result.rejected_percentage
+
+
+def test_training_summary_is_logged_only_after_current_result_acceptance(tmp_path, caplog):
+    """Two excluded hours out of ten log 20.0 percent without an early notification or repeated INFO."""
+    definition = replace(
+        config(), terms=(EnergyTerm("sensor.house", 1), EnergyTerm("sensor.export", -1))
+    )
+    store = make_store(tmp_path, DemandStore)
+    store.save(definition)
+    runtime = DemandRuntime(store)
+    runtime.histories = {
+        "sensor.house": channel("sensor.house", [1] * 10),
+        "sensor.export": channel("sensor.export", [2] * 2 + [0.2] * 8),
+    }
+    now = START + timedelta(hours=10)
+    caplog.set_level(logging.DEBUG, logger="open_energy_planner.demand.runtime")
+    result = runtime.build(runtime.job(now))
+    assert "Household energy training accepted" not in caplog.text
+    assert not runtime.install(result, now + timedelta(minutes=15))
+    assert "Household energy training accepted" not in caplog.text
+    assert runtime.install(result, now)
+    assert runtime.issue is None
+    summaries = [
+        record
+        for record in caplog.records
+        if "Household energy training accepted" in record.message
+    ]
+    assert len(summaries) == 1
+    assert summaries[0].levelno == logging.INFO
+    assert "8 usable hours, 2 excluded hours (20.0%)" in summaries[0].message
+    caplog.clear()
+    later = now + timedelta(minutes=15)
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    summaries = [
+        record
+        for record in caplog.records
+        if "Household energy training accepted" in record.message
+    ]
+    assert len(summaries) == 1
+    assert summaries[0].levelno == logging.DEBUG
+    caplog.clear()
+    runtime.histories["sensor.export"] = channel("sensor.export", [0.2] * 10)
+    runtime.data_versions["sensor.export"] = "recovered"
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert "10 usable hours, 0 excluded hours (0.0%)" in caplog.text
+    assert any(record.levelno == logging.INFO for record in caplog.records)
+
+
+def test_failed_training_never_logs_an_accepted_quality_summary(tmp_path, monkeypatch, caplog):
+    """An archive failure cannot announce successful training or install new diagnostic counts."""
+    store = make_store(tmp_path, DemandStore)
+    store.save(config())
+    runtime = DemandRuntime(store)
+    runtime.histories = {"sensor.house": channel("sensor.house", [1] * 24)}
+
+    def fail_archive(*_arguments):
+        """Fail at the actual persistence boundary before a worker result can be accepted."""
+        raise OSError("synthetic archive failure")
+
+    monkeypatch.setattr(store, "archive", fail_archive)
+    caplog.set_level(logging.DEBUG, logger="open_energy_planner.demand.runtime")
+    with pytest.raises(OSError, match="synthetic archive failure"):
+        runtime.build(runtime.job(START + timedelta(hours=24)))
+    assert runtime.history_quality is None
+    assert "Household energy training accepted" not in caplog.text
 
 
 def samples(days=70, *, trend=False):
@@ -180,10 +271,20 @@ def test_rounding_budget_and_rejection_are_per_complete_hour(negative_kwh, bound
         assert len(result.samples) == 3
         assert result.samples[1].residual_kwh == 0
         assert result.samples[1].total_kwh == (0 if boundary == "household" else 1)
-        assert result.document() == {"usable_hours": 3, "corrected_hours": 1, "rejected_hours": 0}
+        assert result.document() == {
+            "usable_hours": 3,
+            "corrected_hours": 1,
+            "rejected_hours": 0,
+            "rejected_percentage": 0,
+        }
     else:
         assert [hour.start for hour in result.samples] == [START, START + timedelta(hours=2)]
-        assert result.document() == {"usable_hours": 2, "corrected_hours": 0, "rejected_hours": 1}
+        assert result.document() == {
+            "usable_hours": 2,
+            "corrected_hours": 0,
+            "rejected_hours": 1,
+            "rejected_percentage": pytest.approx(100 / 3),
+        }
     assert (
         DemandReconstructor().reconstruct(definition, histories, before=START + timedelta(hours=3))
         == result.samples
@@ -219,11 +320,11 @@ def test_small_decreasing_source_sum_is_not_treated_as_balance_rounding():
 
 
 @pytest.mark.parametrize("rejected_hours", [0, 1, 23, 24])
-@pytest.mark.parametrize("history_hours", [24, 168, 169, 240])
+@pytest.mark.parametrize("history_hours", [24, 120, 168, 169, 240])
 def test_runtime_retains_usable_training_and_reports_substantial_loss(
     tmp_path, rejected_hours, history_hours
 ):
-    """One bad hour cannot erase ten days. A day of rejected balances or insufficient remainder stays actionable."""
+    """Retain valid hours and notify only for a fifth of the complete cohort, regardless of startup readiness."""
     definition = replace(config(), exclusions=(ExcludedLoad("ev", "sensor.ev"),))
     store = make_store(tmp_path, DemandStore)
     store.save(definition)
@@ -240,14 +341,13 @@ def test_runtime_retains_usable_training_and_reports_substantial_loss(
         "weekday-hour-v2" if history_hours - rejected_hours >= 168 else "startup-v2"
     )
     assert runtime.issue == (
-        "demand_boundary_inconsistent"
-        if rejected_hours and (rejected_hours >= 24 or history_hours - rejected_hours < 168)
-        else None
+        "demand_boundary_inconsistent" if rejected_hours * 100 >= history_hours * 20 else None
     )
     assert runtime.document(now)["history_quality"] == {
         "usable_hours": history_hours - rejected_hours,
         "corrected_hours": 0,
         "rejected_hours": rejected_hours,
+        "rejected_percentage": pytest.approx(100 * rejected_hours / history_hours),
     }
     old_forecast = runtime.forecast
     old_archive = store.documents.read("forecast-" + old_forecast.version + ".json")
@@ -279,6 +379,7 @@ def test_rounding_noise_does_not_raise_a_runtime_problem(tmp_path):
         "usable_hours": 240,
         "corrected_hours": 240,
         "rejected_hours": 0,
+        "rejected_percentage": 0,
     }
 
 
@@ -486,7 +587,12 @@ def test_source_histories_commit_as_one_cohort_and_stale_requests_cannot_change_
     assert set(runtime.histories) == {"sensor.house", "sensor.ev"}
     assert runtime.request(now) is None
     assert runtime.install(runtime.build(runtime.job(now)), now)
-    assert runtime.history_quality == {"usable_hours": 2, "corrected_hours": 0, "rejected_hours": 0}
+    assert runtime.history_quality == {
+        "usable_hours": 2,
+        "corrected_hours": 0,
+        "rejected_hours": 0,
+        "rejected_percentage": 0,
+    }
     previous_quality = runtime.history_quality
     later = now + timedelta(days=1)
     first = runtime.request(later)
@@ -499,7 +605,12 @@ def test_source_histories_commit_as_one_cohort_and_stale_requests_cannot_change_
     assert runtime.failed(job[0], later)
     assert runtime.document(later)["history_quality"] is None
     assert runtime.install(runtime.build(job), later)
-    assert runtime.history_quality == {"usable_hours": 3, "corrected_hours": 0, "rejected_hours": 0}
+    assert runtime.history_quality == {
+        "usable_hours": 3,
+        "corrected_hours": 0,
+        "rejected_hours": 0,
+        "rejected_percentage": 0,
+    }
 
 
 @pytest.mark.parametrize("minute,tail", [(0, 1), (15, 0.25), (30, 0.5), (45, 0.75)])
@@ -570,7 +681,7 @@ def test_training_quality_warning_preserves_honest_household_planning(tmp_path, 
     }
     now = START + timedelta(hours=240)
     assert runtime.install(runtime.build(runtime.job(now)), now)
-    assert runtime.issue == "demand_boundary_inconsistent"
+    assert runtime.issue == (None if rejected_hours == 24 else "demand_boundary_inconsistent")
     assert runtime.forecast.model == ("weekday-hour-v2" if rejected_hours == 24 else "startup-v2")
     assert runtime.forecast.quality == ("estimated" if rejected_hours == 24 else "provisional")
     solar = SimpleNamespace(
