@@ -76,6 +76,36 @@ the frozen head and rechecks the current base and head before emitting a command
 It cannot prove the human queue order. The operator must still confirm that all
 preceding PRs have completed the required merge and main checks.
 
+## Choose the reviewer before requesting a review
+
+Agents apply this order to each explicit automated-review request after the
+current-head cheap checks and coordinated merge slot are ready:
+
+1. Post `@coderabbitai rate limit` on the PR and wait for CodeRabbit's fresh reply.
+   This checks included review availability without starting a review, as
+   documented in [CodeRabbit's rate-limit guide](https://docs.coderabbit.ai/management/rate-limits).
+   Use the actual response for this request. Do not infer capacity from a fixed
+   plan allowance, an earlier review or a stale reply from another PR.
+2. If included capacity is available, follow the existing CodeRabbit preflight
+   and request one CodeRabbit review of the frozen head.
+3. If CodeRabbit explicitly reports no included capacity, request Kody-ai once
+   using `@kody start-review` with `<!-- oep-kody-head:<current-head-sha> -->`.
+   A positive availability check does not reserve capacity. If the subsequent
+   CodeRabbit request is explicitly rate-limited, switch to the same Kody route
+   without retrying CodeRabbit.
+
+Record the availability reply and chosen reviewer in the PR. Recheck the frozen
+head and base before sending either review command. Never launch both reviews
+in parallel, repeat an existing request or enable usage billing or paid credits.
+An unavailable status reply, provider outage or generic failure is not evidence
+of quota exhaustion. Stop and report that condition instead of guessing or
+silently switching providers. The existing Dependabot exception remains.
+
+This is the order agents use when requesting reviews. It does not change the
+candidate-admission rules. A completed substantive review of the current head
+from either CodeRabbit or Kody-ai remains valid for Ready, CI and merge. All
+findings from every reviewer still require evaluation, replies and resolution.
+
 ## Prepare one final CodeRabbit review
 
 Keep every PR within **150 changed files**. All files count, including binary,
@@ -121,20 +151,17 @@ Two successful preflights can still lead two people to post the command. The
 workflow concurrency group serializes preflights, not provider review capacity.
 All chats must coordinate one queue and use actual provider availability, not a
 hardcoded hourly allowance. Keep this conservative procedure during paid months
-too. Never remove a request marker, push an empty commit or retry autonomously to
-evade the duplicate guard. A rate-limited request needs deliberate operator
-handling after the provider reports capacity again and the prerequisites are
-rechecked.
+too. Never remove a request marker, push an empty commit or retry CodeRabbit
+automatically to evade the duplicate guard. A confirmed rate limit selects the
+Kody-ai fallback described above after the frozen identities and prerequisites
+are rechecked.
 
-For that deliberate recovery, inspect the actual provider result and current
-repository/account capacity or reset without making another review request.
-Confirm that the previous request did not run a substantive review. Recheck the
-exact current head and base, Quick/signature/CodeQL results, finding disposition
-and the absence of a running or completed substantive CodeRabbit review. Reuse
-the existing preflight summary and head marker, and consciously post the same
-manual command only when capacity is actually available. The normal preflight
-still refuses the existing marker. This is an explicit operator recovery outside
-that duplicate blocker, not a successful preflight rerun or an automatic retry.
+For that fallback, inspect the actual availability reply or rate-limit result
+and confirm that no substantive review ran. Recheck the exact current head and
+base, Quick/signature/CodeQL results, finding disposition and the absence of
+running or completed provider work. Request Kody-ai once with its own head
+marker. Do not repeat the existing CodeRabbit request or wait for its quota to
+refill when Kody-ai can review the frozen revision.
 
 Native automatic, incremental, positive-label and description-keyword triggers
 are disabled. GitHub cannot prevent a person with access from directly posting a

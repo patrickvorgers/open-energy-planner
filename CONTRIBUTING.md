@@ -34,6 +34,15 @@ the Draft. Record the reviewed commit SHA and finding dispositions in the PR.
 Batch corrections and retest instead of restarting independent review on every
 push. This local review is distinct from the optional Codex Cloud service above.
 
+Before requesting an automated review, ask CodeRabbit for fresh availability
+with `@coderabbitai rate limit` on the PR. This does not start a review. Use
+CodeRabbit when included capacity is available and Kody-ai when CodeRabbit
+explicitly reports no capacity. A confirmed rate limit after a positive check
+also permits Kody fallback. Unknown status and ordinary failures do not.
+Record the response and selected provider, avoid concurrent or duplicate
+requests, and never enable paid credits. Both completed current-head reviewers
+remain equally valid for CI. See [provider selection](docs/development/CI-STAGES.md#choose-the-reviewer-before-requesting-a-review).
+
 Develop Drafts and run independent local Codex reviews in parallel, but request
 final automated reviews in the intended merge order. Wait for the preceding PR
 to merge and finish its required main checks. Include that actual main in this
