@@ -377,6 +377,7 @@ async function showPlan(signal) {
         const period = planEvidence?.period;
         renderSmartBenefit(self?.expected_savings, currency, period ? `From ${when(period.start)} to ${when(period.end)}: Whole original plan. Expected, not measured.` : undefined);
         let message = "Benefits versus without battery include storage and OEP. Excludes investment costs.";
+        if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and OEP start from the same measured SoC and opening bonus budgets. The extra expected saving includes the difference in remaining battery value. " + message;
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
         if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
         if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";

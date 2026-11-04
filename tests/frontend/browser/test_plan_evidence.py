@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
@@ -549,6 +550,46 @@ def test_cached_page_restore_restarts_one_poll_and_updates_the_time_window(autom
     with page.expect_response("**/v1/plans?limit=1"):
         page.clock.run_for(15000)
     assert state["poll_reads"] == 2
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_future_strategy_choice_shares_measured_soc_and_shows_extra_saving(app_page):
+    """Both forecasts spend the same initial 2 kWh. Equal costs show zero extra saving on desktop/mobile."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    plan_id = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    document = page.request.get(url + f"/v1/plans/{plan_id}/comparison", headers=headers).json()
+    beginning = datetime.fromisoformat(
+        document["plan"]["input_snapshot"]["problem"]["intervals"][0]["start"]
+    )
+    page.clock.install(time=beginning)
+    page.clock.pause_at(beginning + timedelta(minutes=1))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#self-consumption-chart")).to_be_visible()
+    expect(page.locator("#expected-benefit")).to_contain_text(
+        "Self-consumption and OEP start from the same measured SoC and opening bonus budgets."
+    )
+    expect(page.locator("#expected-benefit")).to_contain_text(
+        "The extra expected saving includes the difference in remaining battery value"
+    )
+    expect(page.locator("#expected-benefit")).not_to_contain_text("provisional")
+    expect(page.locator("#self-consumption-issue")).to_be_empty()
+    expect(page.locator("#smart-benefit-value")).to_have_text("0.00")
+    expect(page.locator("#smart-benefit-label")).to_have_text(
+        "No extra expected savings from smart planning"
+    )
+    expect(page.locator("#optimizer-total-value")).to_have_text("0.00")
+    expect(page.locator(".optimizer-scenario .planning-benefit")).to_have_attribute(
+        "data-state", "zero"
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    page.locator("#expected-benefit").scroll_into_view_if_needed()
+    Path("results/ci").mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=f"results/ci/common-soc-choice-{page.viewport_size['width']}.png")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
