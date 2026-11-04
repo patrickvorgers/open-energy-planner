@@ -53,9 +53,9 @@ def test_proof_only_diff_selects_ci_without_workloads(monkeypatch, name, status)
     ],
 )
 def test_execution_policy_and_unknown_ci_owners_remain_conservative(path):
-    """Changing execution capabilities or unknown harness code retains full and performance coverage."""
+    """Execution and unknown CI code retain full functional coverage without query measurements."""
     assert path_profile(PurePosixPath(path)) == "full"
-    assert performance_queries_path(PurePosixPath(path))
+    assert not performance_queries_path(PurePosixPath(path))
 
 
 @pytest.mark.parametrize("path", [".coderabbit.yaml", ".github/workflows/review-preflight.yaml"])
@@ -97,7 +97,9 @@ def test_review_metadata_cannot_remove_shared_workload_coverage(monkeypatch, met
         f":100644 100644 {'3' * 40} {'4' * 40} M\0{path}\0" for path in (metadata, workload)
     ).encode()
     monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: records)
-    assert select_profile("1" * 40, "2" * 40) == "full+performance-queries"
+    assert select_profile("1" * 40, "2" * 40) == (
+        "full+performance-queries" if workload == "compose.yaml" else "full"
+    )
 
 
 @pytest.mark.parametrize(
@@ -130,7 +132,7 @@ def test_review_metadata_cannot_remove_shared_workload_coverage(monkeypatch, met
         ),
         (
             "script/ci/future.py",
-            {"native", "browser", "ha", "databases", "supervisor", "performance-queries"},
+            {"native", "browser", "ha", "databases", "supervisor"},
         ),
     ],
 )
@@ -153,7 +155,7 @@ def test_renaming_proof_into_unknown_owner_retains_full(monkeypatch):
     ).encode()
     monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: records)
     monkeypatch.setattr("script.ci.ci_scope.immutable_test_sources", lambda *args: {})
-    assert select_profile("1" * 40, "2" * 40) == "full+performance-queries"
+    assert select_profile("1" * 40, "2" * 40) == "full"
 
 
 def test_ci_route_runs_only_native_regressions(monkeypatch, tmp_path):

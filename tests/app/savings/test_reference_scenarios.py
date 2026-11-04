@@ -90,6 +90,24 @@ def test_continuous_reference_start_is_not_reset_to_actual_soc():
     assert chart["expected_flows"][0]["grid_import"] == 1
 
 
+@pytest.mark.parametrize("ems_cash,expected_saving", [(0, 0.2), (0.3, -0.1)])
+def test_future_choice_uses_measured_stock_and_values_remaining_energy(ems_cash, expected_saving):
+    """Self-consumption spends 1 kWh worth .20. EMS keeps its stock and costs either zero or .30."""
+    plan = plan_document(problem())
+    plan["independent_costs"]["cash_cost"] = ems_cash
+    plan["independent_costs"]["import_cost"] = ems_cash
+    original = deepcopy(plan)
+    reference = comparison(plan)
+    chart = scenario(plan, reference)["chart"]
+    assert reference["reference_start"]["status"] == "measured_common_start"
+    assert chart["input_snapshot"]["problem"]["batteries"][0]["battery"]["initial_kwh"] == 2
+    assert chart["expected_flows"][0]["batteries"][0]["end_kwh"] == 1
+    assert reference["reference_costs"]["purchase"] == 0
+    assert reference["reference_costs"]["inventory_change"] == pytest.approx(-0.2)
+    assert reference["expected_savings"] == pytest.approx(expected_saving)
+    assert plan == original
+
+
 def test_without_battery_respects_bonus_cap_and_retains_original_budget():
     """One exported kWh has only .25 quota left: .2 bonus rate pays .05, after .1 export cost."""
     plan = plan_document(problem(pv_kwh=1, load_kwh=0))

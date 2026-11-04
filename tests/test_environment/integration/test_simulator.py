@@ -526,7 +526,8 @@ def test_simulator_history_keeps_native_sum_origin_when_reseeding(origin):
                     )
                 else:
                     async_import_statistics(hass, metadata, previous)
-                await get_instance(hass).async_block_till_done()
+                # Queue a fence even when Recorder already dequeued the active import.
+                await hass.async_add_executor_job(get_instance(hass).block_till_done)
             rows = [
                 {
                     "start": start + timedelta(minutes=5 * index),
@@ -538,7 +539,7 @@ def test_simulator_history_keeps_native_sum_origin_when_reseeding(origin):
             await history.import_fine(
                 hass, metadata, rows, [{"start": start, "sum": 1500.3, "state": 1500.3}]
             )
-            await get_instance(hass).async_block_till_done()
+            await hass.async_add_executor_job(get_instance(hass).block_till_done)
             result = await get_instance(hass).async_add_executor_job(
                 statistics_during_period,
                 hass,
@@ -570,6 +571,86 @@ def test_simulator_history_keeps_native_sum_origin_when_reseeding(origin):
                 0 if origin == "new_meter" else 0.3
             )
             assert hourly["sensor.fixture_join"][0]["state"] == pytest.approx(1500.3)
+
+    asyncio.run(scenario())
+
+
+def test_simulator_history_barrier_waits_for_a_dequeued_import():
+    """A queued barrier waits for an active import even after Recorder's queue empties."""
+    from threading import Event
+    from unittest.mock import patch
+
+    from homeassistant.components.recorder import get_instance
+    from homeassistant.components.recorder.db_schema import StatisticsShortTerm
+    from homeassistant.components.recorder.models import StatisticMeanType
+    from homeassistant.components.recorder.statistics import get_last_short_term_statistics
+    from homeassistant.components.recorder.tasks import ImportStatisticsTask, WaitTask
+
+    async def scenario():
+        """Pause a real import, observe its queued fence, then verify durable meter data."""
+        async with running_chain(recorder=True) as (hass, _entry, _url, _root):
+            recorder = get_instance(hass)
+            started, fenced = asyncio.Event(), asyncio.Event()
+            release = Event()
+            original_import, original_queue = ImportStatisticsTask.run, recorder.queue_task
+
+            def pause_import(task, instance):
+                """Hold the dequeued import until the test observes its waiting fence."""
+                hass.loop.call_soon_threadsafe(started.set)
+                if not release.wait(10):
+                    raise TimeoutError("The synthetic Recorder import was not released")
+                original_import(task, instance)
+
+            def track_fence(task):
+                """Expose the fence enqueue without changing Recorder's task order."""
+                original_queue(task)
+                if isinstance(task, WaitTask):
+                    hass.loop.call_soon_threadsafe(fenced.set)
+
+            metadata = {
+                "statistic_id": "sensor.fixture_barrier",
+                "source": "recorder",
+                "name": "Fixture barrier",
+                "has_sum": True,
+                "mean_type": StatisticMeanType.NONE,
+                "unit_of_measurement": "kWh",
+                "unit_class": "energy",
+            }
+            previous = [
+                {
+                    "start": (dt_util.utcnow() - timedelta(hours=3)).replace(
+                        minute=0, second=0, microsecond=0
+                    ),
+                    "sum": 0.0,
+                    "state": 1500.0,
+                }
+            ]
+            with (
+                patch.object(ImportStatisticsTask, "run", pause_import),
+                patch.object(recorder, "queue_task", track_fence),
+            ):
+                waiter = None
+                try:
+                    recorder.async_import_statistics(metadata, previous, StatisticsShortTerm)
+                    await asyncio.wait_for(started.wait(), 5)
+                    assert recorder.async_get_commit_future() is None
+                    waiter = hass.async_add_executor_job(recorder.block_till_done)
+                    await asyncio.wait_for(fenced.wait(), 5)
+                    assert not waiter.done()
+                finally:
+                    release.set()
+                    if waiter is not None:
+                        await asyncio.wait_for(waiter, 10)
+            result = await recorder.async_add_executor_job(
+                get_last_short_term_statistics,
+                hass,
+                1,
+                "sensor.fixture_barrier",
+                False,
+                {"sum", "state"},
+            )
+            assert result["sensor.fixture_barrier"][0]["sum"] == 0.0
+            assert result["sensor.fixture_barrier"][0]["state"] == 1500.0
 
     asyncio.run(scenario())
 

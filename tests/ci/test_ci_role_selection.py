@@ -48,7 +48,7 @@ def test_ha_configuration_keeps_all_ha_contracts_without_database_or_volume_grou
 def test_shared_execution_and_snapshot_process_owners_retain_broad_coverage(path):
     """General process, shared pytest and heavy workflow edits cannot inherit metadata-only coverage."""
     assert path_profile(PurePosixPath(path)) == "full"
-    assert performance_queries_path(PurePosixPath(path))
+    assert not performance_queries_path(PurePosixPath(path))
 
 
 def test_ha_argument_owner_preserves_worker_plugin_directories_and_independent_report():
@@ -81,7 +81,7 @@ def test_ha_policy_changes_never_remove_mixed_workload_coverage(monkeypatch, wor
     ).encode()
     monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: records)
     suites = selected_suites(select_profile("1" * 40, "2" * 40))
-    assert "performance-queries" in suites
+    assert ("performance-queries" in suites) == (workload != "shared")
     if workload == "query":
         assert {"database-contracts", "ha", "browser", "unit-app"} <= suites
         assert "databases" not in suites and "database-migrations" not in suites
@@ -94,7 +94,6 @@ def test_ha_policy_changes_never_remove_mixed_workload_coverage(monkeypatch, wor
             "ha",
             "databases",
             "supervisor",
-            "performance-queries",
         }
 
 

@@ -7,6 +7,31 @@ import pytest
 from script.ci import proof_git
 
 
+@pytest.mark.parametrize("blob", ["--help", "HEAD", "a" * 39, "A" * 40, None])
+def test_immutable_blob_rejects_non_sha_without_starting_git(monkeypatch, blob):
+    """A workflow comparison cannot turn an unvalidated blob reference into a Git argument."""
+    calls = []
+    monkeypatch.setattr(
+        proof_git.subprocess, "check_output", lambda *args, **kwargs: calls.append(args)
+    )
+    with pytest.raises(proof_git.VerificationError, match="immutable 40-character commit SHA"):
+        proof_git.immutable_blob(blob)
+    assert calls == []
+
+
+def test_immutable_blob_uses_a_fixed_bounded_read(monkeypatch, tmp_path):
+    """Blob reads return raw bytes through cat-file with no checkout, diff driver or execution."""
+
+    def read(command, **options):
+        """Assert the complete process contract before returning independent workflow bytes."""
+        assert command == ["git", "cat-file", "blob", "a" * 40]
+        assert options == {"cwd": tmp_path, "stderr": subprocess.DEVNULL, "timeout": 60}
+        return b"workflow bytes\n"
+
+    monkeypatch.setattr(proof_git.subprocess, "check_output", read)
+    assert proof_git.immutable_blob("a" * 40, tmp_path) == b"workflow bytes\n"
+
+
 def test_history_fetch_timeout_becomes_credential_free_verification_failure(monkeypatch):
     """A stalled remote fetch gets a longer bounded deadline and fails signature verification cleanly."""
 

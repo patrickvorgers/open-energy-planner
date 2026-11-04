@@ -107,6 +107,7 @@ PROOF_CAPABILITIES = {
         "checkout_tree",
         "merged_tree",
         "immutable_test_sources",
+        "immutable_blob",
         "raw_changes",
     },
     "script.ci.ci_scope": {"matrix_profile", "select_profile", "selected_suites"},

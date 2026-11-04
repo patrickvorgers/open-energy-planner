@@ -304,7 +304,7 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     popup = page.locator("#plan-chart-tooltip")
     expect(popup).to_be_visible()
     formatted_timestamps = page.evaluate(
-        "values => values.map(value => new Date(value).toLocaleString('en-US', {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short'}))",
+        "values => values.map(value => new Date(value).toLocaleString('en-US', {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC'}))",
         ["2026-10-23T00:00:00Z", "2026-10-23T00:15:00Z"],
     )
     expect(popup).to_contain_text(f"From {formatted_timestamps[0]} to {formatted_timestamps[1]}")
