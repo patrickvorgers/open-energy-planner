@@ -221,6 +221,20 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
     providers[0]["panels"][0]["azimuth"] = 115
     refresh()
     expect(page.locator("#installation-summary")).to_contain_text("115")
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
+    expiry_message = "This notification disappears automatically after 5 minutes."
+    expect(page.get_by_role("region", name="Notifications", exact=True)).to_contain_text(
+        expiry_message
+    )
+    page.locator(".notification-toggle").click()
+    popup = page.get_by_role("dialog", name="Notifications", exact=True)
+    expect(popup).to_contain_text(expiry_message)
+    mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
+    popup.screenshot(
+        path=f"results/ci/solar-panel-notice-expiry-{page.viewport_size['width']}-{mode}.png"
+    )
+    popup.get_by_role("button", name="Close notifications", exact=True).click()
     installation_area(page, 1, edit=True)
     expect(angle).to_have_value("115")
     expect(angle).to_be_disabled()

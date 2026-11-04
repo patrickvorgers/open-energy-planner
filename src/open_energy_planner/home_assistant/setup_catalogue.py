@@ -142,6 +142,7 @@ class SetupDiscovery:
                     "OEP retains the last accepted panel settings. You can now edit them manually."
                 )
                 code = "solar_panel_settings_manual"
+            message += f" This notification disappears automatically after {PANEL_CHANGE_NOTICE_MINUTES} minutes."
             self.panel_changes[source.entity_id] = (
                 now + timedelta(minutes=PANEL_CHANGE_NOTICE_MINUTES),
                 Notification(
