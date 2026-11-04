@@ -41,7 +41,10 @@ def repository_from_link(page):
 
 
 def test_default_launch_and_responsive_content(page):
-    """Load the default page on desktop/mobile. Require the right repository, English content and usable overflow-free layout."""
+    """Show AMD64 guidance before the VS Code installation link and keep cloning usable without overflow.
+
+    The page fixture supplies fresh desktop and mobile browser contexts.
+    """
     assert repository_from_link(page) == {
         "url": ["https://github.com/patrickvorgers/open-energy-planner"]
     }
