@@ -168,6 +168,36 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("plan_view", ["empty", "historical"])
+def test_current_prices_recover_independently_of_plan_selection(automatic_plan_overview, plan_view):
+    """Retry current prices with an empty archive or historical selection without changing that view."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["failed_prices"] = True
+    if plan_view == "empty":
+        state["plans"].clear()
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
+    if plan_view == "historical":
+        page.locator("#plan-version").select_option("older-plan")
+        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    else:
+        expect(page.locator("#plan-version option")).to_have_count(0)
+    page.wait_for_load_state("networkidle")
+    comparisons = list(state["comparison_reads"])
+    state["failed_prices"] = False
+    state["current_buy_price"] = 0.88
+    page.clock.run_for(15000)
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
+        .data.datasets[1].data[0].y === 0.88""")
+    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    assert state["comparison_reads"] == comparisons
+    expect(page.locator("#plan-version")).to_have_value(
+        "older-plan" if plan_view == "historical" else ""
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("failed_view", ["plan", "prices"])
 def test_failed_overview_reload_recovers_without_a_new_publication(
     automatic_plan_overview, failed_view

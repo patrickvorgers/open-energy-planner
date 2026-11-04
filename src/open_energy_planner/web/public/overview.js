@@ -482,7 +482,9 @@ async function refreshLatestPlan() {
     if (!planRefreshEnabled || planRefreshBusy || overviewLoads || document.hidden || location.hash === "#savings") return;
     planRefreshBusy = true;
     const selector = $("plan-version"), previousLatest = selector.options[0]?.value || "";
+    let priceRead;
     try {
+        if (priceRefreshPending) priceRead = currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
         const data = await api("v1/plans?limit=1", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), latest = data.plans[0];
         if (!latest || overviewLoads || previousLatest !== (selector.options[0]?.value || "")) return;
         const selected = selector.value, followingLatest = selected === previousLatest;
@@ -495,12 +497,12 @@ async function refreshLatestPlan() {
             selector.value = followingLatest ? latest.plan_id : selected;
         }
         const needsPlan = renderedPlanId !== latest.plan_id;
-        if (followingLatest && (needsPlan || priceRefreshPending)) {
+        if (followingLatest && needsPlan) {
             const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
-            await Promise.all([needsPlan ? showPlan(signal) : true, currentPrices(signal)]);
+            await Promise.all([showPlan(signal), priceRead ??= currentPrices(signal)]);
         }
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
-    finally { planRefreshBusy = false; }
+    finally { await Promise.allSettled([priceRead]); planRefreshBusy = false; }
 }
 /** Use local calendar boundaries as aware API instants. Absent coverage never becomes zero savings. */
 async function savings(signal) {
