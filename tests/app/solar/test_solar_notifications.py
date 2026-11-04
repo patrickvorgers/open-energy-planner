@@ -1,11 +1,14 @@
 """Verify solar-owned availability, conditional recovery and shared planning admission."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
+from aiohttp import ClientResponseError
 
 from open_energy_planner.home_assistant.observations import InputsUnavailable
 from open_energy_planner.installation.location import SiteLocation
@@ -197,3 +200,45 @@ def test_real_solar_notification_source_clears_after_automatic_forecast_refresh(
             assert datetime.fromisoformat(solar["forecast"]["issued_at"]) <= datetime.now(UTC)
 
     asyncio.run(scenario())
+
+
+def test_weather_outage_logs_impact_retry_without_private_url_or_traceback(tmp_path, caplog):
+    """A real lifecycle reports an HTTP 503 clearly without exposing precise location or a misleading defect trace."""
+    called = None
+
+    class Weather:
+        async def read(self, _location, _now):
+            """Represent the actual aiohttp failure with a private provider request URL."""
+            called.set()
+            raise ClientResponseError(
+                SimpleNamespace(
+                    real_url="https://weather.invalid/?latitude=PRIVATE_SITE&token=SECRET"
+                ),
+                (),
+                status=503,
+                message="Service Unavailable",
+            )
+
+    @asynccontextmanager
+    async def weather_factory():
+        """Use the real weather loop while avoiding external services."""
+        yield Weather()
+
+    async def scenario():
+        """Wait for one actual failed read after installing a complete configured site."""
+        nonlocal called
+        called = asyncio.Event()
+        async with running_forecasts(tmp_path, weather_factory=weather_factory) as (session, url):
+            await configure_forecasts(session, url, solar_definition=asdict(plant()))
+            await asyncio.wait_for(called.wait(), 10)
+
+    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.solar.api"):
+        asyncio.run(scenario())
+    failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert len(failures) == 1
+    assert "HTTP 503" in failures[0].getMessage()
+    assert "30 minutes" in failures[0].getMessage()
+    assert "valid forecasts" in failures[0].getMessage()
+    assert failures[0].exc_info is None
+    assert "PRIVATE_SITE" not in caplog.text
+    assert "SECRET" not in caplog.text
