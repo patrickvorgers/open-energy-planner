@@ -343,9 +343,24 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         "**/v1/forecast-quality/days/2026-10-25", lambda route: route.fulfill(json=fold_body)
     )
     page.locator("#quality-day").select_option("2026-10-25")
+    local_labels = page.evaluate("""() => {
+        const options = {timeZone: 'Europe/Amsterdam', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'};
+        return [0, 1, 2].map(hour => new Date(`2026-10-25T0${hour}:00:00Z`).toLocaleString(undefined, options));
+    }""")
     expect(page.locator("#quality-charts tbody tr td:first-child")).to_have_text(
-        ["10/25/2026, 2:00 AM (1 of 2)", "10/25/2026, 2:00 AM (2 of 2)", "10/25/2026, 3:00 AM"]
+        [local_labels[0] + " (1 of 2)", local_labels[1] + " (2 of 2)", local_labels[2]]
     )
+    canvas = page.locator("#quality-chart-0")
+    point = canvas.evaluate(
+        "canvas => Chart.getChart(canvas).getDatasetMeta(0).data[0].getCenterPoint()"
+    )
+    canvas.hover(position={"x": point["x"], "y": point["y"]})
+    end_label = page.evaluate(
+        "new Date('2026-10-25T01:00:00Z').toLocaleString(undefined, {timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit'})"
+    )
+    assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == [
+        f"{local_labels[0]} (1 of 2) to {end_label} (2 of 2)"
+    ]
     page.locator("#quality-day").select_option("2026-10-26")
     expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
     page.route(

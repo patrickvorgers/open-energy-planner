@@ -64,6 +64,18 @@ function devices(data) {
  * The physical lower bound is zero. Only the upper end receives clearance.
  */
 function graph(source, index, inProgress) {
+    // Unique instants share occurrence labels across table rows and tooltip endpoints.
+    const localHours = new Map(), hourOccurrences = new Map();
+    const instants = [...new Set(source.rows.flatMap(row => [Date.parse(row.start), Date.parse(row.end)]))].sort((left, right) => left - right);
+    for (const instant of instants) {
+        const label = when(instant), hours = localHours.get(label) || [];
+        hours.push(instant); localHours.set(label, hours);
+    }
+    for (const hours of localHours.values()) {
+        if (hours.length > 1) hours.forEach((instant, occurrence) => hourOccurrences.set(instant, ` (${occurrence + 1} of ${hours.length})`));
+    }
+    /** Keep endpoint formatting while identifying repeated local wall times without timezone names. */
+    const evidenceTime = (value, options = {}) => when(value, options) + (hourOccurrences.get(Date.parse(value)) || "");
     const article = document.createElement("article"), heading = document.createElement("h2"), wrap = document.createElement("div"), canvas = document.createElement("canvas");
     article.className = "chart-card"; heading.textContent = source.title; article.append(heading);
     const daily = source.daily;
@@ -97,7 +109,7 @@ function graph(source, index, inProgress) {
             chart.getDatasetMeta(datasetIndex + datasets.length).data.forEach((point, pointIndex) => { point.x = bars[pointIndex].x; });
         });
     }};
-    const chart = new Chart(canvas, {type: "bar", plugins: [alignment, calendarDays], data: {datasets: [...datasets, ...lines]}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "index", intersect: false}, scales: {x: {type: "linear", min: source.rows[0] ? Date.parse(source.rows[0].start) - HOUR_MILLISECONDS / 2 : undefined, max: source.rows.length ? Date.parse(source.rows.at(-1).start) + HOUR_MILLISECONDS / 2 : undefined, afterBuildTicks: (scale) => { const first = Math.ceil(scale.min / HOUR_MILLISECONDS), last = Math.floor(scale.max / HOUR_MILLISECONDS), stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_LABELS - 1))); scale.ticks = []; for (let hour = first; hour <= last; hour += stride) scale.ticks.push({value: hour * HOUR_MILLISECONDS}); }, ticks: {stepSize: HOUR_MILLISECONDS, maxTicksLimit: MAX_TIME_LABELS, callback: calendarTime}}, y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per completed hour (kWh)"}}}, plugins: {legend: {display: false}, tooltip: {filter: item => item.dataset.type === "bar", bodyFont: {family: "monospace"}, callbacks: {title: (items) => { const row = source.rows[items[0].dataIndex]; return `${when(row.start)} to ${when(row.end, {hour: "2-digit", minute: "2-digit"})}`; }, label: (item) => `${item.dataset.label.padEnd(10)}${item.parsed.y == null ? "Unavailable" : `${item.parsed.y.toFixed(3).padStart(9)} kWh`}`, afterBody: (items) => source.rows[items[0].dataIndex].evaluation_issue || "Eligible for descriptive accuracy"}}}}});
+    const chart = new Chart(canvas, {type: "bar", plugins: [alignment, calendarDays], data: {datasets: [...datasets, ...lines]}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "index", intersect: false}, scales: {x: {type: "linear", min: source.rows[0] ? Date.parse(source.rows[0].start) - HOUR_MILLISECONDS / 2 : undefined, max: source.rows.length ? Date.parse(source.rows.at(-1).start) + HOUR_MILLISECONDS / 2 : undefined, afterBuildTicks: (scale) => { const first = Math.ceil(scale.min / HOUR_MILLISECONDS), last = Math.floor(scale.max / HOUR_MILLISECONDS), stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_LABELS - 1))); scale.ticks = []; for (let hour = first; hour <= last; hour += stride) scale.ticks.push({value: hour * HOUR_MILLISECONDS}); }, ticks: {stepSize: HOUR_MILLISECONDS, maxTicksLimit: MAX_TIME_LABELS, callback: calendarTime}}, y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per completed hour (kWh)"}}}, plugins: {legend: {display: false}, tooltip: {filter: item => item.dataset.type === "bar", bodyFont: {family: "monospace"}, callbacks: {title: (items) => { const row = source.rows[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`; }, label: (item) => `${item.dataset.label.padEnd(10)}${item.parsed.y == null ? "Unavailable" : `${item.parsed.y.toFixed(3).padStart(9)} kWh`}`, afterBody: (items) => source.rows[items[0].dataIndex].evaluation_issue || "Eligible for descriptive accuracy"}}}}});
     charts.push(chart);
     const controls = document.createElement("div");
     controls.className = "chart-legend quality-evidence-controls";
@@ -119,14 +131,7 @@ function graph(source, index, inProgress) {
     if (daily.relative_error_percent != null) paragraph(details, `Relative daily error: ${percentage(daily.relative_error_percent)}`);
 
     const headerRow = document.createElement("tr"); for (const title of ["Hour starts", "Predicted kWh", "Measured kWh", "Error kWh", "Evaluation"]) { const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = title; headerRow.append(cell); } header.append(headerRow);
-    const hourLabels = source.rows.map(row => when(row.start)), hourTotals = new Map(), occurrences = new Map();
-    for (const label of hourLabels) hourTotals.set(label, (hourTotals.get(label) || 0) + 1);
-    for (const [index, row] of source.rows.entries()) {
-        const label = hourLabels[index], occurrence = (occurrences.get(label) || 0) + 1;
-        occurrences.set(label, occurrence);
-        const hour = hourTotals.get(label) > 1 ? `${label} (${occurrence} of ${hourTotals.get(label)})` : label;
-        const line = document.createElement("tr"); for (const value of [hour, quantity(row.predicted_kwh), quantity(row.measured_kwh), quantity(row.error_kwh), row.evaluation_issue || "Eligible"]) { const cell = document.createElement("td"); cell.textContent = value; line.append(cell); } body.append(line);
-    }
+    for (const row of source.rows) { const line = document.createElement("tr"); for (const value of [evidenceTime(row.start), quantity(row.predicted_kwh), quantity(row.measured_kwh), quantity(row.error_kwh), row.evaluation_issue || "Eligible"]) { const cell = document.createElement("td"); cell.textContent = value; line.append(cell); } body.append(line); }
     table.append(header, body); scroll.className = "table-scroll"; scroll.append(table); details.append(scroll);
     paragraph(details, `Original forecast version: ${source.forecast_version}`, "quality-version");
     paragraph(details, `Latest measurement receipt: ${source.last_received_at ? when(source.last_received_at) : "Unavailable"}`);
