@@ -603,3 +603,110 @@ def test_incomplete_or_ambiguous_api_data_cannot_admit_candidate(candidate, evid
     client.get = get
     with pytest.raises(VerificationError):
         check(event, REPOSITORY, client)
+
+
+@pytest.fixture
+def kody_candidate(candidate):
+    """Replace CodeRabbit with independently specified successful Kody provider evidence."""
+    event, current, checks = deepcopy(candidate)
+    checks[2].update(
+        name="Kody Code Review",
+        app={"id": 413034},
+        output={
+            "title": "Code Review Complete",
+            "summary": "Review finished successfully. Suggestions (if any) were posted as PR/file comments.",
+        },
+    )
+    return event, current, checks
+
+
+def test_kody_review_alone_admits_candidate(kody_candidate):
+    """A substantive Kody review satisfies the same current-head admission as CodeRabbit."""
+    event, current, checks = kody_candidate
+    assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
+
+
+@pytest.mark.parametrize("other_status", ["skipped", "failure", "in_progress"])
+@pytest.mark.parametrize("provider", ["CodeRabbit", "Kody Code Review"])
+def test_either_completed_provider_is_sufficient(candidate, kody_candidate, provider, other_status):
+    """An unavailable alternative provider does not invalidate the completed selected reviewer."""
+    event, current, checks = candidate if provider == "CodeRabbit" else kody_candidate
+    alternative = deepcopy(kody_candidate[2][2] if provider == "CodeRabbit" else candidate[2][2])
+    alternative.update(id=5, conclusion=other_status, status="completed")
+    if other_status == "in_progress":
+        alternative.update(status="in_progress", conclusion=None)
+    checks.append(alternative)
+    assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "wrong_app",
+        "wrong_head",
+        "pending",
+        "failed",
+        "skipped",
+        "neutral",
+        "starting",
+        "warnings",
+        "missing_output",
+        "unknown_summary",
+    ],
+)
+def test_kody_requires_real_current_head_completion(kody_candidate, fault):
+    """Kody skips, warnings, forged checks and unfinished work cannot replace a review."""
+    event, current, checks = kody_candidate
+    review = checks[2]
+    if fault == "missing":
+        checks.pop(2)
+    elif fault == "wrong_app":
+        review["app"]["id"] = 999
+    elif fault == "wrong_head":
+        review["head_sha"] = "3" * 40
+    elif fault == "pending":
+        review.update(status="in_progress", conclusion=None)
+    elif fault in {"failed", "skipped", "neutral"}:
+        review["conclusion"] = {"failed": "failure"}.get(fault, fault)
+    elif fault == "starting":
+        review["output"]["title"] = "Code Review Starting"
+    elif fault == "warnings":
+        review["output"]["title"] = "Code Review Completed with Warnings"
+    elif fault == "missing_output":
+        review.pop("output")
+    else:
+        review["output"]["summary"] = "Review skipped."
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, Evidence(current, checks))
+
+
+@pytest.mark.parametrize("status", ["in_progress", "failure", "skipped"])
+def test_latest_kody_attempt_supersedes_old_success(kody_candidate, status):
+    """A later incomplete Kody attempt prevents reuse of its earlier successful review."""
+    event, current, checks = kody_candidate
+    latest = {**checks[2], "id": 5, "status": "completed", "conclusion": status}
+    if status == "in_progress":
+        latest.update(status="in_progress", conclusion=None)
+    checks.append(latest)
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, Evidence(current, checks))
+
+
+def test_kody_does_not_bypass_open_findings(kody_candidate):
+    """Successful Kody evidence cannot admit a candidate with unresolved discussions."""
+    event, current, checks = kody_candidate
+
+    class OpenFinding(Evidence):
+        """Serve one unresolved review thread independent of the selected provider."""
+
+        def post(self, path, payload):
+            """Return a complete page containing an actionable unresolved thread."""
+            response = super().post(path, payload)
+            response["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] = [
+                {"id": "finding", "isResolved": False}
+            ]
+            return response
+
+    with pytest.raises(VerificationError, match="threads"):
+        check(event, REPOSITORY, OpenFinding(current, checks))

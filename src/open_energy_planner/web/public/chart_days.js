@@ -9,9 +9,9 @@ const MIN_HEADING_WIDTH = 22;
 const MILLISECONDS_PER_DAY = 86400000;
 const bands = new WeakMap();
 
-/** Day headings supply the date. Compact clock ticks retain timezone names to distinguish repeated hours. */
+/** Day headings supply the date. Compact clock ticks use installation time without timezone names. */
 export function calendarTime(value) {
-    return when(value, {hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short"});
+    return when(value, {hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
 }
 
 /** Empty charts keep their original layout until at least one real timestamp is present. */
@@ -78,7 +78,7 @@ export const calendarDays = {
             const instant = Date.parse(date + "T12:00:00Z");
             const format = parts => options.utc ? new Date(instant).toLocaleDateString(undefined, {...parts, timeZone: "UTC"}) : when(start, parts);
             const relative = date === today ? "Today" : date === tomorrow ? "Tomorrow" : null;
-            const full = `${relative ? relative + ": " : ""}${format({weekday: "long", year: "numeric", month: "long", day: "numeric"})}${options.utc ? " UTC" : ""}`;
+            const full = `${relative ? relative + ": " : ""}${format({weekday: "long", year: "numeric", month: "long", day: "numeric"})}`;
             const width = right - left;
             heading.style.cssText = `left:${left}px;width:${width}px;background:${alternate ? "#edf5fa" : "#edf6f2"}`;
             heading.setAttribute("role", "listitem");

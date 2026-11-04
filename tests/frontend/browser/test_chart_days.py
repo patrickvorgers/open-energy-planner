@@ -1,5 +1,6 @@
 """Prove calendar ownership and rendering with real Chart.js on desktop and mobile."""
 
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -40,8 +41,8 @@ def test_calendar_bands_follow_installation_days_and_resize(
         page.goto(app_site + "/calendar-preview")
         page.evaluate(
             """async ({start,end,utc,zone}) => {
-                const {useHomeAssistantTimezone,when} = await import('/setup/display.js');
-                const {calendarDays} = await import('/setup/chart_days.js');
+                const {useHomeAssistantTimezone} = await import('/setup/display.js');
+                const {calendarDays,calendarTime} = await import('/setup/chart_days.js');
                 useHomeAssistantTimezone(zone);
                 const beginning=Date.parse(start), ending=Date.parse(end);
                 window.calendar = new Chart(document.getElementById('calendar'), {
@@ -51,7 +52,7 @@ def test_calendar_bands_follow_installation_days_and_resize(
                     options:{responsive:true,maintainAspectRatio:false,animation:false,parsing:false,
                         plugins:{calendarDays:{utc},legend:{display:false}},
                         scales:{x:{type:'linear',min:beginning,max:ending,ticks:{maxTicksLimit:5,maxRotation:0,
-                            callback:value=>when(value,{hour:'2-digit',minute:'2-digit'})}},y:{min:0,max:5}}}
+                            callback:calendarTime}},y:{min:0,max:5}}}
                 });
             }""",
             {"start": start, "end": end, "utc": utc, "zone": zone},
@@ -67,6 +68,7 @@ def test_calendar_bands_follow_installation_days_and_resize(
                     fits:[...heading.children].every(child=>child.scrollWidth<=child.clientWidth),
                     pixel:[...chart.ctx.getImageData(Math.round((parseFloat(heading.style.left)+heading.getBoundingClientRect().width/2)*chart.currentDevicePixelRatio),
                         Math.round((area.bottom-8)*chart.currentDevicePixelRatio),1,1).data]})),
+                    ticks:chart.scales.x.ticks.map(tick=>tick.label),
                     left:area.left,right:area.right,top:area.top,data:chart.data.datasets[0].data,
                     overflow:document.documentElement.scrollWidth>innerWidth};
             }""")
@@ -100,8 +102,10 @@ def test_calendar_bands_follow_installation_days_and_resize(
                 )
 
             assert (luminance(heading["pixel"]) + 0.05) / (luminance([181, 137, 0]) + 0.05) >= 3
-            assert ("UTC" in heading["label"]) == utc
+            assert "UTC" not in heading["label"]
         assert initial["headings"][0]["pixel"] != initial["headings"][1]["pixel"]
+        assert initial["ticks"]
+        assert all(re.fullmatch(r"\d{2}:\d{2}", label) for label in initial["ticks"])
         assert not initial["overflow"]
         zone_name = zone.replace("/", "-")
         mode = "utc" if utc else "local"
@@ -147,7 +151,7 @@ def test_calendar_bands_follow_installation_days_and_resize(
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_overview_calendar_headers_refresh_without_duplicates(app_page):
-    """Planning charts retain data and headings on refresh. Repeated wintertime hours have distinct ticks and tooltips."""
+    """Planning charts retain data and headings on refresh. Clock ticks and tooltips omit timezone names while retaining repeated wintertime timestamps."""
     from playwright.sync_api import expect
 
     from tests.frontend.browser.helpers import TOKEN
@@ -191,15 +195,14 @@ def test_overview_calendar_headers_refresh_without_duplicates(app_page):
         "canvas=>Chart.getChart(canvas).scales.x.ticks.map(tick=>tick.label)"
     )
     assert axis_labels[0].startswith("00:00")
-    assert len(axis_labels) == len(set(axis_labels))
-    assert any("GMT+2" in label for label in axis_labels)
-    assert any("GMT+1" in label for label in axis_labels)
-    for index, suffix in enumerate(["GMT+2", "GMT+1"]):
+    assert all(re.fullmatch(r"\d{2}:\d{2}", label) for label in axis_labels)
+    assert axis_labels.count("02:00") == 2
+    for index in range(2):
         point = page.evaluate(
             "index=>Chart.getChart(document.getElementById('price-chart')).getDatasetMeta(0).data[index].getCenterPoint()",
             index,
         )
         canvas.hover(position={"x": point["x"], "y": point["y"]})
         expect(page.locator("#price-chart-tooltip .chart-tooltip-title")).to_have_text(
-            f"10/25/2026, 2:30 AM {suffix}"
+            "10/25/2026, 2:30 AM"
         )

@@ -6,7 +6,7 @@ bindSettingsActions();
 const find = id => document.getElementById(id);
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const seconds = value => Number.isFinite(value) ? `${value.toLocaleString(undefined,{maximumFractionDigits:1})} s` : "Not recorded";
-const clock = value => when(value,{hour:"2-digit",minute:"2-digit",timeZoneName:"short"});
+const clock = value => when(value,{hour:"2-digit",minute:"2-digit"});
 const bottomLegend = {id:"performanceBottomLegend",beforeLayout(chart){chart.options.plugins.legend.position="bottom";}};
 const QUARTER_MILLISECONDS = 15 * 60 * 1000;
 const MAX_TIME_LABELS = 8;
@@ -30,14 +30,14 @@ async function detail(row) {
  const version = ++detailVersion, dialog = find("calculation-detail");
  detailChart?.destroy(); detailChart=null;
  find("calculation-summary").textContent="Loading calculation details.";
- find("calculation-time").textContent=when(row.started_at,{timeZoneName:"short"});
+ find("calculation-time").textContent=when(row.started_at);
  for(const id of ["calculation-facts","calculation-cost-note","calculation-proof","calculation-samples"])find(id).replaceChildren();
  if(!dialog.open)dialog.showModal();
  try { row = await api(`v1/planning-performance/${encodeURIComponent(row.id)}`); }
  catch(error){if(version===detailVersion && dialog.open)find("calculation-summary").textContent=error.message;return;}
  if(version!==detailVersion || !dialog.open)return;
  const samples = row.progress || [], first = samples[0], last = samples.at(-1);
- find("calculation-time").textContent = when(row.started_at,{timeZoneName:"short"});
+ find("calculation-time").textContent = when(row.started_at);
  find("calculation-summary").textContent = `${outcome(row)}: Total ${seconds(row.duration_seconds)}. ${row.first_candidate_seconds != null ? `First candidate observed after ${seconds(row.first_candidate_seconds)}.` : "First candidate time was not recorded."}`;
  const facts = find("calculation-facts"); facts.replaceChildren();
  for (const [label,value] of [["Preparation",seconds(row.build_seconds)],["Service priorities",row.financial_started_seconds == null ? "Not separately recorded" : seconds(Math.max(0,row.financial_started_seconds - row.build_seconds))],["Strategy",row.strategy === "minimize consumption" ? "Minimize consumption" : "Minimize cost"],["Calculation intervals",row.intervals],["Solver time budget",seconds(row.time_limit_seconds)],["Result",outcome(row)]]) {
@@ -62,7 +62,7 @@ function render() {
  const plottedRows = rows.filter(row => find("performance-extra").checked || new Date(row.started_at).getUTCMinutes() % 15 === 0);
  find("performance-summary").textContent = rows.length ? `${rows.length} completed calculations: Longest ${seconds(Math.max(...rows.map(row=>row.duration_seconds)))}.` : "No completed calculations were recorded for this day. History begins after this feature is installed.";
  const series = [["First candidate observed","#0072b2",row=>row.first_candidate_seconds],["Further calculation","#b45f00",row=>row.first_candidate_seconds == null ? null : Math.max(0,row.duration_seconds-row.first_candidate_seconds)],["First time unknown","#73528d",row=>row.first_candidate_seconds == null ? row.duration_seconds : null]];
- chart = new Chart(find("performance-chart"),{plugins:[{id:"quarterWidths",afterDatasetsUpdate(chart){for(const meta of chart.getSortedVisibleDatasetMetas()){if(meta.type!=="bar")continue;for(const bar of meta.data)bar.width=Math.abs(chart.scales.x.getPixelForValue(minimum+QUARTER_MILLISECONDS)-chart.scales.x.getPixelForValue(minimum))*0.9;}}}],type:"bar",data:{datasets:series.map(([label,color,value])=>({label,backgroundColor:color,data:plottedRows.map(row=>({x:Date.parse(row.started_at),y:value(row)})),barPercentage:0.9,categoryPercentage:1}))},options:{responsive:true,maintainAspectRatio:false,animation:false,onClick:(_event,elements)=>{if(elements[0] && chart.data.datasets[elements[0].datasetIndex].type!=="line")detail(plottedRows[elements[0].index]);},scales:{x:{type:"linear",offset:false,min:minimum,max:maximum,stacked:true,afterBuildTicks:scale=>{const stride=Math.ceil((maximum-minimum)/QUARTER_MILLISECONDS/(MAX_TIME_LABELS-1))*QUARTER_MILLISECONDS;scale.ticks=[];for(let time=minimum;time<=maximum;time+=stride)scale.ticks.push({value:time});},ticks:{maxTicksLimit:MAX_TIME_LABELS,maxRotation:0,minRotation:0,callback:value=>when(value,{hour:"2-digit",minute:"2-digit",hourCycle:"h23"})}},y:{stacked:true,min:0,title:{display:true,text:"Seconds"}}},plugins:{legend:{display:false},tooltip:{filter:item=>item.dataset.type!=="line",callbacks:{title:items=>when(items[0].parsed.x,{timeZoneName:"short"}),afterBody:items=>plottedRows[items[0].dataIndex].first_candidate_seconds == null ? "First candidate time not recorded. The full bar shows total duration." : outcome(plottedRows[items[0].dataIndex])}}}}});
+ chart = new Chart(find("performance-chart"),{plugins:[{id:"quarterWidths",afterDatasetsUpdate(chart){for(const meta of chart.getSortedVisibleDatasetMetas()){if(meta.type!=="bar")continue;for(const bar of meta.data)bar.width=Math.abs(chart.scales.x.getPixelForValue(minimum+QUARTER_MILLISECONDS)-chart.scales.x.getPixelForValue(minimum))*0.9;}}}],type:"bar",data:{datasets:series.map(([label,color,value])=>({label,backgroundColor:color,data:plottedRows.map(row=>({x:Date.parse(row.started_at),y:value(row)})),barPercentage:0.9,categoryPercentage:1}))},options:{responsive:true,maintainAspectRatio:false,animation:false,onClick:(_event,elements)=>{if(elements[0] && chart.data.datasets[elements[0].datasetIndex].type!=="line")detail(plottedRows[elements[0].index]);},scales:{x:{type:"linear",offset:false,min:minimum,max:maximum,stacked:true,afterBuildTicks:scale=>{const stride=Math.ceil((maximum-minimum)/QUARTER_MILLISECONDS/(MAX_TIME_LABELS-1))*QUARTER_MILLISECONDS;scale.ticks=[];for(let time=minimum;time<=maximum;time+=stride)scale.ticks.push({value:time});},ticks:{maxTicksLimit:MAX_TIME_LABELS,maxRotation:0,minRotation:0,callback:value=>when(value,{hour:"2-digit",minute:"2-digit",hourCycle:"h23"})}},y:{stacked:true,min:0,title:{display:true,text:"Seconds"}}},plugins:{legend:{display:false},tooltip:{filter:item=>item.dataset.type!=="line",callbacks:{title:items=>when(items[0].parsed.x),afterBody:items=>plottedRows[items[0].dataIndex].first_candidate_seconds == null ? "First candidate time not recorded. The full bar shows total duration." : outcome(plottedRows[items[0].dataIndex])}}}}});
  const budgets = [...new Set(rows.map(row=>row.time_limit_seconds).filter(Number.isFinite))];
  if (budgets.length === 1) {
   const budget = budgets[0];

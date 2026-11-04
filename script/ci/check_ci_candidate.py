@@ -20,6 +20,7 @@ CHECKS_PER_PAGE = 100
 MAX_CHECK_PAGES = 10
 GITHUB_ACTIONS_APP_ID = 15368
 CODERABBIT_APP_ID = 347564
+KODY_APP_ID = 413034
 CODEQL_APP_ID = 57789
 MAX_PR_FILES = 150
 PREREQUISITE_CHECKS = (
@@ -140,6 +141,32 @@ def require_coderabbit_review(checks):
         raise VerificationError(
             "CodeRabbit scope, workspace, analysis or feedback did not complete"
         )
+
+
+def require_automated_review(checks):
+    """Accept substantive current-head CodeRabbit or Kody evidence from the actual provider app.
+
+    Provider completion does not dispose of findings. The caller still checks all
+    review threads, and the operator must evaluate outside-diff feedback too.
+    """
+    try:
+        require_coderabbit_review(checks)
+        return
+    except VerificationError as error:
+        coderabbit_error = str(error)
+    latest = latest_check(checks, "Kody Code Review", KODY_APP_ID)
+    if latest and latest.get("status") == "completed" and latest.get("conclusion") == "success":
+        output = latest.get("output")
+        if (
+            isinstance(output, dict)
+            and output.get("title") == "Code Review Complete"
+            and output.get("summary")
+            == "Review finished successfully. Suggestions (if any) were posted as PR/file comments."
+        ):
+            return
+    raise VerificationError(
+        f"No completed current-head CodeRabbit or Kody-ai review. CodeRabbit: {coderabbit_error}"
+    )
 
 
 def runner_labels(event, repository):
@@ -275,7 +302,7 @@ def check(event, repository, client):
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
     if current.get("user", {}).get("login") != "dependabot[bot]":
-        require_coderabbit_review(checks)
+        require_automated_review(checks)
     require_resolved_threads(repository, number, client)
     final_count = current_pr().get("changed_files")
     if type(final_count) is not int or final_count != file_count:

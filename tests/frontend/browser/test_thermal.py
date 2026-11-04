@@ -1,5 +1,6 @@
 """Render the real thermal settings modules on desktop and mobile with controlled HTTP responses."""
 
+import re
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -420,8 +421,8 @@ def test_thermal_chart_and_measured_request_separation_are_responsive(thermal_mo
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
-def test_thermal_tooltips_distinguish_both_occurrences_of_the_wintertime_hour(thermal_monitor_page):
-    """Repeated 02:30 times have distinct axis labels and GMT+2/GMT+1 tooltip endpoints on desktop, tablet and mobile."""
+def test_thermal_axes_and_tooltips_omit_timezone_names_during_wintertime(thermal_monitor_page):
+    """Repeated 02:30 times retain separate points without timezone names in axes or tooltips on desktop, tablet and mobile."""
     page, state = thermal_monitor_page
     state["document"]["devices"][0]["planned"] = [
         {
@@ -439,17 +440,16 @@ def test_thermal_tooltips_distinguish_both_occurrences_of_the_wintertime_hour(th
     axis_labels = canvas.evaluate(
         "canvas=>Chart.getChart(canvas).scales.x.ticks.map(tick=>tick.label)"
     )
-    assert len(axis_labels) == len(set(axis_labels))
-    assert any("GMT+2" in label for label in axis_labels)
-    assert any("GMT+1" in label for label in axis_labels)
-    for index, suffix in enumerate(["GMT+2", "GMT+1"]):
+    assert axis_labels
+    assert all(re.fullmatch(r"\d{2}:\d{2}", label) for label in axis_labels)
+    for index in range(2):
         point = canvas.evaluate(
             "(canvas,index)=>Chart.getChart(canvas).getDatasetMeta(0).data[index].getCenterPoint()",
             index,
         )
         canvas.hover(position={"x": point["x"], "y": point["y"]})
         assert canvas.evaluate("canvas=>Chart.getChart(canvas).tooltip.title") == [
-            f"10/25/2026, 2:30 AM {suffix} to 02:45 AM {suffix}"
+            "10/25/2026, 2:30 AM to 02:45 AM"
         ]
 
 
