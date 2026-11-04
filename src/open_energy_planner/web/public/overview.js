@@ -458,6 +458,7 @@ async function showPlan(signal) {
         return true;
     } catch (error) {
         if (request === selectionRequest) {
+            renderedPlanId = null;
             $("overview-status").textContent = error.message;
             $("plan-evidence-status").textContent = $("evidence-issue").textContent = `Original evidence could not be loaded. ${error.message}`;
             $("inspect-values").textContent = "Original interval values could not be loaded.";
@@ -496,8 +497,7 @@ async function refreshLatestPlan() {
         const needsPlan = renderedPlanId !== latest.plan_id;
         if (followingLatest && (needsPlan || priceRefreshPending)) {
             const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
-            const [, pricesUpdated] = await Promise.all([needsPlan ? showPlan(signal) : true, currentPrices(signal)]);
-            priceRefreshPending = pricesUpdated !== true;
+            await Promise.all([needsPlan ? showPlan(signal) : true, currentPrices(signal)]);
         }
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
     finally { planRefreshBusy = false; }
@@ -605,9 +605,11 @@ async function currentPrices(signal) {
         $("current-price-chart").closest(".chart-wrap").hidden = !intervals.length;
         chart("current-price-chart", series, {unit: `${data.currency || "EUR"}/kWh`});
         $("current-price-status").textContent = data.issue ? `Current prices unavailable: ${optionLabel(data.issue)}` : `Saved contract rates as of: ${when(data.as_of)}: ${intervals.some(interval => interval.bonus_issue) ? "Bonus eligibility unavailable: Missing values remain gaps." : data.has_bonus ? "Bonus volume is not applied in this preview." : "No bonus applies in this period."}${data.coverage === "shortened_horizon" ? " Market-price coverage ends early." : ""}`;
+        priceRefreshPending = false;
         return true;
     } catch (error) {
         if (request !== priceRequest) return;
+        priceRefreshPending = true;
         currentPriceWindow = null;
         $("current-price-chart").closest(".chart-wrap").hidden = true;
         chart("current-price-chart", [], {unit: "EUR/kWh"});

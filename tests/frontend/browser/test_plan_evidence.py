@@ -168,6 +168,46 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("failed_view", ["plan", "prices"])
+def test_failed_overview_reload_recovers_without_a_new_publication(
+    automatic_plan_overview, failed_view
+):
+    """Retry the same latest plan or prices after a failed manual reload without redrawing good data."""
+    state = automatic_plan_overview
+    page = state["page"]
+    current = state["plans"][0]["plan_id"]
+    state["current_buy_price"] = 0.88
+    if failed_view == "plan":
+        state["failed_plans"].add(current)
+    else:
+        state["failed_prices"] = True
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    status = "#overview-status" if failed_view == "plan" else "#current-price-status"
+    expect(page.locator(status)).to_have_text("Cannot read this view (503).")
+    if failed_view == "prices":
+        page.wait_for_function("""() => window.initialPlanChart !==
+            Chart.getChart(document.getElementById('plan-chart'))""")
+        page.evaluate(
+            "window.reloadedPlanChart = Chart.getChart(document.getElementById('plan-chart'))"
+        )
+    page.wait_for_load_state("networkidle")
+    comparisons = state["comparison_reads"].count(current)
+    state["failed_plans"].clear()
+    state["failed_prices"] = False
+    page.clock.run_for(15000)
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    expect(page.locator("#plan-evidence-status")).not_to_contain_text("could not be loaded")
+    expect(page.locator("#plan-version")).to_have_value(current)
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
+        .data.datasets[1].data[0].y === 0.88""")
+    assert state["comparison_reads"].count(current) == comparisons + (failed_view == "plan")
+    if failed_view == "prices":
+        assert page.evaluate("""window.reloadedPlanChart ===
+            Chart.getChart(document.getElementById('plan-chart'))""")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("hung_view", ["listing", "savings", "comparison", "prices"])
 def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_overview, hung_view):
     """A bounded overview load releases polling even when one of its view reads never responds."""
