@@ -106,8 +106,8 @@ def test_savings_overview_compares_realized_costs_and_original_plan(app_page):
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("aggregated", [False, True])
-def test_savings_chart_breaks_missing_coverage_and_labels_utc_bins(app_page, aggregated):
-    """Renderer-only sparse intervals/bins draw separate segments. Aggregated dates stay UTC on desktop/mobile."""
+def test_savings_chart_breaks_missing_coverage_without_timezone_labels(app_page, aggregated):
+    """Renderer-only sparse intervals/bins draw separate segments. Aggregated dates keep UTC binning without timezone labels on desktop/mobile."""
     page, url = app_page
     first = (datetime.now(UTC) - timedelta(days=1)).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -145,5 +145,10 @@ def test_savings_chart_breaks_missing_coverage_and_labels_utc_bins(app_page, agg
         == 1
     )
     if aggregated:
-        expect(page.locator("#savings-chart-range")).to_contain_text("2026-10-20 UTC")
-        expect(page.locator("#savings-chart-range")).to_contain_text("2026-10-23 UTC")
+        expect(page.locator("#savings-chart-range")).to_have_text("From 2026-10-20 to 2026-10-23")
+        assert (
+            page.locator("#savings-chart").evaluate(
+                "canvas => Chart.getChart(canvas).options.scales.x.title.text"
+            )
+            == "Calendar date"
+        )
