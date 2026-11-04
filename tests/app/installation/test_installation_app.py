@@ -117,21 +117,37 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
 ):
     """Live settings produce plans despite optional reference faults. Energy charge links create a retained second battery configuration."""
     if reference_error:
-        from open_energy_planner.savings import forecast_state
+        from open_energy_planner.savings import forecast
 
-        def fail_reference(*_args):
+        original_comparison = forecast.comparison
+
+        def fail_reference(*arguments, **keywords):
             """Emulate a failed reference read without breaking the independently healthy plan archive."""
+            if keywords.get("without_battery"):
+                return original_comparison(*arguments, **keywords)
             raise reference_error(
                 "Reference forecast context is missing"
                 if reference_error is PendingSettlement
                 else "postgresql://private:SECRET_PASSWORD@private.invalid/archive?token=SECRET_TOKEN"
             )
 
-        monkeypatch.setattr(forecast_state, "initial_state", fail_reference)
+        monkeypatch.setattr(forecast, "comparison", fail_reference)
 
     async def scenario():
         """Use real HTTP, physical forecasting and HiGHS. Only external weather and market responses are fixtures."""
         now = datetime.now(UTC)
+        from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+        stale_reference = {
+            "end": (now - timedelta(days=3)).isoformat(),
+            "reference_stored": {f"bat{index}": 0 for index in range(count)},
+            "actual_stored": {f"bat{index}": 1 for index in range(count)},
+            "capacities": {f"bat{index}": 2 for index in range(count)},
+        }
+        with closing(SqlPlanRepository(tmp_path)) as archive:
+            SqlDocuments(archive.engine, "savings").write(
+                "physical-reference.json", stale_reference
+            )
         start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
         price = PriceSeries(
             "fixture",
@@ -280,6 +296,21 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                 plan = state["plan"]
                 WirePlan.parse(plan, config["revision"])
                 assert plan["device_commands"] is True
+                if not reference_error:
+                    archived = read_plan(tmp_path, plan["plan_id"])
+                    reference = archived["reference_forecast"]
+                    assert reference["reference_start"] == {
+                        "stored": None,
+                        "counters": {},
+                        "status": "measured_common_start",
+                        "estimated": False,
+                    }
+                    assert "reference_forecast_issue" not in archived
+                    with closing(SqlPlanRepository(tmp_path)) as archive:
+                        assert (
+                            SqlDocuments(archive.engine, "savings").read("physical-reference.json")
+                            == stale_reference
+                        )
                 if reference_error:
                     archived = read_plan(tmp_path, plan["plan_id"])
                     expected_issue = (

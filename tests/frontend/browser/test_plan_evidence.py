@@ -2,11 +2,34 @@
 
 from copy import deepcopy
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_future_strategy_choice_shares_measured_soc_and_shows_extra_saving(app_page):
+    """Both forecasts spend the same initial 2 kWh. Equal costs show zero extra saving on desktop/mobile."""
+    page, url = app_page
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#self-consumption-chart")).to_be_visible()
+    expect(page.locator("#expected-benefit")).to_contain_text(
+        "Expected extra saving with OEP versus self-consumption from the same measured starting SoC: 0.00 EUR"
+    )
+    expect(page.locator("#expected-benefit")).to_contain_text(
+        "Includes the difference in remaining battery value"
+    )
+    expect(page.locator("#expected-benefit")).not_to_contain_text("provisional")
+    expect(page.locator("#self-consumption-issue")).to_be_empty()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    page.locator("#expected-benefit").scroll_into_view_if_needed()
+    Path("results/ci").mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=f"results/ci/common-soc-choice-{page.viewport_size['width']}.png")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)

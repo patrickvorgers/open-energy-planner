@@ -319,6 +319,7 @@ async function showPlan() {
         $("self-consumption-costs").textContent = describeCosts(self?.reference_costs) + `: Expected benefit versus without battery: ${money(selfConsumption?.expected_savings_vs_without_battery)} ${currency}.`;
         $("ems-costs").textContent = describeCosts(baseline?.ems_costs || self?.ems_costs) + `: Expected benefit versus without battery: ${money(baseline?.expected_savings)} ${currency}.`;
         let message = `Original expected benefit versus without battery over this horizon: ${money(baseline?.expected_savings)} ${currency}: Includes storage and OEP. Excludes investment costs. All graph costs use the original contract.`;
+        if (self?.reference_start?.status === "measured_common_start") message = `Expected extra saving with OEP versus self-consumption from the same measured starting SoC: ${money(self.expected_savings)} ${currency}: Includes the difference in remaining battery value. ` + message;
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
         if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
         if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";

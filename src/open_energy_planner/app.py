@@ -197,7 +197,6 @@ def create_app(
                 from dataclasses import asdict
 
                 from .savings.forecast import comparison
-                from .savings.forecast_state import initial_state
 
                 document["comparison_bindings"] = {
                     "terms": [asdict(energy_term) for energy_term in demand.configuration.terms],
@@ -206,17 +205,7 @@ def create_app(
                     **((setup_catalogue.value or {}).get("suggestions", {}).get("settlement", {})),
                 }
                 try:
-                    reference_start = await asyncio.to_thread(
-                        initial_state,
-                        savings_runtime.store,
-                        savings_runtime.documents,
-                        repository,
-                        document,
-                        contracts.current,
-                    )
-                    document["reference_forecast"] = await asyncio.to_thread(
-                        comparison, document, reference_start
-                    )
+                    document["reference_forecast"] = await asyncio.to_thread(comparison, document)
                 # Optional reference defects cannot block publication. The helper logs a value-free stack.
                 except Exception as error:  # noqa: BLE001
                     document["reference_forecast_issue"] = request_error_message(
