@@ -224,6 +224,19 @@ class DemandRuntime:
             self.store.archive(forecast, selected)
         if candidate is not None and not consumers[1]:
             self.store.archive(candidate, ridge)
+        candidates_path = "quality-candidates-" + forecast.version + ".json"
+        if not self.store.documents.exists(candidates_path):
+            self.store.documents.write(
+                candidates_path,
+                {
+                    "forecasts": [
+                        {"version": alternative.version, "model": alternative.model}
+                        for alternative in (baseline_forecast, candidate)
+                        if alternative is not None
+                        and not (alternative is candidate and consumers[1])
+                    ]
+                },
+            )
         if composite is not None:
             self.store.documents.write(
                 "consumer-forecast-" + composite.version + ".json",

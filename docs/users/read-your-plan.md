@@ -37,3 +37,20 @@ For virtual battery commands, positive W means discharge and negative W means ch
 ## Respond to a warning
 
 Read the stated action and affected input before changing configuration. Check the measurement source and time, not just whether an entity exists. Missing history, an absent forecast and a failed connection require different remedies. See [troubleshooting](troubleshooting.md) and the [notification guide](../development/PLANNING-NOTIFICATIONS.md).
+
+## Compare forecasts with actual energy
+
+Open **Forecast quality**, choose a day, then select **Household**, **Solar** or
+**Devices**. The same day applies to all three sections. Solar and Devices show
+one selected source at a time. Measured energy appears as bars. The original
+selected forecast uses a solid line and retained alternatives use dashed or
+dotted lines. A complete comparable day is required for accuracy scores.
+
+For Solar, optionally enable **Forecast irradiance** and **Satellite estimate**.
+These use the right-hand W/m² axis, separate from production in kWh. The satellite
+series estimates sunlight from satellite observations. It is not a sensor on your
+roof. **Satellite data complete through** identifies the last uninterrupted hour
+available from the day's start. **Last fetched** only indicates when the app
+retrieved the data. Missing hours stay missing and do not affect the separate
+comparison with measured solar production. Use **Refresh evidence** to retrieve
+updated observations without replacing the original forecast.

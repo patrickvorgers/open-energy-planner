@@ -1,5 +1,6 @@
 """Responsive app-owned setup against real authenticated API/storage, without physical devices."""
 
+import re
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -136,48 +137,31 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         "Current ML model"
     )
     expect(page.locator("#quality-charts .quality-current-model")).to_contain_text(
-        "Simulated baseline cost: 1.23 EUR: Candidate: 0.12 EUR"
+        re.compile(r"Simulated baseline cost: 1[.,]23 EUR: Candidate: 0[.,]12 EUR")
     )
     expect(page.locator("#quality-charts .quality-current-model")).to_contain_text(
-        "Baseline grid import: 1.5 kWh: Candidate: 1.2 kWh"
+        re.compile(r"Baseline grid import: 1[.,]5 kWh: Candidate: 1[.,]2 kWh")
     )
     assert page.locator("#quality-charts").locator("canvas").count() == 1
     data = page.locator("#quality-chart-0").evaluate(
-        "canvas => {const chart = Chart.getChart(canvas);return {predicted:chart.data.datasets[0].data.map(row=>row.y),measured:chart.data.datasets[1].data.map(row=>row.y),step:chart.options.scales.x.ticks.stepSize};}"
+        "canvas => {const chart = Chart.getChart(canvas);return {predicted:chart.data.datasets[1].data.map(row=>row.y),measured:chart.data.datasets[0].data.map(row=>row.y),step:chart.options.scales.x.ticks.stepSize};}"
     )
     assert data == {"predicted": [1] * 24, "measured": [0.5, None, 2] + [1] * 21, "step": 3600000}
-    overlay = page.locator("#quality-chart-0").evaluate(
-        """canvas => {
-            const chart = Chart.getChart(canvas);
-            return {
-                types: chart.data.datasets.map(dataset => dataset.type),
-                orders: chart.data.datasets.map(dataset => dataset.order),
-                lines: chart.data.datasets.slice(2).map(dataset => dataset.data.map(row => row.y)),
-                gaps: chart.data.datasets.slice(2).map(dataset => dataset.spanGaps),
-                segments: chart.getDatasetMeta(3).dataset.segments.map(segment => [segment.start, segment.end]),
-                hiddenCanvasLegend: chart.options.plugins.legend.display === false
-            };
-        }"""
-    )
+    overlay = page.locator("#quality-chart-0").evaluate("""canvas => {
+        const chart = Chart.getChart(canvas);
+        return {types: chart.data.datasets.map(dataset => dataset.type),
+                measuredOutline: chart.data.datasets[0].borderWidth,
+                activeDash: chart.data.datasets[1].borderDash,
+                hiddenCanvasLegend: chart.options.plugins.legend.display === false};
+    }""")
     assert overlay == {
-        "types": ["bar", "bar", "line", "line"],
-        "orders": [1, 1, 0, 0],
-        "lines": [[1] * 24, [0.5, None, 2] + [1] * 21],
-        "gaps": [False, False],
-        "segments": [[0, 0], [2, 23]],
+        "types": ["bar", "line"],
+        "measuredOutline": 0,
+        "activeDash": [],
         "hiddenCanvasLegend": True,
     }
     expect(page.locator(".quality-evidence-controls input")).to_have_count(2)
-    expect(page.locator(".quality-evidence-controls .series-swatch")).to_have_count(2)
     original_size = page.viewport_size
-    line_alignment = """canvas => {
-        const chart = Chart.getChart(canvas);
-        return [0, 1].every(datasetIndex => !chart.isDatasetVisible(datasetIndex) ||
-            chart.getDatasetMeta(datasetIndex + 2).data.every((point, pointIndex) => {
-                const bar = chart.getDatasetMeta(datasetIndex).data[pointIndex];
-                return point.skip || (Math.abs(point.x - bar.x) < 0.01 && Math.abs(point.y - bar.y) < 0.01);
-            }));
-    }"""
     alternate_size = {"width": 1000 if original_size["width"] <= 640 else 375, "height": 900}
     for viewport in (original_size, alternate_size, original_size):
         page.set_viewport_size(viewport)
@@ -192,33 +176,10 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
             }""",
             arg={"breakpoint": MOBILE_CHART_LEGEND_BREAKPOINT_PX, "width": viewport["width"]},
         )
-        assert page.locator("#quality-chart-0").evaluate(line_alignment)
         day_control = page.get_by_label("Day", exact=True).bounding_box()
-        device_control = page.get_by_label("Device", exact=True).bounding_box()
         refresh_button = page.get_by_role("button", name="Refresh evidence", exact=True)
         refresh_box = refresh_button.bounding_box()
-        assert (
-            abs(
-                day_control["y"]
-                + day_control["height"]
-                - device_control["y"]
-                - device_control["height"]
-            )
-            < 1
-        )
-        if viewport["width"] > MOBILE_CHART_LEGEND_BREAKPOINT_PX:
-            assert (
-                abs(
-                    refresh_box["y"]
-                    + refresh_box["height"]
-                    - day_control["y"]
-                    - day_control["height"]
-                )
-                < 1
-            )
-        else:
-            assert abs(refresh_box["x"] - day_control["x"]) < 1
-            assert refresh_box["y"] >= day_control["y"] + day_control["height"]
+        assert day_control["y"] < page.locator("#quality-subjects").bounding_box()["y"]
         assert refresh_box["height"] >= 44
     page.screenshot(
         path=f"results/ci/quality-refresh-alignment-{original_size['width']}-{'ingress' in url}.png",
@@ -232,7 +193,10 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
             return chart.tooltip.body.map(row => row.lines.join(' '));
         }"""
     )
-    assert tooltip == ["Predicted     1.000 kWh", "Measured  Unavailable"]
+    assert tooltip == [
+        "Measured: Unavailable kWh",
+        "Original weekday model: Original choice: 1.000 kWh",
+    ]
     body["series"][0]["rows"] = [
         {
             **row,
@@ -274,7 +238,9 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
     expect(page.locator("#quality-day")).to_have_value("2026-10-26")
     expect(page.locator("#quality-charts")).to_contain_text("24 of 24 hours measured.")
-    expect(page.locator("#quality-charts .quality-daily")).to_contain_text("Difference-0.5 kWh")
+    expect(page.locator("#quality-charts .quality-daily")).to_contain_text(
+        re.compile(r"Difference-0[.,]5 kWh")
+    )
     assert (
         page.locator("#quality-chart-0").evaluate(
             "canvas => Chart.getChart(canvas).data.datasets[0].data.length"
@@ -286,36 +252,36 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     )
     assert ticks
     assert all(value % 3600000 == 0 for value in ticks)
-    page.get_by_role("checkbox", name="Predicted", exact=True).uncheck()
-    assert page.locator("#quality-chart-0").evaluate(line_alignment)
+    page.get_by_role(
+        "checkbox", name="Original weekday model: Original choice", exact=True
+    ).uncheck()
     assert page.locator("#quality-chart-0").evaluate(
-        "canvas => [0, 2].every(index => !Chart.getChart(canvas).isDatasetVisible(index))"
+        "canvas => !Chart.getChart(canvas).isDatasetVisible(1)"
     )
-    page.get_by_role("checkbox", name="Predicted", exact=True).check()
-    assert page.locator("#quality-chart-0").evaluate(line_alignment)
+    page.get_by_role("checkbox", name="Original weekday model: Original choice", exact=True).check()
     assert page.locator("#quality-chart-0").evaluate(
-        "canvas => [0, 2].every(index => Chart.getChart(canvas).isDatasetVisible(index))"
+        "canvas => Chart.getChart(canvas).isDatasetVisible(1)"
     )
     measured = page.get_by_role("checkbox", name="Measured", exact=True)
     measured.focus()
     measured.press("Space")
-    assert page.locator("#quality-chart-0").evaluate(line_alignment)
     assert page.locator("#quality-chart-0").evaluate(
-        "canvas => { const chart = Chart.getChart(canvas); return !chart.isDatasetVisible(1) && !chart.isDatasetVisible(3) && chart.isDatasetVisible(0) && chart.isDatasetVisible(2); }"
+        "canvas => { const chart = Chart.getChart(canvas); return !chart.isDatasetVisible(0) && chart.isDatasetVisible(1); }"
     )
     measured.press("Space")
-    assert page.locator("#quality-chart-0").evaluate(line_alignment)
     assert page.locator("#quality-chart-0").evaluate(
-        "canvas => [1, 3].every(index => Chart.getChart(canvas).isDatasetVisible(index))"
+        "canvas => Chart.getChart(canvas).isDatasetVisible(0)"
     )
     page.get_by_text("Hourly evidence and provenance", exact=True).click()
-    expect(page.locator("#quality-charts")).to_contain_text("Relative daily error: 2.0%")
-    expect(page.locator("#quality-charts table")).to_contain_text("Eligible")
+    expect(page.locator("#quality-charts")).to_contain_text(
+        re.compile(r"Relative daily error: 2[.,]0%")
+    )
+    expect(page.locator("#quality-charts details table")).to_contain_text("Eligible")
     expected_hour = page.evaluate(
         "value => new Date(value).toLocaleString(undefined, {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/Amsterdam'})",
         start.isoformat(),
     )
-    expect(page.locator("#quality-charts table")).to_contain_text(expected_hour)
+    expect(page.locator("#quality-charts details table")).to_contain_text(expected_hour)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.route(
         "**/v1/forecast-quality/days?before=2026-10-27",
@@ -331,7 +297,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         "2026-10-25",
     ]
     expect(page.locator("#quality-day")).to_have_value("2026-10-26")
-    expect(page.locator("#quality-charts table")).to_have_count(1)
+    expect(page.locator("#quality-charts details table")).to_have_count(1)
     # Repeated local hours keep independent rows without exposing timezone names.
     fold_body = deepcopy(body)
     fold_body.update(day="2026-10-25", start="2026-10-24T22:00:00Z", end="2026-10-25T23:00:00Z")
@@ -347,7 +313,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         const options = {timeZone: 'Europe/Amsterdam', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'};
         return [0, 1, 2].map(hour => new Date(`2026-10-25T0${hour}:00:00Z`).toLocaleString(undefined, options));
     }""")
-    expect(page.locator("#quality-charts tbody tr td:first-child")).to_have_text(
+    expect(page.locator("#quality-charts details tbody tr td:first-child")).to_have_text(
         [local_labels[0] + " (1 of 2)", local_labels[1] + " (2 of 2)", local_labels[2]]
     )
     canvas = page.locator("#quality-chart-0")
@@ -444,7 +410,7 @@ def test_model_status_distinguishes_actual_forecast_preference_and_decision_evid
         page.locator('#quality-models details[data-model-source="household"]')
     ).to_have_attribute("open", "")
     expect(page.locator("#quality-models")).to_contain_text(
-        "Simulated baseline cost: 0.50 EUR: Candidate: 0.10 EUR"
+        re.compile(r"Simulated baseline cost: 0[.,]50 EUR: Candidate: 0[.,]10 EUR")
     )
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
@@ -495,13 +461,15 @@ def test_quality_ready_device_is_independent_of_an_untrained_selected_device(app
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     rows = page.locator("#quality-models article")
-    expect(rows).to_have_count(2)
+    page.get_by_role("button", name="Devices", exact=True).click()
+    expect(rows).to_have_count(1)
     boiler = rows.filter(has=page.get_by_role("heading", name="Boiler", exact=True))
     boiler.get_by_text("Current model and learning", exact=True).click()
     expect(boiler.locator("dd")).to_have_text(
         ["weekday-hour-v2", "Shadow waiting for decision evidence", "Not used"]
     )
     expect(boiler).not_to_contain_text("History or weather not ready")
+    page.get_by_label("Device", exact=True).select_option("sensor.dryer")
     dryer = rows.filter(has=page.get_by_role("heading", name="New dryer", exact=True))
     dryer.get_by_text("Current model and learning", exact=True).click()
     expect(dryer).to_contain_text("History or weather not ready")
@@ -557,18 +525,19 @@ def test_quality_current_models_filter_without_midnight_history_and_clear_failur
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     rows = page.locator("#quality-models article")
-    expect(rows).to_have_count(3)
+    expect(rows).to_have_count(1)
     expect(rows.first.locator("dd")).to_have_text(
         ["Learned weekday/hour profile", "Active", "Baseline", "0 of 3 required"]
     )
-    page.get_by_label("Device", exact=True).select_option("roof")
+    page.get_by_role("button", name="Solar", exact=True).click()
+    page.get_by_label("Solar source", exact=True).select_option("roof")
     expect(rows).to_have_count(1)
     expect(rows.locator("h2")).to_have_text("SolarEdge lifetime energy")
     page.get_by_text("Current model and learning", exact=True).click()
     expect(rows).to_contain_text("production prevented by curtailment")
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
     expect(rows.locator("details")).to_have_attribute("open", "")
-    page.get_by_label("Device", exact=True).select_option("")
+    page.get_by_role("button", name="Household", exact=True).click()
     for width in (1440, 768, 390):
         page.set_viewport_size({"width": width, "height": 1000})
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
@@ -879,7 +848,8 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
         page.get_by_role("navigation").get_by_role("link", name="Device forecasts", exact=True)
     ).to_have_count(0)
     expect(page.get_by_label("Day", exact=True)).to_have_value("2026-10-26")
-    expect(page.locator("#quality-charts canvas")).to_have_count(2)
+    page.get_by_role("button", name="Devices", exact=True).click()
+    expect(page.locator("#quality-charts canvas")).to_have_count(1)
     page.get_by_label("Device", exact=True).select_option("heat")
     expect(page.locator("#quality-charts canvas")).to_have_count(1)
     expect(page.locator("#quality-charts h2")).to_have_text("Heat pump")
@@ -895,21 +865,21 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     expect(page.locator(".quality-daily")).to_contain_text("Not scored yet")
     assert (
         page.evaluate(
-            "Chart.getChart(document.getElementById('quality-chart-0')).data.datasets[1].data[1].y"
+            "Chart.getChart(document.getElementById('quality-chart-0')).data.datasets[0].data[1].y"
         )
         is None
     )
     source["rows"][0]["measured_kwh"] = 0
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
     page.wait_for_function(
-        "() => Chart.getChart(document.getElementById('quality-chart-0'))?.data.datasets[3]?.data[0].y === 0"
+        "() => Chart.getChart(document.getElementById('quality-chart-0'))?.data.datasets[0]?.data[0].y === 0"
     )
     assert page.locator("#quality-chart-0").evaluate(
         """canvas => {
             const chart = Chart.getChart(canvas);
-            return chart.data.datasets[1].data[0].y === 0
-                && chart.data.datasets[3].data[1].y === null
-                && !chart.getDatasetMeta(3).data[0].skip;
+            return chart.data.datasets[0].data[0].y === 0
+                && chart.data.datasets[0].data[1].y === null
+                && !chart.getDatasetMeta(0).data[0].skip;
         }"""
     )
     capture = Path("results/ci")
@@ -922,7 +892,7 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     page.get_by_label("Day", exact=True).select_option("2026-10-25")
     expect(page.get_by_label("Device", exact=True)).to_have_value("heat")
     expect(page.locator(".quality-daily")).to_contain_text(
-        "Difference1.25 kWh" if score_eligible else "DifferenceNot scored yet"
+        re.compile(r"Difference1[.,]25 kWh") if score_eligible else "DifferenceNot scored yet"
     )
     expect(page.locator(".quality-coverage")).to_contain_text("Complete day")
     expect(page.locator(".quality-coverage")).to_contain_text("25 of 25 hours measured")
@@ -932,13 +902,13 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
         )
     assert (
         page.evaluate(
-            "Chart.getChart(document.getElementById('quality-chart-0')).data.datasets[0].data.map(row => row.y)"
+            "Chart.getChart(document.getElementById('quality-chart-0')).data.datasets[1].data.map(row => row.y)"
         )
         == [0.25] * 25
     )
     assert page.locator("#quality-chart-0").evaluate(
-        "canvas => Chart.getChart(canvas).data.datasets.slice(2).map(dataset => dataset.data.map(row => row.y))"
-    ) == [[0.25] * 25, [0.2] * 25]
+        "canvas => Chart.getChart(canvas).data.datasets.map(dataset => dataset.data.map(row => row.y))"
+    ) == [[0.2] * 25, [0.25] * 25]
     assert (
         page.locator("#quality-charts").bounding_box()["y"]
         < page.locator("#model-selection-help").bounding_box()["y"]
@@ -946,3 +916,171 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
     page.screenshot(path=str(capture / f"unified-forecasts-{suffix}-yesterday.png"), full_page=True)
+
+
+@pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
+@pytest.mark.parametrize(
+    "app_page",
+    [
+        {"width": 1440, "height": 1000},
+        {"width": 768, "height": 1024},
+        {"width": 390, "height": 844},
+    ],
+    indirect=True,
+)
+def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(app_page):
+    """One source at a time retains its day, gaps and original choice while satellite visibility changes no scores."""
+    page, url = app_page
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    start = datetime(2026, 10, 25, 23, tzinfo=UTC)
+    rows = [
+        {
+            "start": (start + timedelta(hours=index)).isoformat(),
+            "end": (start + timedelta(hours=index + 1)).isoformat(),
+            "predicted_kwh": 0.25,
+            "measured_kwh": 0 if index == 0 else None if index == 2 else 0.2,
+            "error_kwh": None,
+            "evaluation_issue": "Incomplete measurements",
+        }
+        for index in range(24)
+    ]
+    metrics = dict.fromkeys(("mae_kwh", "bias_kwh", "rmse_kwh", "wape_percent"))
+    original = {
+        "id": "roof",
+        "scope": "solar",
+        "title": "South roof",
+        "model": "ridge-v2",
+        "model_label": "ML forecast",
+        "forecast_version": "frozen",
+        "issued_at": (start - timedelta(minutes=5)).isoformat(),
+        "last_received_at": None,
+        "measurement_boundary": "AC",
+        "rows": rows,
+        "metrics": metrics,
+        "coverage": {"hours": 24, "measured_hours": 23, "paired_hours": 23},
+        "daily": {
+            "predicted_kwh": 6,
+            "measured_kwh": None,
+            "error_kwh": None,
+            "evaluation_issue": "Incomplete measurements",
+        },
+    }
+    alternative = {
+        **original,
+        "model": "pvwatts-v2",
+        "model_label": "PVWatts",
+        "forecast_version": "physical",
+        "rows": [{**row, "predicted_kwh": 0.3} for row in rows],
+        "daily": {**original["daily"], "predicted_kwh": 7.2},
+    }
+    original["alternatives"] = [alternative]
+    original["radiation"] = {
+        "source": "Open-Meteo: DWD / EUMETSAT MTG",
+        "complete_until": (start + timedelta(hours=2)).isoformat(),
+        "received_at": (start + timedelta(hours=24, minutes=20)).isoformat(),
+        "observed_hours": 23,
+        "hours": 24,
+        "issue": None,
+        "rows": [
+            {
+                "start": row["start"],
+                "end": row["end"],
+                "forecast_w_m2": 100,
+                "satellite_w_m2": None if index == 2 else 0 if index == 0 else 200,
+            }
+            for index, row in enumerate(rows)
+        ],
+    }
+    household = {
+        **original,
+        "id": "household",
+        "scope": "household",
+        "title": "Household consumption",
+        "radiation": None,
+        "alternatives": [],
+    }
+    body = {
+        "day": "2026-10-26",
+        "start": start.isoformat(),
+        "end": (start + timedelta(days=1)).isoformat(),
+        "captured_at": start.isoformat(),
+        "as_of": (start + timedelta(days=2)).isoformat(),
+        "timezone": "Europe/Amsterdam",
+        "issues": [],
+        "series": [household, original],
+        "current_models": {},
+    }
+    page.route(
+        "**/v1/forecast-quality/days",
+        lambda route: route.fulfill(json={"days": ["2026-10-26"], "next_before": None}),
+    )
+    page.route("**/v1/forecast-quality/days/2026-10-26", lambda route: route.fulfill(json=body))
+    page.route(
+        "**/v1/models",
+        lambda route: route.fulfill(
+            json={"models": [], "issue": None, "explanation": "Independent energy evaluation"}
+        ),
+    )
+    page.goto(url + "/quality")
+    if not urlsplit(url).path:
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#quality-charts h2")).to_have_text("Household consumption")
+    solar = page.get_by_role("button", name="Solar", exact=True)
+    solar.focus()
+    solar.press("Space")
+    expect(page.locator("#quality-charts h2")).to_have_text("South roof")
+    expect(page.get_by_label("Day", exact=True)).to_have_value("2026-10-26")
+    expect(page.get_by_label("Solar source", exact=True)).to_have_value("roof")
+    expect(page.locator("#quality-charts canvas")).to_have_count(1)
+    marker = page.evaluate(
+        "value => new Date(value).toLocaleString(undefined, {year:'numeric', month:'numeric', day:'numeric', hour:'numeric', minute:'2-digit', timeZone:'Europe/Amsterdam'})",
+        original["radiation"]["complete_until"],
+    )
+    expect(page.locator(".quality-radiation-status")).to_contain_text(
+        "Satellite data complete through: " + marker
+    )
+    expect(page.locator(".quality-radiation-status")).to_contain_text("Coverage: 23 of 24 hours")
+    expect(page.locator(".quality-radiation-source")).to_contain_text(
+        "not a local sensor measurement"
+    )
+    before = page.locator(".quality-comparison").inner_text()
+    state = page.locator("#quality-chart-0").evaluate(
+        """canvas => {const chart=Chart.getChart(canvas);return {types:chart.data.datasets.map(row=>row.type), active:chart.data.datasets[1].borderDash, alternative:chart.data.datasets[2].borderDash, outline:chart.data.datasets[0].borderWidth, right:chart.options.scales.radiation.display};}"""
+    )
+    assert state == {
+        "types": ["bar", "line", "line", "line", "line"],
+        "active": [],
+        "alternative": [8, 4],
+        "outline": 0,
+        "right": False,
+    }
+    page.get_by_role("checkbox", name="Forecast irradiance", exact=True).check()
+    page.get_by_role("checkbox", name="Satellite estimate", exact=True).check()
+    assert page.locator("#quality-chart-0").evaluate(
+        """canvas => {const chart=Chart.getChart(canvas);return chart.options.scales.radiation.display && chart.options.scales.radiation.title.text.includes('W/m²') && chart.data.datasets[3].borderColor !== chart.data.datasets[4].borderColor && chart.data.datasets[4].data[0].y === 0 && chart.data.datasets[4].data[2].y === null && chart.data.datasets[4].spanGaps === false;}"""
+    )
+    assert page.locator(".quality-comparison").inner_text() == before
+    width = page.viewport_size["width"]
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/satellite-reference-{width}-{'ingress' in url}.png", full_page=True
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    assert (
+        solar.evaluate("button => getComputedStyle(button).backgroundColor") == "rgba(0, 0, 0, 0)"
+    )
+    assert solar.evaluate("button => getComputedStyle(button).borderBottomWidth") == "3px"
+    page.get_by_role("button", name="Devices", exact=True).click()
+    expect(page.locator("#quality-charts canvas")).to_have_count(0)
+    expect(page.get_by_label("Day", exact=True)).to_have_value("2026-10-26")
+    page.get_by_role("button", name="Solar", exact=True).click()
+    expect(page.get_by_label("Solar source", exact=True)).to_have_value("roof")
+    original["radiation"]["issue"] = (
+        "Satellite refresh failed. Retained observations are shown. Retry after ten minutes."
+    )
+    page.get_by_role("button", name="Refresh evidence", exact=True).click()
+    expect(page.locator(".quality-radiation-source")).to_contain_text("Satellite refresh failed")
+    expect(page.locator(".quality-daily")).to_contain_text("Not scored yet")
+    assert not errors

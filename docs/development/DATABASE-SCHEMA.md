@@ -1097,3 +1097,23 @@ Retention is explicit: completed calculation evidence remains in the active data
 
 
 Optional calculation recording uses one serialized background writer. The coordinator only captures a detached summary and at most 256 samples, then enqueues without waiting for SQL. Up to 32 pending observations bound memory. Queue saturation logs an unrecorded observation rather than delaying planning or fabricating a history row. Individual write failures are contained and later writes continue. Normal shutdown stops planning, drains queued observations and only then closes the shared archive engine. Forced termination or storage failure cannot guarantee retained diagnostics. This changes no device command, solver budget or existing history.
+
+### Forecast comparison and satellite irradiance documents
+
+The existing `demand` and `solar` document namespaces retain
+`quality-candidates-<selected-forecast-version>.json`. Demand entries contain
+`forecasts`, an array of `{version, model}` references. Solar entries contain
+`forecasts`, an array of immutable forecast-version references. They identify
+same-issue alternatives to the original selected forecast. Original configuration,
+issue time and per-source predictor maps remain authoritative. These documents
+add no model-selection policy or solver input.
+
+The `solar` namespace owns `quality-satellite-<sha256>.json` latest pointers and
+immutable `quality-satellite-receipt-<sha256>.json` observations. Both payloads
+contain `location` from the archived forecast, aware UTC `start`/`end`, named
+`dataset`, actual UTC `received_at`, and `hours` entries with UTC interval `start`
+and mean `ghi` in W/m². The pointer hash binds location, window and dataset.
+Receipts retain their original values when a pointer advances. Null or absent
+provider hours remain absent. The existing `(namespace, name)` key supports
+bounded reads. Both writes commit in one transaction. These documents transfer
+with the shared document table on SQLite, PostgreSQL, MariaDB and MySQL.

@@ -98,6 +98,7 @@ def create_app(
     price_factory=None,
     weather_factory=None,
     solar_weather_factory=None,
+    satellite_factory=None,
     demand_scorer=None,
     discovery_options=None,
     ingress_peer=None,
@@ -972,7 +973,7 @@ def create_app(
     from .forecast_quality.api import register as register_forecast_quality
 
     forecast_history_request = register_forecast_quality(
-        app, repository, demand, solar, setup_catalogue, lock
+        app, repository, demand, solar, setup_catalogue, lock, satellite_factory
     )
     register_lifecycle(app, RELEASE, source)
     return app

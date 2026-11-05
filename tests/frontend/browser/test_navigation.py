@@ -786,6 +786,11 @@ def test_first_run_auxiliary_views_retain_draft_and_keyboard_focus(app_page):
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
+@pytest.mark.parametrize(
+    "app_page",
+    [{"width": 1280, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
+    indirect=True,
+)
 def test_appliance_settings_categories_share_navigation_and_operational_links(app_page):
     """All device editors remain under Settings, including through the HA ingress prefix."""
     page, url = app_page
@@ -801,6 +806,12 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
         expect(categories.get_by_role("link", name=label, exact=True)).to_have_attribute(
             "aria-current", "page"
         )
+        active = categories.get_by_role("link", name=label, exact=True)
+        assert active.evaluate(
+            "link => {const style = getComputedStyle(link); return style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.borderBottomWidth === '3px' && style.borderTopWidth === '0px' && link.getBoundingClientRect().height >= 44;}"
+        )
+        active.focus()
+        assert active.evaluate("link => getComputedStyle(link).outlineStyle") != "none"
         open_primary_navigation(page)
         settings = page.get_by_role("region", name="Settings", exact=True)
         expect(settings.get_by_role("link", name="Appliances", exact=True)).to_have_attribute(
@@ -809,6 +820,15 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
         if page.get_by_role("button", name="Menu", exact=True).is_visible():
             page.get_by_role("button", name="Menu", exact=True).click()
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        directory = Path("results/ci")
+        directory.mkdir(parents=True, exist_ok=True)
+        page.screenshot(
+            path=str(
+                directory
+                / f"section-tabs-{page.viewport_size['width']}-{suffix.strip('/') or 'cycles'}-{'ingress' in url}.png"
+            ),
+            full_page=True,
+        )
         page.goto(url + monitor)
         if suffix:
             expect(

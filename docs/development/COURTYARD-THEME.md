@@ -47,6 +47,18 @@ in the initial HTML. A delayed or failed session request therefore cannot flash
 an API-key prompt. Standalone pages still show their connection form immediately.
 An untrusted forwarded ingress header cannot hide that form or grant API access.
 
+## Section navigation
+
+Comparable sections use the shared `section-tabs` style: an open row without an
+enclosing border or background, 24-pixel spacing, and a blue bottom underline on
+the selected item. Targets remain at least 44 pixels high and wrap on narrow
+screens. Keyboard focus has a separate visible outline. Use links with
+`aria-current="page"` for page navigation, ARIA tabs for tab panels, and labelled
+pressed buttons for view filters. Preserve existing keyboard behavior and unsaved
+settings guards. Operational toggles and time-range controls retain their own
+presentation. Forecast subjects, appliance settings categories and supplier
+examples share this style.
+
 ## Visual identity
 
 The shell uses navy `#1a3060`, sky `#cde9fd`, paper `#f5fbff`, ink `#19263f`,

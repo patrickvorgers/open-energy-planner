@@ -262,7 +262,11 @@ def daily_evidence(
     if not result["series"]:
         result["issues"].append("No usable energy forecasts were available at midnight")
     completed = now >= end + timedelta(minutes=RECORDER_DELAY_MINUTES)
-    for source in result["series"]:
+    for source in [
+        candidate
+        for original in result["series"]
+        for candidate in (original, *original.get("alternatives", ()))
+    ]:
         rows = source["rows"]
         predicted = (
             fsum(row["predicted_kwh"] for row in rows)

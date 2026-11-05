@@ -1,5 +1,5 @@
 import "./chart_theme.js";
-import {calendarDays, calendarTime} from "./chart_days.js";
+import {qualityChart} from "./quality-chart.js";
 import {when, percentage, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {currentModelRows, renderCurrentModel} from "./quality-models.js";
@@ -7,12 +7,15 @@ bindSettingsActions();
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = (id) => document.getElementById(id);
-const HOUR_MILLISECONDS = 3600000;
-const MAX_TIME_LABELS = 8;
 let token = "", cursor = null, requestVersion = 0, historyVersion = 0, charts = [], displayedDay = null;
 const quantity = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "Unavailable";
 let currentRows = new Map(), indexData = null;
 const expandedModels = new Set();
+const selectionKey = `forecast-quality-selection:${base}`;
+let subject = "household", selections = {}, solarIds = new Set();
+try {const saved = JSON.parse(localStorage.getItem(selectionKey)); if (["household", "solar", "devices"].includes(saved?.subject)) subject = saved.subject; if (saved?.selections && typeof saved.selections === "object") selections = saved.selections;} catch { /* Browsers may disable local preferences. */ }
+/** Store presentation preferences only, never credentials or source evidence. */
+function remember() {try {localStorage.setItem(selectionKey, JSON.stringify({subject, selections}));} catch { /* Selection remains usable without persistence. */ }}
 
 /** Never persist credentials or let an API error display stale evidence as current. */
 async function api(path) {
@@ -34,11 +37,11 @@ function renderSources() {
     clearGraphs();
     find("quality-models").replaceChildren();
     const selected = find("quality-source").value;
-    const sources = (displayedDay?.series || []).filter((source) => !selected || source.id === selected);
+    const sources = (displayedDay?.series || []).filter(source => subjectOf(source) === subject && source.id === selected);
     const inProgress = displayedDay && Date.parse(displayedDay.as_of) < Date.parse(displayedDay.end);
     sources.forEach((source, index) => graph(source, index, inProgress));
     for (const row of currentRows.values()) {
-        if ((selected && row.id !== selected) || sources.some(source => source.id === row.id)) continue;
+        if (subjectOf(row) !== subject || row.id !== selected || sources.some(source => source.id === row.id)) continue;
         const article = document.createElement("article"), heading = document.createElement("h2");
         article.className = "chart-card"; heading.textContent = row.label; article.append(heading);
         paragraph(article, "Current model status: No midnight graph is available for this device on the selected day.");
@@ -47,15 +50,22 @@ function renderSources() {
     if (!sources.length && displayedDay) paragraph(find("quality-charts"), "No midnight forecast was recorded for this day. New forecasts are captured automatically at the next midnight.");
 }
 
-/** Keep device selection when it exists on the newly selected day. */
+/** Resolve stable source families independently of display labels. */
+function subjectOf(source) {return source.scope || (source.id === "household" ? "household" : source.measurement_boundary || source.solarSelection || solarIds.has(source.id) ? "solar" : "devices");}
+
+/** Keep one selection per subject while the calendar day remains shared. */
 function devices(data) {
-    const input = find("quality-source"), previous = input.value;
+    const input = find("quality-source");
+    const available = new Map([...currentRows.values(), ...(data.series || [])].filter(source => subjectOf(source) === subject).map(source => [source.id, source.title || source.label]));
     input.replaceChildren();
-    for (const [value, label] of [["", "All devices"], ...new Map([...currentRows.values()].map(row => [row.id, row.label]).concat(data.series.map(source => [source.id, source.title])))]) {
-        const option = document.createElement("option"); option.value = value; option.textContent = label; input.append(option);
-    }
-    input.value = [...input.options].some(option => option.value === previous) ? previous : "";
-    input.disabled = input.options.length <= 1;
+    for (const [value, label] of available) {const option = document.createElement("option"); option.value = value; option.textContent = label; input.append(option);}
+    input.value = available.has(selections[subject]) ? selections[subject] : available.keys().next().value || "";
+    selections[subject] = input.value;
+    input.disabled = !available.size;
+    find("quality-source-label").hidden = subject === "household";
+    find("quality-source-title").textContent = subject === "solar" ? "Solar source" : "Device";
+    input.setAttribute("aria-label", find("quality-source-title").textContent);
+    for (const button of document.querySelectorAll("#quality-subjects button")) button.setAttribute("aria-pressed", String(button.dataset.subject === subject));
 }
 
 /** Plot archived numeric evidence. Null actuals remain gaps instead of measured zeros.
@@ -96,46 +106,7 @@ function graph(source, index, inProgress) {
     canvas.id = `quality-chart-${index}`; canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", `${source.title}: Original predicted and measured hourly energy`);
     const plot = document.createElement("div"); plot.className = "chart-plot";
     wrap.className = "chart-wrap"; wrap.append(canvas); plot.append(wrap); article.append(plot); find("quality-charts").append(article);
-    // Clip only the plotted interval. Original hourly timestamps still describe the complete evidence.
-    const positions = source.rows.map(row => {
-        const start = Date.parse(row.start), end = Date.parse(row.end);
-        const left = Math.max(start, Date.parse(displayedDay.start)), right = Math.min(end, Date.parse(displayedDay.end));
-        return {original: (start + end) / 2, midpoint: (left + right) / 2, fraction: (right - left) / (end - start)};
-    });
-    // Original sample spacing keeps full-hour bar widths independent of clipped edge intervals.
-    const datasets = [["Predicted", "predicted_kwh", "#5d70bc"], ["Measured", "measured_kwh", "#078b80"]].map(([label, field, color]) => ({label, type: "bar", order: 1, backgroundColor: `${color}66`, borderColor: color, data: source.rows.map((row, index) => ({x: positions[index].original, y: row[field]}))}));
-    const lines = datasets.map(dataset => ({...dataset, type: "line", order: 0, backgroundColor: dataset.borderColor, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, fill: false, spanGaps: false, tension: 0}));
-    const alignment = {id: "quality-bar-centres",
-    /** Move line-point x coordinates in pixels onto grouped bar centres after layout.
-     * Paired lines follow all bars in the same order. Source timestamps and values remain unchanged.
-     * Reapply after visibility changes and resizing because grouped bar centres can move.
-     */
-    afterDatasetsUpdate(chart) {
-        datasets.forEach((dataset, datasetIndex) => {
-            const bars = chart.getDatasetMeta(datasetIndex).data;
-            bars.forEach((bar, index) => {
-                const {original, midpoint, fraction} = positions[index];
-                if (fraction >= 1) return;
-                const centre = chart.scales.x.getPixelForValue(original);
-                bar.x = chart.scales.x.getPixelForValue(midpoint) + (bar.x - centre) * fraction;
-                bar.width *= fraction;
-            });
-            chart.getDatasetMeta(datasetIndex + datasets.length).data.forEach((point, pointIndex) => { point.x = bars[pointIndex].x; });
-        });
-    }};
-    const chart = new Chart(canvas, {type: "bar", plugins: [alignment, calendarDays], data: {datasets: [...datasets, ...lines]}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "index", intersect: false}, scales: {x: {type: "linear", offset: false, min: Date.parse(displayedDay.start), max: Date.parse(displayedDay.end), afterBuildTicks: (scale) => { const first = Math.ceil(scale.min / HOUR_MILLISECONDS), last = Math.floor(scale.max / HOUR_MILLISECONDS), stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_LABELS - 1))); scale.ticks = []; for (let hour = first; hour <= last; hour += stride) scale.ticks.push({value: hour * HOUR_MILLISECONDS}); }, ticks: {stepSize: HOUR_MILLISECONDS, maxTicksLimit: MAX_TIME_LABELS, callback: calendarTime}}, y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per completed hour (kWh)"}}}, plugins: {legend: {display: false}, tooltip: {filter: item => item.dataset.type === "bar", bodyFont: {family: "monospace"}, callbacks: {title: (items) => { const row = source.rows[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`; }, label: (item) => `${item.dataset.label.padEnd(10)}${item.parsed.y == null ? "Unavailable" : `${item.parsed.y.toFixed(3).padStart(9)} kWh`}`, afterBody: (items) => source.rows[items[0].dataIndex].evaluation_issue || "Eligible for descriptive accuracy"}}}}});
-    charts.push(chart);
-    const controls = document.createElement("div");
-    controls.className = "chart-legend quality-evidence-controls";
-    controls.setAttribute("role", "group"); controls.setAttribute("aria-label", `${source.title}: Show in chart`);
-    datasets.forEach((dataset, datasetIndex) => {
-        const label = document.createElement("label"), checkbox = document.createElement("input");
-        checkbox.type = "checkbox"; checkbox.checked = true;
-        checkbox.onchange = () => { chart.setDatasetVisibility(datasetIndex, checkbox.checked); chart.setDatasetVisibility(datasetIndex + datasets.length, checkbox.checked); chart.update(); };
-        const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = dataset.borderColor; swatch.setAttribute("aria-hidden", "true");
-        label.append(checkbox, swatch, document.createTextNode(dataset.label)); controls.append(label);
-    });
-    plot.append(controls);
+    charts.push(qualityChart(canvas, plot, source, displayedDay, evidenceTime));
     const details = document.createElement("details"), summary = document.createElement("summary"), scroll = document.createElement("div"), table = document.createElement("table"), header = document.createElement("thead"), body = document.createElement("tbody");
     summary.textContent = "Hourly evidence and provenance"; details.append(summary);
     paragraph(details, `Original model: ${source.model_label}: Issued: ${when(source.issued_at)}${source.measurement_boundary ? `: Measurement boundary: ${source.measurement_boundary}` : ""}`);
@@ -150,6 +121,14 @@ function graph(source, index, inProgress) {
     paragraph(details, `Original forecast version: ${source.forecast_version}`, "quality-version");
     paragraph(details, `Latest measurement receipt: ${source.last_received_at ? when(source.last_received_at) : "Unavailable"}`);
     article.append(details);
+    const comparison = document.createElement("div"); comparison.className = "table-scroll quality-comparison"; comparison.tabIndex = 0; comparison.setAttribute("role", "region"); comparison.setAttribute("aria-label", "Original model comparison");
+    const modelsTable = document.createElement("table"), caption = document.createElement("caption"); caption.textContent = "Original model comparison"; modelsTable.append(caption);
+    const modelHead = document.createElement("tr");
+    for (const label of ["Model", "Day forecast (kWh)", "Difference (kWh)", "MAE (kWh/hour)"]) {const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; modelHead.append(cell);}
+    const modelHeader = document.createElement("thead"); modelHeader.append(modelHead); modelsTable.append(modelHeader);
+    const modelBody = document.createElement("tbody");
+    for (const [index, model] of [source, ...(source.alternatives || [])].entries()) {const line = document.createElement("tr"); for (const value of [model.model_label + (index ? "" : ": Original choice"), quantity(model.daily?.predicted_kwh), quantity(model.daily?.error_kwh), quantity(model.metrics.mae_kwh)]) {const cell = document.createElement("td"); cell.textContent = value; line.append(cell);} modelBody.append(line);}
+    modelsTable.append(modelBody); comparison.append(modelsTable); article.insertBefore(comparison, details);
     const current = currentRows.get(source.id);
     if (current) renderCurrentModel(article, current, expandedModels.has(source.id));
 }
@@ -163,6 +142,7 @@ async function show() {
         useHomeAssistantTimezone(data.timezone); currentRows = currentModelRows(data.current_models, selection);
         find("quality-policy").textContent = selection.explanation;
         find("quality-model-issue").textContent = selection.issue === "model_selection_archive_unreadable" ? "Model selection archive is unreadable. Baseline retained. Inspect application logs." : selection.issue || "";
+        solarIds = new Set((data.current_models?.solar?.configuration?.sources || []).map(source => source.source_id));
         displayedDay = day ? data : null; devices({...data, series: data.series || []}); renderSources();
         find("quality-status").textContent = day ? `Day ${data.day}: Midnight forecast: ${data.captured_at ? "Recorded" : "Unavailable"}: Evidence checked: ${when(data.as_of)}${data.issues.length ? `: ${data.issues.join(": ")}` : ""}` : currentRows.size ? "No daily forecasts available yet. Current model status is shown below." : "No daily forecasts or current model status available yet.";
         return true;
@@ -187,6 +167,7 @@ async function load(older = false) {
     } catch (error) { if (version === historyVersion) { clear(); find("quality-status").textContent = error.message; } }
 }
 find("connect").onsubmit = (event) => { event.preventDefault(); token = find("token").value; load(); };
-find("quality-source").onchange = renderSources;
+find("quality-source").onchange = () => {selections[subject] = find("quality-source").value; remember(); renderSources();};
+for (const button of document.querySelectorAll("#quality-subjects button")) button.onclick = () => {subject = button.dataset.subject; devices(displayedDay || {}); remember(); renderSources();};
 find("quality-day").onchange = show; find("quality-refresh").onclick = () => load(); find("quality-older").onclick = () => load(true);
 fetch(base + "setup/session", {redirect: "error"}).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); watchSourceNames(() => api("setup/session"), show, session.source_names_revision); find("connect").hidden = Boolean(session.ingress); if (session.ingress) load(); }).catch((error) => { find("quality-status").textContent = error.message; });
