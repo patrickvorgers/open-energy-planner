@@ -61,23 +61,26 @@ The response names its projection version (`plan-facts-v1`) and original plan ID
 
 ## Reference balances and original price inputs
 
-Planning defaults to **Without battery versus OEP**. The reference chart appears
-above the optimized chart, with shared time ranges, units and flow colors. It
-uses the same frozen household and available-solar forecasts but removes storage.
+Planning shows **Optimizer**, **Battery self-consumption** and **Without battery: Baseline**
+in that order. They share time ranges, units and flow colors. Each chart uses
+its own value-axis bounds. The without-battery chart uses the same frozen
+household and available-solar forecasts but removes storage.
 PV serves demand, exports surplus and imports deficits. Converter efficiency,
 physical clipping and grid ratings still apply. A physically impossible reference
 is explicitly unavailable. No flow or price curtailment is invented to hide it.
 
-**Battery self-consumption** is shown as the second reference, without a dropdown. Its initial
-stock and bonus counters continue independently from the actual installation.
-Reading charts never resets that state. The no-battery forecast uses
+**Battery self-consumption** uses the plan's recorded starting stock and bonus
+budgets for new horizon comparisons. Legacy original comparisons retain their
+recorded reference start. The separate retrospective Savings reference carries
+its own stock and counters across time. Reading charts never resets that state. The no-battery forecast uses
 the plan's recorded initial bonus budgets. It is a horizon comparison, not a new
 continuous lifetime settlement scenario. The Savings screen continues to evaluate
 the established continuous self-consumption reference and labels that policy.
 
-Without-battery benefit includes the operational contribution of storage plus OEP.
-Self-consumption benefit isolates price optimization. Neither includes investment
-costs. Inventory changes remain separate from grid cash. Original costs are used
+Both battery charts show expected economic cost and benefit against the same
+without-battery baseline. Optimizer benefit includes storage and smart planning.
+Self-consumption benefit shows storage without price optimization. Their benefits
+are alternatives, not additive. Neither includes investment costs. Inventory changes remain separate from grid cash. Original costs are used
 for both graphs. Corrected cost evaluations remain separately available for the
 continuous self-consumption reference. Do not silently mix original and corrected
 reference/EMS costs.

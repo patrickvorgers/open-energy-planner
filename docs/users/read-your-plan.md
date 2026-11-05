@@ -1,39 +1,67 @@
 # Read your plan
 
-Start with the original plan's timestamp and input context. A chart describes the plan that was calculated, not a guarantee of future measurements.
+Open **Energy > Planning** to inspect one original calculation. Begin with its version, generated time and strategy. Then follow the same energy through the three scenarios. The page explains proposed behavior, not proof that physical equipment followed it.
 
-## Know which result you see
+## Check which plan you are looking at
 
-**Planning** shows forecasts and proposed flows for a particular horizon. **Savings** evaluates retained evidence and distinguishes expected comparisons from measured history. **Forecast quality** compares original predictions with later measurements. These views answer different questions.
+The latest retained plan is the default. **Plan version** lets you inspect history. A historical selection changes the view, not active commands. While the same plan refreshes, the previous complete view can remain visible with an explicit loading status. Choosing a different historical plan clears its predecessor's data until that selection loads.
 
-An original plan retains the prices, input versions, limits and expected costs used when it was calculated. Later tariff changes do not rewrite that original calculation. A failed new calculation does not overwrite the previous accepted plan or extend its commands indefinitely.
+A valid older plan can remain in history after a later calculation fails. Its presence does not mean its commands are still applicable. Read the page's status and any source warning.
 
-During an automatic plan update, the previous complete comparison stays visible until the replacement has loaded. The status identifies when you are still viewing the previously loaded plan, including when an update cannot be read. Its original timestamp and period remain unchanged. Selecting a different historical plan clears its evidence while that selection loads.
+For duration and solver-progress questions, use [Planning performance](planning-performance.md). A first solver candidate is not yet an independently checked published plan.
 
-## Read the balance
+## Start with the three scenarios
 
-The balance uses quarter-hour bars. Above zero means supply to the modeled balance, including grid import and battery discharge. Below zero means consumption, including household demand, grid export and battery charging. A separate battery-state series shows state of charge.
-
-Use **Next 6 hours**, **Next 24 hours** or **Full horizon**. Tap or hover to inspect an interval. The three balance comparisons use the same kW scale. Switching a series or the visible horizon changes the view, not the saved plan.
-
-| Comparison | Meaning |
+| Chart | Read it as |
 |---|---|
-| Without battery | The same original household and solar forecasts without battery operation |
-| Battery self-consumption | A separate reference that stores surplus solar and covers deficits within its limits |
-| OEP | The proposed optimized operation under the selected strategy and contract |
+| **Optimizer** | The original plan under its selected goal, forecast, installation and contract |
+| **Battery self-consumption** | The same installation storing surplus solar and covering demand without price optimization |
+| **Without battery: Baseline** | The same household and solar forecasts without battery storage |
 
-Each chart starts with **Expected economic cost**. Optimizer and battery self-consumption also show **Expected benefit versus without battery** against the same baseline. A negative benefit means higher expected cost than without battery. Missing comparisons stay unavailable. These amounts cover the complete original plan, even when you zoom into fewer hours. They are expectations, not measured savings or investment returns.
+The scenarios share a time range and units. Each chart scales its value axis to its own visible data. Compare the numeric axis and interval values rather than the apparent bar height across charts. The baseline retains planned EV and thermal loads. Self-consumption aims for zero on the meter within physical limits, rather than guaranteeing it.
 
-Open **Cost breakdown** for net grid cash cost, battery wear and the change in stored-energy value. Economic cost includes wear and subtracts the stored-energy value change. That value change is not cash.
+[![A populated synthetic Planning view showing energy supply and use, battery state and the boundary between days.](../assets/planning-example.png)](../assets/planning-example.png)
 
-For detailed comparison boundaries, use [Savings](../development/SAVINGS.md) and [plan evidence](../development/PLAN-EVIDENCE.md).
+*Read the colored flows together with battery SoC. The example contains actual calculated flows from synthetic inputs. It is a teaching scenario, not a prediction for your household.*
 
-## Keep prices and commands clear
+## Read the energy balance
 
-Published prices and forecast prices are different inputs. Solid and dotted price lines retain that distinction. Current tariff previews may differ from the prices saved with an older plan. The [contract guide](../development/CONTRACT-PRICES.md) explains formulas, units and effective periods.
+Above zero is supply to the modeled balance: used solar, grid import and battery discharge. Below zero is use: household demand, grid export, battery charge and conversion losses. These signs describe this chart's balance. They are not interchangeable with every device's command sign.
 
-For virtual battery commands, positive W means discharge and negative W means charge. Zero W is a real idle request. Unknown means there is no applicable numeric target. Unavailable means the command is not currently usable, for example after pause or expiry. Do not turn either state into zero. The [virtual-device guide](../development/VIRTUAL-DEVICES.md) owns the complete contract.
+The series together should balance around zero. Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
-## Respond to a warning
+Use **Next 6 hours**, **Next 24 hours** or **Full horizon**. Day bands and date labels identify calendar boundaries in the installation timezone. On a phone, the legend sits below the chart. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
 
-Read the stated action and affected input before changing configuration. Check the measurement source and time, not just whether an entity exists. Missing history, an absent forecast and a failed connection require different remedies. See [troubleshooting](troubleshooting.md) and the [notification guide](../development/PLANNING-NOTIFICATIONS.md).
+[Open the mobile chart example](../assets/planning-mobile.png) to see the stacked cost cards and legend below the same synthetic two-day plan. Open any guide figure at full size when its labels are too small on your screen.
+
+## Read cost before benefit
+
+Every scenario starts with **Expected economic cost**. Both battery scenarios then show **Expected benefit versus without battery** against the same baseline. A negative benefit means the scenario costs more than the baseline. An unavailable comparison stays unavailable.
+
+Open **Cost breakdown** for net grid cash cost, battery wear and stored-energy value change. Economic cost includes wear and subtracts the value change. Stored-energy value is not cash received.
+
+These amounts cover the complete original plan even when you zoom into fewer hours. They are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
+
+## Understand the forecast and price charts
+
+Household demand and available solar describe original forecast inputs before the planner's decisions. Available DC solar and household AC demand use different measurement boundaries. Compare them with conversion and clipping in mind.
+
+Original-plan prices retain the inputs that belonged to the selected calculation. Published and predicted price segments remain distinguishable. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
+
+See [contract and prices](contract.md) for formulas, dates and bonus interpretation, and [forecasts](forecasts.md) for how predictions are checked against measurements.
+
+## Inspect an individual decision
+
+Open **Understand this plan** for whole-plan inputs, assumptions and source evidence. Expand **Selected interval details** and move the time selector to inspect the relevant interval.
+
+Check the measured starting stock, forecast inputs, physical limits, proposed command and expected result together. A reached limit is an observation. It is not proof that OEP evaluated every hypothetical alternative or that this limit caused the choice.
+
+Original prices and expected outcomes remain separate from later contract repricing. The detailed energy and command tables preserve the selected original plan. Viewing them never sends a physical command.
+
+## Keep units and commands straight
+
+Power in kW is a rate. Energy in kWh is the amount across an interval. A steady 2 kW for one quarter is 0.50 kWh. OEP retains calculation precision even when a screen rounds the displayed value.
+
+For a fixed stationary-battery target, positive W means discharge and negative W means charge at the battery DC terminal. Zero is a real idle target. A numeric value can be unknown because its mode has no fixed target, or unavailable because no usable command exists. Do not turn either state into zero in an automation.
+
+**Next:** [Understand Savings](savings.md), [inspect forecast quality](forecasts.md#read-forecast-quality) or [resolve a warning](troubleshooting.md).

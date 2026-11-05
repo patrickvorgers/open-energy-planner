@@ -57,9 +57,11 @@ Open `.local/first-plan/administration-token` in a local text editor. Paste its 
 
 Wait for the first calculation, then choose **Refresh overview**. Under **Original plan**, expect a planning window, a plan version and a generated timestamp. The synthetic demo normally shows **Status: Optimal** and a 48-hour planning window.
 
-Scroll to **OEP: Planned energy balance**. Use **Next 6 hours**, **Next 24 hours** and **Full horizon** to inspect the same plan at different scales. Tap or hover over the chart to read an interval.
+Start with the **Optimizer** chart, followed by **Battery self-consumption** and **Without battery: Baseline**. Use **Next 6 hours**, **Next 24 hours** and **Full horizon** to inspect the same plan at different scales. Tap or hover over the chart to read an interval.
 
-[![The actual synthetic OEP plan with quarter-hour energy flows and battery state.](../assets/first-plan.png)](../assets/first-plan.png)
+[![The actual Planning interface with populated synthetic energy flows, battery state and a visible day transition.](../assets/planning-example.png)](../assets/planning-example.png)
+
+The screenshot uses a richer synthetic teaching scenario with solar and household variation. The basic command-line demo is deliberately smaller: its first quarters illustrate charging cheaply and exporting later, with little activity afterward. Different synthetic input does not mean your installation is misconfigured.
 
 **First success:** an original plan has a version and timestamp, the planned balance contains values, and changing the displayed horizon works. This establishes that the local planner and browser view work with synthetic inputs. It does not establish that your own installation is configured or that physical energy flowed as proposed.
 

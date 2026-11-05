@@ -17,7 +17,11 @@ Workflow and checker changes become active only after merging onto the trusted d
 
 ## Accepted enforcement limitation
 
-The owner explicitly chose CI quality checks for the private repository without a GitHub Pro upgrade. Native branch protection and required signed commits are deferred because GitHub rejects them under the current plan. A failed or missing CI result does not technically prevent a merge. Contributors must respect the result.
+This repository uses signature verification as a CI quality gate. Do not assume
+that a failing or missing check technically prevents a writer from merging.
+Contributors and the merge coordinator must verify the required results. Making
+the repository public does not itself configure server-enforced rules. Inspect
+the actual GitHub rules before claiming that they enforce this policy.
 
 This check verifies signatures but is not an adversarial security boundary against same-repository writers. Loading trusted base code prevents this verifier from executing PR code, but does not make a CI-only policy server-enforced. Server-enforced signed-commit rules or an independently trusted publisher would be needed for stronger enforcement.
 

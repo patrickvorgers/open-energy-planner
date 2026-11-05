@@ -179,7 +179,7 @@ These are visible limitations of the current design coverage. No result from ano
 ## Retained price-history query coverage
 
 The shared SQLite/PostgreSQL/MariaDB/MySQL matrix includes a five-year hourly
-history fixture in `tests/database/performance/test_price_history_performance.py`. It verifies indexed,
+history fixture in `tests/database/contracts/test_price_history_performance.py`. It verifies indexed,
 bounded latest-status reads, market/lead/time filtering, independent 30-day MAEs,
 retention counts and a lossless/idempotent scoring-index rebuild. Native plans and
 seven warmed baseline/current timing samples are saved as CI artifacts. These checks do not benchmark the complete plan archive.

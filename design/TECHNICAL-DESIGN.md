@@ -10,7 +10,7 @@ alternatives against frozen original inputs and preserve solver proof status.
 
 *Local energy optimization for Home Assistant.*
 
-The [release scope](FIRST-RELEASE-SCOPE.md) and [requirements](REQUIREMENTS.md) are authoritative. Milestones are implementation steps within that scope, not smaller product promises. Labelled proposals are not automatically confirmed requirements. Implement technical details within the agreed boundary. Changes to behaviour/user obligations need an explicit product decision. Solver/synthetic app/HA experiments exist. The full product does not. Experiments do not control production hardware. See [development foundation](DEVELOPMENT-FOUNDATION.md) for the private repository, provisioning, CI and review limits. All project artifacts and names use English.
+The [release scope](FIRST-RELEASE-SCOPE.md) and [requirements](REQUIREMENTS.md) are authoritative. Milestones are implementation steps within that scope, not smaller product promises. Labelled proposals are not automatically confirmed requirements. Implement technical details within the agreed boundary. Changes to behaviour/user obligations need an explicit product decision. Solver/synthetic app/HA experiments exist. The full product does not. Experiments do not control production hardware. See [development foundation](DEVELOPMENT-FOUNDATION.md) for repository ownership, provisioning, CI and review limits. All project artifacts and names use English.
 
 ## 1. Structure
 
@@ -994,7 +994,7 @@ writes reuse stable identities and saved cycle evidence. No task is submitted.
 
 ### Installable artifacts and multi-device control projection
 
-The [HA OS acceptance route](../docs/development/HAOS-ACCEPTANCE.md) packages matching app/integration versions from one clean Git revision, hashes both archives and retains the repository as private. HACS metadata prepares future public installation. HACS does not support private repositories, so private native acceptance uses an administrator-installed ZIP and local app build. The app never installs integration files.
+The [HA OS acceptance route](../docs/development/HAOS-ACCEPTANCE.md) uses matching app/integration artifacts from one verified source tree. Preserve their original numbered manifests and hashes. The repository is public, but public HACS installation remains a separate release gate. Development-preview acceptance uses the matched integration ZIP and packaged app. The app never installs integration files.
 
 The [virtual-device contract](../docs/development/VIRTUAL-DEVICES.md) adds per-battery enum modes, an explicit grid mode and retained non-applicable power sensors. Optional `can_follow_grid` defaults false. Canonical omission of false preserves existing immutable configuration hashes/files. Only validated zero-import/export intervals can select this permission-gated execution mode. Nominal flows/costs remain unchanged. HA rejects follower commands without the configured capability or an active grid goal. Physical execution remains user-owned.
 
@@ -1389,7 +1389,7 @@ acquire thermal command permission automatically.
 
 ### Domain and physical equations
 
-`thermal/model.py` defines immutable `ThermalWork` and detached `ThermalFlow`.
+`appliances/thermal/model.py` defines immutable `ThermalWork` and detached `ThermalFlow`.
 `InstallationProblem.thermal_work` retains each device independently, and
 `InstallationFlow.thermal` retains AC intake, final temperature, physical comfort
 deficit and commanded watts. No native optimizer expressions cross this boundary.
@@ -1502,7 +1502,7 @@ proof produces no candidate. A feasible zero deficit proves the nonnegative
 objective's lower bound within tolerance. Every stage restores native solver
 options and the financial objective before returning.
 
-`thermal/validation.py` independently recomputes the thermal equations from plain
+`appliances/thermal/validation.py` independently recomputes the thermal equations from plain
 problem/plan values. It verifies exact device membership, finite quantities,
 zero-or-rated heater commands, UTC-quarter consistency, readiness, AC integration,
 temperature bounds, bounded unserved draw and actual comfort shortfall. Extraction computes comfort shortfall from the
