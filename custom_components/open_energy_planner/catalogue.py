@@ -265,12 +265,23 @@ async def setup_catalogue(hass):
     )
     for battery in suggestions["batteries"]:
         preferred.update(value for value in battery.values() if isinstance(value, str))
+    # Keep connection sensors on Energy devices ahead of unrelated household sensors.
+    preferred_devices = {
+        entry.device_id
+        for entity_id in preferred
+        if (entry := registry.async_get(entity_id)) and entry.device_id
+    }
     states = [
         *hass.states.async_all("sensor"),
         *hass.states.async_all("binary_sensor"),
         *hass.states.async_all("water_heater"),
     ]
     present = {state.entity_id for state in states}
+    related = {
+        state.entity_id
+        for state in states
+        if (entry := registry.async_get(state.entity_id)) and entry.device_id in preferred_devices
+    }
     # These metadata-only placeholders never enter HA's measurement state machine.
     states.extend(
         State(entity_id, STATE_UNKNOWN)
@@ -283,6 +294,7 @@ async def setup_catalogue(hass):
         states,
         key=lambda sensor_state: (
             sensor_state.entity_id not in preferred,
+            sensor_state.entity_id not in related,
             sensor_state.entity_id.startswith("binary_sensor."),
             sensor_state.entity_id,
         ),
@@ -294,6 +306,11 @@ async def setup_catalogue(hass):
             continue
         physical = (
             dr.async_get(hass).async_get(entry.device_id) if entry and entry.device_id else None
+        )
+        integration = (
+            hass.config_entries.async_get_entry(entry.config_entry_id)
+            if entry and entry.config_entry_id
+            else None
         )
         entities.append(
             {
@@ -323,6 +340,14 @@ async def setup_catalogue(hass):
                     :MAX_CATALOGUE_TEXT_LENGTH
                 ],
                 "device_id": entry.device_id if entry and entry.device_id else "",
+                **(
+                    {
+                        "integration_id": integration.entry_id,
+                        "integration_name": integration.title[:MAX_CATALOGUE_TEXT_LENGTH],
+                    }
+                    if integration
+                    else {}
+                ),
             }
         )
         # Match aiohttp's default JSON escaping, including non-ASCII friendly names.

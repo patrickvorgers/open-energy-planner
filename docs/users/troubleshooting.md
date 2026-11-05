@@ -24,6 +24,22 @@ In Home Assistant mode, open the app's diagnostics and check the source named by
 
 Keep an original valid plan separate from a failed new round. A visible older plan does not prove its command is still applicable. The [planning notification guide](../development/PLANNING-NOTIFICATIONS.md) explains recovery and action-required states.
 
+## No vehicle or connection sensor appears
+
+In Settings > Appliances > EV charging, choose the Home Assistant integration
+before choosing its sensors. The car's state-of-charge sensor must report `%`.
+A sensor with an unrelated device class, such as humidity, is not a vehicle SoC
+source.
+
+For a charge point, search its integration's binary sensors by name or entity ID.
+Use a sensor that stays On while plugged in, including when charging is paused.
+A charging-active sensor is not equivalent. Check the sensor in Home Assistant
+if its purpose is unclear. Choose the charge point's Energy consumption meter
+separately. After correcting HA configuration, save or cancel pending edits and
+use Check saved settings to reload available metadata. The app's catalogue is
+bounded. Related sensors on Energy devices receive priority, while unrelated
+sensors may not all fit.
+
 ## Household energy training excludes hours
 
 OEP excludes unreliable negative household balances from forecast training. Diagnostics and history-assessment logs report usable hours, excluded hours and the excluded percentage. Recorder data remains unchanged. Small excluded shares do not create a notification.

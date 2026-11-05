@@ -12,6 +12,26 @@ from tests.database.support.archive import list_documents, read_plan
 from tests.ha_contract.support.metadata import setup_metadata
 
 
+@pytest.mark.parametrize("field,value", [("integration_id", ""), ("integration_name", "x" * 161)])
+def test_catalogue_rejects_incomplete_or_oversized_integration_metadata(field, value):
+    """Integration labels and identities retain the same bounded, paired metadata contract."""
+    body = setup_metadata()
+    body["entities"][0].update(integration_id="entry", integration_name="Family car")
+    body["entities"][0][field] = value
+    with pytest.raises(ValueError, match="Invalid setup entity metadata"):
+        HACatalogue().receive(body, datetime.now(UTC))
+
+
+def test_catalogue_retains_integration_identity_and_title_without_provider_attributes():
+    """The validated app catalogue preserves the integration grouping needed by source pickers."""
+    body = setup_metadata()
+    body["entities"][0].update(integration_id="entry", integration_name="Family car")
+    catalogue = HACatalogue()
+    catalogue.receive(body, datetime.now(UTC))
+    assert catalogue.value["entities"][0]["integration_id"] == "entry"
+    assert catalogue.value["entities"][0]["integration_name"] == "Family car"
+
+
 @pytest.mark.parametrize("write_fails", [False, True])
 def test_catalogue_cancelled_source_write_still_invalidates_consumer_model(
     tmp_path, monkeypatch, write_fails

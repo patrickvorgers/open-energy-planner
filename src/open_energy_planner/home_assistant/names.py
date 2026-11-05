@@ -21,6 +21,14 @@ def source_names(catalogue):
     }
 
 
+def vehicle_source_names(catalogue):
+    """Use the configured HA integration title for cars, retaining source labels without an entry."""
+    return {
+        row["entity_id"]: row.get("integration_name", "").strip() or source_name(row, "Vehicle")
+        for row in (catalogue or {}).get("entities", ())
+    }
+
+
 def energy_source_names(catalogue):
     """Limit historical overrides to current Energy members, retaining removed-source labels."""
     names = source_names(catalogue)
@@ -88,12 +96,13 @@ def display_plan(plan, catalogue):
 def comparison_names(catalogue, thermal_state, ev_state, installation, solar):
     """Capture labels by stable device identity without changing frozen metering bindings."""
     names = source_names(catalogue)
+    vehicles = vehicle_source_names(catalogue)
     return {
         **{
             store["id"]: names.get(store["energy_entity"], "Thermal storage")
             for store in thermal_state["stores"]
         },
-        **{car["id"]: names.get(car["soc_entity"], "Vehicle") for car in ev_state["vehicles"]},
+        **{car["id"]: vehicles.get(car["soc_entity"], "Vehicle") for car in ev_state["vehicles"]},
         **{
             point["id"]: names.get(point["energy_entity"], "Charge point")
             for point in ev_state["points"]

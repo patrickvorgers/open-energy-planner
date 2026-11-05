@@ -17,7 +17,7 @@ from open_energy_planner.appliances.ev.model import (
 )
 from open_energy_planner.core.units import FULL_SOC_PERCENT
 from open_energy_planner.demand.calculation.model import digest
-from open_energy_planner.home_assistant.names import source_names
+from open_energy_planner.home_assistant.names import source_names, vehicle_source_names
 from open_energy_planner.optimization.adapters.process.worker import DEFAULT_WORKER_TIMEOUT_SECONDS
 
 STATE_KEY = "ev-state.json"
@@ -357,6 +357,7 @@ class EVService:
     def document(self, now, timezone, catalogue=None, plan=None):
         """Expose authoritative configuration, current session issues and explicit predicted shortfall."""
         names = source_names(catalogue)
+        vehicle_names = vehicle_source_names(catalogue)
         live = {row["id"]: row for row in self.live(now)}
         readings = self.vehicle_readings(now)
         works = {work.point_id: work for work in self.work(now, timezone)}
@@ -416,7 +417,7 @@ class EVService:
             "vehicles": [
                 {
                     **car,
-                    "name": names.get(car["soc_entity"], "Vehicle"),
+                    "name": vehicle_names.get(car["soc_entity"], "Vehicle"),
                     "actual": readings.get(car["id"]),
                     "next_departure": departure(car, now, timezone).isoformat(),
                 }

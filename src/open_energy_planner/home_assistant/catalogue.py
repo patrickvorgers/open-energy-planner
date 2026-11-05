@@ -75,7 +75,12 @@ class HACatalogue:
         if not isinstance(body["entities"], list) or len(body["entities"]) > MAX_CATALOGUE_ENTITIES:
             raise ValueError("Too many setup entities")
         for entity in body["entities"]:
-            if not isinstance(entity, dict) or set(entity) - {"device_name", "energy_name"} != {
+            if not isinstance(entity, dict) or set(entity) - {
+                "device_name",
+                "energy_name",
+                "integration_id",
+                "integration_name",
+            } != {
                 "entity_id",
                 "name",
                 "unit",
@@ -87,6 +92,10 @@ class HACatalogue:
             if any(
                 not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
                 for value_item in entity.values()
+            ):
+                raise ValueError("Invalid setup entity metadata")
+            if ("integration_id" in entity) != ("integration_name" in entity) or (
+                "integration_id" in entity and not entity["integration_id"].strip()
             ):
                 raise ValueError("Invalid setup entity metadata")
             if not entity["entity_id"].startswith(("sensor.", "binary_sensor.", "water_heater.")):
