@@ -130,12 +130,13 @@ when the retained history requires the annual-consumption startup estimate.
 Filtering and the separate conservative appliance-component admission safeguards
 remain unchanged.
 
-After a trained worker result is accepted, the responsible demand logger reports
-usable hours, excluded hours and the excluded percentage. New or changed cohort
-quality is INFO. Unchanged retraining summaries are DEBUG. Results with no usable
-hours, failed results and superseded results cannot announce successful training.
-A new history cohort or
-configuration clears the previous quality before its accepted training summary.
+After a forecast worker result with usable training history is accepted, the
+responsible demand logger reports usable hours, excluded hours and the excluded
+percentage. This assesses the training history without claiming that a learned
+model replaced the startup estimate. New or changed cohort quality is INFO.
+Unchanged retraining summaries are DEBUG. Results with no usable hours, failed
+results and superseded results cannot emit this assessment summary. A new history
+cohort or configuration clears the previous quality before its accepted summary.
 Counts and percentage remain available in `GET /v1/demand.history_quality` even
 when the share is too small for a notification. They are disposable diagnostics,
 not another archive of measured data.

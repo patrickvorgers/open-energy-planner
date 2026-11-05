@@ -283,7 +283,7 @@ class DemandRuntime:
         if history_quality["usable_hours"] > 0:
             _LOGGER.log(
                 logging.INFO if quality_changed else logging.DEBUG,
-                "Household energy training accepted: %d usable hours, %d excluded hours (%.1f%%). "
+                "Household energy training history assessed: %d usable hours, %d excluded hours (%.1f%%). "
                 "Excluded hours were omitted from training. Recorder data is unchanged.",
                 history_quality["usable_hours"],
                 history_quality["rejected_hours"],

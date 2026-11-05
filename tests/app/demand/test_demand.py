@@ -83,26 +83,28 @@ def test_training_summary_is_logged_only_after_current_result_acceptance(tmp_pat
     now = START + timedelta(hours=10)
     caplog.set_level(logging.DEBUG, logger="open_energy_planner.demand.runtime")
     result = runtime.build(runtime.job(now))
-    assert "Household energy training accepted" not in caplog.text
+    assert "Household energy training history assessed" not in caplog.text
     assert not runtime.install(result, now + timedelta(minutes=15))
-    assert "Household energy training accepted" not in caplog.text
+    assert "Household energy training history assessed" not in caplog.text
     assert runtime.install(result, now)
     assert runtime.issue is None
+    assert runtime.forecast.model == "startup-v2"
     summaries = [
         record
         for record in caplog.records
-        if "Household energy training accepted" in record.message
+        if "Household energy training history assessed" in record.message
     ]
     assert len(summaries) == 1
     assert summaries[0].levelno == logging.INFO
     assert "8 usable hours, 2 excluded hours (20.0%)" in summaries[0].message
+    assert "training accepted" not in summaries[0].message
     caplog.clear()
     later = now + timedelta(minutes=15)
     assert runtime.install(runtime.build(runtime.job(later)), later)
     summaries = [
         record
         for record in caplog.records
-        if "Household energy training accepted" in record.message
+        if "Household energy training history assessed" in record.message
     ]
     assert len(summaries) == 1
     assert summaries[0].levelno == logging.DEBUG
@@ -116,7 +118,7 @@ def test_training_summary_is_logged_only_after_current_result_acceptance(tmp_pat
 
 @pytest.mark.parametrize("assessed_hours", [0, 24])
 def test_no_usable_hours_never_logs_successful_training(tmp_path, caplog, assessed_hours):
-    """Keep empty or fully rejected history diagnostic without announcing successful training."""
+    """Retain empty or fully rejected history diagnostics without an accepted assessment log."""
     definition = replace(
         config(), terms=(EnergyTerm("sensor.house", 1), EnergyTerm("sensor.export", -1))
     )
@@ -138,11 +140,11 @@ def test_no_usable_hours_never_logs_successful_training(tmp_path, caplog, assess
     }
     assert runtime.forecast.model == "startup-v2"
     assert runtime.issue == ("demand_boundary_inconsistent" if assessed_hours else None)
-    assert "Household energy training accepted" not in caplog.text
+    assert "Household energy training history assessed" not in caplog.text
 
 
 def test_failed_training_never_logs_an_accepted_quality_summary(tmp_path, monkeypatch, caplog):
-    """An archive failure cannot announce successful training or install new diagnostic counts."""
+    """An archive failure cannot announce an accepted assessment or install new diagnostic counts."""
     store = make_store(tmp_path, DemandStore)
     store.save(config())
     runtime = DemandRuntime(store)
@@ -157,7 +159,7 @@ def test_failed_training_never_logs_an_accepted_quality_summary(tmp_path, monkey
     with pytest.raises(OSError, match="synthetic archive failure"):
         runtime.build(runtime.job(START + timedelta(hours=24)))
     assert runtime.history_quality is None
-    assert "Household energy training accepted" not in caplog.text
+    assert "Household energy training history assessed" not in caplog.text
 
 
 def samples(days=70, *, trend=False):
