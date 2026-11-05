@@ -30,7 +30,10 @@ For detailed comparison boundaries, use [Savings](../development/SAVINGS.md) and
 
 ## Keep prices and commands clear
 
-Published prices and forecast prices are different inputs. Solid and dotted price lines retain that distinction. Current tariff previews may differ from the prices saved with an older plan. The [contract guide](../development/CONTRACT-PRICES.md) explains formulas, units and effective periods.
+Published prices and forecast prices are different inputs. Solid and dotted price lines retain that distinction. **Price inputs** shows the prices saved with the selected plan, whether latest
+or historical. Newly received prices or contract changes appear when a new plan
+uses them. Without a plan, the same graph explicitly shows a **Current tariff
+preview**. These preview prices are not presented as prices used by a plan. The [contract guide](../development/CONTRACT-PRICES.md) explains formulas, units and effective periods.
 
 For virtual battery commands, positive W means discharge and negative W means charge. Zero W is a real idle request. Unknown means there is no applicable numeric target. Unavailable means the command is not currently usable, for example after pause or expiry. Do not turn either state into zero. The [virtual-device guide](../development/VIRTUAL-DEVICES.md) owns the complete contract.
 
