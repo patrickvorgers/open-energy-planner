@@ -4,6 +4,17 @@ PR development uses Draft for building and reviewing, followed by a deliberate
 Ready for review transition for one selected candidate run. This reduces repeated heavy runs while keeping the final merge evidence.
 It does not remove tests or change app behaviour.
 
+## Find the right procedure
+
+| Task | Start here |
+|---|---|
+| Prepare a revision | [During development](#during-development) |
+| Coordinate multiple PRs | [Follow the intended merge order](#follow-the-intended-merge-order) |
+| Request independent review | [Choose the reviewer](#choose-the-reviewer-before-requesting-a-review) |
+| Understand selected tests | [Change-based candidate matrix](#change-based-candidate-matrix) |
+
+Local checks, review, candidate CI, merge and main reuse establish different evidence. Follow the complete applicable procedure before claiming readiness.
+
 ## During development
 
 Each PR opening, new revision or reopening runs

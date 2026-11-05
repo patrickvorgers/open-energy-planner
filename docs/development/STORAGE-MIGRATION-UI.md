@@ -1,13 +1,15 @@
 # Database migration from Data storage
 
-## Implementation plan and acceptance conditions
+For the operating steps and recovery decisions, use [Data storage and preservation](../users/data-storage.md). This reference defines the implemented migration boundary and the contracts that verification must preserve.
 
-1. Reuse the four-backend archive transfer, including exact verification of every
-   registered OEP table. Add bounded row-count progress, not a second copy engine.
-2. Keep a database-independent maintenance HTTP shell alive. A managed app runtime
+## Architecture and acceptance contracts
+
+1. The four-backend archive transfer verifies every registered OEP table.
+   Bounded row-count progress uses that same copy engine.
+2. A database-independent maintenance HTTP shell stays alive. A managed app runtime
    serves normal traffic on loopback. The shell closes admission and drains that
    runtime completely before copying. No database hot swapping or dual writes.
-3. Add authenticated connection preflight and explicit target-overwrite consent.
+3. Connection preflight is authenticated and requires explicit target-overwrite consent.
    Never return passwords, connection URLs or driver exceptions to the browser.
 4. Keep a private, atomically replaced migration journal outside both databases.
    It holds source/candidate connection settings, phase and recovery boundary.
@@ -18,8 +20,8 @@
    Restart the managed application automatically. The maintenance shell stays up.
 6. Preserve the source. Before release, offer restore/retry. After release, refuse
    old-source restoration: new data may exist, so returning needs a new migration.
-7. Extend the existing Courtyard Data storage screen with an explicit Change
-   database flow, progress, reconnect handling and downloadable recovery steps.
+7. The Courtyard Data storage screen provides an explicit Change database
+   flow, progress, reconnect handling and downloadable recovery steps.
 8. Prove admission, drain ordering, restart boundaries, credential redaction,
    four-backend copy/progress and desktop/mobile behavior. Keep CI and deployment
    outcomes separate from local verification.

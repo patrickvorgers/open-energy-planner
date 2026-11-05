@@ -1,6 +1,9 @@
 # First release scope: Open Energy Planner
 
-Development proceeds in the requested private repository under `patrickvorgers`. See [development foundation](DEVELOPMENT-FOUNDATION.md) for reproducible onboarding and CI. This does not change the agreed open-source product release or any functional inclusion below.
+Development proceeds in the public `patrickvorgers/open-energy-planner` repository.
+See [development foundation](DEVELOPMENT-FOUNDATION.md) for reproducible onboarding
+and CI. Source availability does not establish a stable product release or change
+any functional inclusion below.
 
 This document consolidates the agreed first product release. It does not narrow earlier commitments or turn an implementation proposal into a confirmed requirement. Detailed behaviour remains defined by [requirements](REQUIREMENTS.md). Implementation boundaries are in the [technical design](TECHNICAL-DESIGN.md). Changes to this boundary require an explicit product decision. Finishing a milestone or solver experiment does not constitute the first product release.
 

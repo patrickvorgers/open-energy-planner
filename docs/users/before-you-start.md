@@ -1,37 +1,51 @@
 # Before you start
 
-Choose a safe first experience. You can inspect a real OEP plan using synthetic data before connecting Home Assistant.
+Start by understanding the inputs and the current installation boundary. You can try a real synthetic plan without Home Assistant, then prepare an isolated installation before using your own measurements.
 
-## What OEP does
+## Choose the first experience
 
-Open Energy Planner runs a local optimization app beside Home Assistant. The app proposes how energy can flow through your installation over the planning window. Its thin Home Assistant integration exchanges measurements and publishes virtual commands.
-
-A virtual command is a proposed action exposed in Home Assistant. It does not automatically operate your battery or another appliance. Physical device control, manufacturer limits and electrical safety remain with your own automations and equipment.
-
-## Choose your starting point
-
-| Your goal | What you need | Start here |
+| Your goal | What you need | Continue with |
 |---|---|---|
-| Understand the interface and a plan | Repository access, Git, a supported 64-bit Python installation and a browser | [Local synthetic demo](first-plan.md) |
-| Explore setup with Home Assistant | Repository access and an accepted, numbered CI installation bundle, plus Python and Docker with Linux containers | [Isolated Home Assistant](home-assistant.md) |
-| Connect real measurements | An administrator-managed installation, configured Energy meters and the relevant integration knowledge | [Installation reference](../development/INSTALLATION-PLANNING.md) |
+| Understand the model and interface | This guide and the energy glossary | [How OEP works](how-oep-works.md) |
+| Run a plan without equipment | Git, a supported 64-bit Python environment and a browser | [Try your first plan](first-plan.md) |
+| Configure an existing OEP installation | The matched app/integration pair and access to Home Assistant Energy | [Connect Home Assistant](home-assistant.md) |
+| Contribute code or test actual Supervisor behavior | The pinned tools and an accepted numbered package | [Developer start](../development/README.md) |
 
-The demo needs no Home Assistant knowledge. For an actual connection, you should know how to open Home Assistant Settings, configure the Energy dashboard, identify entities and inspect their units and availability. A power reading in W measures a rate. An energy counter in kWh accumulates consumption or production over time.
+## Check current availability
 
-## Current availability
+OEP is a public development preview, not a stable product release. Public HACS installation is not available yet. Existing administrator-managed installations use matched app and integration artifacts. Do not combine independently chosen builds.
 
-The repository and documentation are public. The integration is not currently available through public HACS. The release packages and native acceptance procedures are described in the [installation acceptance guide](../development/HAOS-ACCEPTANCE.md). These are development procedures, not a one-click public release. Verification of a numbered installation bundle still requires GitHub read access.
+Linux AMD64 is the maintained full acceptance platform. Other Python installations depend on compatible native dependency wheels. An experimental install workaround is not platform acceptance. The [release scope](../../design/FIRST-RELEASE-SCOPE.md) records the remaining product gates.
 
-The maintained full acceptance platform is Linux AMD64. Installing Python packages elsewhere depends on compatible native dependency wheels. If installation fails, use the supported Docker-based developer route rather than bypassing dependency checks.
+## Prepare Home Assistant Energy
 
-## Before using real data
+Energy owns your grid, solar, battery and individual-consumer source membership. Check **Home Assistant Settings > Dashboards > Energy** before OEP setup.
 
-Check the [release boundaries](../../design/FIRST-RELEASE-SCOPE.md). Back up your installation using your established process. Begin in an isolated environment. Never copy a sample battery limit or tariff into a real installation without checking it against your own equipment and contract.
+| Source | What to confirm |
+|---|---|
+| Grid | Every import/export cumulative energy channel and the configured normalized instantaneous power |
+| Solar | Each disjoint production source, its units and any supported linked panel metadata |
+| Battery | Separate charge/discharge energy, normalized power, SoC and usable capacity |
+| Individual consumer | Its own cumulative energy and power evidence without overlapping a selected parent or another controlled device |
 
-Home Assistant supplies the timezone. OEP does not have a separate timezone setting. Planning limits are not electrical protection. Missing or stale inputs may prevent a plan, and forecasts do not guarantee a particular outcome.
+Power in W or kW is a rate. Energy in Wh or kWh accumulates over time. A power sensor is not a substitute for a cumulative settlement meter. Energy can normalize inverted or combined power readings. OEP reads that normalized result rather than applying the same inversion twice.
 
-**Next:** [Try your first plan](first-plan.md).
+Grid power is import-positive and export-negative. Battery terminal power is discharge-positive and charge-negative. Missing or unavailable constituents of a combined power sensor must be repaired at the source, not treated as zero.
 
-## Help from the app
+The household balance must use disjoint channels. Selecting both a total and its components can count energy twice. A source can be structurally configured before its current readings or history are usable. These are separate readiness checks.
 
-Open **Help > Wiki help** in the app navigation to read this guide in a new tab. On a phone, open **Menu** first. Your current app page stays open. The public wiki needs an internet connection.
+## Prepare OEP-only settings
+
+Have the actual grid limits, physical inverter relationships, charge/discharge ratings, reserves and relevant efficiencies available. If recent common energy history is insufficient, supply a reasonable annual whole-home consumption estimate. Empty history is not zero demand.
+
+Have your contract's effective dates and import/export formulas ready. A bonus needs its own eligibility, allowance and reset definition. Do not copy laboratory tariffs or equipment limits as recommendations for your installation.
+
+Home Assistant is the timezone authority. OEP has no independent timezone setting. Physical equipment protections and fast local control remain outside the optimizer.
+
+## Know where help lives
+
+Open **Help > Wiki help** in the app navigation. On a phone, open **Menu** first. The public guide opens in a new tab, so the current app page stays open. It needs internet access.
+
+Keep tokens, private entity details, measurements and location data out of public screenshots or issue reports. Use the [troubleshooting guide](troubleshooting.md) for a specific failure rather than replacing missing inputs with invented values.
+
+**Next:** [Try your first plan](first-plan.md), or [connect an existing installation](home-assistant.md).
