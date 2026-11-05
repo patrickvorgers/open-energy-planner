@@ -31,7 +31,7 @@ production boundaries.
 Ruff 0.17.1 uses its default lint rules plus the explicitly agreed D100-D107/D419 missing/empty-docstring rules from the central `pyproject.toml`. These rules also cover tests/browser tests without path exemptions. Existing code and tests have no legacy baseline. `EXE002` is the sole global exception: Windows Docker Desktop bind mounts and build contexts report ordinary Python files as executable. Targeted `TRY004` suppressions retain existing `ValueError` validation contracts. Their reasons are documented at each raise site. The project retains its 100-character formatter width and Python 3.12 target. The Dev Container installs Ruff and its VS Code extension. The editor explicitly uses `/opt/oep-dev/bin/ruff`. The same pinned version runs lint and formatting checks through `script/ci/check_native.py` for explicit local checks and GitHub Actions. The `dev` extra and Ruff's required-version setting enforce the same version outside the container. A future Ruff upgrade is a tested dependency change.
 
 PR revisions run **Quick checks** before any candidate is requested. The shared
-`python script/ci/check_native.py --quick` entry point verifies provenance, lint and
+`python script/ci/check_native.py --quick` entry point runs lint and
 formatting without Docker or app dependencies. The requested quality job repeats
 these checks before image builds. Its native stage retains full-scope lint and
 format checks. Build and review in Draft, then choose Ready for review to request
@@ -46,24 +46,24 @@ log levels, failure/recovery deduplication, privacy and truthful acceptance logs
 
 ### What the quality job runs
 
-CodeRabbit is the only required automated review service and must cover the latest
-PR head. After Quick, signature and CodeQL checks pass, use an independent local
-Codex context to review the Draft, batch corrections and retest. Prepare one final
-manual CodeRabbit request through the trusted-main read-only preflight. The
+CodeRabbit is the preferred independent reviewer. Check fresh included capacity
+before requesting review and use Kody-ai only after a confirmed CodeRabbit rate
+limit. A substantive review from either provider must cover the latest PR head.
+After Quick, signature and CodeQL checks pass, inspect your own changes, batch
+corrections and retest. When choosing CodeRabbit, prepare one final manual request
+through the trusted-main read-only preflight. The
 150-file limit counts every changed file. Automatic review triggers are disabled
 regardless of plan or star count. Follow the [review procedure](CI-STAGES.md#prepare-one-final-coderabbit-review).
-Codex Cloud review is optional and starts only on an explicit human
-request for that service and PR. Automatic Codex review is disabled for this
-repository. A general request to inspect a PR does not authorize a cloud review.
-Do not automatically post or repeat Codex review commands after commits. Keep
-evaluating findings already posted by either service. The existing Dependabot
-exception remains: no mandatory CodeRabbit or Codex Cloud review, with CI,
+The selected provider supplies the independent review. Do not add a separate local Codex
+reviewer, reviewer subagent or Codex Cloud review stage. Keep automatic Codex
+reviews disabled and evaluate findings already posted by any reviewer.
+The existing Dependabot exception remains: no mandatory automated review, with CI,
 verified commits and compatibility/regression assessment still required. See
 [the contribution policy](../../CONTRIBUTING.md).
 
 | Stage | Checks |
 |---|---|
-| Provenance | Original/translated documentation provenance against immutable Git objects |
+| Source identity | GitHub-verified commits and CI results bound to the exact tested Git tree |
 | Container builds | App, native tests, HA framework tests, provisioning and browser runtimes |
 | Native quality | Pinned Ruff lint and format checks. Native pytest, including independent solver scenarios, physics/economics validation, contracts, app HTTP tests, failure cases and documentation links |
 | Process and solver smoke | Separate app process, authentication, pause/resume, fresh resume plan and independently checked debug planning scenario |
@@ -112,11 +112,9 @@ regression checks this invariant on every full and documentation-only run.
 Update both pins together. The persistent real-Supervisor developer installation has
 its own upgrade lifecycle and is not upgraded by the ephemeral CI recipe.
 Existing daemon settings are retained when enabling the feature. Local Docker
-settings are never changed. Optional personal Windows/Linux runners use a
-separate Buildx container instead of changing or restarting the host daemon.
-The workflow keeps the same test selection and artifacts. See
-[personal runner execution](CI-STAGES.md#personal-runner-execution) for owner-only
-labels, availability fallback and setup. Separate scopes hold the app, native,
+settings are never changed. All CI jobs use
+[GitHub-hosted execution](CI-STAGES.md#github-hosted-execution).
+Separate scopes hold the app, native,
 Home Assistant and browser layers. The native recipe builds once with three tags
 for the native, provisioning and database suites, avoiding duplicate image exports.
 Dependency/base-image layers can survive source changes. Docker still hashes
@@ -130,7 +128,7 @@ artifacts remain available.
 `script/ci/ci.py --prebuilt` requires that exact project namespace and runs every
 selected gate with image rebuilding disabled. Missing images fail the run.
 The ordinary local command remains `python script/ci/ci.py`, which builds normally
-and creates its own unique project. Both paths retain provenance, Ruff, all four
+and creates its own unique project. Both paths retain exact tested-tree identity, Ruff, all four
 database backends, HA, onboarding, desktop/mobile tests, artifacts and failure
 cleanup. Documentation-only routing and the trusted signature workflow remain
 unchanged. No test-result cache, private registry, paid service or secrets are
@@ -167,7 +165,6 @@ control, not an adversarial boundary against same-repository workflow writers.
 Focused runs build only the existing pinned native runtime. They retain:
 
 - Ruff lint and format checks over all maintained Python code.
-- Immutable Git provenance verification and its regression tests.
 - Requirements inventory, local documentation links and database dictionary
   table/column coverage tests. Meaning, completeness and examples remain review
   obligations. Coverage does not prove semantic accuracy.
