@@ -1007,7 +1007,9 @@ def test_current_price_chart_shows_saved_bonus_without_any_plan_or_volume_histor
     )
     page.route("**/v1/prices/inputs", lambda route: route.abort())
     page.get_by_role("button", name="Refresh overview", exact=True).click()
-    expect(page.locator("#current-price-status")).to_contain_text("Failed to fetch")
+    expect(page.locator("#current-price-status")).to_contain_text(
+        "Cannot read this view: Check the connection and retry."
+    )
     assert (
         page.evaluate("Chart.getChart(document.getElementById('price-chart')).data.datasets.length")
         == 0
