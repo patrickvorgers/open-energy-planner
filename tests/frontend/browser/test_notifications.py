@@ -417,11 +417,12 @@ def test_malformed_status_cannot_clear_last_known_notice_or_follow_external_acti
     page.wait_for_function(
         "document.getElementById('integration-version-status').hasAttribute('title')"
     )
-    result["notifications"][0]["auto_clear_minutes"] = "5"
-    with page.expect_response("**/v1/notifications"):
-        page.clock.fast_forward(16000)
-    expect(popup).to_contain_text("last known notifications")
-    expect(popup.locator(".notification-expiry")).to_have_count(0)
+    for lifetime in ("5", 9007199254740992):
+        result["notifications"][0]["auto_clear_minutes"] = lifetime
+        with page.expect_response("**/v1/notifications"):
+            page.clock.fast_forward(16000)
+        expect(popup).to_contain_text("last known notifications")
+        expect(popup.locator(".notification-expiry")).to_have_count(0)
     result["notifications"] = None
     page.clock.fast_forward(16000)
     expect(popup).to_contain_text("last known notifications")

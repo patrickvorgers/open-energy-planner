@@ -10,18 +10,19 @@ from open_energy_planner.notifications.collection import NotificationCenter
 from open_energy_planner.notifications.model import Lifecycle, NoticeText, Notification
 
 
-def test_temporary_lifetime_is_optional_source_owned_presentation():
+@pytest.mark.parametrize("minutes", [1, 5, 9007199254740991])
+def test_temporary_lifetime_is_optional_source_owned_presentation(minutes):
     """Expose the declared lifetime without timing out notices or altering permanent warnings."""
     cause = Notification("example", "updated", NoticeText("Updated", "Settings accepted"))
     assert "auto_clear_minutes" not in cause.document("example")
-    temporary = replace(cause, auto_clear_minutes=5)
+    temporary = replace(cause, auto_clear_minutes=minutes)
     center = NotificationCenter()
     center.register("example", lambda: (temporary,))
-    assert center.document()["notifications"][0]["auto_clear_minutes"] == 5
+    assert center.document()["notifications"][0]["auto_clear_minutes"] == minutes
     assert center.document()["notifications"][0]["key"] == "example"
 
 
-@pytest.mark.parametrize("minutes", [0, -1, True, "5", 1.5])
+@pytest.mark.parametrize("minutes", [0, -1, True, "5", 1.5, 9007199254740992, 9007199254740993])
 def test_temporary_lifetime_rejects_invalid_minutes(minutes):
     """Malformed duration hints cannot enter the trusted notification projection."""
     with pytest.raises(ValueError, match="positive whole-minute"):

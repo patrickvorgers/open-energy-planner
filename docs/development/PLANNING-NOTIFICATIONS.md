@@ -69,7 +69,9 @@ role and freshness. `level` and `blocks` are independent. An informative waiting
 can block planning while a warning about corrected statistics does not.
 
 Sources may supply positive whole-minute `auto_clear_minutes` presentation metadata
-for temporary confirmations. Both notification views show a clock badge with this
+up to 9007199254740991, matching JavaScript's `Number.MAX_SAFE_INTEGER` at the JSON
+boundary. Larger integers, fractions, booleans and strings are rejected.
+For temporary confirmations, both notification views show a clock badge with this
 lifetime and a hover/focus explanation instead of repeating expiry prose. It is
 not a countdown. The source still owns actual removal. The browser never clears
 notices on a timer. Notices marked stale hide the badge until their source can be read.

@@ -4,6 +4,9 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
 
+# Match JavaScript's Number.MAX_SAFE_INTEGER at the JSON boundary.
+MAX_NOTIFICATION_LIFETIME_MINUTES = 2**53 - 1
+
 
 class Severity(StrEnum):
     """Describe importance independently of which operations a problem blocks."""
@@ -89,9 +92,12 @@ class Notification:
         if self.detail is not None and not isinstance(self.detail, str):
             raise TypeError("Notification details must be text")
         if self.auto_clear_minutes is not None and (
-            type(self.auto_clear_minutes) is not int or self.auto_clear_minutes <= 0
+            type(self.auto_clear_minutes) is not int
+            or not 0 < self.auto_clear_minutes <= MAX_NOTIFICATION_LIFETIME_MINUTES
         ):
-            raise ValueError("A temporary notification needs a positive whole-minute lifetime")
+            raise ValueError(
+                "A temporary notification needs a positive whole-minute lifetime within the JSON safe-integer range"
+            )
 
     def document(self, owner: str, *, stale: bool = False, fallback: bool = False) -> dict:
         """Serialize display fields and ownership without exposing executable actions."""
