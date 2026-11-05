@@ -59,14 +59,14 @@
 <dt>Threshold</dt>
 <dd><code class="example-value">0</code><p>No bonus is paid when the combined price is zero or negative.</p></dd>
 <dt>Annual export cap</dt>
-<dd><code class="example-value">7500 kWh</code><p>All grid export counts towards the cap, including unpaid export.</p></dd>
+<dd><code class="example-value">7500 kWh</code><p>This app counts all grid export towards the cap, including unpaid export and battery export.</p></dd>
 <dt>Annual reset</dt>
 <dd><code class="example-value">Calendar year (1 January)</code><p>A new supplier contract&#x27;s first period starts at its own Contract starts date.</p></dd>
 <dt>Paid window</dt>
 <dd><code class="example-value">Daylight</code><p>Sunrise and sunset come from the Home Assistant location and timezone.</p></dd>
 </dl>
 <p>For one exported kWh at a market price of €0.18/kWh, base income is €0.20 and the bonus is €0.02: total income €0.22. At night or after the cap, only the €0.20 base remains. With 0.50 kWh of quota left, that export earns €0.01 bonus and €0.21 total.</p>
-<p>All grid export counts towards the cap, including unpaid hours and battery export. Source exclusions are unsupported. This example cannot reproduce contract terms that exclude particular energy sources. Changing terms within the same contract does not reset used volume.</p>
+<p>This app counts all grid export towards the cap, including unpaid hours and battery export. Source exclusions are unsupported. This example cannot reproduce contract terms that exclude particular energy sources. Changing terms within the same contract does not reset used volume.</p>
 </section>
 <section id="bonus-nextenergy-panel" role="tabpanel" aria-labelledby="bonus-nextenergy-tab" tabindex="0" hidden>
 <h3>NextEnergy Zonnebonus</h3>
@@ -83,7 +83,7 @@
 <dt>Threshold</dt>
 <dd><code class="example-value">0</code><p>Zero and negative exchange prices earn no bonus.</p></dd>
 <dt>Annual export cap</dt>
-<dd><code class="example-value">6000 kWh</code><p>All grid export counts. Supplier source exclusions cannot be applied.</p></dd>
+<dd><code class="example-value">6000 kWh</code><p>This app counts all grid export towards the cap. Supplier source exclusions cannot be applied.</p></dd>
 <dt>Annual reset</dt>
 <dd><code class="example-value">Contract anniversary</code><p>Uses this price rule&#x27;s Contract starts date, rather than its effective date.</p></dd>
 <dt>Paid window</dt>
@@ -94,7 +94,7 @@
 <dd><code class="example-value">22:00</code><p>The end instant is excluded.</p></dd>
 </dl>
 <p>With a simplified base export rate equal to the market price, one exported kWh at €0.06/kWh earns €0.06 base plus €0.03 bonus: €0.09 total. Outside the window or after the cap, it earns €0.06. If two kWh are exported with only one kWh of quota left, the base is €0.12 and the bonus €0.03: €0.15 total. Use the same price/VAT basis throughout.</p>
-<p>NextEnergy excludes stored battery energy from the bonus. All grid export counts. Source exclusions cannot be applied. This example is not an exact supplier preset when those exclusions affect settlement. A changed price rule within the same contract retains used volume.</p>
+<p>NextEnergy excludes stored battery energy from the bonus. This app counts all grid export towards the cap. Source exclusions cannot be applied. This example is not an exact supplier preset when those exclusions affect settlement. A changed price rule within the same contract retains used volume.</p>
 </section>
 <form method="dialog"><button autofocus>Close</button></form>
 </dialog>
