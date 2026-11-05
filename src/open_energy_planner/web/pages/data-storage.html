@@ -26,7 +26,7 @@
 <div id="migration-confirmation" hidden>
 <p id="migration-route"></p>
 <p>Connection changes made here persist across restarts and app updates. Deployment database connection options no longer override it.</p>
-<p>After migration and successful startup checks, planning resumes automatically using the new database. The original database is retained but is no longer updated.</p>
+<p>After migration and successful startup checks, the app resumes automatically using the new database. Planning may wait for fresh Home Assistant measurements and its other required inputs. The original database is retained but is no longer updated.</p>
 <label><input id="overwrite-destination" type="checkbox">I accept replacement of all existing tables belonging to this app in the destination. Other applications' tables are not replaced.</label>
 <button id="start-migration" type="button" disabled>Migrate database</button>
 </div>

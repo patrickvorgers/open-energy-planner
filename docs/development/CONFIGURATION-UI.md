@@ -69,7 +69,7 @@ Choosing a source stages it in the editor. Configure its weather sensitivity and
 cycle-shifting permission, then Save appliance settings. The source is not added
 until persistence succeeds. Cancel abandons the draft.
 
-More actions offers Remove appliance with a named confirmation. An open cycle
+The More actions menu offers Remove appliance with a named confirmation. An open cycle
 blocks removal. Existing server safeguards remain authoritative if evidence
 changes after loading. Removing first revokes shifting, then updates the
 versioned consumer selection. EV selections remain intact. HA sources and
