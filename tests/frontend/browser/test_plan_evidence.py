@@ -11,13 +11,13 @@ from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 
 @pytest.fixture
-def automatic_plan_overview(app_page):
+def automatic_plan_overview(app_page, request):
     """Serve immutable synthetic plan versions while controlling publication and browser time.
 
     The seeded plan begins on a UTC quarter boundary. Pause the browser clock 14 minutes
     later, leaving four 15-second publication polls until the next quarter. Older and newer
     versions clone that plan under distinct identities. The newer plan's first buy price is
-    0.91. Current prices reuse the seeded tariff intervals with a buy price of 0.3 by default.
+    0.91, while the older plan uses 0.17. Current prices reuse the seeded tariff intervals with a buy price of 0.3 by default.
     Publication tests change that current price to 0.88.
     """
     page, url = app_page
@@ -33,13 +33,16 @@ def automatic_plan_overview(app_page):
     newer = {**original, "plan_id": "newly-published-plan", "strategy": "minimize consumption"}
     older_comparison = deepcopy(comparison)
     older_comparison["plan"].update(plan_id=older["plan_id"], strategy="minimize consumption")
+    older_comparison["plan"]["input_snapshot"]["tariff_evidence"][0]["buy_price"] = 0.17
+    older_comparison["plan"]["input_snapshot"]["problem"]["intervals"][0]["buy_price"] = 0.17
     new_comparison = deepcopy(comparison)
     new_comparison["plan"].update(plan_id=newer["plan_id"], strategy=newer["strategy"])
     new_comparison["plan"]["input_snapshot"]["tariff_evidence"][0]["buy_price"] = 0.91
     state = {
         "page": page,
         "beginning": beginning,
-        "plans": [original, older],
+        "plans": [] if getattr(request, "param", None) == "preview" else [original, older],
+        "original": original,
         "newer": newer,
         "comparisons": {
             original["plan_id"]: comparison,
@@ -108,7 +111,11 @@ def automatic_plan_overview(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    expect(page.locator("#current-price-status")).to_contain_text(
+        "Current tariff preview"
+        if getattr(request, "param", None) == "preview"
+        else "Selected plan:"
+    )
     wait_for_product_reads(page)
     page.evaluate("window.initialPlanChart = Chart.getChart(document.getElementById('plan-chart'))")
     return state
@@ -204,14 +211,54 @@ def test_current_plan_moves_at_quarter_boundary_without_reloading_data(automatic
     expected_start = (beginning + timedelta(minutes=15)).timestamp() * 1000
     assert (
         page.evaluate("""() => ['plan-chart', 'reference-chart', 'self-consumption-chart',
-        'forecast-chart', 'price-chart', 'current-price-chart'].map(id =>
+        'forecast-chart', 'price-chart'].map(id =>
         Chart.getChart(document.getElementById(id)).scales.x.min)""")
-        == [expected_start] * 6
+        == [expected_start] * 5
     )
     assert state["comparison_reads"] == original_reads
     assert page.evaluate(
         "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
     )
+
+
+@pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("late_response", ["success", "failure"])
+def test_late_current_preview_cannot_replace_selected_plan_prices(
+    automatic_plan_overview, late_response
+):
+    """A late preview from an older refresh cannot replace or clear a newly selected plan."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["hold_prices"] = True
+    with page.expect_request("**/v1/prices/inputs"):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    page.evaluate("Promise.resolve()")
+    assert len(state["held_prices"]) == 1
+    state["plans"].insert(0, state["newer"])
+    with page.expect_response("**/v1/plans/newly-published-plan/comparison"):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    if late_response == "failure":
+        state["held_prices"][0].fulfill(status=503, body="Late preview failure")
+    else:
+        original = state["comparisons"][state["original"]["plan_id"]]["plan"]
+        tariffs = deepcopy(original["input_snapshot"]["tariff_evidence"])
+        for tariff in tariffs:
+            tariff["buy_price"] = 0.88
+        state["held_prices"][0].fulfill(
+            json={"as_of": state["beginning"].isoformat(), "currency": "EUR", "intervals": tariffs}
+        )
+    wait_for_product_reads(page)
+    assert (
+        page.evaluate(
+            "Chart.getChart(document.getElementById('price-chart')).data.datasets[1].data[0].y"
+        )
+        == 0.91
+    )
+    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.get_by_role("heading", name="Price inputs", exact=True)).to_have_count(1)
+    expect(page.get_by_role("heading", name="Original plan prices", exact=True)).to_have_count(0)
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -227,10 +274,10 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     page.clock.run_for(15000)
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
-    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        ?.data.datasets[1]?.data[0]?.y === 0.88""")
-    assert page.evaluate("""() => ['price-chart', 'current-price-chart'].map(id =>
-        Chart.getChart(document.getElementById(id)).data.datasets[1].data[0].y)""") == [0.91, 0.88]
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('price-chart'))
+        ?.data.datasets[1]?.data[0]?.y === 0.91""")
+    assert page.evaluate("""() => ['price-chart'].map(id =>
+        Chart.getChart(document.getElementById(id)).data.datasets[1].data[0].y)""") == [0.91]
     assert (
         page.evaluate("""() => {
         const graph = Chart.getChart(document.getElementById('plan-chart'));
@@ -244,32 +291,55 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     page.locator("figure").filter(has=page.locator("#plan-chart")).screenshot(
         path=f"results/ci/planning-auto-refresh-{page.viewport_size['width']}.png"
     )
+    page.get_by_role("button", name="Full horizon", exact=True).click()
+    price_figure = page.locator("figure").filter(has=page.locator("#price-chart"))
+    price_figure.scroll_into_view_if_needed()
+    page.evaluate(
+        "window.scrollBy(0, -(document.querySelector('.settings-mobilebar')?.getBoundingClientRect().height || 0))"
+    )
+    price_figure.screenshot(
+        path=f"results/ci/latest-plan-price-inputs-{page.viewport_size['width']}.png"
+    )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("plan_view", ["empty", "historical"])
 def test_current_prices_recover_independently_of_plan_selection(automatic_plan_overview, plan_view):
-    """Retry current prices with an empty archive or historical selection without changing that view."""
+    """Retry the no-plan preview, while a historical selection retains its own frozen prices."""
     state = automatic_plan_overview
     page = state["page"]
     state["failed_prices"] = True
     if plan_view == "empty":
         state["plans"].clear()
-    page.get_by_role("button", name="Refresh overview", exact=True).click()
-    expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
     if plan_view == "historical":
-        page.locator("#plan-version").select_option("older-plan")
-        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        original_id = state["original"]["plan_id"]
+        with page.expect_response(f"**/v1/plans/{original_id}/comparison"):
+            page.get_by_role("button", name="Refresh overview", exact=True).click()
     else:
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    if plan_view == "historical":
+        with page.expect_response("**/v1/plans/older-plan/comparison") as selected:
+            page.locator("#plan-version").select_option("older-plan")
+        assert selected.value.json()["plan"]["strategy"] == "minimize consumption"
+        expect(page.locator("#plan-version")).to_have_value("older-plan")
+        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    else:
+        expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
         expect(page.locator("#plan-version option")).to_have_count(0)
     wait_for_product_reads(page)
     comparisons = list(state["comparison_reads"])
     state["failed_prices"] = False
     state["current_buy_price"] = 0.88
     page.clock.run_for(15000)
-    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        ?.data.datasets[1]?.data[0]?.y === 0.88""")
-    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    page.wait_for_function(
+        """expected => Chart.getChart(document.getElementById('price-chart'))
+        ?.data.datasets[1]?.data[0]?.y === expected""",
+        arg=0.17 if plan_view == "historical" else 0.88,
+    )
+    expect(page.locator("#current-price-status")).to_contain_text(
+        "Selected plan:" if plan_view == "historical" else "Current tariff preview"
+    )
     assert state["comparison_reads"] == comparisons
     expect(page.locator("#plan-version")).to_have_value(
         "older-plan" if plan_view == "historical" else ""
@@ -284,12 +354,13 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
     """Retry the same latest plan or prices after a failed manual reload without redrawing good data."""
     state = automatic_plan_overview
     page = state["page"]
-    page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
+    page.locator("#price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
     current = state["plans"][0]["plan_id"]
     state["current_buy_price"] = 0.88
     if failed_view == "plan":
         state["failed_plans"].add(current)
     else:
+        state["plans"].clear()
         state["failed_prices"] = True
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     status = "#overview-status" if failed_view == "plan" else "#current-price-status"
@@ -298,35 +369,32 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
         if failed_view == "plan"
         else "Cannot read this view (503)."
     )
-    if failed_view == "prices":
-        page.wait_for_function("""() => window.initialPlanChart !==
-            Chart.getChart(document.getElementById('plan-chart'))""")
-        page.evaluate(
-            "window.reloadedPlanChart = Chart.getChart(document.getElementById('plan-chart'))"
-        )
     wait_for_product_reads(page)
     comparisons = state["comparison_reads"].count(current)
     state["failed_plans"].clear()
     state["failed_prices"] = False
     page.clock.run_for(15000)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    expect(page.locator("#current-price-status")).to_contain_text(
+        "Selected plan:" if failed_view == "plan" else "Current tariff preview"
+    )
     expect(page.locator("#plan-evidence-status")).not_to_contain_text("could not be loaded")
-    expect(page.locator("#plan-version")).to_have_value(current)
+    expect(page.locator("#plan-version")).to_have_value(current if failed_view == "plan" else "")
     expect(
-        page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True)
+        page.locator("#price-chart-legend").get_by_label("Import rate", exact=True)
     ).not_to_be_checked()
     assert page.evaluate(
-        "!Chart.getChart(document.getElementById('current-price-chart')).isDatasetVisible(1)"
+        "!Chart.getChart(document.getElementById('price-chart')).isDatasetVisible(1)"
     )
-    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        ?.data.datasets[1]?.data[0]?.y === 0.88""")
+    page.wait_for_function(
+        """expected => Chart.getChart(document.getElementById('price-chart'))
+        ?.data.datasets[1]?.data[0]?.y === expected""",
+        arg=0.3 if failed_view == "plan" else 0.88,
+    )
     assert state["comparison_reads"].count(current) == comparisons + (failed_view == "plan")
-    if failed_view == "prices":
-        assert page.evaluate("""window.reloadedPlanChart ===
-            Chart.getChart(document.getElementById('plan-chart'))""")
 
 
+@pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("manual_timing", ["before_poll", "during_poll"])
 def test_poll_retry_preserves_an_active_manual_price_read(automatic_plan_overview, manual_timing):
@@ -361,7 +429,7 @@ def test_poll_retry_preserves_an_active_manual_price_read(automatic_plan_overvie
             state["held_polls"][0].fulfill(json={"plans": state["plans"][:1], "next_before": None})
         page.evaluate("Promise.resolve()")
     assert len(state["held_prices"]) == 1
-    current = state["plans"][0]["plan_id"]
+    current = state["original"]["plan_id"]
     intervals = deepcopy(state["comparisons"][current]["plan"]["input_snapshot"]["tariff_evidence"])
     for interval in intervals:
         interval["buy_price"] = 0.88
@@ -372,12 +440,13 @@ def test_poll_retry_preserves_an_active_manual_price_read(automatic_plan_overvie
             "intervals": intervals,
         }
     )
-    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('price-chart'))
         ?.data.datasets[1]?.data[0]?.y === 0.88""")
     expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
     assert len(state["held_prices"]) == 1
 
 
+@pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_pending_price_retry_reads_after_publication_detection(automatic_plan_overview):
     """A pending price retry reads the new snapshot after archive detection, once per poll."""
@@ -403,9 +472,112 @@ def test_pending_price_retry_reads_after_publication_detection(automatic_plan_ov
     state["plans"].insert(0, state["newer"])
     state["current_buy_price"] = 0.88
     state["held_polls"][0].fulfill(json={"plans": state["plans"][:1], "next_before": None})
-    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        ?.data.datasets[1]?.data[0]?.y === 0.88""")
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('price-chart'))
+        ?.data.datasets[1]?.data[0]?.y === 0.91""")
     assert page.evaluate("window.priceReads") == 1
+
+
+@pytest.mark.parametrize("automatic_plan_overview", ["plan", "preview"], indirect=True)
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("failure", ["network", "json"])
+def test_price_read_failures_never_display_private_exception_values(
+    automatic_plan_overview, failure
+):
+    """Network and malformed JSON failures show owned recovery text without private exception values."""
+    state = automatic_plan_overview
+    page = state["page"]
+    selected = bool(state["plans"])
+    endpoint = "/v1/plans/older-plan/comparison" if selected else "/v1/prices/inputs"
+    if failure == "json":
+        page.route(
+            "**" + endpoint,
+            lambda route: route.fulfill(
+                content_type="application/json", body="PRIVATE_REVIEW_SENTINEL is not JSON"
+            ),
+        )
+        explanation = "Cannot read this view: The response is unreadable. Please retry."
+    else:
+        page.evaluate(
+            """endpoint => {
+            const originalFetch = window.fetch;
+            window.fetch = (input, options) => String(input).includes(endpoint)
+                ? Promise.reject(new Error('PRIVATE_REVIEW_SENTINEL connection detail'))
+                : originalFetch(input, options);
+        }""",
+            endpoint,
+        )
+        explanation = "Cannot read this view: Check the connection and retry."
+    if selected:
+        page.locator("#plan-version").select_option("older-plan")
+    else:
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_contain_text(explanation)
+    assert "PRIVATE" not in page.locator("body").inner_text()
+    expect(page.locator("#price-chart")).to_be_hidden()
+
+
+@pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_empty_price_preview_is_explicitly_unavailable(automatic_plan_overview):
+    """A successful read with no intervals cannot claim that saved rates are visible."""
+    state = automatic_plan_overview
+    page = state["page"]
+    page.route(
+        "**/v1/prices/inputs",
+        lambda route: route.fulfill(
+            json={"as_of": state["beginning"].isoformat(), "currency": "EUR", "intervals": []}
+        ),
+    )
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_have_text(
+        "Current price preview unavailable: No price intervals available."
+    )
+    expect(page.locator("#price-chart")).to_be_hidden()
+    assert page.evaluate("""() => Chart.getChart(document.getElementById('price-chart'))
+        .data.datasets.every(series => series.data.length === 0)""")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_initial_plan_lookup_never_flashes_current_tariff_preview(app_page):
+    """The initial pending archive lookup cannot briefly show unrelated current prices as plan inputs."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    listing = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()
+    held, preview_reads = [], []
+    page.route("**/v1/plans?limit=20", lambda route: held.append(route))
+    page.route("**/v1/prices/inputs", lambda route: preview_reads.append(route))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    with page.expect_request("**/v1/plans?limit=20"):
+        page.get_by_role("button", name="Connect", exact=True).click()
+    page.evaluate("Promise.resolve()")
+    assert len(held) == 1
+    assert preview_reads == []
+    expect(page.locator("#current-price-status")).not_to_contain_text("Current tariff preview")
+    held[0].fulfill(json=listing)
+    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
+    assert preview_reads == []
+
+
+@pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_no_plan_preview_reads_after_the_listing_timeout(automatic_plan_overview):
+    """A timed-out listing cannot spend the independent healthy preview read's timeout budget."""
+    state = automatic_plan_overview
+    page = state["page"]
+    held = []
+    page.route("**/v1/plans?limit=20", lambda route: held.append(route))
+    state["current_buy_price"] = 0.88
+    with page.expect_request("**/v1/plans?limit=20"):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    page.clock.run_for(5001)
+    expect(page.locator("#current-price-status")).to_contain_text("Current tariff preview")
+    expect(page.locator("#price-chart")).to_be_visible()
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('price-chart'))
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
+    assert len(held) == 1
+    held[0].fulfill(json={"plans": [], "next_before": None})
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -414,6 +586,8 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
     """A bounded overview load releases polling even when one of its view reads never responds."""
     state = automatic_plan_overview
     page = state["page"]
+    if hung_view == "prices":
+        state["plans"].clear()
     pattern = {
         "listing": "**/v1/plans?limit=20",
         "savings": "**/v1/savings?**",
@@ -447,12 +621,12 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_historical_selection_survives_publication_and_quarter_rollover(automatic_plan_overview):
-    """New advice refreshes current prices while historical chart data and its time range stay selected."""
+    """New advice never replaces the selected historical prices, time range or legend choice."""
     state = automatic_plan_overview
     page = state["page"]
     page.locator("#plan-version").select_option("older-plan")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
-    page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
+    page.locator("#price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
     before = page.evaluate("""() => {
         window.historicalChart = Chart.getChart(document.getElementById('plan-chart'));
         return {start: window.historicalChart.scales.x.min,
@@ -462,14 +636,14 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     state["plans"].insert(0, state["newer"])
     state["current_buy_price"] = 0.88
     page.clock.run_for(15000)
-    page.wait_for_function("""() => Chart.getChart(document.getElementById('current-price-chart'))
-        ?.data.datasets[1]?.data[0]?.y === 0.88""")
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('price-chart'))
+        ?.data.datasets[1]?.data[0]?.y === 0.17""")
     page.clock.run_for(45000)
     expect(
-        page.locator("#current-price-chart-legend").get_by_label("Import rate", exact=True)
+        page.locator("#price-chart-legend").get_by_label("Import rate", exact=True)
     ).not_to_be_checked()
     assert page.evaluate(
-        "!Chart.getChart(document.getElementById('current-price-chart')).isDatasetVisible(1)"
+        "!Chart.getChart(document.getElementById('price-chart')).isDatasetVisible(1)"
     )
     expect(page.locator("#plan-version option")).to_have_count(3)
     expect(page.locator("#plan-version")).to_have_value("older-plan")
@@ -481,6 +655,15 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     assert state["comparison_reads"] == original_reads
     assert page.evaluate(
         "window.historicalChart === Chart.getChart(document.getElementById('plan-chart'))"
+    )
+    page.locator("#price-chart-legend").get_by_label("Import rate", exact=True).check()
+    price_figure = page.locator("figure").filter(has=page.locator("#price-chart"))
+    price_figure.scroll_into_view_if_needed()
+    page.evaluate(
+        "window.scrollBy(0, -(document.querySelector('.settings-mobilebar')?.getBoundingClientRect().height || 0))"
+    )
+    price_figure.screenshot(
+        path=f"results/ci/historical-plan-price-inputs-{page.viewport_size['width']}.png"
     )
 
 
@@ -508,7 +691,7 @@ def test_failed_new_plan_comparison_retries_without_another_publication(
             "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
         )
     else:
-        expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
+        expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
         expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
         page.evaluate(
             "window.publishedPlanChart = Chart.getChart(document.getElementById('plan-chart'))"
@@ -518,12 +701,12 @@ def test_failed_new_plan_comparison_retries_without_another_publication(
     page.clock.run_for(15000)
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
+    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
     assert (
         page.evaluate(
-            "Chart.getChart(document.getElementById('current-price-chart')).data.datasets[1].data[0].y"
+            "Chart.getChart(document.getElementById('price-chart')).data.datasets[1].data[0].y"
         )
-        == 0.88
+        == 0.91
     )
     assert state["comparison_reads"].count("newly-published-plan") == (
         2 if failed_view == "plan" else 1
@@ -544,6 +727,19 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
     page = state["page"]
     state["plans"].insert(0, state["newer"])
     state["hold_" + hung_view] = True
+    if hung_view == "prices":
+        with page.expect_response("**/v1/plans/newly-published-plan/comparison"):
+            page.clock.run_for(15000)
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
+        expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+        assert state["held_prices"] == []
+        assert (
+            page.evaluate(
+                "Chart.getChart(document.getElementById('price-chart')).data.datasets[1].data[0].y"
+            )
+            == 0.91
+        )
+        return
     held_path = (
         "/v1/plans/newly-published-plan/comparison"
         if hung_view == "comparison"
@@ -561,7 +757,7 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
     if hung_view == "comparison":
         expect(page.locator("#overview-status")).not_to_contain_text("Connected")
     else:
-        expect(page.locator("#current-price-chart")).to_be_hidden()
+        expect(page.locator("#price-chart")).to_be_hidden()
     state["held_comparisons" if hung_view == "comparison" else "held_prices"][0].fulfill(
         status=503, body="Late response after cancellation"
     )
@@ -723,7 +919,6 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#price-chart-legend")).to_contain_text("Export rate incl. bonus")
-    expect(page.locator("#current-price-chart-legend")).to_contain_text("before volume cap")
 
     def rendered_intervals(chart_id):
         """Read the resolved segment styles that Chart.js actually uses to stroke each interval."""
@@ -741,8 +936,15 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
             chart_id,
         )
 
+    assert page.evaluate("""() => Chart.getChart(document.getElementById('price-chart'))
+        .data.datasets.map(series => series.borderColor)""") == [
+        "#d9a300",
+        "#d56788",
+        "#399bc1",
+        "#9255b7",
+    ]
     expected = [[kind == "forecast" for kind in kinds]] * 4
-    for chart_id in ("price-chart", "current-price-chart"):
+    for chart_id in ("price-chart",):
         assert rendered_intervals(chart_id) == expected
         page.locator(f"#{chart_id}-legend").get_by_label("Import rate", exact=True).uncheck()
         page.locator(f"#{chart_id}-legend").get_by_label("Import rate", exact=True).check()
@@ -762,21 +964,31 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
         }.get(kind, "Market rate provenance unclassified")
         expect(page.locator("#price-chart-tooltip")).to_contain_text(label)
     if kinds == ("published", "forecast"):
-        page.locator("#current-price-chart").scroll_into_view_if_needed()
+        page.locator("#price-chart").scroll_into_view_if_needed()
         page.screenshot(path=f"results/ci/current-price-lines-{page.viewport_size['width']}.png")
     page.get_by_role("button", name="Next 6 hours", exact=True).click()
     assert rendered_intervals("price-chart") == expected
-    assert rendered_intervals("current-price-chart") == expected
     for tariff in current["intervals"]:
         tariff["price_kind"] = "published"
-    with page.expect_response("**/v1/prices/inputs"):
-        page.get_by_role("button", name="Refresh overview", exact=True).click()
-    page.wait_for_function("""() => {
-        const chart = Chart.getChart(document.getElementById('current-price-chart'));
-        return chart.data.datasets.every((dataset, index) =>
-            chart.getDatasetMeta(index).dataset.segments.every(segment => !segment.style?.borderDash?.length));
-    }""")
-    assert rendered_intervals("current-price-chart") == [[False, False]] * 4
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    wait_for_product_reads(page)
+    assert rendered_intervals("price-chart") == expected
+    page.route(
+        "**/v1/plans?**", lambda route: route.fulfill(json={"plans": [], "next_before": None})
+    )
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_contain_text("Current tariff preview")
+    assert rendered_intervals("price-chart") == [[False, False]] * 4
+    assert page.evaluate("""() => Chart.getChart(document.getElementById('price-chart'))
+        .data.datasets.map(series => series.borderColor)""") == [
+        "#d9a300",
+        "#d56788",
+        "#399bc1",
+        "#9255b7",
+    ]
+    page.unroute("**/v1/plans?**")
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
     assert rendered_intervals("price-chart") == expected
     if kinds == ("published", "forecast"):
         page.get_by_role("button", name="Full horizon", exact=True).click()
@@ -1218,19 +1430,22 @@ def test_current_price_click_does_not_open_original_plan_evidence(app_page):
             }
         ),
     )
+    page.route(
+        "**/v1/plans?**", lambda route: route.fulfill(json={"plans": [], "next_before": None})
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
-    expect(page.locator("#current-price-chart-legend")).to_contain_text("before volume cap")
+    expect(page.locator("#current-price-status")).to_contain_text("Current tariff preview")
     inspector = page.locator("#inspect-time")
     before = inspector.input_value()
     point = page.evaluate("""() => {
-        const chart=Chart.getChart(document.getElementById('current-price-chart'));
+        const chart=Chart.getChart(document.getElementById('price-chart'));
         const point=chart.getDatasetMeta(0).data[2];
         return {x:point.x,y:point.y};
     }""")
-    page.locator("#current-price-chart").click(position=point)
+    page.locator("#price-chart").click(position=point)
     page.evaluate(
         "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
     )

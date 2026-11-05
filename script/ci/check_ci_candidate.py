@@ -108,7 +108,10 @@ def latest_check(checks, name, app_id):
                     and isinstance(row.get("output"), dict)
                     and row["output"].get("title") == "Code Review Skipped"
                     and row["output"].get("summary")
-                    == "No New Commits (No changes detected since last review)"
+                    in {
+                        "No New Commits (No changes detected since last review)",
+                        "No changed files in this pull request.",
+                    }
                 )
             )
         )

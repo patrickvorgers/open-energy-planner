@@ -61,23 +61,26 @@ The response names its projection version (`plan-facts-v1`) and original plan ID
 
 ## Reference balances and original price inputs
 
-Planning defaults to **Without battery versus OEP**. The reference chart appears
-above the optimized chart, with shared time ranges, units and flow colors. It
-uses the same frozen household and available-solar forecasts but removes storage.
+Planning shows **Optimizer**, **Battery self-consumption** and **Without battery: Baseline**
+in that order. They share time ranges, units, flow colors and a kW scale.
+Value-axis bounds combine visible signed stacks across all three charts. The without-battery chart uses the same frozen
+household and available-solar forecasts but removes storage.
 PV serves demand, exports surplus and imports deficits. Converter efficiency,
 physical clipping and grid ratings still apply. A physically impossible reference
 is explicitly unavailable. No flow or price curtailment is invented to hide it.
 
-**Battery self-consumption** is shown as the second reference, without a dropdown. Its initial
-stock and bonus counters continue independently from the actual installation.
-Reading charts never resets that state. The no-battery forecast uses
+**Battery self-consumption** uses the plan's recorded starting stock and bonus
+budgets for new horizon comparisons. Legacy original comparisons retain their
+recorded reference start. The separate retrospective Savings reference carries
+its own stock and counters across time. Reading charts never resets that state. The no-battery forecast uses
 the plan's recorded initial bonus budgets. It is a horizon comparison, not a new
 continuous lifetime settlement scenario. The Savings screen continues to evaluate
 the established continuous self-consumption reference and labels that policy.
 
-Without-battery benefit includes the operational contribution of storage plus OEP.
-Self-consumption benefit isolates price optimization. Neither includes investment
-costs. Inventory changes remain separate from grid cash. Original costs are used
+Both battery charts show expected economic cost and benefit against the same
+without-battery baseline. Optimizer benefit includes storage and smart planning.
+Self-consumption benefit shows storage without price optimization. Their benefits
+are alternatives, not additive. Neither includes investment costs. Inventory changes remain separate from grid cash. Original costs are used
 for both graphs. Corrected cost evaluations remain separately available for the
 continuous self-consumption reference. Do not silently mix original and corrected
 reference/EMS costs.
@@ -96,12 +99,16 @@ Missing spot evidence stays a gap. Never derive spot from a retail rate. Conditi
 bonuses stay separate because their payment can depend on time, conditions and
 remaining period quota. Detailed factual explanation follows the graphs.
 
-Current Price inputs and Original plan prices draw published market intervals as
+The single **Price inputs** chart uses the selected plan's frozen prices. If no
+plan is available, its status explicitly identifies a current tariff preview.
+Changing the selected plan updates prices together with its other original
+evidence. A late preview response never overwrites archived plan prices.
+Both modes draw published market intervals as
 solid lines and forecast intervals as dotted lines. Import, export and potential
 bonus-inclusive export rates inherit the market interval's recorded `price_kind`.
 Mixed series change style at the exact interval boundary, without changing rates,
-native resolution or missing-data gaps. Current prices use the current API
-classification. Original plan prices retain their frozen classification even when
+native resolution or missing-data gaps. The no-plan preview uses the current API
+classification. Selected-plan prices retain their frozen classification even when
 new published prices arrive. Older evidence without a classification retains its
 existing line style rather than inventing forecast provenance.
 
@@ -148,7 +155,7 @@ Negative benefit remains signed and uses the loss colour. Zero remains neutral,
 including amounts that round to zero at the displayed currency precision. Missing
 comparisons stay unavailable. All headers name the complete original plan period.
 Amounts do not change with chart zoom and are not measured or annualized returns.
-Current price inputs follow the three scenario graphs without a duplicate optimizer
+Price inputs follow the three scenario graphs without a duplicate optimizer
 result card. Cash cost, wear and non-cash stored-energy value remain in the
 keyboard-accessible Cost breakdown disclosure. Its expanded state survives a
 read-only refresh.

@@ -54,6 +54,10 @@ def app_site(request):
     ready, shutdown = Event(), Event()
     result = {}
     with TemporaryDirectory() as directory:
+        if getattr(request, "param", None) == "documentation":
+            from tests.frontend.browser.documentation_fixture import seed
+
+            seed(Path(directory))
 
         async def serve():
             """Own the app lifecycle and close its forecast/solver tasks before deleting the temporary store."""

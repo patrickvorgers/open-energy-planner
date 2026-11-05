@@ -25,7 +25,7 @@ python -m http.server 18766 --bind 127.0.0.1 --directory .local/documentation
 ```
 
 Open `http://127.0.0.1:18766/open-energy-planner/`. This serves the production
-build beneath the actual future project prefix, including direct article URLs,
+build beneath the actual project prefix, including direct article URLs,
 local fonts and the search worker. The root forwards to the guide. Ctrl+C stops
 the server. The server binds only to loopback and requires no GitHub hosting.
 Changes need a rebuild. The build is generated under `.local` and is not committed.
@@ -35,6 +35,24 @@ external service. Without JavaScript, articles and the complete navigation remai
 readable. Search itself needs JavaScript and browser worker support.
 
 ## Maintain one source
+
+The repository README is a short product introduction and route selector. It links
+to the wiki instead of maintaining another installation manual or API reference.
+The wiki separates **Use OEP** from **Develop OEP**:
+
+| Location | Audience and purpose |
+|---|---|
+| `docs/users/` | User concepts, ordered setup, daily actions, interpretation and recovery |
+| `docs/development/README.md` | A contributor's environment, source and verification entry point |
+| `docs/development/REFERENCE-INDEX.md` | The complete catalogue of developer contracts and domain references |
+| Other `docs/development/` guides | Implementation ownership, API/storage contracts and verification boundaries |
+| `design/` | Requirements, design decisions, independent scenarios and explicitly marked proposals |
+
+Write user steps in the actual screen order with visible labels and expected
+results. Keep developer interfaces and detailed numerical policies in their
+responsible reference. Link between the two where a reader needs deeper detail.
+Do not make a user traverse an implementation catalogue to configure a feature.
+Adding a technical guide also requires adding its task to the reference index.
 
 `docs/assets/courtyard.css` owns the shared Courtyard site palette, local Outfit and Space Grotesk
 font loading, logo presentation, buttons, fields and focus states. Both the wiki
@@ -55,6 +73,44 @@ affected guides in the same change or explain why no update is needed. Reviewers
 must check this decision. Keep temporary screenshots, Taste review notes and test
 receipts outside maintained guides. An explanatory product screenshot may remain
 when it helps users understand the current interface.
+
+## Maintain useful screenshots
+
+Guide images live under `docs/assets/` and are published from that same source.
+Place them beside the instruction they explain, with descriptive alt text and a
+caption explaining what to notice. Keep the instruction usable without the image.
+Use actual app pages and synthetic examples with meaningful values. A chart needs
+visible variation, not empty axes. A configuration example needs coherent filled
+values. A saved configuration is not proof of usable live measurements or physical
+execution. Never present a generated mockup as the implemented interface.
+
+The reproducible examples use the existing isolated browser harness:
+
+```console
+docker compose --profile test build ui-tests
+docker compose run --rm ui-tests -m pytest tests/frontend/browser/test_documentation_examples.py -q
+```
+
+For the calculation-history figure, run the existing `tests/frontend/browser/test_planning_performance.py` browser tests. Their synthetic captures are written under `results/ci/planning-performance/`. They illustrate the interface, not benchmark timings.
+
+The guide cases write to `results/ci/documentation-examples/` without modifying tracked
+assets. The planning example is calculated by the real solver and independently
+validated before archiving. Forecast-quality and cycle examples are explicitly
+synthetic response fixtures rendered by the actual page. They illustrate reading
+the interface, not measured model performance or physical task execution.
+
+Inspect the captures and choose the relevant desktop figures for the guide.
+Keep a mobile counterpart where responsive layout affects the task. Copy the
+selected image to its maintained asset name only after checking the labels,
+data, framing and absence of credentials or personal information. Existing guide
+captions identify the examples as synthetic. Refresh affected images when a UI
+change makes the prose or screenshot disagree. Do not copy a CI delivery receipt
+or private installation capture into the site.
+
+Rebuild the site after copying images. Open the actual rendered article and
+verify the images load and remain readable. Keep their original aspect ratio.
+The publication boundary and browser checks protect inclusion and rendering,
+but semantic correctness still requires inspecting the instruction and image.
 
 Run the strict build and documentation link tests after guide changes. Check the
 production build on desktop, tablet and phone after navigation or theme changes.

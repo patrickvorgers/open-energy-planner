@@ -1,251 +1,83 @@
-# Development
+# Develop OEP
 
-The [activity and module event guide](ACTIVITY-EVENTS.md) covers background work,
-six-hour schedules, module health, notifications and restart/reconnect behavior.
+Start here if you want to change Open Energy Planner. For installation settings and daily use, follow the [user guide](../index.md). This page gets a contributor to the right environment, source owner and validation route. The [reference library](REFERENCE-INDEX.md) contains the detailed contracts.
 
-The [planning notifications guide](PLANNING-NOTIFICATIONS.md) describes actionable
-app warnings, recovery, authenticated status reads and deduplicated diagnostics.
+## Choose the environment for the task
 
-Prepare an original successful CI installation bundle as described in the
-[real Supervisor developer environment guide](DEVELOPER-ENVIRONMENT.md#start-and-stop),
-then run `python -m script.supervisor.dev start`. It supplies actual Supervisor/Core, OEP, simulated
-devices and recent Energy history without a personal HA OS VM. The Dev Container
-uses this same environment. Existing fast CI remains separate from interactive
-startup.
+| Task | Environment | Start with |
+|---|---|---|
+| Understand a user-visible plan | Local synthetic app, no HA connection | [First plan](../users/first-plan.md) |
+| Edit prose or inspect code | Ordinary checkout and the relevant local dependencies | [Documentation preview](DOCUMENTATION-SITE.md#local-build-and-preview) or the subsystem reference |
+| Change a pure calculation or app behavior | Focused tests with the pinned native dependencies | [Local checks](#run-the-smallest-sufficient-checks) |
+| Exercise actual HA, pairing, ingress and lifecycle | Isolated real Supervisor developer environment with an accepted numbered package | [First start](#first-start) |
+| Inspect populated appliance, EV, boiler and history behavior | Simulated devices in an isolated developer environment | [Interactive scenarios](USER-TEST-ENVIRONMENT.md) |
 
-The [thermal storage guide](THERMAL-STORAGE.md) explains electric-boiler physics,
-declared hot-water demand, joint planning, virtual HA control and preserved storage.
-
-The [EV charging guide](EV-CHARGING.md) describes shared charge points, native
-vehicle controls, joint planning, loss assumptions and simulation-only testing.
-
-The [EMS feature reference](EMS-FEATURE-COMPARISON.md) compares documented DAO,
-EMHASS and GBBOptimizer capabilities with OEP requirements, including what to
-keep, defer or reject and the evidence needed before adoption.
-
-The [installation planning guide](INSTALLATION-PLANNING.md) describes the app-owned
-grid/battery wizard, production basis bootstrap, composed multi-inverter model,
-independent validation and capability-driven HA entities. Its [live HA test instructions](INSTALLATION-PLANNING.md#test-against-your-own-home-assistant-instance) explain how to connect a real test instance and why a complete Energy dashboard is required.
-
-The [solar forecasting guide](SOLAR-FORECASTING.md) describes pvlib/PVWatts,
-Energy-prefilled multi-inverter setup, local shadow calibration and current
-production boundaries.
-
-Ruff 0.17.1 uses its default lint rules plus the explicitly agreed D100-D107/D419 missing/empty-docstring rules from the central `pyproject.toml`. These rules also cover tests/browser tests without path exemptions. Existing code and tests have no legacy baseline. `EXE002` is the sole global exception: Windows Docker Desktop bind mounts and build contexts report ordinary Python files as executable. Targeted `TRY004` suppressions retain existing `ValueError` validation contracts. Their reasons are documented at each raise site. The project retains its 100-character formatter width and Python 3.12 target. The Dev Container installs Ruff and its VS Code extension. The editor explicitly uses `/opt/oep-dev/bin/ruff`. The same pinned version runs lint and formatting checks through `script/ci/check_native.py` for explicit local checks and GitHub Actions. The `dev` extra and Ruff's required-version setting enforce the same version outside the container. A future Ruff upgrade is a tested dependency change.
-
-PR revisions run **Quick checks** before any candidate is requested. The shared
-`python script/ci/check_native.py --quick` entry point runs lint and
-formatting without Docker or app dependencies. The requested quality job repeats
-these checks before image builds. Its native stage retains full-scope lint and
-format checks. Build and review in Draft, then choose Ready for review to request
-one candidate automatically. New commits return the PR to Draft. See
-[review and CI stages](CI-STAGES.md) for deliberate `ci: run` retries,
-batched review corrections and exact-candidate merge policy.
-
-Follow the [code documentation standard](CODE-DOCUMENTATION.md) for required docstrings, comments, domain contracts and documentation review. Disabling a generic docstring-coverage percentage does not remove the obligation to document code properly.
-
-Follow the [application logging guideline](LOGGING.md) for actionable messages,
-log levels, failure/recovery deduplication, privacy and truthful acceptance logs.
-
-### What the quality job runs
-
-CodeRabbit is the preferred independent reviewer. Check fresh included capacity
-before requesting review and use Kody-ai only after a confirmed CodeRabbit rate
-limit. A substantive review from either provider must cover the latest PR head.
-After Quick, signature and CodeQL checks pass, inspect your own changes, batch
-corrections and retest. When choosing CodeRabbit, prepare one final manual request
-through the trusted-main read-only preflight. The
-150-file limit counts every changed file. Automatic review triggers are disabled
-regardless of plan or star count. Follow the [review procedure](CI-STAGES.md#prepare-one-final-coderabbit-review).
-The selected provider supplies the independent review. Do not add a separate local Codex
-reviewer, reviewer subagent or Codex Cloud review stage. Keep automatic Codex
-reviews disabled and evaluate findings already posted by any reviewer.
-The existing Dependabot exception remains: no mandatory automated review, with CI,
-verified commits and compatibility/regression assessment still required. See
-[the contribution policy](../../CONTRIBUTING.md).
-
-| Stage | Checks |
-|---|---|
-| Source identity | GitHub-verified commits and CI results bound to the exact tested Git tree |
-| Container builds | App, native tests, HA framework tests, provisioning and browser runtimes |
-| Native quality | Pinned Ruff lint and format checks. Native pytest, including independent solver scenarios, physics/economics validation, contracts, app HTTP tests, failure cases and documentation links |
-| Process and solver smoke | Separate app process, authentication, pause/resume, fresh resume plan and independently checked debug planning scenario |
-| Home Assistant | Actual HA framework/config-flow tests and authenticated app/integration handoff |
-| Provisioning | Fresh onboarding, repeat setup, interrupted-setup recovery and rejection of non-development installations |
-| Browser | Existing developer-entry Playwright tests at desktop/mobile sizes |
-| Reports and cleanup | JUnit artifact upload plus cleanup of the run's isolated containers/network, including failure paths |
-
-The provisioning smoke test requests its own new validated plan from the isolated
-synthetic app before onboarding. It does not rely on commands left by the earlier
-HA suite, which can expire at a quarter boundary plus the normal grace period.
-It rejects a live source, failed planning, retained older output and an expired
-replacement. This fixture preparation never extends production command validity.
-
-These are separate test suites executed by one orchestration entry point, not one undifferentiated test. A single Actions job avoids rebuilding the Docker runtimes in multiple runners. One job per individual test would add overhead without useful isolation.
-
-### Reusing image layers without reusing test results
-
-After native checks and database startup, one background worker runs the real
-database contracts while the foreground starts the app and runs HA, provisioning
-and browser checks in their existing order. At most two suites overlap in the
-same runner: the database suite and one HA/browser stage. Their application stores,
-containers and report files are independent. Both paths must finish before the
-orchestrator removes its project. Either failure fails the job. The executor joins
-its worker even when a foreground check raises. Barrier-based regressions prove
-overlap and failure propagation without running Docker in unit tests.
-
-Browser tests launch Chromium once per suite instead of once per case. Every case
-still owns a fresh context and page with its original desktop/mobile viewport,
-touch and timezone settings. App-setup cases also own a temporary app store.
-Context managers close pages and contexts even after failed assertions. A
-real-browser regression checks that cookies, local storage and session storage
-do not survive context replacement.
-The Playwright Python client must match the version of the bundled-browser image.
-Update the UI test image, its client pin and the Dev Container client pin together.
-A native regression rejects inconsistent versions before browser tests run.
-
-Actions builds the current checked-out merge tree with pinned Docker Buildx/Bake
-actions and GitHub's build-layer cache. On the ephemeral Ubuntu runner, Docker's
-containerd image store and Docker build driver share layers between builds and
-test containers. This avoids keeping a second builder store plus imported image
-copies. The HA framework image and ephemeral provisioning service must pin the same HA
-version and digest. Otherwise provisioning downloads a second large HA runtime
-after the framework build and can exhaust the hosted runner's disk. A native
-regression checks this invariant on every full and documentation-only run.
-Update both pins together. The persistent real-Supervisor developer installation has
-its own upgrade lifecycle and is not upgraded by the ephemeral CI recipe.
-Existing daemon settings are retained when enabling the feature. Local Docker
-settings are never changed. All CI jobs use
-[GitHub-hosted execution](CI-STAGES.md#github-hosted-execution).
-Separate scopes hold the app, native,
-Home Assistant and browser layers. The native recipe builds once with three tags
-for the native, provisioning and database suites, avoiding duplicate image exports.
-Dependency/base-image layers can survive source changes. Docker still hashes
-every build input. A restored layer is not permission to use an older source
-tree. Cache misses rebuild normally. Optional cache exports have a 60-second
-timeout and cannot turn a build/test failure into success.
-
-Bake loads the images with the current run/attempt's isolated Compose tags.
-Its optional build-record upload is disabled. Required JUnit and installation
-artifacts remain available.
-`script/ci/ci.py --prebuilt` requires that exact project namespace and runs every
-selected gate with image rebuilding disabled. Missing images fail the run.
-The ordinary local command remains `python script/ci/ci.py`, which builds normally
-and creates its own unique project. Both paths retain exact tested-tree identity, Ruff, all four
-database backends, HA, onboarding, desktop/mobile tests, artifacts and failure
-cleanup. Documentation-only routing and the trusted signature workflow remain
-unchanged. No test-result cache, private registry, paid service or secrets are
-added. Caches contain development images/source and use normal repository access
-and branch cache isolation. No production configuration enters the build context.
-
-Each Compose operation logs its elapsed seconds, including failed operations.
-Compare cold and warm hosted runs of the **same commit**. Include builder setup,
-cache transfer and post-job export in the job duration. A first run populates
-the cache and can be slower. Source/dependency changes, cache eviction, hosted
-runner variance and cache service availability affect the result. Runner time,
-queue time and billed minutes are distinct: sum job durations (rounding each job
-up to minutes) to estimate allowance consumption. Do not claim an account billing
-measurement from workflow elapsed time alone.
-
-### Documentation-only PRs
-
-The same **Quality and integration (AMD64)** status uses focused checks only when
-every changed path is a regular Markdown file under `docs/` or `design/`, or one
-of root `README.md`, `CONTRIBUTING.md` and `AGENTS.md`. Additions, edits, deletions
-and moves within these paths qualify. Executables, symlinks and gitlinks do not.
-Other paths follow the [change-based matrix](CI-STAGES.md#change-based-candidate-matrix).
-Unknown root documents, legal/package notices and unclassified inputs remain full.
-
-CI reads `script/ci/ci_scope.py` from the immutable PR base revision and compares
-that base tree with the checked-out synthetic merge commit. This checks the
-complete PR against current base content, including runtime changes in earlier
-commits and both sides of renames. A changed classifier cannot grant itself a
-shorter route. Empty diffs, missing history/policy and unreadable data select full
-checks. Main
-pushes reuse only an identical successful full candidate through the [checked reuse gate](CI-STAGES.md#reuse-an-identical-tested-merge-on-main). Manual runs always run the full suite. This routing is a quality
-control, not an adversarial boundary against same-repository workflow writers.
-
-Focused runs build only the existing pinned native runtime. They retain:
-
-- Ruff lint and format checks over all maintained Python code.
-- Requirements inventory, local documentation links and database dictionary
-  table/column coverage tests. Meaning, completeness and examples remain review
-  obligations. Coverage does not prove semantic accuracy.
-- Scope-classification and orchestration regressions, including failure cleanup.
-- The separate trusted commit-verification job and latest-head CodeRabbit review.
-
-They omit app/database/HA/provisioning/browser runtimes, runtime scenarios and
-installation-bundle generation because eligible edits do not change their inputs.
-JUnit documentation results are uploaded as usual. Skipped workflow steps are
-visible inside the same quality job. No required status is skipped by a workflow
-path filter. A failure in any retained check fails the job.
-
-Run `python script/ci/ci.py --documentation-only` locally to repeat these gates.
-This explicit local flag does not prove that a PR qualifies. Actions determines
-eligibility independently. Infrastructure changes still
-require `python script/ci/ci.py`. No application or HA configuration is changed by
-either CI route.
-
-### CodeRabbit tool ownership
-
-Project CI owns pinned Python linting and formatting. CodeRabbit's Ruff and Flake8 integrations are disabled to avoid duplicate Python-lint findings and provider version mismatches. Its blanket docstring-coverage pre-merge check is disabled because that percentage is not a project requirement. Useful documentation still receives review.
-
-Pylint, security/secrets scanning, workflow/container/YAML analysis and GitHub-check integration keep their provider defaults: they can add findings beyond our executable checks. GitHub-check integration consumes CI evidence rather than rerunning our test suites. No blanket tool shutdown, review-profile reduction or measured provider speedup is implied. Provider settings are validated against the published CodeRabbit schema when edited. Actual activation/performance must be checked on a subsequent provider run.
+Production Home Assistant is not a development dependency. A local model test, real HA framework test, Supervisor acceptance and physical-device test establish different things.
 
 ## First start
 
-Install Python 3.12 or newer, Git, Docker with Compose, VS Code and the Dev Containers extension. The repository is public. Package verification still needs GitHub read access through Git Credential Manager or `GH_TOKEN`/`GITHUB_TOKEN` in a host terminal. Never enter credentials on the start page.
+Install Git, Python 3.12 or later, Docker with Linux containers, VS Code and its Dev Containers extension. The public [provisioning page](https://patrickvorgers.github.io/open-energy-planner/provisioning/) opens the normal VS Code clone flow and explains host preparation. It does not run Docker on GitHub.
 
-The host terminal and VS Code must both resolve `python` to Python 3.12 or newer. Check `python --version` before preparing the package. On Debian or Ubuntu, install `python-is-python3` only when `python3 --version` already reports a supported version. Alternatively, create a host virtual environment with `python3 -m venv .local/host-venv`, activate it with `. .local/host-venv/bin/activate`, and launch VS Code with `code .` from that terminal. Close existing VS Code processes first so the new process inherits the activated environment. A shell alias alone does not satisfy the Dev Container's host `initializeCommand`.
+1. Clone the public repository into a local folder. Check `python --version` in the host terminal used to launch VS Code.
+2. Obtain the **original** `installation-bundle-amd64` ZIP from a successful candidate whose tested tree matches a GitHub Verified merge on `main`.
+3. Use a clean checkout of that actual merge. Do not prepare a persistent installation from an edited or unmerged source overlay.
+4. Accept the package and start from the **host** terminal at the repository root:
 
-The public [developer start page](https://patrickvorgers.github.io/open-energy-planner/provisioning/) opens VS Code's ordinary Git clone flow for a repository or branch. Clone into a local folder and prepare the original successful CI installation bundle on the host. Run `python -m script.supervisor.dev start` on the host to provision the environment and copy its private login details into the checkout, then choose **Dev Containers: Reopen in Container**. Use the matching verified merge checkout for persistent provisioning. Unmerged branches remain available for editing and focused tests, not persistent source installation. The container-volume clone flow cannot perform the required host preparation. Browser/VS Code clone/trust prompts remain the developer's responsibility. See [package selection and preparation](DEVELOPER-ENVIRONMENT.md#start-and-stop).
+   ```console
+   python -m script.supervisor.dev prepare --bundle /path/to/installation-bundle-amd64.zip --run-id RUN_ID
+   python -m script.supervisor.dev start
+   ```
 
-The public [documentation site](https://patrickvorgers.github.io/open-energy-planner/) and [provisioning entry](https://patrickvorgers.github.io/open-energy-planner/provisioning/) share one Pages artifact. The provisioning source lives under `docs/site/provisioning/`. GitHub Pages uses source **GitHub Actions** and repository variable `DEVELOPER_PAGES_ENABLED=true`. The **Documentation and developer pages** workflow checks the site and provisioning entry before publishing main. See [documentation-site maintenance](DOCUMENTATION-SITE.md) for the full local preview, publication boundary and browser checks. The site guides local installation. It does not run provisioning on GitHub.
+5. Open `http://localhost:7123/app/local_open_energy_planner`. The ignored `.local/dev/developer.json` holds the generated private HA account. Ingress authenticates the app without copying an administration token.
+6. Choose **Dev Containers: Reopen in Container** in VS Code when you need the pinned editor/tool environment.
 
-The Dev Container starts the real Supervisor environment, installs the normal OEP app and integration, completes HA onboarding and loads simulated devices and history. Provisioning fills only missing sample settings and preserves existing settings, partial configuration and HA identities. No production HA settings are copied. See the [developer environment guide](DEVELOPER-ENVIRONMENT.md) for the host-only start command and source-update workflow.
+The run ID is the original candidate run, not a later main run that reused it. GitHub read access comes from the existing credential manager or the documented host token environment. Never enter credentials on the public start page or copy signing keys into the container.
 
-Open **http://localhost:7123/app/local_open_energy_planner**. Run `python -m script.supervisor.dev start` from a host terminal to provision the environment and copy the generated HA account to `.local/dev/developer.json`. This ignored file contains private credentials and a refresh token; do not share it. OEP ingress needs no API key, pairing code or separate app login. The Installation wizard is inside the app. All commands affect virtual entities only.
+The host terminal and VS Code must resolve `python` to a supported version. On Debian/Ubuntu, install `python-is-python3` only when `python3 --version` is already supported. Alternatively, activate a host virtual environment and launch a new VS Code process from that terminal. A shell alias alone does not configure the Dev Container's host initialization command.
 
-The privileged developer container owns a private inner Docker engine. The host Docker socket and private signing keys are not mounted. Image builds and normal market/weather adapters require internet access; the Docker bridge is not an egress firewall. Stop the development stack from the host with `python -m script.supervisor.dev stop`. This preserves all volumes and data.
+Package verification, update, cache recovery and startup ownership are specified once in the [Supervisor environment guide](DEVELOPER-ENVIRONMENT.md#start-and-stop). Stop and status are host commands and preserve existing volumes:
 
-## Commands
+```console
+python -m script.supervisor.dev status
+python -m script.supervisor.dev stop
+```
 
-- `python script/ci/setup.py`: inside the Dev Container, repeat native/UI quality checks. Actual Supervisor provisioning uses `python -m script.supervisor.provision_supervisor` inside that container.
-- `docker compose --profile test build ui-tests` and `docker compose run --rm ui-tests`: Chromium checks at desktop/mobile sizes, without launching VS Code. Full CI includes these tests.
-- `python script/ci/ci.py`: from a host with Docker, run the same full isolated suite as GitHub Actions. It builds the app and both test runtimes, runs Ruff/format/native scenarios/smoke and actual HA handoff, then removes only its uniquely named test project.
-- `python -m script.supervisor.dev start`: from the host, repeat onboarding with the accepted CI package while preserving existing state. Do not run the host launcher inside the Dev Container.
-- After editing app or integration sources, run focused tests or disposable Supervisor acceptance. Persistent startup rejects changed tracked sources. Reopening the Dev Container also runs host `prepare` through `initializeCommand` and rejects tracked-file edits, including documentation and tests, even after a successful earlier preparation. Save your edits on a separate branch or worktree before returning this checkout to the clean verified merge matching the accepted package. From that host checkout, run `python -m script.supervisor.dev prepare` without package options to validate and reuse the intact accepted cache, then reopen the Dev Container. Reopening directly also validates and reuses that cache through `initializeCommand`. Cache reuse needs no GitHub access or unexpired artifact. If the cache is unavailable, first run `python -m script.supervisor.dev prepare --bundle /path/to/installation-bundle-amd64.zip --run-id RUN_ID` with the original matching archive and run ID. Keep the separate edited checkout for focused tests. Do not discard edits or replace persistent sources with an unmerged branch. Update the persistent environment only after merge, using the original successful matching CI bundle as described in the [developer environment guide](DEVELOPER-ENVIRONMENT.md#start-and-stop).
+## Keep editing separate from persistent package acceptance
 
-CI writes fresh JUnit files to ignored `results/ci/`. The HA suite uses its own framework runtime and must not be skipped silently in the full pipeline. Native tests run without a network. No tests require production credentials or physical equipment.
+Persistent startup validates the accepted package and tracked checkout. Even documentation or test edits can block reopening that package checkout. Keep an editing branch/worktree for changes and a clean verified merge checkout for the numbered installation. Do not discard work or fabricate build identities to bypass the check.
 
-VS Code supplies named setup/native/browser tasks. Press **F5** with **Open Energy Planner: debug synthetic planning round** to inspect the real synthetic model and independent validation directly. This development-only launcher avoids the app worker's parent watchdog terminating a paused debugger. It publishes no commands and changes no production timing. The command is tested. Interactive breakpoint stopping is not claimed as verified. The separate app process smoke still tests worker/HTTP behaviour.
+Use focused tests or disposable Supervisor acceptance for unmerged source changes. Update the persistent environment only from the original matching successful CI bundle after merge. Provisioning preserves existing settings and HA identities and supplies only missing simulated examples. Do not reset retained data to make a screenshot or test match an example.
 
-## Repository and release boundaries
+## Find the responsible code and contract
 
-`src/` contains the app/recalculation code. `custom_components/` contains the thin HA integration. `design/` contains the agreed requirements and design. The [solver selection decision](../../design/SOLVER-SELECTION.md) records the selected stack. GitHub Actions publishes test artifacts only. It does not publish containers, HACS or Supervisor releases. The product UI provides Installation and Contract settings, Planning, Savings, Forecast quality, appliance configuration/control and EV charging. Desktop/mobile browser checks exercise these flows against app APIs and fixture data. Their scope does not establish physical hardware execution.
+Read the [architecture overview](ARCHITECTURE-OVERVIEW.md) before changing a boundary. App calculations belong in the app. The HA integration stays thin. Physical equipment actions remain in user-owned automations.
 
-Use signed commits and pull requests as described in [CONTRIBUTING.md](../../CONTRIBUTING.md). CodeRabbit needs a separately enabled GitHub App installation. The YAML file alone does not activate it. Repository protection also depends on the account's support for private-repository protection. Record any unavailable external setting explicitly rather than claiming it is enforced.
+The [reference library](REFERENCE-INDEX.md) groups every maintained subsystem guide by contribution task, including forecasts, prices, contracts, appliances, storage, UI and release proof. Formal requirements and proposed design remain distinguishable from implemented behavior. Preserve independent numerical scenarios instead of changing their answers to agree with the solver.
 
-## Measurement source development
+## Run the smallest sufficient checks
 
-See [demand forecasting](DEMAND-FORECASTING.md) for the always-active startup model,
-historical residual demand, local Ridge candidate, app-owned source setup and
-the decision-benefit activation boundary.
+During development, run Quick and the affected regressions before a tested push:
 
-See the [history adapter](HA-HISTORY.md)
-for optional Recorder API reads, typed hourly energy, automatic missing bonus
-baselines, manual recovery and actual-HA acceptance coverage.
+```console
+python script/ci/check_native.py --quick
+```
 
-See the [HA measurement-source boundary](HA-MEASUREMENT-SOURCES.md) for app-owned source selection, observation forwarding, snapshot assembly, supported units, tests and production input readiness.
+Use the existing test environment for the affected group. Browser cases run in Chromium at desktop/mobile sizes. App-side HA wire contracts do not start HA, while Recorder/platform contracts require the actual HA runtime. Every database change retains the real SQLite/PostgreSQL/MariaDB/MySQL matrix. Installation and lifecycle changes retain their provisioning/Supervisor coverage.
 
-## GitHub-verified PR commits
+The shared commands and exact suite ownership are in [CI stages](CI-STAGES.md#change-based-candidate-matrix). Avoid running the complete local suite as a duplicate prerequisite for every PR. The complete required suite union runs once through the admitted GitHub candidate. A diagnostic full local run needs a concrete reason and an actual result in the PR.
 
-See [trusted signature verification](VERIFIED-COMMITS.md) for the base-only target workflow, commit/status checks, permissions and trusted-base activation. The offline pytest suite tests acceptance/failure behaviour. It never requires a GitHub token or network access. The trusted network gate runs separately in GitHub Actions.
+For documentation, use the [strict local site build and link checks](DOCUMENTATION-SITE.md#local-build-and-preview). A successful build validates rendering, not the truth or usability of an instruction. Read the result as a new user or contributor.
 
-## Native installation and virtual devices
+For interactive model debugging, VS Code provides **Open Energy Planner: debug synthetic planning round**. It exercises the synthetic model and independent validation without publishing physical commands. Interactive breakpoint behavior is separate from automated worker/HTTP evidence.
 
-Use the [real Supervisor developer environment](DEVELOPER-ENVIRONMENT.md) and its automated acceptance for development. The optional [Home Assistant installation guide](HAOS-ACCEPTANCE.md) covers product artifacts. The [device contract](VIRTUAL-DEVICES.md) defines modes, capability permissions and numeric applicability.
+## Prepare a contribution
 
-## Durable plan archive
+Follow [CONTRIBUTING.md](../../CONTRIBUTING.md) for signed public commit identity, Draft preparation and documentation impact. The [review and CI stages](CI-STAGES.md) own provider selection, current-head review, finding disposition, queue coordination, Ready admission and exact-tree merge proof.
 
-See [plan archive](PLAN-ARCHIVE.md) for SQLAlchemy-backed immutable plans, shared input blocks, database deployment, the pre-release no-migration decision and consistent backup procedures.
+Do not treat a green skipped review, an older candidate or another owner's local result as current merge evidence. Preserve an active candidate's agreed base. Changes to the head require fresh review and the appropriate Ready transition.
+
+## Know what a successful change proves
+
+Local checks, hosted candidate CI, a Verified exact-tree merge, main checks and a loaded installation are separate evidence. A focused candidate proves its selected suites. It is not full-suite, physical-device or deployment evidence.
+
+GitHub Actions produces original test reports and matched app/integration bundles. It does not silently install OEP into a user's Home Assistant. Use [joint release identity](RELEASE-IDENTITY.md) and [the release scope](../../design/FIRST-RELEASE-SCOPE.md) before making a deployment or support claim.

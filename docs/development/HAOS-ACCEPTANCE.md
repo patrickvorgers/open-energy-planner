@@ -13,9 +13,10 @@ Use the original successful numbered CI/release artifacts described in
 from the same artifact set. Never stamp a source overlay with a numbered build.
 Developer source builds remain unnumbered and need no transfer bundle.
 
-For a private repository, install the matching integration ZIP through an
-administrator-managed workflow and install/build the matching Home Assistant
-app repository. HACS does not support private repositories. The app does not
+The development preview does not yet offer public HACS installation. Install the
+matching integration ZIP through an administrator-managed workflow and use the
+matching packaged Home Assistant app. A public source repository alone does not
+establish a supported product installation channel. The app does not
 write integration files. Preserve existing app options, the integration entry,
 entity/device identities, database and Recorder history when updating.
 
