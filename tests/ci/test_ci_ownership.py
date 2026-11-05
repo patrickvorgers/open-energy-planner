@@ -106,7 +106,6 @@ PROOF_CAPABILITIES = {
         "base_test_only_profile",
         "checkout_tree",
         "merged_tree",
-        "tree_records",
         "immutable_test_sources",
         "immutable_blob",
         "raw_changes",

@@ -1,5 +1,5 @@
 name: Quick checks
-description: Run the shared provenance and pinned lint checks without Docker.
+description: Run pinned lint, formatting and CI policy checks without Docker.
 runs:
   using: composite
   steps:
@@ -17,7 +17,7 @@ runs:
         requirements = settings['project']['optional-dependencies']['dev']
         subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *requirements], check=True)
         PY
-    - name: Check provenance, lint and formatting without Docker
+    - name: Check lint and formatting without Docker
       shell: bash
       run: python3 script/ci/check_native.py --quick
     - name: Check CI selection and execution policies without app dependencies

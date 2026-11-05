@@ -322,13 +322,12 @@ def test_removed_ha_test_layout_cannot_grant_cheap_coverage(area):
 
 
 def test_documentation_profile_collects_future_files(tmp_path):
-    """A new documentation test runs alongside both required CI policy checks without editing a file list."""
+    """A new documentation test runs alongside CI routing checks without editing a file list."""
     import subprocess
     import sys
 
     for relative_path in (
         "tests/documentation/test_future_documentation.py",
-        "tests/ci/test_provenance.py",
         "tests/ci/test_ci_scope.py",
     ):
         test_file = tmp_path / relative_path
@@ -346,7 +345,6 @@ def test_documentation_profile_collects_future_files(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "tests/documentation/test_future_documentation.py::test_inherited" in result.stdout
-    assert "tests/ci/test_provenance.py::test_inherited" in result.stdout
     assert "tests/ci/test_ci_scope.py::test_inherited" in result.stdout
 
 
