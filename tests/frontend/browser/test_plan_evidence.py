@@ -115,6 +115,84 @@ def automatic_plan_overview(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("refresh", ["publication", "manual"])
+def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
+    automatic_plan_overview, refresh
+):
+    """A delayed refresh retains the original amounts and evidence until a complete response arrives."""
+    state = automatic_plan_overview
+    page = state["page"]
+    benefit = page.locator("#smart-benefit-value").inner_text()
+    costs = page.locator("#optimizer-total-costs").inner_text()
+    evidence = page.locator("#plan-evidence").inner_text()
+    description = page.locator("#plan-description").inner_text()
+    state["hold_comparison"] = True
+    if refresh == "publication":
+        state["plans"].insert(0, state["newer"])
+        page.clock.run_for(15000)
+    else:
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#smart-benefit-value")).to_have_text(benefit)
+    expect(page.locator("#overview-status")).to_contain_text("Showing the previously loaded plan")
+    assert state["held_comparisons"]
+    assert page.locator("#optimizer-total-costs").inner_text() == costs
+    assert page.locator("#plan-evidence").inner_text() == evidence
+    expect(page.locator("#plan-description")).to_have_text(description)
+    expect(page.locator("#inspect-time")).to_be_enabled()
+    assert page.evaluate(
+        "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
+    )
+    page.locator(".optimizer-scenario").screenshot(
+        path=f"results/ci/planning-retained-{refresh}-{page.viewport_size['width']}.png"
+    )
+    page.locator("#overview-status").scroll_into_view_if_needed()
+    page.screenshot(
+        path=f"results/ci/planning-refresh-status-{refresh}-{page.viewport_size['width']}.png"
+    )
+    held = state["held_comparisons"].pop()
+    plan_id = held.request.url.rsplit("/", 2)[1]
+    held.fulfill(json=state["comparisons"][plan_id])
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    if refresh == "publication":
+        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("failed", [False, True])
+def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
+    automatic_plan_overview, failed
+):
+    """Another selection never presents the previous plan's graphs or tables as its own, even on failure."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["hold_comparison"] = True
+    with page.expect_request("**/v1/plans/older-plan/comparison"):
+        page.locator("#plan-version").select_option("older-plan")
+    expect(page.locator("#overview-status")).to_have_text("Loading selected plan…")
+    expect(page.locator("#plan-description")).to_have_text("Loading selected plan…")
+    for rows in ("plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"):
+        expect(page.locator(f"#{rows} tr")).to_have_count(0)
+    assert page.evaluate("""() => ['plan-chart', 'reference-chart', 'self-consumption-chart',
+        'energy-chart', 'forecast-chart', 'price-chart'].every(id =>
+        Chart.getChart(document.getElementById(id)).data.datasets.length === 0)""")
+    expect(page.locator("#smart-benefit-value")).to_have_text("-")
+    expect(page.locator("#inspect-time")).to_be_disabled()
+    held = state["held_comparisons"].pop()
+    if failed:
+        held.fulfill(status=503, body="Temporary archive read failure")
+        expect(page.locator("#plan-description")).to_have_text("Selected plan could not be loaded.")
+        expect(page.locator("#plan-rows tr")).to_have_count(0)
+        assert page.evaluate(
+            "Chart.getChart(document.getElementById('plan-chart')).data.datasets.length === 0"
+        )
+    else:
+        held.fulfill(json=state["comparisons"]["older-plan"])
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
+        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        expect(page.locator("#plan-rows tr")).to_have_count(2)
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_current_plan_moves_at_quarter_boundary_without_reloading_data(automatic_plan_overview):
     """Exact quarter rollover clips elapsed advice while an unchanged plan keeps its chart and data."""
     state = automatic_plan_overview
@@ -215,7 +293,11 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
         state["failed_prices"] = True
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     status = "#overview-status" if failed_view == "plan" else "#current-price-status"
-    expect(page.locator(status)).to_have_text("Cannot read this view (503).")
+    expect(page.locator(status)).to_have_text(
+        "Cannot read this view (503). Showing the previously loaded plan. The update is not available yet."
+        if failed_view == "plan"
+        else "Cannot read this view (503)."
+    )
     if failed_view == "prices":
         page.wait_for_function("""() => window.initialPlanChart !==
             Chart.getChart(document.getElementById('plan-chart'))""")
@@ -419,7 +501,9 @@ def test_failed_new_plan_comparison_retries_without_another_publication(
     page.clock.run_for(15000)
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
     if failed_view == "plan":
-        expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
+        expect(page.locator("#overview-status")).to_have_text(
+            "Cannot read this view (503). Showing the previously loaded plan. The update is not available yet."
+        )
         assert page.evaluate(
             "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
         )
@@ -468,7 +552,9 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
     with page.expect_event(
         "requestfailed", predicate=lambda request: request.url.endswith(held_path), timeout=8000
     ) as cancelled:
-        page.clock.run_for(15000)
+        # The archive response must start the bounded read before advancing its deadline.
+        with page.expect_request("**" + held_path):
+            page.clock.run_for(15000)
         page.clock.run_for(5001)
     assert cancelled.value.failure
     assert len(state["held_comparisons" if hung_view == "comparison" else "held_prices"]) == 1
