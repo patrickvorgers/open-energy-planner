@@ -20,7 +20,7 @@ Use **Next 6 hours**, **Next 24 hours** or **Full horizon**. Tap or hover to ins
 |---|---|
 | Without battery | The same original household and solar forecasts without battery operation |
 | Battery self-consumption | A separate reference that stores surplus solar and covers deficits within its limits |
-| OEP | The proposed optimized operation under the selected strategy and contract |
+| Optimizer | The proposed optimized operation under the selected strategy and contract |
 
 Each chart starts with **Expected economic cost**. Optimizer and battery self-consumption also show **Expected benefit versus without battery** against the same baseline. A negative benefit means higher expected cost than without battery. Missing comparisons stay unavailable. These amounts cover the complete original plan, even when you zoom into fewer hours. They are expectations, not measured savings or investment returns.
 

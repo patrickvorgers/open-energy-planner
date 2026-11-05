@@ -398,8 +398,8 @@ async function showPlan(signal, background = false) {
         renderScenarioCosts("ems-costs", baseline?.ems_costs || self?.ems_costs, currency, baseline?.expected_savings, true);
         const period = planEvidence?.period;
         for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = period ? `From ${when(period.start)} to ${when(period.end)}: Whole original plan. Expected, not measured.` : "Whole original plan. Expected, not measured.";
-        let message = "Benefits versus without battery include storage and OEP. Excludes investment costs.";
-        if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and OEP start from the same measured SoC and opening bonus budgets. Expected benefits include the difference in remaining battery value. " + message;
+        let message = "Benefits versus no battery include storage and smart planning. Excludes investment costs.";
+        if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. Expected benefits include the difference in remaining battery value. " + message;
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
         if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
         if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
@@ -519,7 +519,7 @@ async function showPlan(signal, background = false) {
                 }
             }
         }
-        const priceSeries = [{name: "Spot market rate", points: spot, color: "#85919c"}, {name: "Import rate", points: buy, color: "#2586c4"}, {name: "Export rate", points: sell, color: "#23965e"}];
+        const priceSeries = [{name: "Spot market rate", points: spot, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
         if (bonusRules.length) priceSeries.push({name: "Export rate incl. bonus", points: bonusSell, color: "#9255b7"});
         priceInputPlanId = id;
         currentPriceWindow = null;
@@ -691,7 +691,7 @@ async function currentPrices(signal) {
             for (const [points, value] of [[buy, interval.buy_price], [sell, interval.sell_price], [market, interval.market_price], [total, interval.total_export_price]]) points.push([start, value, interval.price_kind], [end, value, interval.price_kind]);
         }
         currentPriceWindow = intervals.length ? {start: Math.floor(Date.parse(data.as_of) / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS, end: Date.parse(intervals.at(-1).end)} : null;
-        const series = [{name: "Spot market rate", points: market, color: "#85919c"}, {name: "Import rate", points: buy, color: "#2586c4"}, {name: "Export rate", points: sell, color: "#23965e"}];
+        const series = [{name: "Spot market rate", points: market, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
         if (data.has_bonus) series.push({name: "Export rate incl. bonus", points: total, color: "#9255b7"});
         $("price-chart").closest(".chart-wrap").hidden = !intervals.length;
         chart("price-chart", series, {unit: `${data.currency || "EUR"}/kWh`});

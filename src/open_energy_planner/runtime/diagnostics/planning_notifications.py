@@ -43,8 +43,8 @@ def planning_notice(state: PlanningStatus, text: NoticeText) -> Notification:
     content = (
         NoticeText(
             "Calculating a new energy plan",
-            "The inputs are usable again. OEP is calculating and checking a new energy "
-            "plan. This can take a few minutes. Planning has not yet completed successfully.",
+            "The inputs are usable again. A new energy plan is being calculated and checked. "
+            "This can take a few minutes. Planning has not yet completed successfully.",
             "View planning status" if text.action_path else None,
             text.action_path,
             "info",
@@ -83,9 +83,9 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
     if reason == "waiting_for_energy_configuration":
         return NoticeText(
             "Waiting for Home Assistant Energy configuration",
-            "The OEP integration has not supplied the Home Assistant Energy dashboard configuration. "
+            "The Open Energy Planner integration has not supplied the Home Assistant Energy dashboard configuration. "
             "Check that the integration is loaded and connected, then refresh Home Assistant data "
-            "in Installation settings. OEP retries automatically.",
+            "in Installation settings. Planning retries automatically.",
             "Check installation",
             "/setup",
             "info",
@@ -93,7 +93,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
     if reason == "energy_configuration_changed":
         return NoticeText(
             "Home Assistant Energy configuration needs synchronization",
-            "The saved OEP installation no longer matches the Home Assistant Energy dashboard, "
+            "The saved installation no longer matches the Home Assistant Energy dashboard, "
             "or required installation settings are incomplete. Refresh Home Assistant data and "
             "review the discovered devices in Installation settings. Home Assistant Energy "
             "remains the source of truth for sensor membership.",
@@ -105,14 +105,14 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
             "Household consumption forecast is unavailable",
             "The household consumption forecast has not arrived or no longer covers the current "
             "planning period. Review its source and model status in Forecast quality. "
-            "OEP retries automatically when an updated forecast is available.",
+            "Planning retries automatically when an updated forecast is available.",
             "Review household forecast",
             "/quality",
         )
     if reason == "solar_configuration_required":
         return NoticeText(
             "Solar installation settings are incomplete",
-            "Solar producers are configured in Home Assistant Energy, but their OEP installation "
+            "Solar producers are configured in Home Assistant Energy, but their installation "
             "settings are incomplete. Review the discovered solar sources and inverter limits "
             "in Installation settings.",
             "Review solar installation",
@@ -122,14 +122,14 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Market prices are unavailable",
             "No usable market prices are available. Check the price sources in Installation settings. "
-            "OEP retries automatically when prices become available.",
+            "Planning retries automatically when prices become available.",
             "Check price sources",
             "/setup",
         )
     if reason in {"sources_not_configured", "forecasts_not_configured"}:
         return NoticeText(
             "Planning setup is incomplete",
-            "Complete the installation and its contract before OEP can calculate an energy plan.",
+            "Complete the installation and its contract before an energy plan can be calculated.",
             "Open installation",
             "/setup",
             "info",
@@ -141,8 +141,8 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
     }:
         return NoticeText(
             "Waiting for planning inputs",
-            "OEP is waiting for current Home Assistant measurements or a household forecast. "
-            "It retries automatically. If this continues, check the integration and selected sensors.",
+            "Planning is waiting for current Home Assistant measurements or a household forecast. "
+            "Planning retries automatically. If this continues, check the integration and selected sensors.",
             "Check installation",
             "/setup",
             "info",
@@ -165,7 +165,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Planning inputs expired before publication",
             "The measurements became too old or the first transfer interval elapsed before "
-            "a plan could be published. OEP retries with current inputs and a new usable interval. "
+            "a plan could be published. Planning retries with current inputs and a new usable interval. "
             "Check Planning for the next calculation and its current status.",
             "View planning",
             "/overview",
@@ -175,7 +175,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Forecast coverage is unavailable",
             "The available forecasts or prices do not cover a usable planning period. "
-            "Check forecast quality and source availability. OEP retries automatically.",
+            "Check forecast quality and source availability. Planning retries automatically.",
             "Review forecasts",
             "/quality",
         )

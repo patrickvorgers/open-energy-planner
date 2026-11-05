@@ -102,7 +102,7 @@ def test_expired_bridge_names_integration_instead_of_claiming_sensor_failure():
     """A five-minute capture outage explains the transport deadline without blaming unchanged sensor timestamps."""
     config, report = measurement_evidence(NOW)
     text = explain_measurement_problem("report_expired", config, report, NOW + timedelta(minutes=5))
-    assert "OEP integration" in text.message
+    assert "Open Energy Planner integration" in text.message
     assert "5 minutes" in text.message
     assert "not the age of an unchanged sensor value" in text.message
 

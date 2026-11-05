@@ -393,7 +393,7 @@ def test_post_replace_failure_preserves_release_boundary_and_closes_admission(
                     json={"check_id": "durability-proof", "overwrite": True},
                 )
                 assert response.status == 503
-                assert "restart OEP" in await response.text()
+                assert "restart the app" in await response.text()
             elif boundary == "startup-completion":
                 await host.restart()
             else:

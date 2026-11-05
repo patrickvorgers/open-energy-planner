@@ -108,7 +108,7 @@ def test_new_weather_cannot_clear_warning_before_forecast_recovery(solar_runtime
     notice = next(item for item in first if item["owner"] == "solar")
     assert notice["title"] == "Solar forecast is unavailable"
     assert "Weather data for the solar forecast is too old" in notice["message"]
-    assert "automatically retries" in notice["message"]
+    assert "are retried automatically" in notice["message"]
     assert "clears when a valid, up-to-date solar forecast is available" in notice["message"]
     assert "prices" not in notice["message"]
     runtime.set_weather(SITE, weather(now))
