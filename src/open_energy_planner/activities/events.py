@@ -5,10 +5,11 @@ import logging
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager, suppress
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from ..runtime.diagnostics.logging import failure_trace
 from ..storage.writes import complete_write
 
 _LOGGER = logging.getLogger(__name__)
@@ -163,8 +164,14 @@ class Events:
                     else await complete_write(self.store.write, row, now)
                 )
                 self.history_available = True
-            except Exception:
-                _LOGGER.exception("Activity history unavailable. Domain work is unaffected")
+            except Exception as error:
+                locations = failure_trace(error)
+                _LOGGER.exception(
+                    "Activity history unavailable (%s). Domain work is unaffected.\n%s",
+                    type(error).__name__,
+                    locations,
+                    exc_info=False,
+                )
                 self.history_available = False
                 self.lost_updates += int(row is not None)
                 cancellation = None
@@ -271,7 +278,7 @@ class Events:
         self.publish("activity", row)
 
     def snapshot(self):
-        """Publish current state and upcoming six hours, never expired schedule entries."""
+        """Publish current state and future deadlines. Consumers filter their six-hour window."""
         now = self.clock()
         return deepcopy(
             {
@@ -280,7 +287,7 @@ class Events:
                 "scheduled": [
                     row
                     for row in self.schedules.values()
-                    if now <= datetime.fromisoformat(row["due_at"]) <= now + timedelta(hours=6)
+                    if now <= datetime.fromisoformat(row["due_at"])
                 ],
                 "notifications": self.notifications,
                 "history_available": self.history_available,

@@ -531,6 +531,7 @@ class PlanningCoordinator:
             calculation_started = self.clock()
             outcome = None
             calculation_reason = "planning_error"
+            superseded = False
             activity = None
             _LOGGER.debug(
                 "Planning calculation started. Snapshot: %s. Strategy: %s. Intervals: %d.",
@@ -576,6 +577,7 @@ class PlanningCoordinator:
                         continue
                     self._set_status("failed", outcome.reason or "no_usable_plan")
             except PublicationSuperseded as error:
+                superseded = True
                 calculation_reason = str(error) or "inputs_changed"
                 _LOGGER.info(
                     "Plan discarded before publication (%s). No partial plan was activated. %s",
@@ -599,9 +601,6 @@ class PlanningCoordinator:
                     from .activities.events import Outcome
 
                     published = calculation_reason == "published"
-                    superseded = (
-                        outcome is not None and outcome.document is not None and not published
-                    )
                     if published:
                         state = Outcome.COMPLETED
                     elif calculation_reason == "interrupted":

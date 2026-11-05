@@ -27,6 +27,18 @@ def register(app):
         events.publish("history", {"available": events.history_available, "lost_updates": 0})
         return web.json_response({"accepted": True})
 
+    async def burst(_request):
+        """Produce enough real terminal updates to exercise bounded browser retention and paging."""
+        events = app[EVENTS]
+        for index in range(150):
+            identity = await events.start("weather", "weather", f"Weather burst {index}")
+            await events.finish(
+                identity, Outcome.COMPLETED, "Usable synthetic weather.", usable=True
+            )
+        await events.flush()
+        return web.json_response({"accepted": True})
+
+    app.router.add_post("/_test/activity-burst", burst)
     app.router.add_post("/_test/activity", live)
     app.router.add_post("/_test/activity-history", history_state)
 
@@ -63,3 +75,4 @@ async def seed(app):
     events.availability("weather", Health.AVAILABLE, "Current weather is usable.")
     events.availability("models", Health.UNKNOWN, "Waiting for the current training outcome.")
     events.scheduled("weather", "weather", "Fetch weather", now + timedelta(minutes=55))
+    events.scheduled("models", "training", "Later model training", now + timedelta(hours=7))

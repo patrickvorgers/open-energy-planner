@@ -647,3 +647,45 @@ def test_settlement_activity_distinguishes_waiting_from_failure(settlement, monk
             await events.close()
 
     asyncio.run(scenario())
+
+
+def test_repricing_failure_hides_private_exception_values(settlement, monkeypatch, caplog):
+    """Private pricing evidence cannot enter returned status, logs or overwrite the successful valuation."""
+    from open_energy_planner.savings import repricing
+    from tests.app.savings.test_plan_repricing import original_plan
+
+    _runtime, _store, docs, _engine, plans = settlement
+    original = original_plan()
+    plans.state["plan"] = original
+    plans.save()
+    values = repricing.PlanValuations(docs, plans)
+    values.process(contract(buy="0.4"), None, END)
+    accepted = values.latest(original["plan_id"])["valuation"]
+
+    def reject(*args, **kwargs):
+        """Simulate an untrusted retained value without changing the monetary oracle."""
+        raise ValueError("PRIVATE_REPRICING_TOKEN_AND_ARCHIVE_VALUE")
+
+    monkeypatch.setattr(repricing, "reprice", reject)
+    values.process(contract(buy="0.5"), None, END + timedelta(hours=1))
+    result = values.latest(original["plan_id"])
+    assert result["valuation"] == accepted
+    assert "PRIVATE_REPRICING_TOKEN_AND_ARCHIVE_VALUE" not in json.dumps(result)
+    assert "PRIVATE_REPRICING_TOKEN_AND_ARCHIVE_VALUE" not in caplog.text
+    diagnostics = [row for row in caplog.records if row.name.endswith("savings.repricing")]
+    assert diagnostics and all(row.exc_info is None for row in diagnostics)
+    assert "ValueError" in diagnostics[0].getMessage()
+
+
+def test_old_repricing_failure_status_is_sanitized_without_rewriting_evidence(settlement):
+    """Previously retained private failure values stay out of current projections without changing archives."""
+    from open_energy_planner.savings.repricing import PlanValuations, key
+
+    _runtime, _store, docs, _engine, plans = settlement
+    name = "valueissue-" + key("synthetic-plan") + ".json"
+    retained = {"issue": "PRIVATE_RETAINED_FAILURE", "contract_version": "retained-version"}
+    docs.write(name, retained)
+    result = PlanValuations(docs, plans).latest("synthetic-plan")
+    assert "PRIVATE_RETAINED_FAILURE" not in json.dumps(result)
+    assert result["valuation_status"]["contract_version"] == "retained-version"
+    assert docs.read(name) == retained

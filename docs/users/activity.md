@@ -14,6 +14,9 @@ New activities appear automatically while the page is connected. Running work
 updates in the same row. Open a row for its explanation, responsible module and
 finish time. Keyboard focus and open details remain in place during live updates.
 **Refresh** retries a failed history read without restarting background work.
+Refresh and earlier-page actions become available again when the current read
+finishes. Live updates retain the loaded amount of history. Older records remain
+available through **Load earlier activities** when new work pushes them out of view.
 
 ## Understand the result
 

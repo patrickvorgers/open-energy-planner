@@ -1,12 +1,14 @@
 """Revalue frozen plan flows under corrected contracts without rerunning an optimizer."""
 
 import json
+import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from hashlib import sha256
 
 from open_energy_planner.installation.location import SiteLocation
+from open_energy_planner.runtime.diagnostics.logging import request_error_message
 
 from ..contracts.compilation import BonusCompiler
 from ..contracts.export_meter import export_identity
@@ -19,6 +21,11 @@ from .forecast import comparison
 
 REPRICING_BATCH_SIZE = 20
 METHOD = "frozen-flow-contract-reprice-v1"
+_LOGGER = logging.getLogger(__name__)
+REPRICING_FAILURE_MESSAGE = (
+    "Plan repricing evidence is unavailable. Check archived inputs and contract coverage. "
+    "The last successful valuation is retained."
+)
 
 
 @dataclass(frozen=True)
@@ -347,7 +354,12 @@ class PlanValuations:
                         attempt,
                         {
                             "contract_version": contract.version,
-                            "issue": str(error),
+                            "issue": request_error_message(
+                                error,
+                                logger=_LOGGER,
+                                operation="Plan repricing",
+                                fallback=REPRICING_FAILURE_MESSAGE,
+                            ),
                             "evaluated_at": now.isoformat(),
                         },
                     )
@@ -387,11 +399,12 @@ class PlanValuations:
         """Read the latest successful repricing separately from the latest attempted correction."""
         pointer = "planvalue-" + key(plan_id) + ".json"
         attempt = "valueissue-" + key(plan_id) + ".json"
+        status = self.documents.read(attempt) if self.documents.exists(attempt) else None
+        if status and status.get("issue"):
+            status = {**status, "issue": REPRICING_FAILURE_MESSAGE}
         return {
             "valuation": self.documents.read(self.documents.read(pointer))
             if self.documents.exists(pointer)
             else None,
-            "valuation_status": self.documents.read(attempt)
-            if self.documents.exists(attempt)
-            else None,
+            "valuation_status": status,
         }

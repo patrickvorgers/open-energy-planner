@@ -104,10 +104,67 @@ def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     expect(status).to_have_text("", timeout=10000)
     page.route("**/v1/activities?**", lambda route: route.abort())
     page.get_by_role("button", name="Refresh", exact=True).click()
-    expect(status).to_contain_text("Failed to fetch")
+    expect(status).to_contain_text("Activity history could not be loaded")
     assert page.request.post(url + "/_test/activity", headers=headers).ok
     expect(page.locator("#activity-list")).to_contain_text("Live weather refresh")
-    expect(status).to_contain_text("Failed to fetch")
+    expect(status).to_contain_text("Activity history could not be loaded")
     page.unroute("**/v1/activities?**")
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(status).to_have_text("")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_activity_keeps_live_history_bounded_and_later_schedules_visible(app_page):
+    """Future deadlines enter the six-hour window, and trimmed live records remain pageable."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-upcoming")).not_to_contain_text("Later model training")
+    page.clock.install()
+    page.clock.fast_forward(2 * 60 * 60 * 1000)
+    expect(page.locator("#activity-upcoming")).to_contain_text("Later model training")
+    page.get_by_label("Activity type").select_option("weather")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(2)
+    assert page.request.post(
+        url + "/_test/activity-burst", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    expect(page.locator("#activity-list")).to_contain_text("Weather burst 149")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    page.get_by_role("button", name="Load earlier activities").click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(152)
+    page.get_by_label("Activity type").select_option("training")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(1)
+    assert page.request.post(
+        url + "/_test/activity-burst", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    expect(page.locator("#activity-list .activity-row")).to_have_count(1)
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
+    """Repeated Refresh cannot overlap, and invalid private JSON never becomes visible error text."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    requests = []
+    page.route("**/v1/activities?**", lambda route: requests.append(route))
+    refresh = page.get_by_role("button", name="Refresh", exact=True)
+    refresh.click()
+    expect(refresh).to_be_disabled()
+    page.evaluate("document.getElementById('activity-refresh').click()")
+    assert len(requests) == 1
+    requests[0].fulfill(
+        status=200, content_type="application/json", body="PRIVATE_INVALID_JSON_RESPONSE"
+    )
+    expect(page.locator("#activity-status")).to_contain_text("Activity history could not be loaded")
+    assert "PRIVATE_INVALID_JSON_RESPONSE" not in page.locator("body").inner_text()
+    expect(refresh).to_be_enabled()
+    page.unroute("**/v1/activities?**")
+    refresh.click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(100)

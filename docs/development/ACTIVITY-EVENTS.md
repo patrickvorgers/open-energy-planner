@@ -63,7 +63,10 @@ normal app is stopped. Activity does not replace that recovery mechanism.
 
 `GET /v1/events` uses existing bearer or trusted-ingress authorization. Credentials
 never enter URLs. Its first response contains an authoritative snapshot and a
-process-epoch cursor. `?cursor=<cursor>` returns later changes or waits up to
+process-epoch cursor. The snapshot retains all known future deadlines, so an
+unchanged deadline can enter a consumer's six-hour window later without another
+producer update. The Activity page applies that window on each render.
+`?cursor=<cursor>` returns later changes or waits up to
 25 seconds. The browser uses a 35-second timeout and reconnects after three
 seconds. Temporary live and storage-availability warnings clear on recovery.
 Lost-update warnings remain because missing evidence cannot be reconstructed.
@@ -90,7 +93,11 @@ the shared database closes.
 `activities/` owns an SQL history store on the app-owned active engine. The shared
 schema and four-backend transfer include its table. Day paging uses UTC start
 time and ID with installation-local day bounds, including 23-hour and 25-hour
-days. Start time determines retention. Original plans and financial archives are
+days. The browser retains live terminal rows only for the active day/type.
+Automatic growth stays within the loaded history capacity, initially 100 rows.
+Loading an earlier page explicitly increases that capacity by 100. Trimmed older
+records remain reachable through the normal history cursor, without deleting SQL
+evidence. Refresh and earlier-page actions stay disabled while a read is active. Start time determines retention. Original plans and financial archives are
 unchanged.
 
 Producers enqueue detached updates without waiting for SQL. One writer handles

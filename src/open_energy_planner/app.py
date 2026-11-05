@@ -623,9 +623,11 @@ def create_app(
                                 temperatures = await weather_source.read(
                                     location, datetime.now(UTC)
                                 )
+                                installed = False
                                 async with lock:
                                     if live.report and live.report.location == location:
                                         demand.weather(temperatures)
+                                        installed = True
                                         if temperatures:
                                             weather_logger.success(
                                                 f"Received {len(temperatures)} temperature hours. Next refresh in {WEATHER_REFRESH_SECONDS / SECONDS_PER_MINUTE:g} minutes."
@@ -639,19 +641,26 @@ def create_app(
                                 delay = WEATHER_REFRESH_SECONDS
                                 await events.finish(
                                     activity,
-                                    Outcome.COMPLETED if temperatures else Outcome.FAILED,
-                                    "Temperature forecast received."
+                                    Outcome.SKIPPED
+                                    if not installed
+                                    else Outcome.COMPLETED
+                                    if temperatures
+                                    else Outcome.FAILED,
+                                    "Temperature forecast was discarded because the location changed."
+                                    if not installed
+                                    else "Temperature forecast received."
                                     if temperatures
                                     else "No usable temperature hours returned. Calendar consumption forecasting remains available.",
-                                    usable=bool(temperatures),
+                                    usable=installed and bool(temperatures),
                                 )
-                                events.availability(
-                                    "temperature-weather",
-                                    Health.AVAILABLE if temperatures else Health.DEGRADED,
-                                    "Temperature forecast available."
-                                    if temperatures
-                                    else "Calendar consumption forecasting remains available without temperature data.",
-                                )
+                                if installed:
+                                    events.availability(
+                                        "temperature-weather",
+                                        Health.AVAILABLE if temperatures else Health.DEGRADED,
+                                        "Temperature forecast available."
+                                        if temperatures
+                                        else "Calendar consumption forecasting remains available without temperature data.",
+                                    )
                             except Exception as error:
                                 await events.finish(
                                     activity,

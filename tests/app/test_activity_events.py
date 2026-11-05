@@ -72,9 +72,9 @@ def test_failure_recovery_notifications_and_six_hour_schedule(tmp_path):
             assert events.snapshot()["health"][0]["state"] == "unknown"
             events.scheduled("weather", "weather", "Fetch weather", NOW + timedelta(hours=6))
             events.scheduled("models", "training", "Train model", NOW + timedelta(hours=7))
-            assert [row["owner"] for row in events.snapshot()["scheduled"]] == ["weather"]
+            assert [row["owner"] for row in events.snapshot()["scheduled"]] == ["weather", "models"]
             events.scheduled("weather", "weather", "Fetch weather")
-            assert events.snapshot()["scheduled"] == []
+            assert [row["owner"] for row in events.snapshot()["scheduled"]] == ["models"]
         finally:
             repository.close()
 
@@ -291,7 +291,7 @@ def test_managed_gateway_shutdown_releases_active_subscription(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("failure", [TypeError, KeyError, RuntimeError])
-def test_history_writer_survives_unexpected_row_failure(tmp_path, monkeypatch, failure):
+def test_history_writer_survives_unexpected_row_failure(tmp_path, monkeypatch, failure, caplog):
     """One rejected row discloses evidence loss without stranding later writes or shutdown."""
 
     async def scenario():
@@ -306,7 +306,7 @@ def test_history_writer_survives_unexpected_row_failure(tmp_path, monkeypatch, f
             """Inject a non-backend failure before the real store accepts subsequent rows."""
             attempts.append(row["state"])
             if len(attempts) == 1:
-                raise failure("synthetic writer failure")
+                raise failure("PRIVATE_ACTIVITY_VALUE_SQL_AND_PARAMETER")
             write(row, now)
 
         monkeypatch.setattr(store, "write", fail_once)
@@ -321,6 +321,10 @@ def test_history_writer_survives_unexpected_row_failure(tmp_path, monkeypatch, f
             repository.close()
 
     asyncio.run(scenario())
+    assert "PRIVATE_ACTIVITY_VALUE_SQL_AND_PARAMETER" not in caplog.text
+    diagnostics = [row for row in caplog.records if row.name.endswith("activities.events")]
+    assert diagnostics and all(not row.exc_info for row in diagnostics)
+    assert failure.__name__ in diagnostics[0].getMessage()
 
 
 @pytest.mark.parametrize(
@@ -463,6 +467,53 @@ def test_model_activity_waits_for_accepted_evidence(
                     )
                     assert "pending" not in row["detail"].lower()
                 assert store.read("capture", version(capture)) == capture
+        finally:
+            await events.close()
+            repository.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure_kind", ["persistence", "superseded"])
+def test_planning_activity_distinguishes_publication_failure_and_supersession(
+    tmp_path, failure_kind
+):
+    """A publication error starts a failure episode. Deliberate supersession does not."""
+    from open_energy_planner.planning import PlanningCoordinator, PublicationSuperseded
+    from tests.app.planning.test_planning_pipeline import NOW as PLANNING_NOW
+    from tests.app.planning.test_planning_pipeline import capture, service
+
+    async def scenario():
+        """Run two real planning generations with only the first publication rejected."""
+        repository = SqlPlanRepository(tmp_path)
+        events = Events(ActivityStore(repository.engine), lambda: PLANNING_NOW)
+        attempts = []
+
+        async def publish(document):
+            """Distinguish failed persistence from an explicit stale-generation rejection."""
+            attempts.append(document)
+            if len(attempts) == 1:
+                if failure_kind == "superseded":
+                    raise PublicationSuperseded()
+                raise OSError("Synthetic persistence failure")
+
+        coordinator = PlanningCoordinator(service(), publish)
+        coordinator.events = events
+        try:
+            coordinator.submit(capture(PLANNING_NOW))
+            await coordinator.wait()
+            rows = events.changes()["snapshot"]
+            assert rows["running"] == []
+            await events.flush()
+            history = events.store.read(PLANNING_NOW, PLANNING_NOW + timedelta(days=1))
+            assert len(history) == 1
+            assert history[0]["state"] == ("failed" if failure_kind == "persistence" else "skipped")
+            coordinator.submit(capture(PLANNING_NOW, 0.5))
+            await coordinator.wait()
+            await events.flush()
+            history = events.store.read(PLANNING_NOW, PLANNING_NOW + timedelta(days=1))
+            completed = next(row for row in history if row["state"] == "completed")
+            assert completed["recovered"] is (failure_kind == "persistence")
         finally:
             await events.close()
             repository.close()

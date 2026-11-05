@@ -20,8 +20,13 @@ from open_energy_planner.installation.location import SiteLocation
 NOW = datetime(2026, 11, 3, 12, tzinfo=UTC)
 
 
-def test_empty_temperature_evidence_waits_for_usable_recovery(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("location_changed", [False, True])
+def test_empty_temperature_evidence_waits_for_usable_recovery(
+    tmp_path, monkeypatch, caplog, location_changed
+):
     """Empty successful reads stay unavailable until usable hours arrive, with unchanged hourly refresh."""
+    from open_energy_planner.activities.api import EVENTS
+
     runtimes, live_inputs, calls = [], [], []
     original_live_inputs = app_module.LiveInputs
     location = SiteLocation(52, 6, "Europe/Amsterdam")
@@ -49,6 +54,10 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(tmp_path, monkeypa
             """Observe actual refresh requests without contacting a weather service."""
             assert site == location
             calls.append(now)
+            if len(calls) == 3 and location_changed:
+                live_inputs[0].report = SimpleNamespace(
+                    location=SiteLocation(51, 6, "Europe/Amsterdam")
+                )
             return () if len(calls) < 3 else temperatures
 
     @asynccontextmanager
@@ -95,26 +104,43 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(tmp_path, monkeypa
             for attempt in range(3):
                 assert await asyncio.wait_for(sleeps.get(), 3) == 3600
                 assert len(calls) == attempt + 1
-                assert runtimes[0].temperatures == (() if attempt < 2 else temperatures)
+                assert runtimes[0].temperatures == (
+                    () if attempt < 2 or location_changed else temperatures
+                )
                 if attempt < 2:
                     resume.put_nowait(None)
+            events = application[EVENTS]
+            await events.flush()
+            terminal = [
+                row["value"]
+                for row in events.replay
+                if row["topic"] == "activity" and row["value"]["state"] != "running"
+            ]
+            assert terminal[-1]["state"] == ("skipped" if location_changed else "completed")
+            assert terminal[-1]["recovered"] is not location_changed
         finally:
             await lifecycle.aclose()
+            await application[EVENTS].close()
 
     with caplog.at_level(logging.DEBUG, logger=app_module.__name__):
         asyncio.run(scenario())
     records = [
         record for record in caplog.records if "Temperature weather refresh" in record.message
     ]
-    assert [record.levelno for record in records] == [logging.WARNING, logging.DEBUG, logging.INFO]
+    assert [record.levelno for record in records] == (
+        [logging.WARNING, logging.DEBUG]
+        if location_changed
+        else [logging.WARNING, logging.DEBUG, logging.INFO]
+    )
     assert "no usable temperature hours" in records[0].message
     assert "Retrying in 60 minutes." in records[0].message
     assert all(
         "ready" not in record.message and "recovered" not in record.message
         for record in records[:2]
     )
-    assert "recovered" in records[2].message
-    assert "Received 1 temperature hours" in records[2].message
+    if not location_changed:
+        assert "recovered" in records[2].message
+        assert "Received 1 temperature hours" in records[2].message
 
 
 @pytest.mark.parametrize("failure", ["current", "stale", "before_capture"])

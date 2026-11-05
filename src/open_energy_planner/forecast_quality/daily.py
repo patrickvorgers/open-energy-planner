@@ -114,7 +114,11 @@ class DailyForecastArchive:
             return self._write_pending()
         from ..activities.events import Health, Outcome
 
-        usable = not self.pending.get("capture_issue")
+        context = self.pending.get("context") or {}
+        evidence = context.get("input_snapshot", {})
+        usable = not self.pending.get("capture_issue") and any(
+            evidence.get(family + "_evidence") for family in ("demand", "solar")
+        )
         with self.events.thread_attempt(
             "forecast-quality",
             "quality",
@@ -127,7 +131,7 @@ class DailyForecastArchive:
                 Outcome.COMPLETED if usable else Outcome.FAILED,
                 "The daily forecast baseline was archived."
                 if usable
-                else "Midnight was not continuously observed. No complete daily forecast was recorded.",
+                else "No usable original daily forecast evidence was recorded. Check Forecast quality coverage.",
                 usable=usable,
             )
             self.events.availability_thread(

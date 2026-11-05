@@ -254,11 +254,19 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                         if usable
                         else "Waiting for a usable solar forecast.",
                     )
+                    retry = (
+                        runtime.retry_after
+                        if not no_sources
+                        and runtime.retry_after
+                        and runtime.retry_after > current
+                        and runtime.failed_key == runtime.key(current)
+                        else None
+                    )
                     events.scheduled(
                         "solar",
                         "training",
                         "Update solar forecast",
-                        next_update(current, runtime.retry_after) if usable else None,
+                        next_update(current, retry) if usable else retry,
                     )
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
@@ -303,9 +311,16 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                             )
                             try:
                                 weather = await source.read(location, now)
+                                installed = False
                                 async with lock:
-                                    if live.report and live.report.location == location:
+                                    if (
+                                        live.report
+                                        and live.report.location == location
+                                        and runtime.configuration
+                                        and runtime.configuration.sources
+                                    ):
                                         runtime.set_weather(location, weather)
+                                        installed = True
                                         if weather:
                                             weather_logger.success(
                                                 f"Received {len(weather)} weather hours. Next refresh in {WEATHER_REFRESH_HOURS * MINUTES_PER_HOUR:g} minutes."
@@ -322,19 +337,26 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                 if activity:
                                     await events.finish(
                                         activity,
-                                        Outcome.COMPLETED if weather else Outcome.FAILED,
-                                        "Solar weather received."
+                                        Outcome.SKIPPED
+                                        if not installed
+                                        else Outcome.COMPLETED
+                                        if weather
+                                        else Outcome.FAILED,
+                                        "Solar weather was discarded because the installation changed."
+                                        if not installed
+                                        else "Solar weather received."
                                         if weather
                                         else "No usable solar weather returned. Retaining only valid forecasts. Planning still requires usable solar data.",
-                                        usable=bool(weather),
+                                        usable=installed and bool(weather),
                                     )
-                                    events.availability(
-                                        "solar-weather",
-                                        Health.AVAILABLE if weather else Health.DEGRADED,
-                                        "Solar weather available."
-                                        if weather
-                                        else "No new usable solar weather. Check forecast validity.",
-                                    )
+                                    if installed:
+                                        events.availability(
+                                            "solar-weather",
+                                            Health.AVAILABLE if weather else Health.DEGRADED,
+                                            "Solar weather available."
+                                            if weather
+                                            else "No new usable solar weather. Check forecast validity.",
+                                        )
                             except Exception as error:
                                 weather_logger.exception(
                                     "Retaining only valid forecasts. Planning still requires usable solar data.",
