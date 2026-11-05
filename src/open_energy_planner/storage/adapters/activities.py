@@ -40,7 +40,12 @@ class ActivityStore:
             raise OSError("Activity history could not be saved") from None
 
     def read(self, start, end, before=None, limit=100, kind=None):
-        """Page by UTC start and identity, including simultaneous starts exactly once."""
+        """Return newest-first detached rows within the half-open UTC date range.
+
+        The optional before cursor is (started_at, id), both ISO/string values.
+        Ordering is descending by start and identity, including equal starts once.
+        OSError hides backend failures. Invalid stored JSON raises ValueError.
+        """
         query = select(ACTIVITIES.c.payload).where(
             ACTIVITIES.c.started_at >= start.isoformat(), ACTIVITIES.c.started_at < end.isoformat()
         )
@@ -72,7 +77,19 @@ class ActivityStore:
             raise OSError("Activity retention could not be updated") from None
 
     def restart(self, now):
-        """Sanitize backend errors while retaining explicit corrupt-history failures."""
+        """Prune expired rows and mark running executions interrupted at aware now.
+
+        Returns:
+            A tuple containing the (owner, kind) pairs whose latest completed or
+            failed outcome is failed, and the highest retained finished sequence
+            among those terminal outcomes (zero when absent).
+
+        Raises:
+            OSError: Backend recovery failed, without exposing backend details.
+            ValueError: Retained JSON or sequence values are corrupt.
+            KeyError: A retained payload lacks a required field.
+            TypeError: Retained sequence values cannot be compared.
+        """
         try:
             return self._restart(now)
         except SQLAlchemyError:

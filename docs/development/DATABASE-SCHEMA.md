@@ -70,7 +70,7 @@ capacity cannot be measured, or `ok`. This is an on-demand warning in the storag
 page, not background monitoring or an HA notification. Refresh retries failures
 and removes stale evidence. No data is deleted or automatically compacted.
 
-## Relationships
+## Activity history table
 
 ### `oep_activities`
 

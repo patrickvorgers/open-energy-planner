@@ -377,7 +377,23 @@ class SavingsRuntime:
             )
 
     def _evaluate_rows(self, contract, now, book, head, published_state, price_cursor, state, rows):
-        """Evaluate one captured batch and retain the existing success-only publication boundary."""
+        """Evaluate captured intervals before publishing a successful head.
+
+        Args:
+            contract: Current terms whose currency and market are recorded per result.
+            now: Aware evaluation time used for financial evidence and metadata.
+            book: Optional counter book used to prepare bonus evidence.
+            head: Working evaluation metadata, including its revision.
+            published_state: Previously published continuation state, if available.
+            price_cursor: Price cursor retained after the complete batch.
+            state: Continuation state for the next captured interval.
+            rows: Captured measurements and contexts in chronological order.
+
+        Each successful interval is committed immediately. An early return records
+        self.issue and, for handled evaluation errors, self.attention. Earlier
+        interval commits remain stored. Only a complete batch writes the new head
+        or working state, preserving the previous successful publication.
+        """
         counter_version = book.version if book else None
         for row in rows:
             frame = parse_frame(row["frame"])

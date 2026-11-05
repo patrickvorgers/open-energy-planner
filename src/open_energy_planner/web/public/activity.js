@@ -6,7 +6,7 @@ bindSettingsActions();
 const find = id => document.getElementById(id);
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", rows = new Map(), running = [], scheduled = [], health = [], next, generation = 0, loading = false;
-let historyProblem = "";
+let historyProblem = "", loadProblem = "", liveProblem = "";
 const historyWarning = (available, lost) => lost ? "Some activity updates could not be recorded. History may be incomplete. Energy planning continues independently." : available === false ? "Activity history cannot currently be saved. Energy planning continues independently." : "";
 const label = value => value.charAt(0).toUpperCase() + value.slice(1).replaceAll(/[_-]/g, " ");
 const moduleName = value => value.split(":").map(label).join(": ");
@@ -40,7 +40,7 @@ function activityRow(row) {
 
 /** Show current work only on its actual local start day. */
 function render() {
-    if (historyProblem) find("activity-status").textContent = historyProblem;
+    find("activity-status").textContent = loadProblem || liveProblem || historyProblem || (loading ? "Loading activity history." : "");
     const selected = find("activity-day").value, kind = find("activity-type").value;
     const opened = new Set([...find("activity-list").querySelectorAll("details[open]")].map(item => item.dataset.activityId));
     const focused = document.activeElement?.tagName === "SUMMARY" ? document.activeElement.parentElement.dataset.activityId : undefined;
@@ -75,6 +75,7 @@ function render() {
 async function load(append = false) {
     const version = ++generation;
     loading = true;
+    loadProblem = "";
     if (!append) {rows.clear(); next = undefined; render();}
     find("activity-status").textContent = "Loading activity history.";
     try {
@@ -85,13 +86,14 @@ async function load(append = false) {
         useHomeAssistantTimezone(result.timezone);
         for (const row of result.activities) if (!rows.has(row.id)) rows.set(row.id, row);
         next = result.next;
-        find("activity-status").textContent = historyProblem;
-    } catch (error) {if (version === generation) find("activity-status").textContent = error.message;}
+        loadProblem = "";
+    } catch (error) {if (version === generation) loadProblem = error.message;}
     finally {if (version === generation) {loading = false; render();}}
 }
 
 observeEvents(message => {
-    if (message.unavailable) {find("activity-status").textContent = "Live updates unavailable. Displayed information may be out of date."; if (message.unauthorized) find("connect").hidden = false; return;}
+    if (message.unavailable) {liveProblem = "Live updates unavailable. Displayed information may be out of date."; if (message.unauthorized) find("connect").hidden = false; render(); return;}
+    liveProblem = "";
     if (message.reset) {
         running = message.snapshot.running; scheduled = message.snapshot.scheduled; health = message.snapshot.health;
         historyProblem = historyWarning(message.snapshot.history_available, message.snapshot.lost_updates);
@@ -112,5 +114,5 @@ find("activity-today").addEventListener("click", () => {find("activity-day").val
 find("activity-refresh").addEventListener("click", () => load());
 find("activity-more").addEventListener("click", () => load(true));
 find("connect").addEventListener("submit", event => {event.preventDefault(); token = find("token").value; find("token").value = ""; find("connect").hidden = true; connectEvents(base, token); load();});
-api("setup/session").then(session => {useHomeAssistantTimezone(session.timezone); find("activity-day").value = localDate(); find("connect").hidden = Boolean(session.ingress); if (session.ingress) {connectEvents(base); load();} else find("activity-status").textContent = "Connect to read activity history.";}).catch(error => {find("activity-status").textContent = error.message;});
+api("setup/session").then(session => {useHomeAssistantTimezone(session.timezone); find("activity-day").value = localDate(); find("connect").hidden = Boolean(session.ingress); if (session.ingress) {connectEvents(base); load();} else {loadProblem = "Connect to read activity history."; render();}}).catch(error => {loadProblem = error.message; render();});
 setInterval(render, 60000);

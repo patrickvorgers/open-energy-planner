@@ -306,12 +306,29 @@ def register(app, service, repository, live, lock):
                         "Learn appliance cycles",
                         failure="Cycle learning failed. Previously accepted profiles are retained.",
                     ) as activity:
+                        previous_cursor = (
+                            service.state["devices"]
+                            .get(body["entity_id"], {})
+                            .get("history_import", {})
+                            .get("cursor")
+                        )
                         cancellation = await complete_write(apply)
+                        accepted = (
+                            operation != "hourly_history"
+                            or previous_cursor
+                            != (
+                                service.state["devices"][body["entity_id"]]["history_import"][
+                                    "cursor"
+                                ]
+                            )
+                        )
                         await events.finish(
                             activity,
-                            Outcome.COMPLETED,
-                            "Appliance history was processed. Detected cycles and usable profiles are shown in Appliance settings.",
-                            usable=True,
+                            Outcome.COMPLETED if accepted else Outcome.SKIPPED,
+                            "Appliance history was processed. Detected cycles and usable profiles are shown in Appliance settings."
+                            if accepted
+                            else "This appliance history batch was already processed.",
+                            usable=accepted,
                         )
                 else:
                     cancellation = await complete_write(apply)

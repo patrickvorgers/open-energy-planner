@@ -288,3 +288,166 @@ def test_managed_gateway_shutdown_releases_active_subscription(tmp_path, monkeyp
             await client.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", [TypeError, KeyError, RuntimeError])
+def test_history_writer_survives_unexpected_row_failure(tmp_path, monkeypatch, failure):
+    """One rejected row discloses evidence loss without stranding later writes or shutdown."""
+
+    async def scenario():
+        """Fail the first persistence attempt and accept the terminal record afterward."""
+        repository = SqlPlanRepository(tmp_path)
+        store = ActivityStore(repository.engine)
+        events = Events(store, lambda: NOW)
+        write = store.write
+        attempts = []
+
+        def fail_once(row, now):
+            """Inject a non-backend failure before the real store accepts subsequent rows."""
+            attempts.append(row["state"])
+            if len(attempts) == 1:
+                raise failure("synthetic writer failure")
+            write(row, now)
+
+        monkeypatch.setattr(store, "write", fail_once)
+        try:
+            identity = await events.start("weather", "weather", "Fetch weather")
+            await events.finish(identity, Outcome.COMPLETED, "Accepted weather.", usable=True)
+            await asyncio.wait_for(events.close(), 3)
+            assert attempts == ["running", "completed"]
+            assert events.history_available and events.lost_updates == 1
+            assert store.read(NOW, NOW + timedelta(days=1))[0]["state"] == "completed"
+        finally:
+            repository.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["capture", "evaluate"])
+@pytest.mark.parametrize("result_status", ["pending", "failed", "commit_failed", "ok"])
+def test_model_activity_waits_for_accepted_evidence(
+    tmp_path, monkeypatch, operation, result_status
+):
+    """Pending evidence never fails, and capture/evaluation writes must succeed before recovery."""
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from open_energy_planner.forecast_selection.runtime import ModelSelection
+    from open_energy_planner.forecast_selection.storage import SelectionStore
+    from open_energy_planner.solar.calculation.model import version
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+    async def scenario():
+        """Run actual model advancement in its worker thread against the real SQL evidence store."""
+        repository = SqlPlanRepository(tmp_path)
+        store = SelectionStore(SqlDocuments(repository.engine, "planning"))
+        events = Events(ActivityStore(repository.engine), lambda: NOW)
+        events.loop = asyncio.get_running_loop()
+        capture = {
+            "start": (NOW - timedelta(days=2)).isoformat(),
+            "end": NOW.isoformat(),
+            "original_plan_id": "synthetic-plan",
+            "contract_version": "synthetic-contract",
+        }
+        original = {
+            "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+            "market_area": "NL",
+            "currency": "EUR",
+            "input_snapshot": {
+                "problem": {
+                    "intervals": [
+                        {
+                            "start": (NOW + timedelta(hours=48)).isoformat(),
+                            "duration_h": 1,
+                        }
+                    ]
+                }
+            },
+        }
+        family = {"windows": [], "pending": None}
+        if operation == "evaluate":
+            family["pending"] = version(capture)
+            store.commit("family", family, capture=capture)
+        runtime = ModelSelection(
+            store,
+            SimpleNamespace(get_plan=lambda _identity: original),
+            SimpleNamespace(frames=lambda *args, **kwargs: [], published=lambda *args: []),
+            SimpleNamespace(load=lambda _identity: None),
+            None,
+        )
+        runtime.events = events
+        status = "ok" if result_status in ("ok", "commit_failed") else result_status
+        result = {
+            "status": status,
+            "value": capture if operation == "capture" else {"score": 1},
+            "issue": "Settlement evidence is pending."
+            if status == "pending"
+            else "Calculation failed.",
+        }
+        monkeypatch.setattr(runtime, "_execute", lambda _payload: result)
+        prior_state = deepcopy(store.state)
+        commit = store.commit
+
+        def accept(*args, **kwargs):
+            """Verify no usable completion is published before the owning store commits."""
+            assert events.running
+            if result_status == "commit_failed":
+                raise OSError("synthetic commit failure")
+            commit(*args, **kwargs)
+
+        monkeypatch.setattr(store, "commit", accept)
+        try:
+            if result_status == "pending":
+                # A pending first attempt must not create a failure episode.
+                assert events.failed == set()
+            else:
+                failed = await events.start("models", "training", "Earlier comparison")
+                await events.finish(failed, Outcome.FAILED, "Earlier failure.")
+            cursor = events.cursor
+            if result_status == "commit_failed":
+                with pytest.raises(OSError, match="synthetic commit"):
+                    await asyncio.to_thread(
+                        runtime._advance, original, {"family_id": "family"}, family, NOW
+                    )
+                assert store.state == prior_state
+            else:
+                assert await asyncio.to_thread(
+                    runtime._advance, original, {"family_id": "family"}, family, NOW
+                )
+            await events.flush()
+            terminal = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity" and row["value"]["state"] != "running"
+            ]
+            assert len(terminal) == 1
+            row = terminal[0]
+            assert (
+                row["state"]
+                == {
+                    "pending": "skipped",
+                    "failed": "failed",
+                    "commit_failed": "failed",
+                    "ok": "completed",
+                }[result_status]
+            )
+            assert row["recovered"] is (result_status == "ok")
+            assert row["usable"] is (result_status == "ok")
+            assert (("models", "training") in events.failed) is (
+                result_status in ("failed", "commit_failed")
+            )
+            health = events.health["models"]
+            assert health["state"] == (
+                "available"
+                if result_status == "ok"
+                else "unknown"
+                if result_status == "pending"
+                else "degraded"
+            )
+            if result_status == "pending" and operation == "evaluate":
+                assert store.state["families"]["family"]["pending"] == version(capture)
+        finally:
+            await events.close()
+            repository.close()
+
+    asyncio.run(scenario())

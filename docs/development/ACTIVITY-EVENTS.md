@@ -26,8 +26,11 @@ change them. Ad-hoc plan calculations appear only once they actually execute.
 
 Each actual attempt has one execution ID. Intermediate changes reuse that ID.
 Repeated attempts remain separate records. Empty weather and rejected prices
-do not establish recovery. Price details name the actual adapter, market and
-usable coverage. Original source expiry remains authoritative. Failure details
+do not establish recovery. Already processed appliance-history uploads are
+Skipped, not recovery. Model comparisons awaiting evidence are Skipped with
+Unknown availability, not Failed. A comparison becomes Completed only after
+its capture or evaluation is committed. Price details name the actual adapter,
+market and usable coverage. Original source expiry remains authoritative. Failure details
 explain whether retained input or a baseline remains usable and its impact.
 
 Availability is separate. **Unknown** means the producer has not established its
@@ -67,8 +70,11 @@ normal app is stopped. Activity does not replace that recovery mechanism.
 never enter URLs. Its first response contains an authoritative snapshot and a
 process-epoch cursor. `?cursor=<cursor>` returns later changes or waits up to
 25 seconds. The browser uses a 35-second timeout and reconnects after three
-seconds. Transport recovery does not retry business work. Unauthorized responses
-require authentication again.
+seconds. Temporary live and storage-availability warnings clear on recovery.
+Lost-update warnings remain because missing evidence cannot be reconstructed.
+A failed history read remains visible until that read succeeds. Transport
+recovery does not retry business work. Unauthorized responses require
+authentication again.
 
 Events contain a process-local sequence, topic and detached data. The latest
 512 changes are replayable. Snapshot/cursor capture and wakeup registration have
@@ -93,7 +99,8 @@ days. Start time determines retention. Original plans and financial archives are
 unchanged.
 
 Producers enqueue detached updates without waiting for SQL. One writer handles
-up to 512 queued updates. Storage failure does not stop planning. A failed write
+up to 512 queued updates. Individual write failures do not terminate that writer
+or stop planning. A failed write
 or full queue increments a process-local lost-update count. Activity shows that
 history may be incomplete, including after a new subscription. Normal shutdown
 drains accepted updates. Forced termination and unavailable storage cannot

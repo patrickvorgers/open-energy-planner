@@ -163,7 +163,7 @@ class Events:
                     else await complete_write(self.store.write, row, now)
                 )
                 self.history_available = True
-            except (OSError, ValueError):
+            except Exception:
                 _LOGGER.exception("Activity history unavailable. Domain work is unaffected")
                 self.history_available = False
                 self.lost_updates += int(row is not None)

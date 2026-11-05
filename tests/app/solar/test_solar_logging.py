@@ -210,3 +210,56 @@ def test_empty_historical_weather_waits_for_original_cache_invalidation(refresh_
     assert "UTC day or site changes" in records[0].message
     assert "Retrying in" not in records[0].message
     assert "ready" not in records[0].message and "recovered" in records[1].message
+
+
+def test_disabled_weather_producer_withdraws_health_and_schedule(tmp_path, monkeypatch):
+    """Removing PV or location retracts stale availability and upcoming weather work."""
+    from open_energy_planner.activities.api import EVENTS
+    from open_energy_planner.activities.events import Events
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+
+    runtime = SolarRuntime(make_store(tmp_path, SolarStore))
+    runtime.configure(plant())
+
+    @asynccontextmanager
+    async def factory():
+        """Provide accepted weather without external requests."""
+        yield SimpleNamespace(read=read)
+
+    async def read(location, now):
+        """Use physical synthetic hours for the current site."""
+        return weather(now)
+
+    async def scenario():
+        """Drive the actual producer through active, disabled, restored and absent-location states."""
+        _clock, sleeps, resume = controlled_poll(monkeypatch)
+        live = SimpleNamespace(report=SimpleNamespace(location=SITE))
+        app = solar_app(runtime, live=live, weather_factory=factory)
+        events = Events(ActivityStore(runtime.store.documents.engine), lambda: START)
+        app[EVENTS] = events
+        lifecycle = app.cleanup_ctx[1](app)
+        await anext(lifecycle)
+        try:
+            await asyncio.wait_for(sleeps.get(), 3)
+            assert events.health["solar-weather"]["state"] == "available"
+            assert "solar-weather:weather" in events.schedules
+            runtime.configure(plant(count=0))
+            resume.put_nowait(None)
+            await asyncio.wait_for(sleeps.get(), 3)
+            assert "solar-weather" not in events.health
+            assert "solar-weather:weather" not in events.schedules
+            runtime.configure(plant())
+            resume.put_nowait(None)
+            await asyncio.wait_for(sleeps.get(), 3)
+            assert "solar-weather:weather" in events.schedules
+            events.availability("solar-weather", "available", "Synthetic usable weather.")
+            live.report = None
+            resume.put_nowait(None)
+            await asyncio.wait_for(sleeps.get(), 3)
+            assert "solar-weather" not in events.health
+            assert "solar-weather:weather" not in events.schedules
+        finally:
+            await lifecycle.aclose()
+            await events.close()
+
+    asyncio.run(scenario())

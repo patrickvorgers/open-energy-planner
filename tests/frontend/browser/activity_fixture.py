@@ -20,16 +20,25 @@ def register(app):
         )
         return web.json_response({"accepted": True})
 
+    async def history_state(request):
+        """Publish synthetic persistence health transitions through the real event subscription."""
+        events = app[EVENTS]
+        events.history_available = (await request.json())["available"]
+        events.publish("history", {"available": events.history_available, "lost_updates": 0})
+        return web.json_response({"accepted": True})
+
     app.router.add_post("/_test/activity", live)
+    app.router.add_post("/_test/activity-history", history_state)
 
 
 async def seed(app):
     """Provide more than one page, a recovered outage and current planned work without provider traffic."""
     events = app[EVENTS]
     now = datetime.now(UTC)
+    seed_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
     try:
         for index in range(104):
-            events.clock = lambda index=index: now - timedelta(minutes=110 - index)
+            events.clock = lambda index=index: seed_time - timedelta(minutes=110 - index)
             identity = await events.start("prices:nord_pool", "prices", "Fetch published prices")
             await events.finish(
                 identity,
@@ -37,17 +46,17 @@ async def seed(app):
                 "Adapter: Nord Pool. Market: NL. Delivery-day prices accepted.",
                 usable=True,
             )
-        events.clock = lambda: now - timedelta(minutes=3)
+        events.clock = lambda: seed_time - timedelta(minutes=3)
         identity = await events.start("weather", "weather", "Fetch weather")
         await events.finish(
             identity,
             Outcome.FAILED,
             "The provider request failed. Calendar forecasting remains available.",
         )
-        events.clock = lambda: now - timedelta(minutes=2)
+        events.clock = lambda: seed_time - timedelta(minutes=2)
         identity = await events.start("weather", "weather", "Fetch weather")
         await events.finish(identity, Outcome.COMPLETED, "Usable weather received.", usable=True)
-        events.clock = lambda: now - timedelta(minutes=1)
+        events.clock = lambda: seed_time - timedelta(minutes=1)
         await events.start("models", "training", "Update forecast model")
     finally:
         events.clock = lambda: datetime.now(UTC)

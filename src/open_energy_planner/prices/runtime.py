@@ -83,12 +83,12 @@ class ConfiguredPrices:
             service = await replacement.enter_async_context(self.open_service(area))
             service.persistence_lock = self.persistence_lock
             service.events = self.events
+            await self.withdraw_events()
         except BaseException:
             self.configuration_issue = "market_area_reload_failed"
             await replacement.aclose()
             raise
         old = self.resources
-        await self.withdraw_events()
         self.service, self.market_area, self.resources = service, area, replacement
         self.configuration_issue = None
         await old.aclose()
@@ -100,11 +100,12 @@ class ConfiguredPrices:
             from ..activities.events import Outcome
 
             for identity in self.service.activity_requests.values():
-                await self.events.finish(
-                    identity,
-                    Outcome.CANCELLED,
-                    "The price source configuration changed before delivery completed.",
-                )
+                if identity in self.events.running:
+                    await self.events.finish(
+                        identity,
+                        Outcome.CANCELLED,
+                        "The price source configuration changed before delivery completed.",
+                    )
             for source in (
                 self.service.published,
                 self.service.forecast,

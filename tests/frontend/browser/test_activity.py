@@ -63,3 +63,51 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     expect(page.locator("#activity-list")).to_contain_text("No activities recorded")
     page.get_by_role("button", name="Today", exact=True).click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(1)
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
+    """Live and storage recovery clear stale warnings but preserve a failed explicit history read."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    status = page.locator("#activity-status")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    response = page.request.post(
+        url + "/_test/activity-history", headers=headers, data={"available": False}
+    )
+    assert response.ok
+    expect(status).to_contain_text("cannot currently be saved")
+    response = page.request.post(
+        url + "/_test/activity-history", headers=headers, data={"available": True}
+    )
+    assert response.ok
+    expect(status).to_have_text("")
+
+    disconnected = [True]
+
+    def connection(route):
+        """Interrupt the transport while retaining the real server and replay protocol on recovery."""
+        if disconnected[0]:
+            route.abort()
+        else:
+            route.continue_()
+
+    page.route("**/v1/events**", connection)
+    # Wake the existing long poll so the next request encounters the transport outage.
+    assert page.request.post(url + "/_test/activity", headers=headers).ok
+    expect(status).to_contain_text("Live updates unavailable", timeout=10000)
+    disconnected[0] = False
+    expect(status).to_have_text("", timeout=10000)
+    page.route("**/v1/activities?**", lambda route: route.abort())
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(status).to_contain_text("Failed to fetch")
+    assert page.request.post(url + "/_test/activity", headers=headers).ok
+    expect(page.locator("#activity-list")).to_contain_text("Live weather refresh")
+    expect(status).to_contain_text("Failed to fetch")
+    page.unroute("**/v1/activities?**")
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(status).to_have_text("")

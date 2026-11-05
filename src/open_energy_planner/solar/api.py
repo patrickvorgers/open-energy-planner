@@ -356,12 +356,12 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                         "Solar weather refresh failed. Check solar forecast validity.",
                                     )
                         if events:
-                            events.scheduled(
-                                "solar-weather",
-                                "weather",
-                                "Fetch solar weather",
-                                due if configured and location else None,
-                            )
+                            if configured and location:
+                                events.scheduled(
+                                    "solar-weather", "weather", "Fetch solar weather", due
+                                )
+                            else:
+                                events.withdraw("solar-weather")
                         await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
                 task = asyncio.create_task(update_weather())
