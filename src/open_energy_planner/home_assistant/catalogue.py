@@ -301,7 +301,7 @@ class HACatalogue:
                     or configuration.grid_power_inverted
                 ):
                     raise ValueError(
-                        "Configure grid power in the Home Assistant Energy dashboard. OEP follows its normalized sensors"
+                        "Configure grid power in the Home Assistant Energy dashboard. The normalized sensors are used without additional inversion"
                     )
                 if configuration.grid_export_entity != hints["grid_export"]:
                     raise ValueError(

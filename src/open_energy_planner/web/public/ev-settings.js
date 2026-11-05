@@ -67,7 +67,7 @@ function removeSelected() {
         saveState.update(`This vehicle is the only allowed vehicle for: ${dependent.map(point => displayName(point, false)).join(", ")}. Edit or remove the listed charge points first.`);
         return;
     }
-    if (!confirm("Remove this appliance from OEP? Home Assistant sources and historical evidence are retained. Save settings to apply the removal.")) return;
+    if (!confirm("Remove this appliance? Home Assistant sources and historical evidence are retained. Save settings to apply the removal.")) return;
     editOriginId = selectedId;
     const rows = draft.vehicles.includes(row) ? draft.vehicles : draft.points;
     rows.splice(rows.indexOf(row), 1);

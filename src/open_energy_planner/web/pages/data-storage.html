@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="oep-api-base" content="__OEP_BASE__"><title>Open Energy Planner: Data storage</title><link rel="stylesheet" href="/setup/style.css"><link rel="stylesheet" href="/setup/workspace.css"><link rel="stylesheet" href="/setup/storage-migration.css"><script type="module" src="/setup/data-storage.js"></script><link rel="icon" type="image/svg+xml" href="/setup/icons/app.svg"></head>
 <body class="workspace storage-workspace"><!-- OEP_NAVIGATION -->
-<main class="workspace-main"><header class="page-header"><div><h1 class="page-heading"><img class="page-icon" src="/setup/icons/settings.svg" alt="" width="32" height="32"><span>Data storage</span></h1><p>Monitor the database holding your OEP settings, plans and historical evidence.</p></div></header>
+<main class="workspace-main"><header class="page-header"><div><h1 class="page-heading"><img class="page-icon" src="/setup/icons/settings.svg" alt="" width="32" height="32"><span>Data storage</span></h1><p>Monitor the database holding your settings, plans and historical evidence.</p></div></header>
 <form id="connect"><label>Installation API token<input id="token" type="password" autocomplete="off" required></label><button>Connect</button></form>
 <p id="status" role="status" aria-live="polite"></p>
 <section id="storage" hidden aria-label="Storage overview">
@@ -11,7 +11,7 @@
 <section class="evidence-card"><h2>Available space</h2><dl><dt>Free space</dt><dd id="free-space"></dd><dt>Volume size</dt><dd id="volume-size"></dd><dt>Capacity status</dt><dd id="capacity-status"></dd></dl><p id="capacity-note" class="muted"></p></section>
 </div>
 <p>Low space means less than 1 GiB or 5.0% free on the database volume. Other applications may share this space. Storage quotas may impose additional limits.</p>
-<p>OEP retains historical evidence. This overview does not delete data.</p>
+<p>Historical evidence is retained. This overview does not delete data.</p>
 </section>
 <section class="evidence-card storage-connection" aria-labelledby="connection-title" id="database-connection" hidden>
 <div class="storage-connection-heading"><h2 id="connection-title">Database connection</h2><button id="change-database" type="button" class="secondary">Change database</button></div>
@@ -25,9 +25,9 @@
 <p id="destination-result" role="status" aria-live="polite"></p>
 <div id="migration-confirmation" hidden>
 <p id="migration-route"></p>
-<p>After a change here, OEP retains the connection across restarts and app updates. Deployment database connection options no longer override it.</p>
-<p>After migration and successful startup checks, OEP resumes automatically using the new database. The original database is retained but is no longer updated.</p>
-<label><input id="overwrite-destination" type="checkbox">I accept replacement of all existing OEP tables in the destination. Other applications' tables are not replaced.</label>
+<p>Connection changes made here persist across restarts and app updates. Deployment database connection options no longer override it.</p>
+<p>After migration and successful startup checks, the app resumes automatically using the new database. Planning may wait for fresh Home Assistant measurements and its other required inputs. The original database is retained but is no longer updated.</p>
+<label><input id="overwrite-destination" type="checkbox">I accept replacement of all existing tables belonging to this app in the destination. Other applications' tables are not replaced.</label>
 <button id="start-migration" type="button" disabled>Migrate database</button>
 </div>
 </form>
@@ -40,7 +40,7 @@
 <p id="migration-error" role="alert" hidden></p>
 <div class="settings-actions"><button id="retry-migration" type="button" class="secondary" hidden>Retry migration</button><button id="restore-database" type="button" class="secondary" hidden>Restore previous database</button><button id="retry-connection" type="button" class="secondary" hidden>Retry connection</button></div>
 </section>
-<details id="migration-recovery"><summary>Recovery instructions</summary><p>The original database is retained. Before release, use Restore previous database. After release, returning requires a new migration to preserve new data.</p><p>If OEP does not reconnect, keep this screen open. If OEP cannot start, stop it and add --recover-storage to its normal startup command, keeping the same data directory. This is available only before release. For a Home Assistant app, enable recover_storage in the app configuration and start OEP. Disable it after the original database is restored. This option never reverts a released migration. Never publish connection files or passwords.</p><a id="download-recovery" download="oep-database-recovery.txt">Download recovery instructions</a></details>
+<details id="migration-recovery"><summary>Recovery instructions</summary><p>The original database is retained. Before release, use Restore previous database. After release, returning requires a new migration to preserve new data.</p><p>If the app does not reconnect, keep this screen open. If the app cannot start, stop it and add --recover-storage to its normal startup command, keeping the same data directory. This is available only before release. For a Home Assistant app, enable recover_storage in the app configuration and start the app. Disable it after the original database is restored. This option never reverts a released migration. Never publish connection files or passwords.</p><a id="download-recovery" download="oep-database-recovery.txt">Download recovery instructions</a></details>
 </section>
 <button id="refresh" type="button" class="secondary">Refresh</button>
 </main></body></html>

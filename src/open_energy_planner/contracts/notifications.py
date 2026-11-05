@@ -22,8 +22,8 @@ def negative_export_notifications(
             NoticeText(
                 "Export statistics are below the period reference",
                 "Home Assistant reports an export statistics sum below the fixed "
-                "reference for this bonus period. OEP counts the measured difference as 0 kWh "
-                "and keeps any confirmed earlier export. The reference stays unchanged. "
+                "reference for this bonus period. The measured difference counts as 0 kWh. "
+                "Any confirmed earlier export is retained. The reference stays unchanged. "
                 "Further export can make the difference positive again. This may follow an "
                 "intentional statistics correction or incorrect meter data. Check the meter "
                 "history to decide whether it needs correction. Planning can continue with "
@@ -135,7 +135,7 @@ def explain_contract_problem(reason: str, history_issue: str | None = None) -> N
         return NoticeText(
             "Prices or contract need attention",
             "Current prices or contract rules do not provide a usable planning period. "
-            "Check the price sources and contract rules. OEP retries when valid data arrives.",
+            "Check the price sources and contract rules. Planning retries when valid data arrives.",
             "Review contract",
             "/contract",
         )

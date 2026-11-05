@@ -656,13 +656,12 @@ def test_future_strategy_choice_shares_measured_soc_and_shows_baseline_benefit(a
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#self-consumption-chart")).to_be_visible()
-    expect(page.locator("#expected-benefit")).to_contain_text(
-        "Self-consumption and OEP start from the same measured SoC and opening bonus budgets."
+    expect(page.locator("#expected-benefit")).to_have_text(
+        "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. "
+        "Expected benefits include the difference in remaining battery value. "
+        "Benefits versus no battery include storage and smart planning. Excludes investment costs. "
+        "Not evaluated lifetime savings. See Savings for evaluated results."
     )
-    expect(page.locator("#expected-benefit")).to_contain_text(
-        "Expected benefits include the difference in remaining battery value"
-    )
-    expect(page.locator("#expected-benefit")).not_to_contain_text("provisional")
     expect(page.locator("#self-consumption-issue")).to_be_empty()
     for cost_id in ("ems-costs", "self-consumption-costs"):
         expect(page.locator(f"#{cost_id} > dl dd")).to_have_text(["0.40 EUR", "0.20 EUR"])

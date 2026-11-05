@@ -36,7 +36,7 @@ async function load() {
         find("free-space").textContent = bytes(usage.disk_free_bytes);
         find("volume-size").textContent = bytes(usage.disk_total_bytes);
         find("capacity-status").textContent = {ok: "Sufficient space", low: "Low space", unknown: "Unknown", unavailable: "Measurement unavailable"}[usage.status] || "Unknown";
-        find("size-scope").textContent = usage.backend === "sqlite" ? "For file-backed SQLite, includes WAL and shared-memory sidecars. Sizes can change during writes." : usage.database_estimated ? "Estimated size of visible tables and indexes in the connected database, including tables outside OEP. Server storage overhead is excluded." : "Whole connected database, including tables outside OEP. Server storage overhead is excluded.";
+        find("size-scope").textContent = usage.backend === "sqlite" ? "For file-backed SQLite, includes WAL and shared-memory sidecars. Sizes can change during writes." : usage.database_estimated ? "Estimated size of visible tables and indexes in the connected database, including tables belonging to other applications. Server storage overhead is excluded." : "Whole connected database, including tables belonging to other applications. Server storage overhead is excluded.";
         find("capacity-note").textContent = usage.disk_free_bytes === null ? "Free space cannot be determined for this database. Check the database host or provider for capacity and quotas." : "Free space on the volume containing the active database. This is not a database quota.";
         const warning = find("storage-warning");
         warning.hidden = usage.status !== "low";
@@ -45,7 +45,7 @@ async function load() {
         find("connect").hidden = true;
         find("storage").hidden = false;
     } catch {
-        find("status").textContent = find("database-connection").dataset.running === "false" ? "OEP is paused for database maintenance. Storage measurements return after restart." : "Storage evidence unavailable. Check the connection and try again.";
+        find("status").textContent = find("database-connection").dataset.running === "false" ? "The app is paused for database maintenance. Storage measurements return after restart." : "Storage evidence unavailable. Check the connection and try again.";
     } finally {
         busy = false;
         find("refresh").disabled = false;

@@ -201,8 +201,8 @@ function renderQuality(prices) {
             details.dataset.source = source.source_id;
             details.open = expandedSources.has(source.source_id);
             text("summary", "Details", details).setAttribute("aria-label", `Details: ${name(source.source_id)}`);
-            text("p", `Received by OEP: ${source.received_at ? when(source.received_at) : "Not known"}`, details);
-            text("p", "Received is when OEP ingested the forecast. The last interval does not guarantee uninterrupted coverage.", details);
+            text("p", `Received: ${source.received_at ? when(source.received_at) : "Not known"}`, details);
+            text("p", "Received shows when the forecast was imported. The last interval does not guarantee uninterrupted coverage.", details);
             if (!source.issued_at) text("p", "No forecast issue time is available from this source.", details);
         }
         for (const [source, issue] of Object.entries(prices.issues || {})) text("p", `${name(source)}: ${issue}`, provenance);

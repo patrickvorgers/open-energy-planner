@@ -286,7 +286,7 @@ def test_forecast_availability_keeps_provenance_honest_and_details_with_source(p
     detail.focus()
     detail.press("Enter")
     expect(rows.nth(1).locator("details")).to_have_attribute("open", "")
-    expect(rows.nth(1)).to_contain_text("Received by OEP: 10/27/2026, 6:56 PM")
+    expect(rows.nth(1).get_by_text("Received: 10/27/2026, 6:56 PM", exact=True)).to_be_visible()
     expect(rows.nth(1)).to_contain_text("No forecast issue time is available from this source")
     page.evaluate(
         "window.sources.update({...window.snapshot, source_status: [...window.snapshot.source_status].reverse()})"
@@ -320,7 +320,7 @@ def test_configured_forecast_without_accepted_series_stays_visible(price_page):
     expect(failed.locator("small")).to_have_text("Unavailable")
     expect(failed.locator("dd")).to_have_text(["Not known", "Not known"])
     failed.get_by_label("Details: Jeroen.nl", exact=True).click()
-    expect(failed).to_contain_text("Received by OEP: Not known")
+    expect(failed.get_by_text("Received: Not known", exact=True)).to_be_visible()
     expect(overview).to_contain_text("Jeroen.nl: No usable forecast received")
     expect(overview).not_to_contain_text("No forecast source status available")
     page.evaluate("window.sources.update({source_preferences: {available_sources: ['jeroen_nl']}})")

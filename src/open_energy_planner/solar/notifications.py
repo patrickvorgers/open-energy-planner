@@ -20,8 +20,7 @@ def explain_solar_problem(reason: str, detail: str | None = None) -> NoticeText 
         message = "Usable weather data for the solar forecast is currently unavailable. "
     return NoticeText(
         "Solar forecast is unavailable",
-        message
-        + "OEP automatically retries retrieving weather data and updating the solar forecast. "
+        message + "Weather retrieval and solar forecast updates are retried automatically. "
         "This notification clears when a valid, up-to-date solar forecast is available. "
         "If it persists, review the solar forecast status.",
         "View solar forecast",
