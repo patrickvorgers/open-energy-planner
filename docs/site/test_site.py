@@ -1,5 +1,6 @@
 """Check the publication boundary and source-link behavior with documentation dependencies."""
 
+import re
 import unittest
 from types import SimpleNamespace
 
@@ -43,6 +44,28 @@ class DocumentationSiteTests(unittest.TestCase):
             guide.content_string,
             (hooks.ROOT / "docs/development/SAVINGS.md").read_text(encoding="utf-8"),
         )
+
+    def test_user_navigation_covers_user_guides_without_technical_detours(self):
+        """New user guides stay reachable within their audience's navigation group."""
+        navigation = next(group["Use OEP"] for group in self.config.nav if "Use OEP" in group)
+        destinations = {target for entry in navigation for target in entry.values()}
+        self.assertEqual(
+            destinations,
+            {
+                path.relative_to(hooks.ROOT).as_posix()
+                for path in (hooks.ROOT / "docs/users").glob("*.md")
+            },
+        )
+
+    def test_reference_index_covers_every_developer_guide(self):
+        """A new technical contract cannot silently become an undiscoverable reference."""
+        directory = hooks.ROOT / "docs/development"
+        index = directory / "REFERENCE-INDEX.md"
+        destinations = {
+            (directory / target.split("#", 1)[0]).resolve()
+            for target in re.findall(r"\]\(([^)]+)\)", index.read_text(encoding="utf-8"))
+        }
+        self.assertFalse(set(directory.glob("*.md")) - {index} - destinations)
 
     def test_source_links_use_github_and_guide_links_stay_local(self):
         """Keep rendered documentation internal while resolving unpublished code and directories externally."""

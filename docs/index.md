@@ -1,37 +1,35 @@
 # Your energy, understood.
 
-Learn how Open Energy Planner turns your Home Assistant energy data into a local, checked plan. Start with a safe demo, then explore your own installation.
+Understand what OEP plans, configure the inputs it needs and learn how to read the result. Choose the user route for operating the app or the developer route for changing it.
 
-[Try your first plan](users/first-plan.md){ .primary }
+[Start the user guide](users/how-oep-works.md){ .primary }
 
-OEP is a development preview. The repository is public. Public HACS installation and a complete product release are not available yet.
+OEP is a development preview. Public HACS installation and a stable product release are not available yet. You can explore a real plan with synthetic data before connecting an installation.
 
-<figure><a href="assets/first-plan.png" aria-label="Open the synthetic plan image at full size"><img src="assets/first-plan.png" alt="The actual OEP planned energy balance, showing the synthetic demo's quarter-hour flows and battery state."></a><figcaption>A real plan from the local synthetic demo. Forecasts and proposed actions are not proof that a physical device followed them.</figcaption></figure>
+<figure><a href="assets/planning-example.png" aria-label="Open the populated example plan at full size"><img src="assets/planning-example.png" alt="The actual Planning page with a populated synthetic day showing household demand, solar production and battery charging and discharging."></a><figcaption>Follow the energy through a complete example day. These are synthetic inputs in the actual app, not physical execution or measured savings.</figcaption></figure>
 
-## Start with a clear path
+## Use OEP
 
-- **Understand before you connect**
+Follow this route in order the first time. Each guide explains what to do, what the result means and how to recognize success.
 
-    Check what you need, what OEP can currently do and which parts are still development work. [Before you start](users/before-you-start.md).
+1. [How OEP works](users/how-oep-works.md): Measurements, forecasts, constraints, checked plans and virtual commands.
+2. [Before you start](users/before-you-start.md): Availability, units and Home Assistant Energy prerequisites.
+3. [Try your first plan](users/first-plan.md): A local synthetic example without connecting equipment.
+4. [Connect Home Assistant](users/home-assistant.md): The matched app/integration pair and the actual app entry point.
+5. [Configure OEP](users/configuration.md): Installation, strategy, prices, contract and optional appliances.
+6. [Read your plan](users/read-your-plan.md): Energy balances, the three scenarios and original evidence.
+7. [Understand Savings](users/savings.md): Coverage, measured operation, simulated references and costs.
 
-- **See a plan with sample data**
+Return to [forecast quality](users/forecasts.md), [appliance requests](users/appliances.md), [data preservation](users/data-storage.md) and [troubleshooting](users/troubleshooting.md) as needed. The [glossary](users/glossary.md) explains unfamiliar energy and planning terms.
 
-    Run the actual planner on your computer without a Home Assistant connection or physical device commands. [Try your first plan](users/first-plan.md).
+## Develop OEP
 
-- **Connect an isolated Home Assistant**
+Start with [the contributor's development guide](development/README.md). It separates an editing checkout from a persistent numbered installation and explains the smallest relevant checks. The [Dev Container provisioning page](https://patrickvorgers.github.io/open-energy-planner/provisioning/) helps prepare the isolated environment.
 
-    Use the verified installation path, review detected meters and understand the boundary between a plan and device control. [Connect Home Assistant](users/home-assistant.md).
+Then use the [architecture overview](development/ARCHITECTURE-OVERVIEW.md) to find an owner and the [reference library](development/REFERENCE-INDEX.md) to locate detailed contracts. [Contributing](../CONTRIBUTING.md) and [CI stages](development/CI-STAGES.md) explain signing, review, selected suites and merge evidence.
 
-## Make sense of the result
+## Read each result in its own context
 
-A plan combines consumption and solar forecasts, electricity prices and your installation limits. OEP checks the result before publishing it. Start with [reading your plan](users/read-your-plan.md), then explore [prices](development/CONTRACT-PRICES.md), [appliances](development/SHIFTABLE-APPLIANCES.md) and [forecast quality](development/FORECAST-QUALITY.md).
+A forecast is a prediction. A plan is checked advice. Home Assistant acceptance is receipt of that advice. Physical execution requires the user's own automation/controller and feedback. Savings uses retained evidence and a simulated reference, so it is not proof of a measured alternative household or a guaranteed investment return.
 
-Missing measurements stay unknown. Predictions stay separate from measured history. [Savings](development/SAVINGS.md) explains which comparisons are estimates and which use retained measurements.
-
-## Build on the same foundation
-
-Developers use the same maintained guides as the product. Start with the [development guide](development/README.md), then read the [architecture](../design/TECHNICAL-DESIGN.md), [CI stages](development/CI-STAGES.md) and [contribution rules](../CONTRIBUTING.md).
-
-## Need a hand?
-
-Use [troubleshooting](users/troubleshooting.md) for a missing plan, connection problem or incomplete input. The first product release still has [separate acceptance gates](../design/FIRST-RELEASE-SCOPE.md). A successful demo does not establish support for your physical installation.
+Missing values stay unknown. Older plans remain historical records when a new calculation fails. See [release boundaries](../design/FIRST-RELEASE-SCOPE.md) for what is implemented, what is still proposed and what remains to be accepted for a product release.

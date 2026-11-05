@@ -4,7 +4,7 @@ The installation supplies the physical planning basis. A live app
 does not need an injected synthetic/test installation to join its independent
 prices, dated contract rules, demand forecast, PV forecast and measured storage
 states. Hardware control and physical safety remain in user-owned HA automations.
-This is not the complete first product release.
+For the setup sequence and visible controls, use the [user installation guide](../users/installation.md). This reference defines ownership and runtime contracts. It is not a declaration of a stable product release.
 
 ## Setup and ownership
 
@@ -12,7 +12,10 @@ Install the HA integration once and connect it to the app. Its Configure flow
 and virtual-device configuration link open the app's `/setup` interface. The
 integration has no installation, source-selection, battery or PV wizard.
 
-The product onboarding is a one-time HACS integration installation. On HA OS,
+The intended public onboarding uses a one-time HACS integration installation.
+Public HACS distribution is not available in the development preview. Install a
+matched app/integration pair through the [installation acceptance route](HAOS-ACCEPTANCE.md).
+On HA OS,
 Supervisor performs authenticated discovery and connection, while HA ingress
 provides browser authentication. No copied address, token or pairing approval is
 needed. Standalone containers use local discovery with explicit consent and a

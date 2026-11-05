@@ -14,7 +14,7 @@ model. The Dutch examples are not complete supplier presets.
 | `contracts/compilation.py` | Convert rules, accepted tariff segments and current meter evidence into plain solver inputs |
 | `optimization/export_bonus.py` | Plain prepared contracts and numerical chronological settlement. No native solver |
 | `optimization/adapters/highs/export_bonus.py` | Native exact min/max constraints and control-group equal-power constraints |
-| `optimization/costs.py` and `validation.py` | Independently recompute income and reject inconsistent native credits/counters/costs |
+| `installation/validation.py` and `optimization/export_bonus.py` | Independently recompute income and reject inconsistent native credits/counters/costs |
 | `storage/counters.py` | Versioned, atomic counter archives, separate from proposed plans |
 | HA integration | Select/read cumulative grid-export sensor. Forward configured HA coordinates/timezone. Publish commands |
 

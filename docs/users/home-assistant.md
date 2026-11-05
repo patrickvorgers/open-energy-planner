@@ -1,43 +1,43 @@
 # Connect Home Assistant
 
-Use an isolated Home Assistant environment before connecting a real installation. This route requires an accepted installation bundle and more preparation than the standalone demo.
+OEP needs two matching components: the calculation app and the Home Assistant integration. If both are already installed, start at [Open the app](#open-the-app). New installation remains an administrator-managed preview procedure rather than a public one-click HACS flow.
 
-## Start with a verified package
+## Install a matched pair
 
-Install Python and Docker with Linux containers. Obtain the original `installation-bundle-amd64` ZIP from a successful candidate whose tested source was merged onto `main`. Keep the archive intact. You also need a clean checkout of that actual verified merge and GitHub read access.
+Use the original app/integration artifacts from the same successful numbered candidate or release. Verify their expected version, build and source together. A successful Quick check or an arbitrary current source checkout is not an accepted installation package.
 
-Follow the [developer environment instructions](../development/DEVELOPER-ENVIRONMENT.md#start-and-stop) to verify and accept that bundle, then start the environment. The guide owns the exact update command, provenance requirements and recovery procedures. A current development checkout or a successful Quick check alone is not an installable bundle.
+The [installation acceptance guide](../development/HAOS-ACCEPTANCE.md#install-a-matched-product-release) owns administrator installation and update checks. Preserve Home Assistant Energy preferences, device/entity identities and existing OEP data. The app does not copy integration files into HA or request a general HA user token.
 
-**Check:** package preparation and startup complete successfully. `python -m script.supervisor.dev status` lists the running containers, but does not verify package acceptance. If bundle verification fails, stop and correct the package or checkout mismatch. Do not copy loose source files over the installed app.
+For a populated isolated laboratory instead of a user-managed installation, follow [developer environment preparation](../development/README.md#first-start). That route runs actual Supervisor and HA with simulated devices. It is a development tool, not a prerequisite for operating an existing OEP installation.
 
-## Open the actual app
+## Open the app
 
-Open [the local Home Assistant app](http://localhost:7123/app/local_open_energy_planner). Sign in with the generated developer account recorded in `.local/dev/developer.json`. Do not publish that file. The default environment runs actual Supervisor and Home Assistant with simulated devices and history.
+In the Supervisor route, open OEP through its Home Assistant app/ingress entry. Supervisor handles authenticated discovery and connection. Ingress uses the existing HA browser session. No app administration token, copied address or pairing approval should be needed.
 
-Open OEP from Home Assistant. In this Supervisor route, ingress authenticates the browser and pairing is automatic. You should not have to copy an app token or provide a Home Assistant user token. Standalone installations have a separate explicit pairing flow. See [automatic pairing](../development/AUTOMATIC-PAIRING.md).
+For a standalone container, administration uses the app's own token and the integration uses its separate explicit pairing flow. Follow [connection discovery and pairing](../development/AUTOMATIC-PAIRING.md). Do not paste the app administration token into an unrelated HA integration field.
 
-**Check:** the app opens and its component build identities match the accepted package. If you see a token prompt in trusted ingress, inspect the connection and logs instead of pasting unrelated credentials.
+**Check:** the app opens, the connection is ready and both loaded component identities match the intended package. A token prompt in trusted ingress calls for connection diagnosis rather than copying another installation's credentials.
 
 ## Review installation settings
 
-Open **Settings > Installation**. The environment fills only missing sample settings, so a fresh laboratory may already have a configured example. Choose **Edit installation** to inspect an existing definition. A new or incomplete definition opens the wizard.
+Open **Settings > Installation**. A new or incomplete definition opens the five-stage wizard. A complete definition opens saved summaries and an area selector.
 
-Review the Home Assistant connection and Energy sources. Confirm the maximum total grid import and export in kW. Review each detected solar source and battery. Zero solar sources and zero batteries are valid. Annual whole-home consumption is required only when usable history is insufficient. It is an estimate in kWh/year, not a current meter reading.
+Check source ownership in Energy, then confirm connection limits, household scale, solar properties and batteries. Zero solar sources and zero batteries are valid. Do not overwrite retained settings with a sample merely to reproduce a guide.
 
-Use **Review detected settings** when offered. Check the complete installation before choosing **Save installation**. Wait for saved confirmation. A read-only refresh must not be mistaken for a save. See the [installation guide](../development/INSTALLATION-PLANNING.md) for exact field meanings and supported device arrangements.
+Choose **Save installation** only after inspecting the review. Wait for confirmation and read the saved summary. A refresh does not save a draft. The [installation guide](installation.md) explains the fields and the strategy choice.
 
-**Check:** the saved installation reflects the confirmed sources and limits. Resolve unavailable or incompatible meters in Home Assistant Energy rather than guessing a unit or power direction.
+## Confirm prices and a plan
 
-## Review prices and the first live-input plan
+Open **Settings > Contract** to check the effective tariff rules. Inspect **Settings > Installation > Price sources** for availability and source preference. The [contract guide](contract.md) explains the distinction between market prices, effective rates and bonuses.
 
-Open **Settings > Contract**. Verify the active tariff rules and dates against the intended test contract. Sample laboratory rules are examples, not supplier recommendations. Review the price-source choices and availability described in [price inputs](../development/PRICE-INPUTS.md).
+Then open **Energy > Planning**. A usable plan requires coherent source configuration, fresh required measurements, forecasts, contract rules and sufficient price coverage. External provider availability can delay or shorten the horizon. Missing Home Assistant inputs are not replaced by an unlabelled synthetic fallback.
 
-Open **Planning**. A usable plan requires accepted measurements, demand and solar forecasts as applicable, contract inputs and sufficient price coverage. External provider availability can delay or shorten the planning window. No synthetic fallback replaces missing Home Assistant data.
-
-**Check:** an original plan shows its version and generation time, and its input diagnostics correspond to the configured installation. Read [your plan](read-your-plan.md) before interpreting commands. If the plan is missing, use [troubleshooting](troubleshooting.md).
+**Check:** the original plan has a version and generated time, reflects the intended strategy and contains the expected installation sources. Use [Read your plan](read-your-plan.md) before interpreting its virtual commands. If it is unavailable, use [troubleshooting](troubleshooting.md).
 
 ## Keep control separate
 
-The laboratory meters and tasks are simulated. A battery command does not update the stationary demo battery's state of charge. Real device operation requires separately reviewed automations and device safeguards. Use the [virtual-device contract](../development/VIRTUAL-DEVICES.md) before wiring any physical action.
+OEP publishes virtual advice. Your own HA automation/controller must implement physical actions and preserve manufacturer and electrical safeguards. Integration receipt is not execution confirmation.
 
-Stop the laboratory with `python -m script.supervisor.dev stop`. That retains its data. Do not reset or overwrite an existing laboratory to make an example match this guide.
+Battery fixed-power targets use whole DC watts, positive for discharge and negative for charge. Zero is a real idle target. Unknown and unavailable have different meanings. Follow the [virtual-device contract](../development/VIRTUAL-DEVICES.md) before connecting physical equipment, and the relevant [appliance execution contract](appliances.md) for readiness, claims and feedback.
+
+**Next:** [Configure OEP](configuration.md), then [read the plan](read-your-plan.md).

@@ -1,7 +1,7 @@
 """Prove calendar ownership and rendering with real Chart.js on desktop and mobile."""
 
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -157,6 +157,8 @@ def test_overview_calendar_headers_refresh_without_duplicates(app_page):
     from tests.frontend.browser.helpers import TOKEN
 
     page, url = app_page
+    # Start on a quarter so wall-clock rollover cannot reset the injected DST bounds.
+    page.clock.install(time=datetime(2026, 10, 25, tzinfo=UTC))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
