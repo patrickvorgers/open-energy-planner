@@ -1,5 +1,6 @@
 """Cached demand orchestration. Expensive training runs only in an app-owned background executor."""
 
+import logging
 from dataclasses import asdict
 from datetime import timedelta
 
@@ -17,6 +18,7 @@ from .wire import configuration_document, forecast_document
 
 HISTORY_LOOKBACK_DAYS = 365
 MODEL_RETRY_MINUTES = 5
+_LOGGER = logging.getLogger(__name__)
 
 
 class DemandRuntime:
@@ -170,9 +172,7 @@ class DemandRuntime:
         reconstruction = DemandReconstructor().analyze(configuration, histories, before=now)
         samples = reconstruction.samples
         baseline = WeekdayProfile.fit(configuration, samples)
-        if reconstruction.substantial_rejection or (
-            reconstruction.rejected_hours and not baseline.cells
-        ):
+        if reconstruction.notification_required:
             issue = "demand_boundary_inconsistent"
         selected, ridge, candidate = baseline, None, None
         status = "insufficient_training_history"
@@ -278,7 +278,17 @@ class DemandRuntime:
         self.baseline = baseline_forecast
         self.candidate_features = features
         self.consumers.result = consumer_result
+        quality_changed = self.history_quality != history_quality
         self.history_quality = history_quality
+        if history_quality["usable_hours"] > 0:
+            _LOGGER.log(
+                logging.INFO if quality_changed else logging.DEBUG,
+                "Household energy training history assessed: %d usable hours, %d excluded hours (%.1f%%). "
+                "Excluded hours were omitted from training. Recorder data is unchanged.",
+                history_quality["usable_hours"],
+                history_quality["rejected_hours"],
+                history_quality["rejected_percentage"],
+            )
         return True
 
     def select_learned(self, enabled):

@@ -111,7 +111,9 @@ hours is unavailable, preserving the incumbent rather than silently dropping
 device consumption.
 
 `GET /v1/demand` exposes disposable `history_quality` counts: `usable_hours`,
-`corrected_hours` and `rejected_hours`. Corrected hours are included in usable
+`corrected_hours`, `rejected_hours` and `rejected_percentage`. The percentage is
+100 times rejected hours divided by usable plus rejected complete hours. It is
+null when no complete hours were assessed. Corrected hours are included in usable
 hours. Each corrected hour is counted once even if both balances were negative.
 Missing channels and counter corrections do not count as rejected balances.
 The field is null before a current worker result is installed, after settings
@@ -119,15 +121,25 @@ change, or when a replacement history cohort commits. It remains null if the
 replacement worker fails. Partial history collection retains the previous
 cohort and its counts. Superseded worker results cannot install their counts.
 
-Small rounding corrections do not create a persistent HA warning. An isolated
-rejected hour also stays quiet when the remainder supports a historical profile.
-`demand_boundary_inconsistent` remains actionable when rejected balances prevent
-that profile or **24 or more complete hours** are rejected in the current input
-cohort. This conservative operational threshold represents a full day of lost
-training data, not a statistical test of sensor accuracy. Repeated losses
-accumulate across the cohort. Usable hours are still retained even when attention
-is required. Too little history without rejected balances remains normal learning
-readiness, not evidence of an inconsistent energy boundary.
+The `demand_boundary_inconsistent` notification requires at least **20 percent**
+rejected balances and at least **24 complete assessed hours** in the current
+training cohort. This operational policy is not a statistical test of sensor
+accuracy. Missing channels, counter resets and unassessed hours do not inflate
+its denominator. Small rejected shares remain diagnostic information, including
+when the retained history requires the annual-consumption startup estimate.
+Filtering and the separate conservative appliance-component admission safeguards
+remain unchanged.
+
+After a forecast worker result with usable training history is accepted, the
+responsible demand logger reports usable hours, excluded hours and the excluded
+percentage. This assesses the training history without claiming that a learned
+model replaced the startup estimate. New or changed cohort quality is INFO.
+Unchanged retraining summaries are DEBUG. Results with no usable hours, failed
+results and superseded results cannot emit this assessment summary. A new history
+cohort or configuration clears the previous quality before its accepted summary.
+Counts and percentage remain available in `GET /v1/demand.history_quality` even
+when the share is too small for a notification. They are disposable diagnostics,
+not another archive of measured data.
 
 This training-quality warning is not a blanket planning blocker. Direct household
 planning retains its measured historical profile when the remaining samples
