@@ -1,8 +1,8 @@
+# Open Energy Planner
+
 <p align="center">
   <img src="src/open_energy_planner/web/public/icons/app.svg" alt="Open Energy Planner" width="88" height="88">
 </p>
-
-# Open Energy Planner
 
 **Understand your energy. Plan how to use it.**
 

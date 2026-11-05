@@ -18,7 +18,7 @@ For duration and solver-progress questions, use [Planning performance](planning-
 | **Battery self-consumption** | The same installation storing surplus solar and covering demand without price optimization |
 | **Without battery: Baseline** | The same household and solar forecasts without battery storage |
 
-The scenarios share a time range and units. Each chart scales its value axis to its own visible data. Compare the numeric axis and interval values rather than the apparent bar height across charts. The baseline retains planned EV and thermal loads. Self-consumption aims for zero on the meter within physical limits, rather than guaranteeing it.
+The scenarios share a time range, units and kW scale. The value-axis bounds combine visible data across all three charts, so the same bar height represents the same power. Zooming, toggling a series or resizing updates their shared scale. The baseline retains planned EV and thermal loads. Self-consumption aims for zero on the meter within physical limits, rather than guaranteeing it.
 
 [![A populated synthetic Planning view showing energy supply and use, battery state and the boundary between days.](../assets/planning-example.png)](../assets/planning-example.png)
 
@@ -46,7 +46,7 @@ These amounts cover the complete original plan even when you zoom into fewer hou
 
 Household demand and available solar describe original forecast inputs before the planner's decisions. Available DC solar and household AC demand use different measurement boundaries. Compare them with conversion and clipping in mind.
 
-**Price inputs** follows the selected latest or historical plan and shows its frozen prices. Newly received prices and changed contract rules appear when a new plan uses them. Without a plan, the same graph is explicitly labelled **Current tariff preview** and uses cached market prices with saved rules. Solid lines identify published prices and dotted lines identify forecast prices. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
+The **Price inputs** chart follows the selected latest or historical plan and shows its frozen prices. Newly received prices and changed contract rules appear when a new plan uses them. Without a plan, the same graph is explicitly labelled **Current tariff preview** and uses cached market prices with saved rules. Solid lines identify published prices and dotted lines identify forecast prices. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
 
 See [contract and prices](contract.md) for formulas, dates and bonus interpretation, and [forecasts](forecasts.md) for how predictions are checked against measurements.
 

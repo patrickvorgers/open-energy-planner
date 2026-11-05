@@ -210,9 +210,10 @@ Old immutable plans retain their original precise boundaries. Their chart uses t
 recorded end timestamp, avoiding false gaps when legacy microsecond timestamps are
 rendered at browser millisecond precision.
 
-Value-axis bounds use each chart's own visible data, including signed stack totals.
-The three planning comparisons share time windows but no longer share y extrema,
-so another scenario cannot create excessive empty space. Unrestricted ends retain
+Value-axis bounds use visible data, including signed stack totals.
+The three planning comparisons share time windows and kW-axis extrema across their
+group. Changes to the visible range, legend or size update all three together.
+Other charts retain their own value-axis bounds. Unrestricted ends retain
 ten percent of the displayed axis height as clearance. Physically nonnegative
 consumption, production, appliance power/energy and forecast-quality charts have
 a fixed zero lower bound and only upper clearance. Signed balances, net power,

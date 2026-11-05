@@ -32,7 +32,7 @@ Open **Settings > Contract** to check the effective tariff rules. Inspect **Sett
 
 Then open **Energy > Planning**. A usable plan requires coherent source configuration, fresh required measurements, forecasts, contract rules and sufficient price coverage. External provider availability can delay or shorten the horizon. Missing Home Assistant inputs are not replaced by an unlabelled synthetic fallback.
 
-**Check:** the original plan has a version and generated time, reflects the intended strategy and contains the expected installation sources. Use [Reading Planning](read-your-plan.md) before interpreting its virtual commands. If it is unavailable, use [troubleshooting](troubleshooting.md).
+**Check:** the original plan has a version and generated time, reflects the intended strategy and contains the expected installation sources. Use [Read your plan](read-your-plan.md) before interpreting its virtual commands. If it is unavailable, use [troubleshooting](troubleshooting.md).
 
 ## Keep control separate
 

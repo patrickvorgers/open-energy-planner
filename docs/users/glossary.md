@@ -14,7 +14,7 @@ Use this reference when a screen or guide uses an unfamiliar energy term. Intern
 | Planning horizon | The future period covered by a particular plan. It can be shorter than the target when input coverage is limited. |
 | Original plan | The accepted record of inputs, assumptions, proposed actions and expected costs for one calculation. Later measurements do not rewrite it. |
 | Baseline without battery | The future comparison retaining the household and solar forecasts without battery storage. |
-| Self-consumption | Battery operation that stores solar surplus and covers household demand without price optimization. It is a modeled reference. |
+| Self-consumption | Battery operation that stores solar surplus and attempts to cover household demand within battery and converter limits, without price optimization. It is a modeled reference. |
 | Economic cost | Grid cash cost plus wear minus the change in stored-energy value. |
 | Battery value change | Change in estimated stored-energy value, not cash received. |
 | Published price / forecast price | A retained market publication versus a prediction of a future market price. |

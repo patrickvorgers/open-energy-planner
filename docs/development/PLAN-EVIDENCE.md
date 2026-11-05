@@ -62,8 +62,8 @@ The response names its projection version (`plan-facts-v1`) and original plan ID
 ## Reference balances and original price inputs
 
 Planning shows **Optimizer**, **Battery self-consumption** and **Without battery: Baseline**
-in that order. They share time ranges, units and flow colors. Each chart uses
-its own value-axis bounds. The without-battery chart uses the same frozen
+in that order. They share time ranges, units, flow colors and a kW scale.
+Value-axis bounds combine visible signed stacks across all three charts. The without-battery chart uses the same frozen
 household and available-solar forecasts but removes storage.
 PV serves demand, exports surplus and imports deficits. Converter efficiency,
 physical clipping and grid ratings still apply. A physically impossible reference
