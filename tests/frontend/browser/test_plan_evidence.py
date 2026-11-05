@@ -657,7 +657,7 @@ def test_future_strategy_choice_shares_measured_soc_and_shows_baseline_benefit(a
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#self-consumption-chart")).to_be_visible()
     expect(page.locator("#expected-benefit")).to_contain_text(
-        "Self-consumption and OEP start from the same measured SoC and opening bonus budgets."
+        "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets."
     )
     expect(page.locator("#expected-benefit")).to_contain_text(
         "Expected benefits include the difference in remaining battery value"
