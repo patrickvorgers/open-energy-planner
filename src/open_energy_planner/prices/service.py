@@ -185,7 +185,7 @@ class PriceService:
             await self._accept(candidate, day)
         except asyncio.CancelledError:
             await self.events.finish(
-                identity, Outcome.INTERRUPTED, "OEP stopped before the price request finished."
+                identity, Outcome.INTERRUPTED, "Stopped before the price request finished."
             )
             self.activity_requests.pop(request_key, None)
             raise

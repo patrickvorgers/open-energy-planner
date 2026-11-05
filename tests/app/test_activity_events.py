@@ -249,3 +249,38 @@ def test_automatic_ha_price_delivery_has_one_activity_and_actual_transport(tmp_p
             repository.close()
 
     asyncio.run(scenario())
+
+
+def test_managed_gateway_shutdown_releases_active_subscription(tmp_path, monkeypatch):
+    """The outer maintenance gateway cannot wait on a stream that only inner shutdown can release."""
+    from open_energy_planner.runtime.maintenance import MAINTENANCE, create_managed_app
+
+    async def scenario():
+        """Observe actual request admission without replacing the underlying subscription behavior."""
+        app = create_managed_app(tmp_path, TOKEN, factory=create_app, source="home_assistant")
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            headers = {"Authorization": f"Bearer {TOKEN}"}
+            initial = await (await client.get("/v1/events", headers=headers)).json()
+            events = app[MAINTENANCE].runner.app[EVENTS]
+            entered = asyncio.Event()
+            original = events.subscribe
+
+            async def observe(cursor=None, timeout=25):
+                """Signal that the live request reached the real event collector."""
+                entered.set()
+                return await original(cursor, timeout)
+
+            monkeypatch.setattr(events, "subscribe", observe)
+            pending = asyncio.create_task(
+                client.get("/v1/events", params={"cursor": initial["cursor"]}, headers=headers)
+            )
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.wait_for(client.server.close(), 2)
+            response = await pending
+            assert response.status == 200
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())

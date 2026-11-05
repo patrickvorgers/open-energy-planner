@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 
 @pytest.fixture
@@ -109,7 +109,7 @@ def automatic_plan_overview(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#current-price-status")).to_contain_text("Saved contract rates")
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     page.evaluate("window.initialPlanChart = Chart.getChart(document.getElementById('plan-chart'))")
     return state
 
@@ -262,7 +262,7 @@ def test_current_prices_recover_independently_of_plan_selection(automatic_plan_o
         expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
     else:
         expect(page.locator("#plan-version option")).to_have_count(0)
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     comparisons = list(state["comparison_reads"])
     state["failed_prices"] = False
     state["current_buy_price"] = 0.88
@@ -304,7 +304,7 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
         page.evaluate(
             "window.reloadedPlanChart = Chart.getChart(document.getElementById('plan-chart'))"
         )
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     comparisons = state["comparison_reads"].count(current)
     state["failed_plans"].clear()
     state["failed_prices"] = False
@@ -336,7 +336,7 @@ def test_poll_retry_preserves_an_active_manual_price_read(automatic_plan_overvie
     state["failed_prices"] = True
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     if manual_timing == "before_poll":
         page.clock.run_for(14000)
         page.route(
@@ -386,7 +386,7 @@ def test_pending_price_retry_reads_after_publication_detection(automatic_plan_ov
     state["failed_prices"] = True
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     state["failed_prices"] = False
     state["hold_poll"] = True
     page.evaluate("""() => {
@@ -436,7 +436,7 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
     assert len(held) == 1
     held[0].fulfill(status=503, body="Late response after cancellation")
     page.unroute(pattern, hold_read)
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     state["plans"].insert(0, state["newer"])
     with page.expect_response("**/v1/plans/newly-published-plan/comparison"):
         page.clock.run_for(15000 - 5001)
@@ -565,7 +565,7 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
     state["held_comparisons" if hung_view == "comparison" else "held_prices"][0].fulfill(
         status=503, body="Late response after cancellation"
     )
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     state["hold_" + hung_view] = False
     later = {**state["newer"], "plan_id": "later-completed-plan", "strategy": "minimize cost"}
     details = deepcopy(state["comparisons"]["newly-published-plan"])

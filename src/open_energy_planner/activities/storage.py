@@ -96,7 +96,7 @@ class ActivityStore:
                 row.update(
                     state="interrupted",
                     finished_at=now.isoformat(),
-                    detail="OEP restarted before a definitive outcome was recorded.",
+                    detail="Restarted before a definitive outcome was recorded.",
                 )
                 connection.execute(
                     ACTIVITIES.update()

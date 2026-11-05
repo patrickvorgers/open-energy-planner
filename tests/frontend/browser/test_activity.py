@@ -37,6 +37,8 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     capture = Path("results/ci/activity")
     capture.mkdir(parents=True, exist_ok=True)
+    page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+    expect(page.get_by_role("heading", name="Activity", exact=True)).to_be_in_viewport()
     page.screenshot(
         path=str(capture / f"weather-{page.viewport_size['width']}.png"), full_page=True
     )

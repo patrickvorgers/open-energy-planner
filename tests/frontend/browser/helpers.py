@@ -13,6 +13,11 @@ SAVINGS_BROWSER_TIME_ZONE = "America/New_York"
 MOBILE_CHART_LEGEND_BREAKPOINT_PX = 640
 
 
+def wait_for_product_reads(page):
+    """Wait for actual response bodies while excluding the intentionally persistent event subscription."""
+    page.evaluate("() => window.__oepProductReadsIdle()")
+
+
 def open_primary_navigation(page):
     """Open the shared mobile Menu when hidden before choosing a navigation destination."""
     if not page.get_by_role("navigation", name="Primary navigation").is_visible():

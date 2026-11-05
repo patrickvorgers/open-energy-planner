@@ -225,7 +225,7 @@ class Events:
                 await self.finish(
                     identity,
                     Outcome.INTERRUPTED,
-                    "OEP stopped before a definitive outcome was recorded.",
+                    "Stopped before a definitive outcome was recorded.",
                 )
             raise
         except Exception:

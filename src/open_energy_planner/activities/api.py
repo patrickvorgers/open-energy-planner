@@ -68,7 +68,7 @@ def register(app, engine, notifications, timezone):
                 await events.finish(
                     identity,
                     Outcome.INTERRUPTED,
-                    "OEP stopped before a definitive outcome was recorded.",
+                    "Stopped before a definitive outcome was recorded.",
                 )
             await events.close()
 
@@ -121,7 +121,7 @@ def register(app, engine, notifications, timezone):
         """A bounded long poll accepts bearer headers and keeps credentials out of URLs."""
         nonlocal subscribers
         if closing:
-            raise web.HTTPServiceUnavailable(text="OEP is restarting")
+            raise web.HTTPServiceUnavailable(text="Restart in progress")
         cursor = request.query.get("cursor")
         if cursor is not None and len(cursor) > 96:
             raise web.HTTPBadRequest(text="Invalid event cursor")

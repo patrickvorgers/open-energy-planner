@@ -7,7 +7,7 @@ import pytest
 from playwright.sync_api import expect
 
 from open_energy_planner.storage.adapters.usage import StorageUsage
-from tests.frontend.browser.helpers import discover
+from tests.frontend.browser.helpers import discover, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
@@ -20,6 +20,7 @@ from tests.frontend.browser.helpers import discover
         ("appliance-settings/ev", "Appliances settings"),
         ("appliance-settings/thermal", "Appliances settings"),
         ("data-storage", "Data storage"),
+        ("activity", "Activity"),
         ("overview", "Planning"),
         ("ev", "EV charging"),
         ("thermal", "Thermal storage"),
@@ -42,7 +43,7 @@ def test_owned_screen_copy_uses_context_instead_of_the_product_abbreviation(
         )
     page.goto(url + "/" + route)
     expect(page.get_by_role("heading", name=heading, exact=True).first).to_be_visible()
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     expect(page.locator("body")).not_to_contain_text(re.compile(r"\bOEP\b"))
     if route in {"appliance-settings", "data-storage", "contract"}:
         destination = Path("results/ci")

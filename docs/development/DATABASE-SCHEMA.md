@@ -86,10 +86,12 @@ no foreign keys. Shared backend transfer copies and verifies this table.
 | `state` | String(128) | `running`, `completed`, `failed`, `interrupted`, `cancelled` or `skipped`. Restart marks running records interrupted. |
 | `payload` | Text / LONGTEXT | Detached finite JSON with ID, owner, kind, title, state, aware UTC start, nullable finish, safe detail, recovery flag, terminal usability and optional process-local terminal sequence. No credentials or raw provider payloads. |
 
-`finished_sequence` orders outcomes sharing a finish timestamp within one process.
+`finished_sequence` orders outcomes sharing a finish timestamp. Startup resumes
+above its retained maximum while creating a new live-subscription epoch.
 `recovered` marks the first usable completion after a producer/type failure.
 Completed requires `usable` to be true. Writes and startup prune records whose
-start is over seven days old. Reads also enforce that rolling boundary. Upsert
+start is over seven days old. Hourly housekeeping also prunes idle installations.
+Reads enforce the rolling boundary. Upsert
 and pruning share a transaction. Live replay, availability, schedules and
 notification projections remain process-local. See [activity events](ACTIVITY-EVENTS.md)
 for asynchronous-write limits and subscription recovery.
