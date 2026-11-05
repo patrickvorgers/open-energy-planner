@@ -42,6 +42,12 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(cls, config_entry):
+        """Expose native planning groups while keeping their membership app-owned."""
+        return {"planning_group": PlanningGroupFlow}
+
     async def async_step_zeroconf(self, discovery_info):
         """Start consent for a discovered TLS endpoint. An advertisement cannot authorize a peer."""
         from .supervisor import register
@@ -255,6 +261,14 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
         )
+
+
+class PlanningGroupFlow(config_entries.ConfigSubentryFlow):
+    """Explain managed groups without offering duplicate installation settings."""
+
+    async def async_step_user(self, user_input=None):
+        """Direct group additions to the app's existing configuration pages."""
+        return self.async_abort(reason="managed_by_app")
 
 
 class PlannerOptionsFlow(config_entries.OptionsFlow):

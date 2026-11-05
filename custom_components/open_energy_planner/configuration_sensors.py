@@ -69,6 +69,7 @@ class DeviceProperty(PlannerEntity, SensorEntity):
             name,
         )
         self.device_id, self.kind, self.key = device["id"], device["kind"], key
+        self.planning_group = self.kind if self.kind != "grid" else None
         self._attr_device_info["name"] = device.get("name", device["id"])
         self._attr_native_unit_of_measurement = unit
         if key == "cycle_fee":

@@ -26,6 +26,35 @@ This bounded policy does not claim a general robust-control optimization or guar
 
 Devices open the app-owned configuration UI, using its ingress/explicit UI address rather than the restricted TLS synchronization listener. Power entities use HA's power device class, W and zero display decimals. Modes/solar proposals use enums. No command sensor is treated as a cumulative Energy meter or given an energy statistic class. The status connection-type attribute is diagnostic evidence, not a control setting.
 
+## Home Assistant planning groups
+
+On Home Assistant 2026.10 or newer, one app connection owns native configuration
+subentries for Solar, Batteries, Consumption and cycles, Electric boilers and
+EV charging. General EMS and Grid devices remain directly under the connection.
+A group appears only when it has configured virtual devices. Multiple devices
+share a group. These are configuration groups, not hub devices, physical topology,
+areas or labels.
+
+The app's installation and appliance roles determine membership. Display names
+and weather sensitivity do not change the group. Forecast-only heat pumps and
+air conditioners remain Consumption and cycles. All platforms for one virtual
+device share its subentry. The native entity-platform registration receives the
+subentry ID. Existing device associations move in place, preserving device IDs,
+entity unique IDs, entity IDs, user names, areas, disabled settings and labels.
+
+Configure membership in the app, not through a second HA editor. Catalogue
+withdrawal uses the existing entity/device cleanup. A group is retired only after
+its role is no longer configured and neither registry contains members. A
+connection outage retains the last accepted catalogue and its groups. Unloading
+or reloading the integration does not remove its groups.
+
+HA's native Delete action on a subentry deletes its virtual registrations.
+It is not an ungrouping action. The integration automatically reloads once when
+a deleted group is still configured in the app, recreating its groups and devices
+through normal platform setup. If the app is unreachable, recovery completes when
+synchronization resumes. Remove devices in the app to withdraw them permanently.
+Preservation of manually deleted registry metadata is not guaranteed.
+
 ## Device display names
 
 The HA integration uses the linked HA device name as the default solar/battery

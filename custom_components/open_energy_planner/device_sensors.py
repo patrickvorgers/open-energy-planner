@@ -10,6 +10,7 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .configuration_sensors import DeviceProperty, property_values
 from .entity import PlannerEntity, source_device_name
+from .subentries import add_grouped_entities, retire_empty_groups
 
 
 class DeviceTarget(PlannerEntity, SensorEntity):
@@ -24,6 +25,7 @@ class DeviceTarget(PlannerEntity, SensorEntity):
             {"power": "Power target", "mode": "Control mode", "enabled": "Enabled target"}[key],
         )
         self.device_id, self.kind, self.key = device["id"], device["kind"], key
+        self.planning_group = self.kind
         self._attr_device_info["name"] = device.get("name", device["id"])
         if key == "power":
             self._attr_device_class = SensorDeviceClass.POWER
@@ -113,6 +115,7 @@ class DeviceConfiguration(PlannerEntity, SensorEntity):
             else ["configured", "setup_required"]
         )
         self.device_id, self.kind = device["id"], device["kind"]
+        self.planning_group = self.kind
         self._attr_device_info["name"] = device.get("name", device["id"])
 
     def definition(self):
@@ -179,6 +182,7 @@ async def register_devices(hass, entry, async_add_entities):
                     )
         finally:
             pending.discard(identity)
+            retire_empty_groups(coordinator)
 
     @callback
     def update():
@@ -258,7 +262,7 @@ async def register_devices(hass, entry, async_add_entities):
                 entities[identity] = entity
                 added.append(entity)
         if added:
-            async_add_entities(added)
+            add_grouped_entities(coordinator, async_add_entities, added)
 
     entry.async_on_unload(coordinator.subscribe(update))
     update()

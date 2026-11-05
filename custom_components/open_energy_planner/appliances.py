@@ -20,6 +20,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .consumer_sensors import CONSUMER_ID_HEX_LENGTH, ConsumerSensor
 from .protocol import timestamp
+from .subentries import add_grouped_entities, retire_empty_groups
 
 MAX_APPLIANCES = 16
 MAX_CYCLE_HISTORY_HOURS = 12
@@ -541,6 +542,7 @@ def register_entities(
         entities.pop(key, None)
         pending_removal_keys.discard(key)
         update()
+        retire_empty_groups(coordinator)
 
     @callback
     def update():
@@ -561,7 +563,7 @@ def register_entities(
                 entities[key] = factory(coordinator, key[0], names[key[0]], key[1])
                 added.append(entities[key])
         if added:
-            async_add_entities(added)
+            add_grouped_entities(coordinator, async_add_entities, added)
         # The shared consumer lifecycle removes all entities when membership is withdrawn.
         for key, entity in list(entities.items()):
             if key not in desired and key not in pending_removal_keys:
