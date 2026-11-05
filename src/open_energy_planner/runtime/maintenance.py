@@ -581,9 +581,8 @@ def create_managed_app(directory, token, *, factory, **options):
     app.cleanup_ctx.append(lifecycle)
 
     async def shutdown(_app):
-        """Wake inner subscriptions before the public gateway waits for long-lived responses."""
-        if host.runner is not None:
-            await host.runner.shutdown()
+        """Drain transfers and the inner runtime before the gateway waits for proxied subscriptions."""
+        await host.close()
 
     app.on_shutdown.append(shutdown)
     return app

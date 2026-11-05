@@ -1,5 +1,5 @@
 /** Share active notices with navigation and show their full explanation on the recovery page. */
-import {when, useHomeAssistantTimezone} from "./display.js";
+import {when} from "./display.js";
 import {connectEvents, observeEvents} from "./events.js";
 
 const NOTIFICATION_READ_TIMEOUT_MILLISECONDS = 5000;
@@ -280,7 +280,7 @@ function render(payload, warning = "") {
         if (notice.since) {
             const since = window.document.createElement("p");
             since.className = "notification-since";
-            const started = metadata.timezone ? when(notice.since) : new Date(notice.since).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+            const started = metadata.timezone ? when(notice.since, {}, metadata.timezone) : new Date(notice.since).toISOString().slice(0, 16).replace("T", " ") + " UTC";
             const label = notice.blocks?.length === 0 ? "Active since" : "Blocked since";
             since.textContent = `${label}: ${started}`;
             article.append(since);
@@ -294,7 +294,6 @@ function render(payload, warning = "") {
 export async function refreshNotifications(session, focus = false) {
     if (!banner) return;
     if (session) metadata = session;
-    useHomeAssistantTimezone(metadata.timezone);
     if (!focus && focusedReadGeneration && (metadata.ingress || token)) return;
     const requestGeneration = ++generation;
     controller?.abort();

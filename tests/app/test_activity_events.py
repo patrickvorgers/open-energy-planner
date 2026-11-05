@@ -1,6 +1,7 @@
 """Business events retain source ownership, restart truth and race-free subscriptions."""
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -255,7 +256,7 @@ def test_automatic_ha_price_delivery_has_one_activity_and_actual_transport(tmp_p
     asyncio.run(scenario())
 
 
-def test_managed_gateway_shutdown_releases_active_subscription(tmp_path, monkeypatch):
+def test_managed_gateway_shutdown_releases_active_subscription(tmp_path, monkeypatch, caplog):
     """The outer maintenance gateway cannot wait on a stream that only inner shutdown can release."""
     from open_energy_planner.runtime.maintenance import MAINTENANCE, create_managed_app
 
@@ -287,7 +288,18 @@ def test_managed_gateway_shutdown_releases_active_subscription(tmp_path, monkeyp
         finally:
             await client.close()
 
-    asyncio.run(scenario())
+    with caplog.at_level(logging.INFO, logger="open_energy_planner.runtime.diagnostics.logging"):
+        asyncio.run(scenario())
+    assert [
+        record.message.split(" (release=", 1)[0]
+        for record in caplog.records
+        if record.name == "open_energy_planner.runtime.diagnostics.logging"
+    ] == [
+        "Open Energy Planner starting",
+        "Open Energy Planner started",
+        "Open Energy Planner stopping",
+        "Open Energy Planner stopped",
+    ]
 
 
 @pytest.mark.parametrize("failure", [TypeError, KeyError, RuntimeError])

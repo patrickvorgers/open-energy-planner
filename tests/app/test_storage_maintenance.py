@@ -654,6 +654,51 @@ def test_shutdown_always_drains_runtime_and_closes_session(tmp_path, monkeypatch
     asyncio.run(scenario())
 
 
+def test_gateway_shutdown_waits_for_transfer_before_draining_runtime(tmp_path, monkeypatch):
+    """Public shutdown waits for a transfer, then closes the runtime, engine and session once."""
+    from sqlalchemy import event
+
+    async def scenario():
+        """Pause the owned transfer and observe actual gateway shutdown and engine disposal."""
+        app = create_managed_app(tmp_path, TOKEN, factory=create_app, source="home_assistant")
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        host = app[MAINTENANCE]
+        session = host.session
+        transfer_release, closing = asyncio.Event(), asyncio.Event()
+        operations = []
+        event.listen(host.engine, "engine_disposed", lambda _engine: operations.append("disposed"))
+
+        async def transfer():
+            """Represent an admitted transfer that must finish before database disposal."""
+            await transfer_release.wait()
+            operations.append("transfer drained")
+
+        original_close = host.close
+
+        async def close():
+            """Signal shutdown admission while preserving all original close behavior."""
+            closing.set()
+            await original_close()
+
+        monkeypatch.setattr(host, "close", close)
+        host.task = asyncio.create_task(transfer())
+        cleanup = asyncio.create_task(client.server.close())
+        try:
+            await asyncio.wait_for(closing.wait(), 2)
+            assert operations == []
+            assert host.runner is not None and host.engine is not None and not session.closed
+            assert not cleanup.done()
+        finally:
+            transfer_release.set()
+            await asyncio.wait_for(cleanup, 5)
+            await client.close()
+        assert operations == ["transfer drained", "disposed"]
+        assert host.runner is None and host.engine is None and session.closed
+
+    asyncio.run(scenario())
+
+
 def test_overlapping_preflight_is_rejected_without_replacing_first_check(tmp_path, monkeypatch):
     """An overlapping editor receives conflict while the original check retains authority to start."""
     from threading import Event

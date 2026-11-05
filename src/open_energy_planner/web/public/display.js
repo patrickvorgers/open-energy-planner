@@ -51,12 +51,12 @@ export function inputNumber(input) {
     if (precise !== undefined && (precise === "" || !input.validity.valid)) return null;
     return Number(precise ?? input.value);
 }
-/** Show minute precision in the Home Assistant timezone, overriding options.timeZone without changing stored instants. */
-export function when(value, options = {}) {
+/** Show minute precision in HA time or an explicit source zone, overriding options.timeZone without changing stored instants. */
+export function when(value, options = {}, zone = timeZone) {
     const hasStyle = options.dateStyle !== undefined || options.timeStyle !== undefined;
     const explicitParts = ["year", "month", "day", "weekday", "hour", "minute"].some(part => options[part] !== undefined);
     const defaults = explicitParts || hasStyle ? {} : {year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit"};
-    const format = {...defaults, ...options, second: undefined, timeZone};
+    const format = {...defaults, ...options, second: undefined, timeZone: zone};
     if (["full", "long", "medium"].includes(format.timeStyle)) format.timeStyle = "short";
     return new Date(value).toLocaleString(undefined, format);
 }
