@@ -650,7 +650,7 @@ def create_app(
                                     else Outcome.COMPLETED
                                     if temperatures
                                     else Outcome.FAILED,
-                                    "Temperature forecast was discarded because the location changed."
+                                    "Temperature forecast was discarded because the location or demand configuration changed."
                                     if not installed
                                     else "Temperature forecast received."
                                     if temperatures
