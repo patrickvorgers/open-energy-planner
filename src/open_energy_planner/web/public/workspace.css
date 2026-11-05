@@ -105,6 +105,13 @@
 .notification-popup li + li { border-top:1px solid var(--oep-line); }
 .notification-popup li a,.notification-popup li strong { display:flex; align-items:center; min-height:48px; padding:12px 0; color:var(--oep-ink); font-size:14px; overflow-wrap:anywhere; }
 .notification-popup .notification-stale { color:#8b4e09; }
+.notification-heading { display:flex; align-items:center; gap:12px; justify-content:space-between; }
+.notification-heading > :first-child { min-width:0; }
+.notification-expiry { display:inline-flex; position:relative; align-items:center; gap:4px; flex:none; padding:4px 7px; border:1px solid var(--oep-line); border-radius:16px; color:var(--oep-muted); font-size:12px; white-space:nowrap; cursor:help; }
+.notification-expiry svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.notification-expiry:focus-visible { outline:2px solid var(--oep-navy); outline-offset:3px; }
+.notification-expiry-tooltip { position:absolute; top:calc(100% + 4px); right:0; z-index:2; width:210px; padding:8px 10px; border-radius:8px; background:var(--oep-navy); color:white; white-space:normal; font-size:12px; }
+.notification-expiry-tooltip[hidden] { display:none; }
 @media(max-width:640px) { .settings-mobilebar .notification-center { margin:0 8px 0 auto; }.notification-toggle .notification-label { display:none; }.workspace .notification-toggle { width:auto; padding:8px; } }
 .notification-stale { padding:12px; margin:0; border:1px solid #b66a13; border-radius:8px; background:#fff8e8; }
 .workspace #overview-status { margin-bottom:18px; }

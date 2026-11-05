@@ -134,7 +134,7 @@ def test_new_prefilled_solar_source_stays_unsaved_until_all_writes_succeed(app_p
     indirect=True,
 )
 def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
-    """Desktop, tablet and ingress retain converter drafts while HA owns linked geometry through outages and relinks."""
+    """Retain HA panel drafts and expose temporary badges with touch, hover, focus and Escape."""
     page, url = app_page
     page.clock.install()
     body = discover(page, url, devices=True)
@@ -221,6 +221,43 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
     providers[0]["panels"][0]["azimuth"] = 115
     refresh()
     expect(page.locator("#installation-summary")).to_contain_text("115")
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
+    expiry_label = "Temporary notification. Disappears automatically after 5 minutes."
+    banner = page.get_by_role("region", name="Notifications", exact=True)
+    badge = banner.get_by_role("img", name=expiry_label, exact=True)
+    expect(badge).to_have_text("5 min" + expiry_label)
+    badge.focus()
+    expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
+    page.locator(".notification-toggle").click()
+    popup = page.get_by_role("dialog", name="Notifications", exact=True)
+    badge = popup.get_by_role("img", name=expiry_label, exact=True)
+    expect(badge).to_be_visible()
+    if page.viewport_size["width"] < 500:
+        badge.tap()
+        badge.dispatch_event("pointerleave", {"pointerType": "touch"})
+        expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
+        badge.tap()
+        expect(badge.locator(".notification-expiry-tooltip")).to_be_hidden()
+        badge.tap()
+    else:
+        badge.hover()
+        badge.focus()
+        badge.dispatch_event("pointerleave", {"pointerType": "mouse"})
+        expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
+        badge.dispatch_event("pointerenter", {"pointerType": "mouse"})
+        popup.get_by_role("button", name="Close notifications", exact=True).focus()
+    expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
+    mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
+    popup.screenshot(
+        path=f"results/ci/solar-panel-notice-expiry-{page.viewport_size['width']}-{mode}.png"
+    )
+    badge.focus()
+    badge.press("Escape")
+    expect(badge.locator(".notification-expiry-tooltip")).to_be_hidden()
+    expect(badge).to_be_focused()
+    expect(popup).to_be_visible()
+    popup.get_by_role("button", name="Close notifications", exact=True).click()
     installation_area(page, 1, edit=True)
     expect(angle).to_have_value("115")
     expect(angle).to_be_disabled()

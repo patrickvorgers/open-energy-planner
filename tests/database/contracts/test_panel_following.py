@@ -200,6 +200,7 @@ def test_follow_update_outage_unlink_and_relink_preserve_converter_and_originals
                 "Current settings: "
                 "1400 Wp at 80° with 25° tilt, 1800 Wp at 275° with 40° tilt."
             )
+            assert following["auto_clear_minutes"] == 5
         async with TestClient(
             TestServer(
                 create_app(tmp_path, TOKEN, source="home_assistant", database_url=panel_database)
@@ -254,7 +255,13 @@ def test_cancelled_acknowledged_unlink_still_announces_manual_ownership(tmp_path
                 "managed": False,
             }
             notices = await client.get("/v1/notifications", headers=HEADERS)
-            assert "solar_panel_settings_manual" in await notices.text()
+            payload = await notices.json()
+            manual_notice = next(
+                notice
+                for notice in payload["notifications"]
+                if notice["code"] == "solar_panel_settings_manual"
+            )
+            assert manual_notice["auto_clear_minutes"] == 5
 
     asyncio.run(scenario())
 

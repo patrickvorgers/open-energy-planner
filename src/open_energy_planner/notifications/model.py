@@ -4,6 +4,9 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
 
+# Match JavaScript's Number.MAX_SAFE_INTEGER at the JSON boundary.
+MAX_NOTIFICATION_LIFETIME_MINUTES = 2**53 - 1
+
 
 class Severity(StrEnum):
     """Describe importance independently of which operations a problem blocks."""
@@ -58,6 +61,7 @@ class Notification:
     ``blocks`` names affected operations without changing their admission policy.
     ``since`` is an optional timezone-aware start of the current process-local episode.
     ``detail`` is authenticated diagnostic data and must not contain credentials.
+    ``auto_clear_minutes`` describes the source-owned lifetime of a temporary notice.
     Resolution is absence from a successful complete source read, never a dismissal.
     """
 
@@ -68,6 +72,7 @@ class Notification:
     blocks: tuple[str, ...] = ()
     since: datetime | None = None
     detail: str | None = None
+    auto_clear_minutes: int | None = None
 
     def __post_init__(self):
         """Validate the module-to-collector boundary without interpreting domain codes."""
@@ -86,6 +91,13 @@ class Notification:
             raise ValueError("A notification start must include its timezone")
         if self.detail is not None and not isinstance(self.detail, str):
             raise TypeError("Notification details must be text")
+        if self.auto_clear_minutes is not None and (
+            type(self.auto_clear_minutes) is not int
+            or not 0 < self.auto_clear_minutes <= MAX_NOTIFICATION_LIFETIME_MINUTES
+        ):
+            raise ValueError(
+                "A temporary notification needs a positive whole-minute lifetime within the JSON safe-integer range"
+            )
 
     def document(self, owner: str, *, stale: bool = False, fallback: bool = False) -> dict:
         """Serialize display fields and ownership without exposing executable actions."""
@@ -100,4 +112,5 @@ class Notification:
             "detail": self.detail,
             "stale": stale,
             "fallback": fallback,
+            **({"auto_clear_minutes": self.auto_clear_minutes} if self.auto_clear_minutes else {}),
         }

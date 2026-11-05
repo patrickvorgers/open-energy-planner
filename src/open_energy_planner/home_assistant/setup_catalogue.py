@@ -155,6 +155,7 @@ class SetupDiscovery:
                         "/setup",
                         Severity.INFO,
                     ),
+                    auto_clear_minutes=PANEL_CHANGE_NOTICE_MINUTES,
                 ),
             )
             _LOGGER.info(
