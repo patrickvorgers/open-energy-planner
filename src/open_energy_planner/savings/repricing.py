@@ -330,7 +330,7 @@ class PlanValuations:
                 and plan["input_snapshot"].get("contract_version") == contract.version
             ):
                 continue
-            attempt = (
+            activity_context = (
                 self.events.thread_attempt(
                     "contract-valuations",
                     "settlement",
@@ -340,10 +340,10 @@ class PlanValuations:
                 if self.events
                 else nullcontext()
             )
-            with attempt as activity:
+            with activity_context as activity:
                 identity = key([row["plan_id"], generation])
                 pointer = "planvalue-" + key(row["plan_id"]) + ".json"
-                attempt = "valueissue-" + key(row["plan_id"]) + ".json"
+                status_document = "valueissue-" + key(row["plan_id"]) + ".json"
                 try:
                     result = reprice(plan, contract, book, now)
                     result = json.loads(
@@ -351,7 +351,7 @@ class PlanValuations:
                     )
                 except (ValueError, KeyError, TypeError) as error:
                     self.documents.write(
-                        attempt,
+                        status_document,
                         {
                             "contract_version": contract.version,
                             "issue": request_error_message(
@@ -378,7 +378,7 @@ class PlanValuations:
                         self.documents.write(name, result)
                     self.documents.write(pointer, name)
                     self.documents.write(
-                        attempt, {"contract_version": contract.version, "issue": None}
+                        status_document, {"contract_version": contract.version, "issue": None}
                     )
                 if activity:
                     from ..activities.events import Outcome
@@ -398,8 +398,10 @@ class PlanValuations:
     def latest(self, plan_id):
         """Read the latest successful repricing separately from the latest attempted correction."""
         pointer = "planvalue-" + key(plan_id) + ".json"
-        attempt = "valueissue-" + key(plan_id) + ".json"
-        status = self.documents.read(attempt) if self.documents.exists(attempt) else None
+        status_document = "valueissue-" + key(plan_id) + ".json"
+        status = (
+            self.documents.read(status_document) if self.documents.exists(status_document) else None
+        )
         if status and status.get("issue"):
             status = {**status, "issue": REPRICING_FAILURE_MESSAGE}
         return {

@@ -30,8 +30,8 @@ def register(app):
     async def burst(_request):
         """Produce enough real terminal updates to exercise bounded browser retention and paging."""
         events = app[EVENTS]
-        for index in range(150):
-            identity = await events.start("weather", "weather", f"Weather burst {index}")
+        for activity_index in range(150):
+            identity = await events.start("weather", "weather", f"Weather burst {activity_index}")
             await events.finish(
                 identity, Outcome.COMPLETED, "Usable synthetic weather.", usable=True
             )
@@ -49,8 +49,10 @@ async def seed(app):
     now = datetime.now(UTC)
     seed_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
     try:
-        for index in range(104):
-            events.clock = lambda index=index: seed_time - timedelta(minutes=110 - index)
+        for activity_index in range(104):
+            events.clock = lambda activity_index=activity_index: (
+                seed_time - timedelta(minutes=110 - activity_index)
+            )
             identity = await events.start("prices:nord_pool", "prices", "Fetch published prices")
             await events.finish(
                 identity,

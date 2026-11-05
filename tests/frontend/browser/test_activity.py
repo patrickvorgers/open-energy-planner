@@ -153,10 +153,17 @@ def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(100)
     requests = []
-    page.route("**/v1/activities?**", lambda route: requests.append(route))
+
+    def intercept(route):
+        """Signal only after the actual paused request has been captured by this handler."""
+        requests.append(route)
+        page.evaluate("window.activityHistoryRequestCaptured = true")
+
+    page.route("**/v1/activities?**", intercept)
     refresh = page.get_by_role("button", name="Refresh", exact=True)
     refresh.click()
     expect(refresh).to_be_disabled()
+    page.wait_for_function("window.activityHistoryRequestCaptured === true")
     page.evaluate("document.getElementById('activity-refresh').click()")
     assert len(requests) == 1
     requests[0].fulfill(

@@ -441,7 +441,7 @@ class PlanningCoordinator:
             )
             self.block_reason = self.blocked_since = None
         self.status, self.reason = status, reason
-        if self.events:
+        if self.events and status != "calculating":
             from .activities.events import Health
 
             health = (

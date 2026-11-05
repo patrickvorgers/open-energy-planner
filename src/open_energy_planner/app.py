@@ -625,7 +625,11 @@ def create_app(
                                 )
                                 installed = False
                                 async with lock:
-                                    if live.report and live.report.location == location:
+                                    if (
+                                        demand.configuration is not None
+                                        and live.report
+                                        and live.report.location == location
+                                    ):
                                         demand.weather(temperatures)
                                         installed = True
                                         if temperatures:
@@ -682,14 +686,21 @@ def create_app(
                                 )
                         else:
                             delay = PRICE_SCHEDULE_POLL_SECONDS
-                        events.scheduled(
-                            "temperature-weather",
-                            "weather",
-                            "Fetch temperature forecast",
-                            datetime.now(UTC) + timedelta(seconds=delay)
-                            if configured and location
-                            else None,
-                        )
+                        async with lock:
+                            active = bool(
+                                demand.configuration is not None
+                                and live.report
+                                and live.report.location
+                            )
+                        if active:
+                            events.scheduled(
+                                "temperature-weather",
+                                "weather",
+                                "Fetch temperature forecast",
+                                datetime.now(UTC) + timedelta(seconds=delay),
+                            )
+                        else:
+                            events.withdraw("temperature-weather")
                         await asyncio.sleep(delay)
 
                 task = asyncio.create_task(update_weather())

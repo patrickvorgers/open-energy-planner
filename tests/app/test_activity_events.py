@@ -519,3 +519,55 @@ def test_planning_activity_distinguishes_publication_failure_and_supersession(
             repository.close()
 
     asyncio.run(scenario())
+
+
+def test_recalculation_preserves_the_last_established_planning_health(tmp_path, monkeypatch):
+    """A background round does not revoke availability of the already published validated plan."""
+    from open_energy_planner.planning import PlanningCoordinator
+    from tests.app.planning.test_planning_pipeline import NOW as PLANNING_NOW
+    from tests.app.planning.test_planning_pipeline import capture, service
+
+    async def scenario():
+        """Pause a real second calculation and inspect the public health events before completion."""
+        repository = SqlPlanRepository(tmp_path)
+        events = Events(ActivityStore(repository.engine), lambda: PLANNING_NOW)
+        published = []
+
+        async def publish(document):
+            """Accept the validated document without altering the independent solver outcome."""
+            published.append(document)
+
+        planner = service()
+        coordinator = PlanningCoordinator(planner, publish)
+        coordinator.events = events
+        entered, release = asyncio.Event(), asyncio.Event()
+        calculate = planner.calculate
+
+        async def pause(snapshot):
+            """Hold the second numerical operation after its actual calculating transition."""
+            entered.set()
+            await release.wait()
+            return await calculate(snapshot)
+
+        try:
+            coordinator.submit(capture(PLANNING_NOW))
+            await coordinator.wait()
+            assert events.health["planning"]["state"] == "available"
+            cursor = events.cursor
+            monkeypatch.setattr(planner, "calculate", pause)
+            coordinator.submit(capture(PLANNING_NOW, 0.5))
+            await asyncio.wait_for(entered.wait(), 3)
+            assert coordinator.status == "calculating"
+            assert events.health["planning"]["state"] == "available"
+            assert not [row for row in events.changes(cursor)["events"] if row["topic"] == "health"]
+            release.set()
+            await coordinator.wait()
+            assert len(published) == 2
+            assert events.health["planning"]["state"] == "available"
+        finally:
+            release.set()
+            await coordinator.wait()
+            await events.close()
+            repository.close()
+
+    asyncio.run(scenario())

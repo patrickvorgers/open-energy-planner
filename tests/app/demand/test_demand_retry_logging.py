@@ -118,6 +118,18 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(
             ]
             assert terminal[-1]["state"] == ("skipped" if location_changed else "completed")
             assert terminal[-1]["recovered"] is not location_changed
+            configuration = runtimes[0].configuration
+            runtimes[0].configuration = None
+            resume.put_nowait(None)
+            await asyncio.wait_for(sleeps.get(), 3)
+            assert "temperature-weather" not in events.health
+            assert "temperature-weather:weather" not in events.schedules
+            runtimes[0].configuration = configuration
+            live_inputs[0].report = None
+            resume.put_nowait(None)
+            await asyncio.wait_for(sleeps.get(), 3)
+            assert "temperature-weather" not in events.health
+            assert "temperature-weather:weather" not in events.schedules
         finally:
             await lifecycle.aclose()
             await application[EVENTS].close()
