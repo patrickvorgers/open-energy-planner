@@ -93,14 +93,15 @@ function showProfiles() {
     }
     profile();
 }
-/** Refresh only learning evidence. Keep task/deadline drafts and unchanged charts, and retain previous evidence on failure. */
+/** Refresh learning evidence and its HA timezone. Keep drafts and unchanged charts, and retain previous evidence on failure. */
 async function refreshEvidence() {
     if (!current || evidenceRefreshing || document.hidden) return;
     evidenceRefreshing = true;
     const previous = current;
     try {
-        const [data, sources] = await Promise.all([api("v1/appliances"), api("v1/consumers")]);
+        const [data, sources, session] = await Promise.all([api("v1/appliances"), api("v1/consumers"), api("setup/session")]);
         if (current !== previous) return;
+        useHomeAssistantTimezone(session.timezone);
         consumers = sources;
         current = {...data, devices: followedDevices(data)};
         for (const card of document.querySelectorAll("[data-appliance-entity]")) {
@@ -119,8 +120,9 @@ pollApplianceEvidence(refreshEvidence);
  */
 async function load() {
     try {
-        const [data, sources] = await Promise.all([api("v1/appliances"), api("v1/consumers")]);
+        const [data, sources, session] = await Promise.all([api("v1/appliances"), api("v1/consumers"), api("setup/session")]);
         if (!Array.isArray(sources.charging_meters) || !Array.isArray(sources.thermal_meters)) throw new Error("Specialized-meter membership unavailable. Refresh before inspecting appliances.");
+        useHomeAssistantTimezone(session.timezone);
         consumers = sources;
         current = {...data, devices: followedDevices(data)};
         find("connect").hidden = true; find("status").textContent = data.issue || "Connected: A schedule never proves physical execution."; find("appliance-list").replaceChildren();
@@ -148,4 +150,4 @@ async function load() {
 find("profile-device").onchange = profile;
 find("refresh").onclick = load;
 find("connect").onsubmit = (event) => { event.preventDefault(); token = find("token").value; load(); };
-fetch(base + "setup/session", {redirect: "error"}).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); if (session.ingress) load(); }).catch((error) => { find("status").textContent = error.message; });
+fetch(base + "setup/session", {redirect: "error"}).then((response) => response.json()).then((session) => { if (session.ingress) load(); }).catch((error) => { find("status").textContent = error.message; });
