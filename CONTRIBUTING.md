@@ -34,8 +34,8 @@ the existing PR description in the body file, then attach the reviewed images:
 ```sh
 gh pr edit PR_NUMBER --repo OWNER/REPOSITORY \
   --body-file /absolute/path/pr-description.md \
-  --attach /absolute/path/desktop.png \
-  --attach /absolute/path/mobile.png
+  --attach "/absolute/path/desktop.png#Changed interface on desktop" \
+  --attach "/absolute/path/mobile.png#Changed interface on mobile"
 ```
 
 Repeated `--attach` options upload multiple images. Matching local Markdown image
@@ -49,7 +49,7 @@ The ChatGPT Chrome extension file chooser is an alternative when its existing
 file-URL permission allows uploads. Do not expand permissions or take over the
 native desktop merely to upload screenshots. If neither upload route works,
 report the missing inline evidence explicitly and retain synthetic captures in
-CI artifacts until it can be resolved.
+CI artifacts and link those captures from the PR until inline uploads can be resolved.
 
 See [GitHub's attachment procedure](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
 

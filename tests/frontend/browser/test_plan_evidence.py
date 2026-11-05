@@ -477,6 +477,26 @@ def test_pending_price_retry_reads_after_publication_detection(automatic_plan_ov
     assert page.evaluate("window.priceReads") == 1
 
 
+@pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_no_plan_preview_reads_after_the_listing_timeout(automatic_plan_overview):
+    """A timed-out listing cannot spend the independent healthy preview read's timeout budget."""
+    state = automatic_plan_overview
+    page = state["page"]
+    held = []
+    page.route("**/v1/plans?limit=20", lambda route: held.append(route))
+    state["current_buy_price"] = 0.88
+    with page.expect_request("**/v1/plans?limit=20"):
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    page.clock.run_for(5001)
+    expect(page.locator("#current-price-status")).to_contain_text("Current tariff preview")
+    expect(page.locator("#price-chart")).to_be_visible()
+    page.wait_for_function("""() => Chart.getChart(document.getElementById('price-chart'))
+        ?.data.datasets[1]?.data[0]?.y === 0.88""")
+    assert len(held) == 1
+    held[0].fulfill(json={"plans": [], "next_before": None})
+
+
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("hung_view", ["listing", "savings", "comparison", "prices"])
 def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_overview, hung_view):

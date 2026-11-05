@@ -1275,7 +1275,9 @@ evidence, original contract and prepared bonus rates. It shares that plan's time
 range. Only without a selected plan, read the current tariff preview independently
 of plan or bonus-volume availability. Label this fallback explicitly and use the
 current containing quarter and selected 6/24/full-hour range. Late preview reads
-cannot replace a plan chart. Failed plan updates retain the complete previous
+cannot replace a plan chart. A deferred preview starts with its own bounded
+read timeout, so a timed-out archive listing cannot cancel a healthy preview.
+Failed plan updates retain the complete previous
 comparison and its original price inputs until a usable replacement is loaded. The browser uses
 recorded end timestamps instead of reconstructing them from floating duration
 hours when checking coverage. This prevents microsecond daylight boundaries from

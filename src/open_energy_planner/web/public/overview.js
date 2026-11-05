@@ -714,7 +714,9 @@ async function load() {
     try {
         const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
         const planRead = plans(false, signal);
-        const previewRead = planRead.catch(() => {}).then(() => currentPrices(signal));
+        const previewRead = planRead.catch(() => {}).then(
+            () => currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS))
+        );
         const results = await Promise.allSettled([planRead, savings(signal), previewRead]);
         const failure = results.find(result => result.status === "rejected");
         if (failure) throw failure.reason;
