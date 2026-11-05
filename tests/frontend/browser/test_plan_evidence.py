@@ -477,6 +477,89 @@ def test_pending_price_retry_reads_after_publication_detection(automatic_plan_ov
     assert page.evaluate("window.priceReads") == 1
 
 
+@pytest.mark.parametrize("automatic_plan_overview", ["plan", "preview"], indirect=True)
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("failure", ["network", "json"])
+def test_price_read_failures_never_display_private_exception_values(
+    automatic_plan_overview, failure
+):
+    """Network and malformed JSON failures show owned recovery text without private exception values."""
+    state = automatic_plan_overview
+    page = state["page"]
+    selected = bool(state["plans"])
+    endpoint = "/v1/plans/older-plan/comparison" if selected else "/v1/prices/inputs"
+    if failure == "json":
+        page.route(
+            "**" + endpoint,
+            lambda route: route.fulfill(
+                content_type="application/json", body="PRIVATE_REVIEW_SENTINEL is not JSON"
+            ),
+        )
+        explanation = "Cannot read this view: The response is unreadable. Please retry."
+    else:
+        page.evaluate(
+            """endpoint => {
+            const originalFetch = window.fetch;
+            window.fetch = (input, options) => String(input).includes(endpoint)
+                ? Promise.reject(new Error('PRIVATE_REVIEW_SENTINEL connection detail'))
+                : originalFetch(input, options);
+        }""",
+            endpoint,
+        )
+        explanation = "Cannot read this view: Check the connection and retry."
+    if selected:
+        page.locator("#plan-version").select_option("older-plan")
+    else:
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_contain_text(explanation)
+    assert "PRIVATE" not in page.locator("body").inner_text()
+    expect(page.locator("#price-chart")).to_be_hidden()
+
+
+@pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_empty_price_preview_is_explicitly_unavailable(automatic_plan_overview):
+    """A successful read with no intervals cannot claim that saved rates are visible."""
+    state = automatic_plan_overview
+    page = state["page"]
+    page.route(
+        "**/v1/prices/inputs",
+        lambda route: route.fulfill(
+            json={"as_of": state["beginning"].isoformat(), "currency": "EUR", "intervals": []}
+        ),
+    )
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#current-price-status")).to_have_text(
+        "Current price preview unavailable: No price intervals available."
+    )
+    expect(page.locator("#price-chart")).to_be_hidden()
+    assert page.evaluate("""() => Chart.getChart(document.getElementById('price-chart'))
+        .data.datasets.every(series => series.data.length === 0)""")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_initial_plan_lookup_never_flashes_current_tariff_preview(app_page):
+    """The initial pending archive lookup cannot briefly show unrelated current prices as plan inputs."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    listing = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()
+    held, preview_reads = [], []
+    page.route("**/v1/plans?limit=20", lambda route: held.append(route))
+    page.route("**/v1/prices/inputs", lambda route: preview_reads.append(route))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    with page.expect_request("**/v1/plans?limit=20"):
+        page.get_by_role("button", name="Connect", exact=True).click()
+    page.evaluate("Promise.resolve()")
+    assert len(held) == 1
+    assert preview_reads == []
+    expect(page.locator("#current-price-status")).not_to_contain_text("Current tariff preview")
+    held[0].fulfill(json=listing)
+    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
+    assert preview_reads == []
+
+
 @pytest.mark.parametrize("automatic_plan_overview", ["preview"], indirect=True)
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_no_plan_preview_reads_after_the_listing_timeout(automatic_plan_overview):

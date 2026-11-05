@@ -1277,6 +1277,9 @@ of plan or bonus-volume availability. Label this fallback explicitly and use the
 current containing quarter and selected 6/24/full-hour range. Late preview reads
 cannot replace a plan chart. A deferred preview starts with its own bounded
 read timeout, so a timed-out archive listing cannot cancel a healthy preview.
+The overview JSON reader replaces network and parser exceptions with owned
+recovery messages while preserving fixed authentication and HTTP-status advice.
+An empty preview is unavailable evidence, never a normal saved-rate result.
 Failed plan updates retain the complete previous
 comparison and its original price inputs until a usable replacement is loaded. The browser uses
 recorded end timestamps instead of reconstructing them from floating duration

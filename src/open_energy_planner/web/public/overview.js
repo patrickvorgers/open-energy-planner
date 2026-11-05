@@ -21,11 +21,17 @@ const number = (value) => typeof value === "number" && Number.isFinite(value) ? 
 const valueText = (value, unit) => unit === "%" ? percentage(value, false) : unit === "W" ? Math.round(value).toLocaleString() : (isMoneyUnit(unit) ? money : number)(value);
 const strategies = {"minimize cost": "Minimize cost", "minimize consumption": "Minimize consumption"};
 const statuses = {optimal: "Optimal", feasible: "Feasible"};
-/** Read authenticated app JSON. Never persist the standalone administration token. */
+/** Read authenticated JSON with owned recovery messages. Never expose transport or parser details. */
 async function api(path, signal) {
-    const response = await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store", signal});
+    let response;
+    try {
+        response = await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store", signal});
+    } catch {
+        throw new Error(signal?.aborted ? "This view took too long to load. Please retry." : "Cannot read this view: Check the connection and retry.");
+    }
     if (!response.ok) throw new Error(response.status === 401 ? "Enter the app administration token to continue." : `Cannot read this view (${response.status}).`);
-    return response.json();
+    try { return await response.json(); }
+    catch { throw new Error("Cannot read this view: The response is unreadable. Please retry."); }
 }
 /** Render text cells without interpreting source labels as markup. */
 function row(parent, values) {
@@ -695,7 +701,7 @@ async function currentPrices(signal) {
         if (data.has_bonus) series.push({name: "Export rate incl. bonus", points: total, color: "#9255b7"});
         $("price-chart").closest(".chart-wrap").hidden = !intervals.length;
         chart("price-chart", series, {unit: `${data.currency || "EUR"}/kWh`});
-        $("current-price-status").textContent = data.issue ? `Current price preview unavailable: ${optionLabel(data.issue)}` : `No plan available: Current tariff preview: Saved contract rates as of: ${when(data.as_of)}: ${intervals.some(interval => interval.bonus_issue) ? "Bonus eligibility unavailable: Missing values remain gaps." : data.has_bonus ? "Bonus volume is not applied in this preview." : "No bonus applies in this period."}${data.coverage === "shortened_horizon" ? " Market-price coverage ends early." : ""}`;
+        $("current-price-status").textContent = data.issue ? `Current price preview unavailable: ${optionLabel(data.issue)}` : !intervals.length ? "Current price preview unavailable: No price intervals available." : `No plan available: Current tariff preview: Saved contract rates as of: ${when(data.as_of)}: ${intervals.some(interval => interval.bonus_issue) ? "Bonus eligibility unavailable: Missing values remain gaps." : data.has_bonus ? "Bonus volume is not applied in this preview." : "No bonus applies in this period."}${data.coverage === "shortened_horizon" ? " Market-price coverage ends early." : ""}`;
         priceRefreshPending = false;
         return true;
     } catch (error) {
