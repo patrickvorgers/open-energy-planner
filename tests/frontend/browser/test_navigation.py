@@ -799,6 +799,8 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
     page.goto(url + "/quality")
     tab_style = """element => {const style = getComputedStyle(element); return Object.fromEntries(['fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'color', 'borderBottomWidth', 'borderBottomColor', 'backgroundColor', 'paddingTop', 'paddingBottom', 'marginTop', 'marginRight', 'marginBottom'].map(key => [key, style[key]]));}"""
     reference = page.get_by_role("button", name="Household", exact=True).evaluate(tab_style)
+    inactive_reference = page.get_by_role("button", name="Solar", exact=True).evaluate(tab_style)
+    assert inactive_reference["fontWeight"] == "400"
     assert reference["fontSize"] == "14px"
     assert reference["lineHeight"] == "21px"
     page.goto(url + "/appliance-settings")
@@ -818,6 +820,11 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
             "link => {const style = getComputedStyle(link); return style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.borderBottomWidth === '3px' && style.borderTopWidth === '0px' && link.getBoundingClientRect().height >= 44;}"
         )
         assert active.evaluate(tab_style) == reference
+        for link in categories.get_by_role("link").all():
+            expected = (
+                reference if link.get_attribute("aria-current") == "page" else inactive_reference
+            )
+            assert link.evaluate(tab_style) == expected
         active.focus()
         assert active.evaluate("link => getComputedStyle(link).outlineStyle") != "none"
         if suffix == "/thermal":

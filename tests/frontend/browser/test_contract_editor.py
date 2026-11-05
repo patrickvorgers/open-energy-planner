@@ -669,10 +669,16 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     page.goto(url + "/quality")
     tab_style = """element => {const style = getComputedStyle(element); return Object.fromEntries(['fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'color', 'borderBottomWidth', 'borderBottomColor', 'backgroundColor', 'paddingTop', 'paddingBottom', 'marginTop', 'marginRight', 'marginBottom'].map(key => [key, style[key]]));}"""
     reference = page.get_by_role("button", name="Household", exact=True).evaluate(tab_style)
+    inactive_reference = page.get_by_role("button", name="Solar", exact=True).evaluate(tab_style)
 
     def check_tabs(dialog, active, kind):
         """Supplier tabs match the forecast row and keep normal selection separate from keyboard focus."""
         assert active.evaluate(tab_style) == reference
+        for tab in dialog.get_by_role("tab").all():
+            expected = (
+                reference if tab.get_attribute("aria-selected") == "true" else inactive_reference
+            )
+            assert tab.evaluate(tab_style) == expected
         assert active.evaluate("element => getComputedStyle(element).outlineStyle") == "none"
         assert active.evaluate("element => element.getBoundingClientRect().height") >= 44
         assert dialog.get_by_role("tablist").evaluate(

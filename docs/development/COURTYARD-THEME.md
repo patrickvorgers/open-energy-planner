@@ -52,8 +52,8 @@ An untrusted forwarded ingress header cannot hide that form or grant API access.
 Comparable sections use the shared `section-tabs` style: an open row without an
 enclosing border or background, 14-pixel text, 24-pixel spacing, and a blue bottom
 underline on the selected item. Tab typography and button margins are owned by
-the shared style, including inside settings pages and dialogs. Targets remain at least 44 pixels high and wrap on narrow
-screens. Keyboard focus has a separate visible outline. Use links with
+the shared style, including inside settings pages and dialogs. Targets remain at
+least 44 pixels high and wrap on narrow screens. Keyboard focus has a separate visible outline. Use links with
 `aria-current="page"` for page navigation, ARIA tabs for tab panels, and labelled
 pressed buttons for view filters. Preserve existing keyboard behavior and unsaved
 settings guards. Operational toggles and time-range controls retain their own
