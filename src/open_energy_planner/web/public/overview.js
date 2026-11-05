@@ -12,6 +12,7 @@ const PLAN_READ_TIMEOUT_MILLISECONDS = 5000;
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, periodRequest = 0;
 let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
+let planReadPending = false;
 let priceRefreshPending = false;
 const evaluationVersions = new Map();
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
@@ -318,25 +319,42 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
  * Render both frozen reference balances, original whole-plan costs and factual
- * evidence without optimization. Clear/disable evidence during loading. Version
+ * evidence without optimization. Retain complete evidence during background refresh,
+ * but clear it when explicitly selecting another plan. Version
  * requests so late responses cannot overwrite newer selections.
  * Retain every declared interval position even without expected flow. Absent values
  * remain unknown rather than zero. Net watts are (import - export) / duration_h *
  * 1000, positive import and negative export. Missing grid evidence leaves null EMS
  * line gaps. Rebuild tables, inspector and charts without changing active commands.
  */
-async function showPlan(signal) {
+async function showPlan(signal, background = false) {
     const request = ++selectionRequest, id = $("plan-version").value;
-    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = id ? "Loading original plan comparison…" : "No plan selected.";
-    for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
-    $("expected-benefit").textContent = "";
-    planEvidence = null;
-    $("inspect-time").disabled = true;
-    $("inspect-values").textContent = id ? "Loading original interval values…" : "No plan selected.";
-    $("evidence-period").textContent = ""; $("plan-evidence-status").textContent = id ? "Loading original whole-plan evidence…" : "No plan selected.";
-    evidenceCards($("plan-evidence"), []); evidenceCards($("interval-evidence"), []);
-    $("evidence-time").textContent = ""; $("evidence-issue").textContent = id ? "Loading original plan evidence…" : "No plan selected.";
-    if (!id) { $("overview-status").textContent = CONNECTED_MESSAGE; return true; }
+    const retainDisplayedPlan = renderedPlanId && (background || renderedPlanId === id);
+    if (retainDisplayedPlan) {
+        $("overview-status").textContent = "Loading plan update. Showing the previously loaded plan until the update is available.";
+    } else {
+        renderedPlanId = null;
+        planReadPending = false;
+        $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
+        $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
+        $("planning-window").textContent = "";
+        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
+        inspectSteps = [];
+        for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
+            if (charts.has(chartId)) chart(chartId, []);
+        }
+        $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
+        for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = id ? "Loading original plan comparison…" : "No plan selected.";
+        for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
+        $("expected-benefit").textContent = "";
+        planEvidence = null;
+        $("inspect-time").disabled = true;
+        $("inspect-values").textContent = id ? "Loading original interval values…" : "No plan selected.";
+        $("evidence-period").textContent = ""; $("plan-evidence-status").textContent = id ? "Loading original whole-plan evidence…" : "No plan selected.";
+        evidenceCards($("plan-evidence"), []); evidenceCards($("interval-evidence"), []);
+        $("evidence-time").textContent = ""; $("evidence-issue").textContent = id ? "Loading original plan evidence…" : "No plan selected.";
+        if (!id) { $("overview-status").textContent = CONNECTED_MESSAGE; return true; }
+    }
     try {
         const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison`, signal);
         if (request !== selectionRequest) return false;
@@ -498,12 +516,19 @@ async function showPlan(signal) {
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
         $("overview-status").textContent = CONNECTED_MESSAGE;
         renderedPlanId = id;
+        planReadPending = false;
         return true;
     } catch (error) {
+        if (request === selectionRequest && retainDisplayedPlan) {
+            planReadPending = true;
+            $("overview-status").textContent = `${error.message} Showing the previously loaded plan. The update is not available yet.`;
+            return false;
+        }
         if (request === selectionRequest) {
             for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = "Original plan comparison unavailable.";
             renderedPlanId = null;
             $("overview-status").textContent = error.message;
+            $("plan-description").textContent = "Selected plan could not be loaded.";
             $("plan-evidence-status").textContent = $("evidence-issue").textContent = `Original evidence could not be loaded. ${error.message}`;
             $("inspect-values").textContent = "Original interval values could not be loaded.";
         }
@@ -540,10 +565,10 @@ async function refreshLatestPlan() {
             selector.prepend(option);
             selector.value = followingLatest ? latest.plan_id : selected;
         }
-        const needsPlan = renderedPlanId !== latest.plan_id;
+        const needsPlan = renderedPlanId !== latest.plan_id || planReadPending;
         if (followingLatest && needsPlan) {
             const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
-            await Promise.all([showPlan(signal), priceRead ??= currentPrices(signal)]);
+            await Promise.all([showPlan(signal, true), priceRead ??= currentPrices(signal)]);
         }
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
     finally {

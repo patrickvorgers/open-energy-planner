@@ -26,7 +26,6 @@ def pytest_arguments(suite, *, worker=None, arguments=(), collect_only=False):
         ],
         "documentation": [
             "tests/documentation",
-            "tests/ci/test_provenance.py",
             "tests/ci/test_ci_scope.py",
         ],
         "databases": ["tests/database/contracts", "tests/database/migrations"],

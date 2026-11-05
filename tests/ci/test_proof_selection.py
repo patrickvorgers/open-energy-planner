@@ -21,7 +21,6 @@ PROOF_FILES = (
     "check_commit_signatures.py",
     "check_main_ci_reuse.py",
     "check_suite_completion.py",
-    "check_provenance.py",
     "review_preflight.py",
     "scope_report.py",
     "ci_scope.py",

@@ -7,7 +7,7 @@ It does not remove tests or change app behaviour.
 ## During development
 
 Each PR opening, new revision or reopening runs
-`Quick checks`. It verifies immutable documentation provenance and runs the
+`Quick checks`. It runs the
 centrally pinned Ruff lint and formatting checks, followed by CI policy tests.
 It installs the central development dependencies, Ruff and pytest, without
 building Docker images or installing app and HA dependencies. Trusted signature
@@ -280,7 +280,8 @@ checked main-reuse gate. Do not repeat the full suite locally as a prerequisite.
 
 Changes confined to `label_ci_scope.py`, `check_ci_candidate.py`,
 `check_commit_signatures.py`, `check_main_ci_reuse.py`,
-`check_suite_completion.py`, `check_provenance.py`, `review_preflight.py` and `scope_report.py` under `script/ci/` select
+`check_suite_completion.py`, `review_preflight.py` and `scope_report.py` under
+`script/ci/` select
 only the `ci` suite. These modules classify changes, verify admission and
 signatures, inspect original evidence or parse completion reports. They do not
 execute app, HA, database, migration or volume workloads. Mixed changes retain

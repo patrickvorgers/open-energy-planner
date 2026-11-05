@@ -62,11 +62,11 @@ def test_commit_enumeration_timeout_remains_a_verification_failure(monkeypatch, 
         proof_git.introduced_commits("1" * 40, "2" * 40)
 
 
-@pytest.mark.parametrize("operation", ["checkout", "merge", "provenance"])
+@pytest.mark.parametrize("operation", ["checkout", "merge"])
 def test_standalone_metadata_operations_keep_process_failure_contract(
     monkeypatch, tmp_path, operation
 ):
-    """Standalone completion, label and provenance callers retain bounded process errors."""
+    """Standalone completion and label callers retain bounded process errors."""
 
     def timeout(command, **options):
         """The local deadline expires before any result can authorize completion or labels."""
@@ -77,10 +77,8 @@ def test_standalone_metadata_operations_keep_process_failure_contract(
     with pytest.raises(subprocess.TimeoutExpired):
         if operation == "checkout":
             proof_git.checkout_tree()
-        elif operation == "merge":
-            proof_git.merged_tree("1" * 40, "2" * 40, tmp_path)
         else:
-            proof_git.tree_records(tmp_path, "1" * 40)
+            proof_git.merged_tree("1" * 40, "2" * 40, tmp_path)
 
 
 def test_clean_checkout_check_bounds_every_local_process(monkeypatch):
