@@ -177,16 +177,6 @@ def checkout_tree(expected_head=None):
     ).strip()
 
 
-def tree_records(root, revision):
-    """Read provenance blob records from an immutable tree without executing its contents."""
-    return subprocess.check_output(
-        ["git", "-c", f"safe.directory={root}", "ls-tree", "-r", sha(revision)],
-        cwd=root,
-        text=True,
-        timeout=GIT_TIMEOUT_SECONDS,
-    )
-
-
 def immutable_test_sources(revision, root):
     """Read immutable blobs without candidate execution or archive attribute filtering."""
     listing = subprocess.run(
