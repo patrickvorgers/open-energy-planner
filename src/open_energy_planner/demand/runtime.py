@@ -280,7 +280,7 @@ class DemandRuntime:
         self.consumers.result = consumer_result
         quality_changed = self.history_quality != history_quality
         self.history_quality = history_quality
-        if history_quality["rejected_percentage"] is not None:
+        if history_quality["usable_hours"] > 0:
             _LOGGER.log(
                 logging.INFO if quality_changed else logging.DEBUG,
                 "Household energy training accepted: %d usable hours, %d excluded hours (%.1f%%). "

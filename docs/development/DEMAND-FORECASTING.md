@@ -132,8 +132,9 @@ remain unchanged.
 
 After a trained worker result is accepted, the responsible demand logger reports
 usable hours, excluded hours and the excluded percentage. New or changed cohort
-quality is INFO. Unchanged retraining summaries are DEBUG. Empty, failed and
-superseded results cannot announce successful training. A new history cohort or
+quality is INFO. Unchanged retraining summaries are DEBUG. Results with no usable
+hours, failed results and superseded results cannot announce successful training.
+A new history cohort or
 configuration clears the previous quality before its accepted training summary.
 Counts and percentage remain available in `GET /v1/demand.history_quality` even
 when the share is too small for a notification. They are disposable diagnostics,
