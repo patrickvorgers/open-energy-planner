@@ -266,7 +266,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                         "solar",
                         "training",
                         "Update solar forecast",
-                        next_update(current, retry) if usable else retry,
+                        next_update(current, retry) if usable or retry else None,
                     )
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 

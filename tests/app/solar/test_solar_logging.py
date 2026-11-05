@@ -319,17 +319,20 @@ def test_changed_installation_discards_weather_without_recovery(tmp_path, monkey
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failure_minute, expected_minute", [(0, 5), (10, 15), (14, 15), (15, 20)])
 def test_failed_solar_forecast_exposes_its_known_retry_without_a_usable_forecast(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, failure_minute, expected_minute
 ):
-    """A first failed forecast still advertises its actual five-minute retry deadline."""
+    """Advertise the next admitted attempt, including a new quarter before the old key's backoff."""
     from open_energy_planner.activities.api import EVENTS
     from open_energy_planner.activities.events import Events
     from open_energy_planner.storage.adapters.activities import ActivityStore
 
     runtime = SolarRuntime(make_store(tmp_path, SolarStore))
     runtime.configure(plant())
-    runtime.set_weather(SITE, weather())
+    failed_at = START.replace(hour=12, minute=failure_minute)
+    expected = START.replace(hour=12, minute=expected_minute)
+    runtime.set_weather(SITE, weather(failed_at))
 
     async def reject(_runtime, job):
         """Reject a current admitted calculation, leaving the runtime to choose its real backoff."""
@@ -337,21 +340,56 @@ def test_failed_solar_forecast_exposes_its_known_retry_without_a_usable_forecast
 
     async def scenario():
         """Observe the real forecast loop after it persists current-generation retry state."""
-        _clock, sleeps, _resume = controlled_poll(monkeypatch)
+        clock, sleeps, _resume = controlled_poll(monkeypatch)
+        clock[0] = failed_at
         monkeypatch.setattr(solar_api, "worker", reject)
         app = solar_app(runtime)
-        events = Events(ActivityStore(runtime.store.documents.engine), lambda: START)
+        events = Events(ActivityStore(runtime.store.documents.engine), lambda: clock[0])
         app[EVENTS] = events
         lifecycle = app.cleanup_ctx[0](app)
         await anext(lifecycle)
         try:
             await asyncio.wait_for(sleeps.get(), 3)
             assert runtime.forecast is None
-            assert runtime.retry_after == START + timedelta(minutes=5)
-            assert (
-                events.schedules["solar:training"]["due_at"]
-                == (START + timedelta(minutes=5)).isoformat()
-            )
+            assert runtime.retry_after == failed_at + timedelta(minutes=5)
+            assert events.schedules["solar:training"]["due_at"] == expected.isoformat()
+            assert runtime.job(expected - timedelta(microseconds=1)) is None
+            assert runtime.job(expected) is not None
+        finally:
+            await lifecycle.aclose()
+            await events.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("state", ["unconfigured", "no_sources", "missing_weather"])
+def test_solar_without_known_work_withdraws_any_previous_deadline(tmp_path, monkeypatch, state):
+    """Absent prerequisites without a current retry never invent a scheduled solar calculation."""
+    from open_energy_planner.activities.api import EVENTS
+    from open_energy_planner.activities.events import Events
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+
+    runtime = SolarRuntime(make_store(tmp_path, SolarStore))
+    if state == "no_sources":
+        runtime.configure(plant(count=0))
+    elif state == "missing_weather":
+        runtime.configure(plant())
+        runtime.set_weather(SITE, ())
+
+    async def scenario():
+        """Observe the actual lifecycle retract a stale deadline without starting numerical work."""
+        _clock, sleeps, _resume = controlled_poll(monkeypatch)
+        app = solar_app(runtime)
+        events = Events(ActivityStore(runtime.store.documents.engine), lambda: START)
+        events.scheduled("solar", "training", "Old solar deadline", START + timedelta(minutes=5))
+        app[EVENTS] = events
+        lifecycle = app.cleanup_ctx[0](app)
+        await anext(lifecycle)
+        try:
+            await asyncio.wait_for(sleeps.get(), 3)
+            assert runtime.retry_after is None
+            assert "solar:training" not in events.schedules
+            assert events.running == {}
         finally:
             await lifecycle.aclose()
             await events.close()
