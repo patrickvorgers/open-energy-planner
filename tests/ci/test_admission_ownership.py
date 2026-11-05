@@ -7,14 +7,9 @@ import pytest
 
 ADMISSION_PROTOCOL = """on:
   workflow_call:
-    secrets:
-      OEP_RUNNER_READ_TOKEN:
-        required: false
     outputs:
       reuse:
         value: ${{ jobs.candidate.outputs.reuse }}
-      runner_labels:
-        value: ${{ jobs.candidate.outputs.runner_labels }}
 jobs:
   candidate:
     if: >-
@@ -23,7 +18,6 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       reuse: ${{ steps.reuse.outputs.reuse }}
-      runner_labels: ${{ steps.admission.outputs.runner_labels }}
     permissions:
       contents: read
       actions: read
@@ -34,10 +28,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-        id: admission
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OEP_RUNNER_READ_TOKEN: ${{ secrets.OEP_RUNNER_READ_TOKEN }}
         run: python3 -m script.ci.check_ci_candidate
       - uses: ./.github/actions/quick-checks
         id: reuse
@@ -73,13 +65,6 @@ REVIEW_PREFLIGHT_PROTOCOL = """on:
       expected_base:
         required: true
         type: string
-      codex_reviewed_sha:
-        required: true
-        type: string
-      independent_codex_review_done:
-        required: true
-        default: false
-        type: boolean
       findings_dispositioned:
         required: true
         default: false
@@ -145,6 +130,31 @@ def test_reusable_admission_owns_only_reviewed_proof_operations():
     assert not admission_violations((root / ".github/workflows/ci-admission.yaml").read_text())
 
 
+def test_every_ci_job_uses_fixed_github_hosted_capacity():
+    """Every declared runner is a literal hosted label rather than a PR-controlled expression."""
+    root = Path(__file__).resolve().parents[2]
+    directory = root / ".github/workflows"
+    workflows = sorted((*directory.glob("*.yaml"), *directory.glob("*.yml")))
+    assert workflows
+    for path in workflows:
+        labels = re.findall(r"^\s+runs-on:\s*(.+)$", path.read_text(), re.MULTILINE)
+        assert labels and all(label == "ubuntu-24.04" for label in labels), path
+
+
+@pytest.mark.parametrize("extension", ["yaml", "yml"])
+def test_hosted_capacity_guard_rejects_both_workflow_extensions(tmp_path, monkeypatch, extension):
+    """Neither supported workflow extension can hide a personal runner from the actual guard."""
+    workflows = tmp_path / ".github/workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "hosted.yaml").write_text("jobs:\n  check:\n    runs-on: ubuntu-24.04\n")
+    (workflows / f"personal.{extension}").write_text("jobs:\n  check:\n    runs-on: self-hosted\n")
+    monkeypatch.setitem(
+        globals(), "__file__", str(tmp_path / "tests/ci/test_admission_ownership.py")
+    )
+    with pytest.raises(AssertionError):
+        test_every_ci_job_uses_fixed_github_hosted_capacity()
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -171,9 +181,7 @@ def test_reusable_admission_owns_only_reviewed_proof_operations():
         "quoted-environment",
         "noncomment-hash",
         "runner",
-        "runner-output",
-        "runner-job-output",
-        "runner-secret-forward",
+        "secret-forward",
     ],
 )
 def test_admission_guard_rejects_workload_and_evidence_bypasses(change):
@@ -181,17 +189,9 @@ def test_admission_guard_rejects_workload_and_evidence_bypasses(change):
     root = Path(__file__).resolve().parents[2]
     source = (root / ".github/workflows/ci-admission.yaml").read_text()
     changes = {
-        "runner-output": (
-            "value: ${{ jobs.candidate.outputs.runner_labels }}",
-            "value: '[\"self-hosted\"]'",
-        ),
-        "runner-job-output": (
-            "runner_labels: ${{ steps.admission.outputs.runner_labels }}",
-            "runner_labels: '[\"self-hosted\"]'",
-        ),
-        "runner-secret-forward": (
+        "secret-forward": (
             "        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: python3 -m script.ci.check_main_ci_reuse",
-            "        env:\n          GITHUB_TOKEN: ${{ secrets.OEP_RUNNER_READ_TOKEN }}\n        run: python3 -m script.ci.check_main_ci_reuse",
+            "        env:\n          GITHUB_TOKEN: ${{ secrets.UNEXPECTED_CREDENTIAL }}\n        run: python3 -m script.ci.check_main_ci_reuse",
         ),
         "docker": ("run: python3 -m script.ci.check_ci_candidate", "run: docker compose up"),
         "shell": (

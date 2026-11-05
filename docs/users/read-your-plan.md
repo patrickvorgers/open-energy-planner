@@ -8,6 +8,8 @@ Start with the original plan's timestamp and input context. A chart describes th
 
 An original plan retains the prices, input versions, limits and expected costs used when it was calculated. Later tariff changes do not rewrite that original calculation. A failed new calculation does not overwrite the previous accepted plan or extend its commands indefinitely.
 
+During an automatic plan update, the previous complete comparison stays visible until the replacement has loaded. The status identifies when you are still viewing the previously loaded plan, including when an update cannot be read. Its original timestamp and period remain unchanged. Selecting a different historical plan clears its evidence while that selection loads.
+
 ## Read the balance
 
 The balance uses quarter-hour bars. Above zero means supply to the modeled balance, including grid import and battery discharge. Below zero means consumption, including household demand, grid export and battery charging. A separate battery-state series shows state of charge.
@@ -19,6 +21,10 @@ Use **Next 6 hours**, **Next 24 hours** or **Full horizon**. Tap or hover to ins
 | Without battery | The same original household and solar forecasts without battery operation |
 | Battery self-consumption | A separate reference that stores surplus solar and covers deficits within its limits |
 | OEP | The proposed optimized operation under the selected strategy and contract |
+
+Each chart starts with **Expected economic cost**. Optimizer and battery self-consumption also show **Expected benefit versus without battery** against the same baseline. A negative benefit means higher expected cost than without battery. Missing comparisons stay unavailable. These amounts cover the complete original plan, even when you zoom into fewer hours. They are expectations, not measured savings or investment returns.
+
+Open **Cost breakdown** for net grid cash cost, battery wear and the change in stored-energy value. Economic cost includes wear and subtracts the stored-energy value change. That value change is not cash.
 
 For detailed comparison boundaries, use [Savings](../development/SAVINGS.md) and [plan evidence](../development/PLAN-EVIDENCE.md).
 

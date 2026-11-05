@@ -13,7 +13,7 @@ from script.ci.check_commit_signatures import VerificationError
 REPOSITORY = "owner/planner"
 BASE = "1" * 40
 HEAD = "2" * 40
-REVIEWED = "3" * 40
+EARLIER = "3" * 40
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -59,7 +59,7 @@ class Evidence:
             {"filename": f"file-{index}.png", "status": ("added", "removed", "renamed")[index % 3]}
             for index in range(count)
         ]
-        self.commits = [{"sha": REVIEWED}, {"sha": HEAD}]
+        self.commits = [{"sha": EARLIER}, {"sha": HEAD}]
         self.comments = []
         self.checks = [
             {
@@ -139,16 +139,16 @@ class Evidence:
         }
 
 
-def run(client, reviewed=REVIEWED):
-    """Run the real preflight against an independently selected head and earlier reviewed commit."""
-    return review_preflight.preflight(REPOSITORY, 12, HEAD, BASE, reviewed, client)
+def run(client):
+    """Run the real preflight against the independently specified frozen head and base."""
+    return review_preflight.preflight(REPOSITORY, 12, HEAD, BASE, client)
 
 
-def test_final_command_preserves_an_earlier_independent_review_without_requesting_anything():
-    """A later tested correction commit is allowed without demanding a new independent review on every push."""
+def test_final_command_requires_no_separate_codex_review_or_provider_write():
+    """A tested Draft can prepare its independent CodeRabbit review without a Codex attestation."""
     client = Evidence()
     summary = run(client)
-    assert f"Independent Codex review SHA: `{REVIEWED}`" in summary
+    assert "CodeRabbit provides the independent review." in summary
     assert f"@coderabbitai review\n<!-- oep-coderabbit-head:{HEAD} -->" in summary
     assert "No review has been requested." in summary
     assert client.pr_reads == 2
@@ -171,11 +171,11 @@ def test_missing_second_file_page_cannot_hide_50_changed_files():
     assert any(path.endswith("files?per_page=100&page=2") for _, path in client.calls)
 
 
-def test_reviewed_commit_can_be_on_the_second_complete_history_page():
+def test_frozen_head_can_be_on_the_second_complete_history_page():
     """Read the complete introduced history instead of stopping after page one."""
     client = Evidence()
     client.commits = [{"sha": f"{number:040x}"} for number in range(1, 101)]
-    client.commits.extend([{"sha": REVIEWED}, {"sha": HEAD}])
+    client.commits.extend([{"sha": EARLIER}, {"sha": HEAD}])
     client.current["commits"] = 102
     assert "No review has been requested." in run(client)
     assert any(path.endswith("commits?per_page=100&page=2") for _, path in client.calls)
@@ -296,12 +296,11 @@ def test_contributor_fork_uses_only_base_repository_metadata_without_execution()
 
 
 @pytest.mark.parametrize("fault", ["outside", "duplicate", "missing", "count", "boolean_count"])
-def test_independent_review_sha_must_be_in_complete_pr_history(fault):
-    """An unrelated/base SHA or incomplete commit list cannot attest to the independent reviewed version."""
+def test_frozen_head_must_be_in_complete_pr_history(fault):
+    """An unrelated head or incomplete commit list cannot authorize a frozen-head request."""
     client = Evidence()
-    reviewed = REVIEWED
     if fault == "outside":
-        reviewed = BASE
+        client.commits[-1] = {"sha": BASE}
     elif fault == "duplicate":
         client.commits[0] = client.commits[-1]
     elif fault == "missing":
@@ -311,7 +310,7 @@ def test_independent_review_sha_must_be_in_complete_pr_history(fault):
     else:
         client.current["commits"] = True
     with pytest.raises(VerificationError):
-        run(client, reviewed)
+        run(client)
 
 
 @pytest.mark.parametrize("fault", ["pending", "failed", "wrong_app", "wrong_head"])
@@ -486,15 +485,13 @@ def dispatch_event():
             "pull_request": "12",
             "expected_head": HEAD,
             "expected_base": BASE,
-            "codex_reviewed_sha": REVIEWED,
-            "independent_codex_review_done": True,
             "findings_dispositioned": "true",
         },
     }
 
 
 @pytest.mark.parametrize(
-    "fault", [None, "event", "branch", "attestation", "number", "review_sha", "files"]
+    "fault", [None, "event", "branch", "attestation", "number", "head_sha", "files"]
 )
 def test_dispatch_requires_main_identities_and_affirmative_attestations(
     monkeypatch, tmp_path, fault
@@ -507,11 +504,11 @@ def test_dispatch_requires_main_identities_and_affirmative_attestations(
     elif fault == "branch":
         branch = "refs/heads/unreviewed"
     elif fault == "attestation":
-        event["inputs"]["independent_codex_review_done"] = False
+        event["inputs"]["findings_dispositioned"] = False
     elif fault == "number":
         event["inputs"]["pull_request"] = True
-    elif fault == "review_sha":
-        event["inputs"]["codex_reviewed_sha"] = "not-a-sha"
+    elif fault == "head_sha":
+        event["inputs"]["expected_head"] = "not-a-sha"
     path, summary = tmp_path / "event.json", tmp_path / "summary"
     path.write_text(json.dumps(event))
     for name, value in {

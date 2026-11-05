@@ -20,8 +20,8 @@ from script.ci.pr_readiness import require_resolved_threads
 MAX_PAGES = 10
 
 
-def require_reviewed_commit(repository, number, current, reviewed, client):
-    """Bind the independent review SHA to the complete PR history, allowing later batched corrections."""
+def require_pr_history(repository, number, current, client):
+    """Require complete bounded PR history containing the frozen head."""
     expected = current.get("commits")
     if type(expected) is not int or not 1 <= expected <= 250:
         raise VerificationError("A complete PR history of at most 250 commits is required")
@@ -38,8 +38,8 @@ def require_reviewed_commit(repository, number, current, reviewed, client):
                 raise VerificationError("Duplicate PR commit evidence")
             commits.add(commit)
         if len(commits) == expected:
-            if reviewed not in commits or current["head"]["sha"] not in commits:
-                raise VerificationError("Independent Codex review SHA is not in this PR history")
+            if current["head"]["sha"] not in commits:
+                raise VerificationError("Frozen head is not in this PR history")
             return
         if len(commits) > expected or len(rows) < 100:
             raise VerificationError("PR commit count does not match its history")
@@ -83,7 +83,7 @@ def require_no_request(repository, number, head, client):
     raise VerificationError("Review-request history exceeds the page limit")
 
 
-def preflight(repository, number, head, base, reviewed, client):
+def preflight(repository, number, head, base, client):
     """Require current prerequisites and identity before emitting a manual command, without API writes."""
     if (
         not isinstance(repository, str)
@@ -92,7 +92,7 @@ def preflight(repository, number, head, base, reviewed, client):
         or number <= 0
     ):
         raise VerificationError("Invalid review request identity")
-    head, base, reviewed = sha(head), sha(base), sha(reviewed)
+    head, base = sha(head), sha(base)
     path = f"repos/{repository}/pulls/{number}"
 
     def current_pr():
@@ -126,7 +126,7 @@ def preflight(repository, number, head, base, reviewed, client):
     current = current_pr()
     require_included_base(repository, head, base, client)
     file_count = changed_files(repository, number, current, client)
-    require_reviewed_commit(repository, number, current, reviewed, client)
+    require_pr_history(repository, number, current, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
     review = latest_check(checks, "CodeRabbit", CODERABBIT_APP_ID)
@@ -152,9 +152,10 @@ def preflight(repository, number, head, base, reviewed, client):
     return (
         f"## Manual CodeRabbit review preflight\n\nPR: {number}\n\n"
         f"Head: `{head}`\n\nBase: `{base}`\n\n"
-        f"Independent Codex review SHA: `{reviewed}`\n\nChanged files: {file_count}\n\n"
-        "The operator attests that the independent review and finding disposition are complete. "
-        "This is not machine proof of their semantic correctness. No review has been requested.\n\n"
+        f"Changed files: {file_count}\n\n"
+        "The operator attests that existing findings are dispositioned. "
+        "This is not machine proof of their correctness. CodeRabbit provides the independent review. "
+        "No review has been requested.\n\n"
         "Keep the head frozen, coordinate the shared queue and verify actual provider availability. "
         "Recheck this head immediately before posting the following comment manually:\n\n"
         f"```text\n@coderabbitai review\n<!-- oep-coderabbit-head:{head} -->\n```\n\n"
@@ -164,7 +165,7 @@ def preflight(repository, number, head, base, reviewed, client):
 
 
 def main():
-    """Accept only an explicit trusted-main dispatch with affirmative operator attestations."""
+    """Accept only a trusted-main dispatch with an affirmative finding-disposition attestation."""
     try:
         event = json.loads(Path(environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
         repository = environ["GITHUB_REPOSITORY"]
@@ -182,11 +183,11 @@ def main():
         inputs = event["inputs"]
         if not isinstance(inputs, dict):
             raise VerificationError("Invalid workflow inputs")
-        for field in ("independent_codex_review_done", "findings_dispositioned"):
-            if inputs.get(field) is not True and inputs.get(field) != "true":
-                raise VerificationError(
-                    "Independent review and finding disposition must be attested"
-                )
+        if (
+            inputs.get("findings_dispositioned") is not True
+            and inputs.get("findings_dispositioned") != "true"
+        ):
+            raise VerificationError("Existing finding disposition must be attested")
         number = inputs["pull_request"]
         if not isinstance(number, str) or not re.fullmatch(r"[1-9][0-9]{0,9}", number):
             raise VerificationError("Invalid pull request number")
@@ -195,7 +196,6 @@ def main():
             int(number),
             sha(inputs["expected_head"]),
             sha(inputs["expected_base"]),
-            sha(inputs["codex_reviewed_sha"]),
             GitHub(environ["GITHUB_TOKEN"]),
         )
         Path(environ["GITHUB_STEP_SUMMARY"]).write_text(summary, encoding="utf-8")

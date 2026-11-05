@@ -8,6 +8,8 @@ from open_energy_planner.demand.calculation.model import DemandHour
 METER_ROUNDING_ALLOWANCE_KWH = 0.001
 BALANCE_NUMERICAL_TOLERANCE_KWH = 1e-07
 MAX_REJECTED_TRAINING_HOURS = 24
+MIN_NOTIFICATION_HISTORY_HOURS = 24
+REJECTED_HOURS_NOTIFICATION_PERCENT = 20
 
 
 @dataclass(frozen=True)
@@ -25,12 +27,32 @@ class ReconstructionResult:
             self.rejected_hours > 0 and not self.samples
         )
 
+    @property
+    def rejected_percentage(self):
+        """Return the excluded share of complete assessed hours, or None without evidence."""
+        assessed_hours = len(self.samples) + self.rejected_hours
+        return 100 * self.rejected_hours / assessed_hours if assessed_hours else None
+
+    @property
+    def notification_required(self):
+        """Notify only for at least 20 percent rejection after 24 complete assessed hours.
+
+        Missing hours are not assessed balances. Appliance model admission keeps
+        its separate conservative substantial_rejection safeguard.
+        """
+        assessed_hours = len(self.samples) + self.rejected_hours
+        return (
+            assessed_hours >= MIN_NOTIFICATION_HISTORY_HOURS
+            and 100 * self.rejected_hours >= REJECTED_HOURS_NOTIFICATION_PERCENT * assessed_hours
+        )
+
     def document(self):
         """Expose disposable counts without copying measured samples into another archive."""
         return {
             "usable_hours": len(self.samples),
             "corrected_hours": self.corrected_hours,
             "rejected_hours": self.rejected_hours,
+            "rejected_percentage": self.rejected_percentage,
         }
 
 
