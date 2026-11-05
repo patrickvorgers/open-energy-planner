@@ -157,7 +157,7 @@ def test_opening_confirmation_immediately_shows_actual_planning_status(
     if after_confirmation == "calculating":
         expect(
             banner.get_by_text(
-                "The inputs are usable again. OEP is calculating and checking a new energy plan. "
+                "The inputs are usable again. A new energy plan is being calculated and checked. "
                 "This can take a few minutes. Planning has not yet completed successfully.",
                 exact=True,
             )

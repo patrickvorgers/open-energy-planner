@@ -11,6 +11,50 @@ Read the [security policy](SECURITY.md) before reporting a vulnerability or
 attaching logs, screenshots or example configurations. Use synthetic inputs
 instead of personal measurements or credentials.
 
+## Screenshots for interface changes
+
+Every PR that changes the UI must show screenshots directly in its description.
+Capture the actual changed interface with synthetic data at desktop and mobile
+sizes. Include relevant states, such as the latest and historical selections
+when those behave differently. Inspect every image for private information.
+
+For charts, choose a representative period with enough data points and variation
+to assess the changed behavior, scales, legends, date boundaries and gaps. Daily
+price and energy patterns should show a representative full day or the relevant
+planning horizon. Explain the selected period when it matters to the change.
+A sparse test fixture with only a few points may prove a focused regression, but
+it does not provide sufficient visual evidence for the PR. Keep focused tests
+small and use representative synthetic data for visual review.
+
+Upload native GitHub attachments instead of committing temporary PR screenshots
+to the repository or creating screenshot branches. GitHub CLI supports this
+through `--attach`. Check that `gh pr edit --help` lists that option. Preserve
+the existing PR description in the body file, then attach the reviewed images:
+
+```sh
+gh pr edit PR_NUMBER --repo OWNER/REPOSITORY \
+  --body-file /absolute/path/pr-description.md \
+  --attach "/absolute/path/desktop.png#Changed interface on desktop" \
+  --attach "/absolute/path/mobile.png#Changed interface on mobile"
+```
+
+Repeated `--attach` options upload multiple images. Matching local Markdown image
+references in the body file are rewritten to GitHub attachment URLs. Other
+attachments are appended as inline images. Use descriptive alt text and verify
+the uploaded images load from the final PR description. A download link or CI
+artifact link is not a substitute for screenshots visible in that description.
+Use existing authorized credentials without logging or persisting them.
+
+The ChatGPT Chrome extension file chooser is an alternative when its existing
+file-URL permission allows uploads. Do not expand permissions or take over the
+native desktop merely to upload screenshots. If neither upload route works,
+report the missing inline evidence explicitly and retain synthetic captures in
+CI artifacts and link those captures from the PR until inline uploads can be resolved.
+
+See [GitHub's attachment procedure](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
+
+## Development and review
+
 AI-assisted development also follows the repository [AI development agreements](AGENTS.md), including evidence-based handling of all Codex, CodeRabbit and Kody-ai review findings.
 
 At least one automated reviewer, CodeRabbit or Kody-ai, must complete a substantive review of the latest PR head before Ready for review or merge. Every new commit, including documentation-only changes, requires a completed review of that head from either provider. Evaluate and address every finding from all reviewers, including outside-diff comments, and resolve the evaluated threads. Passing CI, no comments, pending or skipped reviews, an unavailable provider and older-head reviews do not prove completion. Recheck the head SHA immediately before merging.

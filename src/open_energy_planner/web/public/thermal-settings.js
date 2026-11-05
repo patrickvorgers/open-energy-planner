@@ -91,11 +91,11 @@ function renderEditor() {
     if (!store) { syncEditor(); return; }
     find("thermal-title").textContent = displayName(store);
     const sources = node("div"); sources.className = "settings-fields"; sources.append(node("h3", "Home Assistant sources"));
-    sourceSelect(sources, store, "energy_entity", "Boiler consumption meter", "Choose its Home Assistant Energy meter. OEP requests individual history automatically and withholds heating commands until the separate consumption baseline is available. Planned heating replaces that baseline.", (current.energy_consumers || []).map(source => [source.entity_id, source.name]));
+    sourceSelect(sources, store, "energy_entity", "Boiler consumption meter", "Choose its Home Assistant Energy meter. Individual history is requested automatically. Heating commands wait until the separate consumption baseline is available. Planned heating replaces that baseline.", (current.energy_consumers || []).map(source => [source.entity_id, source.name]));
     sourceSelect(sources, store, "temperature_entity", "Measured water temperature", "Use a temperature sensor or water heater reporting °C or °F. Home Assistant report time determines freshness.", metadata(source => (source.entity_id.startsWith("sensor.") || source.entity_id.startsWith("water_heater.")) && source.device_class === "temperature" && ["°C", "°F"].includes(source.unit)));
     sourceSelect(sources, store, "power_entity", "Measured heater power", "Use the boiler's own electrical power sensor in W or kW.", metadata(source => source.entity_id.startsWith("sensor.") && source.device_class === "power" && ["W", "kW"].includes(source.unit)));
     editor.append(sources);
-    const enabledLabel = node("label"), enabled = node("input"); enabled.type = "checkbox"; enabled.dataset.field = "enabled"; enabled.checked = store.enabled; enabled.onchange = () => { store.enabled = enabled.checked; saveState.update(); }; enabledLabel.append(enabled, node("span", "Allow OEP to plan heating")); editor.append(enabledLabel);
+    const enabledLabel = node("label"), enabled = node("input"); enabled.type = "checkbox"; enabled.dataset.field = "enabled"; enabled.checked = store.enabled; enabled.onchange = () => { store.enabled = enabled.checked; saveState.update(); }; enabledLabel.append(enabled, node("span", "Allow heating schedules")); editor.append(enabledLabel);
     const physics = node("div"); physics.className = "settings-fields"; physics.append(node("h3", "Boiler and limits"));
     numberInput(physics, store, "volume_litres", "Water volume (litres)", "Declare the tank volume. The first model treats the water as one uniform temperature.", {min: 0.1});
     numberInput(physics, store, "heater_w", "Electrical heating power (kW)", "Fixed on/off electrical power. 1 kW equals 1,000 W. This first version is for a resistive electric heater.", {min: 0.001, max: 30, scale: 1000, step: 0.001});
@@ -166,7 +166,7 @@ find("cancel-thermal").onclick = () => saveState.refresh(() => load(editOriginId
 find("refresh-thermal").onclick = () => { find("thermal-more").open = false; return saveState.refresh(load).finally(syncEditor); };
 find("remove-thermal").onclick = () => {
     find("thermal-more").open = false;
-    if (saveState.busy || editing || !selected() || !confirm("Remove this boiler from OEP? Home Assistant sources and historical evidence are retained. Save settings to apply the removal.")) return;
+    if (saveState.busy || editing || !selected() || !confirm("Remove this boiler? Home Assistant sources and historical evidence are retained. Save settings to apply the removal.")) return;
     editOriginId = selectedId; draft.stores = draft.stores.filter(store => store.id !== selectedId); selectedId = null; editing = true; renderEditor(); saveState.update();
 };
 find("refresh-thermal-evidence").onclick = refreshEvidence;

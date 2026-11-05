@@ -53,7 +53,7 @@ const help = {
         "Normalized battery power from Home Assistant Energy: discharge positive, charging negative. Change the source/direction there.",
     can_follow_grid: "Allow this battery or its inverter to follow the connection-level zero-grid command. Home Assistant automations configure the physical controller. Otherwise the planner publishes fixed power only.",
     power_inverted:
-        "Home Assistant Energy normalizes the power direction. OEP does not apply another inversion.",
+        "Home Assistant Energy normalizes the power direction. No additional inversion is applied.",
     capacity_kwh:
         "Usable battery energy in kWh from Home Assistant Energy. Read-only here. Not current stored energy or inverter power.",
     charge: "Maximum permitted charging power at the battery terminal, in kW.",
@@ -796,7 +796,7 @@ async function load(refresh = false, discard = false) {
     }
     if (missing.length) {
         $("wizard").hidden = true;
-        status(`Complete Settings > Dashboards > Energy in Home Assistant: ${missing.join(": ")}: OEP uses these settings read-only. Refresh after correcting them.`);
+        status(`Complete Settings > Dashboards > Energy in Home Assistant: ${missing.join(": ")}: These settings are read-only here. Refresh after correcting them.`);
         layout.loaded(config, false, discard);
         showStep(layout.area >= 4 ? layout.area : -1);
         return;

@@ -47,6 +47,6 @@ If a preferred provider is unavailable, inspect the actual source and fallback s
 
 ## Check the result
 
-Return to **Planning**. Compare current **Price inputs** with **Original plan prices**. The former uses current cached prices and saved rules. The latter preserves what the selected plan originally used. Contract repricing can evaluate the old flows under changed terms, but it does not make that old plan optimal under those terms.
+Return to **Planning**. **Price inputs** shows the original prices of the selected latest or historical plan. New market data and saved contract changes do not overwrite those frozen inputs. When no plan is available, the same graph is labelled **Current tariff preview** and uses current cached prices and saved rules. Contract repricing can evaluate the old flows under changed terms, but it does not make that old plan optimal under those terms.
 
 **Next:** [Understand forecasts](forecasts.md), then [read your plan](read-your-plan.md).

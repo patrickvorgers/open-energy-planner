@@ -113,7 +113,7 @@ class SetupDiscovery:
                                 )
                                 else "No panel settings have been accepted yet. Waiting for complete Home Assistant settings. "
                             )
-                            + "Home Assistant remains in control. OEP retries on the next configuration refresh.",
+                            + "Home Assistant remains in control. The connection is retried on the next configuration refresh.",
                             "View panel settings",
                             "/setup",
                         ),
@@ -139,7 +139,7 @@ class SetupDiscovery:
             else:
                 message = (
                     "The Forecast.Solar link was removed in Home Assistant. "
-                    "OEP retains the last accepted panel settings. You can now edit them manually."
+                    "The last accepted panel settings are retained. You can now edit them manually."
                 )
                 code = "solar_panel_settings_manual"
             self.panel_changes[source.entity_id] = (

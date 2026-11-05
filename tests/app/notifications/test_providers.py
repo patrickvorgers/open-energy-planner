@@ -68,7 +68,7 @@ def test_contract_owns_its_cause_until_publication_confirms_restored_operation()
     assert recovering.key == notice.key
     assert recovering.state == "recovering"
     assert recovering.since == since
-    assert "calculating and checking a new energy plan" in recovering.text.message
+    assert "A new energy plan is being calculated and checked" in recovering.text.message
     assert "not yet completed successfully" in recovering.text.message
     assert contract_notifications(PlanningStatus("ready", "validated", None)) == ()
 

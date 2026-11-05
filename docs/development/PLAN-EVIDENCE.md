@@ -99,12 +99,16 @@ Missing spot evidence stays a gap. Never derive spot from a retail rate. Conditi
 bonuses stay separate because their payment can depend on time, conditions and
 remaining period quota. Detailed factual explanation follows the graphs.
 
-Current Price inputs and Original plan prices draw published market intervals as
+The single **Price inputs** chart uses the selected plan's frozen prices. If no
+plan is available, its status explicitly identifies a current tariff preview.
+Changing the selected plan updates prices together with its other original
+evidence. A late preview response never overwrites archived plan prices.
+Both modes draw published market intervals as
 solid lines and forecast intervals as dotted lines. Import, export and potential
 bonus-inclusive export rates inherit the market interval's recorded `price_kind`.
 Mixed series change style at the exact interval boundary, without changing rates,
-native resolution or missing-data gaps. Current prices use the current API
-classification. Original plan prices retain their frozen classification even when
+native resolution or missing-data gaps. The no-plan preview uses the current API
+classification. Selected-plan prices retain their frozen classification even when
 new published prices arrive. Older evidence without a classification retains its
 existing line style rather than inventing forecast provenance.
 
@@ -151,7 +155,7 @@ Negative benefit remains signed and uses the loss colour. Zero remains neutral,
 including amounts that round to zero at the displayed currency precision. Missing
 comparisons stay unavailable. All headers name the complete original plan period.
 Amounts do not change with chart zoom and are not measured or annualized returns.
-Current price inputs follow the three scenario graphs without a duplicate optimizer
+Price inputs follow the three scenario graphs without a duplicate optimizer
 result card. Cash cost, wear and non-cash stored-energy value remain in the
 keyboard-accessible Cost breakdown disclosure. Its expanded state survives a
 read-only refresh.

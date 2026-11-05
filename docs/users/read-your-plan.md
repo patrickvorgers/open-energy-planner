@@ -46,7 +46,7 @@ These amounts cover the complete original plan even when you zoom into fewer hou
 
 Household demand and available solar describe original forecast inputs before the planner's decisions. Available DC solar and household AC demand use different measurement boundaries. Compare them with conversion and clipping in mind.
 
-Original-plan prices retain the inputs that belonged to the selected calculation. Published and predicted price segments remain distinguishable. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
+**Price inputs** follows the selected latest or historical plan and shows its frozen prices. Newly received prices and changed contract rules appear when a new plan uses them. Without a plan, the same graph is explicitly labelled **Current tariff preview** and uses cached market prices with saved rules. Solid lines identify published prices and dotted lines identify forecast prices. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
 
 See [contract and prices](contract.md) for formulas, dates and bonus interpretation, and [forecasts](forecasts.md) for how predictions are checked against measurements.
 

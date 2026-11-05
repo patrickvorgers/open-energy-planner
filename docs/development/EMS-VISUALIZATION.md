@@ -184,12 +184,15 @@ asset is a normal pinned dependency change requiring browser regression checks.
 
 ## Current prices without a plan
 
-Price inputs shows current cached spot prices and the latest saved import/export
+Price inputs shows the original rates used by the selected plan, including when
+an older plan is selected. Without an available plan, the same graph explicitly
+shows a preview from current cached spot prices and the latest saved import/export
 rules. The purple line is the total potential export rate including eligible
 bonus, before the annual volume cap. It is available without a plan, household/PV
 forecasts or a confirmed annual export baseline. Saving a bonus then opening or
 refreshing Planning updates this preview. It does not change frozen plan inputs.
-Original plan prices remain separately labelled with the archived plan evidence.
+Plan selection switches all original inputs together. New prices or contract
+changes do not rewrite the displayed plan's saved rates.
 
 A non-quarter boundary such as 07:19 can be an exact sunrise/bonus-window edge.
 It is not necessarily a market-source timestamp. Native provider resolution is

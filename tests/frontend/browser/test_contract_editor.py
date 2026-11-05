@@ -987,33 +987,31 @@ def test_current_price_chart_shows_saved_bonus_without_any_plan_or_volume_histor
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.get_by_role("heading", name="Price inputs", exact=True)).to_be_visible()
-    expect(page.locator("#current-price-chart-legend")).to_contain_text(
-        "Export rate incl. bonus (before volume cap)"
-    )
+    expect(page.locator("#price-chart-legend")).to_contain_text("Export rate incl. bonus")
     expect(page.locator("#current-price-status")).to_contain_text("Bonus volume is not applied")
     values = page.evaluate(
-        "Chart.getChart(document.getElementById('current-price-chart')).data.datasets.at(-1).data.map(point => point.y)"
+        "Chart.getChart(document.getElementById('price-chart')).data.datasets.at(-1).data.map(point => point.y)"
     )
     assert values and all(value == pytest.approx(0.11) for value in values)
     assert page.request.get(url + "/v1/plans", headers=headers).json()["plans"] == []
     page.get_by_role("button", name="Next 6 hours", exact=True).click()
     assert page.evaluate(
-        "(() => {const axis=Chart.getChart(document.getElementById('current-price-chart')).options.scales.x;return axis.min%900000===0 && axis.max-axis.min===21600000;})()"
+        "(() => {const axis=Chart.getChart(document.getElementById('price-chart')).options.scales.x;return axis.min%900000===0 && axis.max-axis.min===21600000;})()"
     )
     body["expected_version"] = saved["version"]
     body["bonuses"][0]["rate_formula"] = "0.04"
     assert page.request.put(url + "/v1/contracts", headers=headers, data=body).ok
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     page.wait_for_function(
-        "() => Chart.getChart(document.getElementById('current-price-chart')).data.datasets.at(-1).data.every(point => Math.abs(point.y-0.12)<1e-12)"
+        "() => Chart.getChart(document.getElementById('price-chart')).data.datasets.at(-1).data.every(point => Math.abs(point.y-0.12)<1e-12)"
     )
     page.route("**/v1/prices/inputs", lambda route: route.abort())
     page.get_by_role("button", name="Refresh overview", exact=True).click()
-    expect(page.locator("#current-price-status")).to_contain_text("Failed to fetch")
+    expect(page.locator("#current-price-status")).to_contain_text(
+        "Cannot read this view: Check the connection and retry."
+    )
     assert (
-        page.evaluate(
-            "Chart.getChart(document.getElementById('current-price-chart')).data.datasets.length"
-        )
+        page.evaluate("Chart.getChart(document.getElementById('price-chart')).data.datasets.length")
         == 0
     )
 

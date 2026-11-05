@@ -42,7 +42,7 @@ function settings(consumers, specializedMeters, devices) {
         const appliance = devices.find(item => item.entity_id === device.entity_id);
         const permission = node("input"); permission.type = "checkbox"; permission.name = device.entity_id + "_shiftable"; permission.checked = Boolean(appliance?.shiftable); permission.disabled = enabled.disabled || !enabled.checked;
         const permissionLabel = node("label"), permissionText = node("span", "Allow shifting complete cycles");
-        permissionLabel.className = "settings-switch"; permissionText.append(node("small", "Let OEP schedule a complete cycle before its deadline.")); permissionLabel.append(permission, permissionText); card.append(permissionLabel);
+        permissionLabel.className = "settings-switch"; permissionText.append(node("small", "Allow a complete cycle to be scheduled before its deadline.")); permissionLabel.append(permission, permissionText); card.append(permissionLabel);
         weather.setAttribute("aria-label", "Consumption depends on outdoor temperature"); permission.setAttribute("aria-label", "Allow shifting complete cycles");
         permission.onchange = () => { if (permission.checked === Boolean(appliance?.shiftable)) pending.delete(device.entity_id); else pending.set(device.entity_id, permission.checked); saveState.update(""); };
         enabled.onchange = () => {
@@ -87,7 +87,7 @@ find("appliance-settings").onsubmit = async (event) => {
     event.preventDefault();
     if (saveState.busy) return;
     const selected = [...retainedSpecialized, ...[...consumerChoices].filter(([, inputs]) => inputs.enabled.checked).map(([entity_id, inputs]) => ({entity_id, weather_sensitive: inputs.weather.checked}))].sort((left, right) => left.entity_id.localeCompare(right.entity_id));
-    if ([...pending].some(([id, enabled]) => enabled && !selected.some(item => item.entity_id === id))) { saveState.update("Select a device in OEP before enabling cycle shifting."); return; }
+    if ([...pending].some(([id, enabled]) => enabled && !selected.some(item => item.entity_id === id))) { saveState.update("Add the device before enabling cycle shifting."); return; }
     const manualChanges = [...consumerChoices].filter(([, inputs]) => inputs.enabled.checked && (inputs.duration.value !== String(inputs.appliance?.manual_profile?.duration_minutes ?? "") || inputs.energy.value !== String(inputs.appliance?.manual_profile?.energy_kwh ?? "")));
     if (manualChanges.some(([, inputs]) => !inputs.duration.value || !inputs.energy.value)) { saveState.update("Enter both duration and energy for a manual profile."); return; }
     saveState.begin(); syncEditor();
@@ -134,7 +134,7 @@ function showAppliance() {
  */
 function showEvidence() {
     const selected = consumerChoices.get(selectedId), appliance = selected?.evidence, profile = appliance?.profile;
-    find("appliance-membership").textContent = selected?.openCycle ? "Open cycle" : "Added to OEP";
+    find("appliance-membership").textContent = selected?.openCycle ? "Open cycle" : "Added";
     const evidence = find("appliance-evidence"); evidence.replaceChildren();
     if (profile) {
         const metrics = profileMetrics(profile), facts = node("dl"); facts.className = "settings-summary";
@@ -207,8 +207,8 @@ find("remove-appliance").onclick = () => {
     find("appliance-more").open = false;
     if (saveState.busy || saveState.dirty || !selectedId) return;
     const inputs = consumerChoices.get(selectedId);
-    if (inputs.openCycle) { saveState.update("Resolve this appliance's open cycle on Energy: Appliances before removing it from OEP."); return; }
-    if (!confirm(`Remove ${inputs.device.name} from OEP? Its Home Assistant source and history are retained. You can add the same source again later.`)) return;
+    if (inputs.openCycle) { saveState.update("Resolve this appliance's open cycle on Energy: Appliances before removing it."); return; }
+    if (!confirm(`Remove ${inputs.device.name}? Its Home Assistant source and history are retained. You can add the same source again later.`)) return;
     inputs.enabled.checked = false; inputs.enabled.onchange(); editing = true; syncEditor(); saveState.update(); find("appliance-settings").requestSubmit();
 };
 
