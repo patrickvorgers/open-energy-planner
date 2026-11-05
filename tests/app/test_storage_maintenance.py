@@ -654,6 +654,92 @@ def test_shutdown_always_drains_runtime_and_closes_session(tmp_path, monkeypatch
     asyncio.run(scenario())
 
 
+def test_gateway_shutdown_keeps_proxy_open_until_held_response_finishes(tmp_path, monkeypatch):
+    """Drain the inner app while preserving a slow gateway response until all bytes reach its client."""
+    from aiohttp import web
+
+    async def scenario():
+        """Hold actual downstream writes after upstream acceptance and shut down the real gateway."""
+        payload = b"synthetic-download-" * 16384
+        writing, release, drained, delivered = (
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+        )
+        session_closures = []
+
+        def factory(*args, **kwargs):
+            """Add one finite download and witness the real inner runtime's cleanup."""
+            application = create_app(*args, **kwargs)
+
+            async def download(_request):
+                """Return independent binary content through the production streaming proxy."""
+                return web.Response(body=payload)
+
+            application.router.add_get("/held-download", download)
+            return application
+
+        app = create_managed_app(tmp_path, TOKEN, factory=factory, source="home_assistant")
+        original_write = web.StreamResponse.write
+        original_eof = web.StreamResponse.write_eof
+
+        async def write(response, data):
+            """Pause only gateway output, preserving the real upstream connection and reader."""
+            if response._req.app is app and response._req.path == "/held-download":
+                writing.set()
+                await release.wait()
+            await original_write(response, data)
+
+        async def write_eof(response, data=b""):
+            """Observe completion only after the actual outer response finishes writing."""
+            gateway_output = response._req is not None and response._req.app is app
+            await original_eof(response, data)
+            if gateway_output:
+                delivered.set()
+
+        monkeypatch.setattr(web.StreamResponse, "write", write)
+        monkeypatch.setattr(web.StreamResponse, "write_eof", write_eof)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        host = app[MAINTENANCE]
+        session = host.session
+        original_stop = host.stop_runtime
+
+        async def stop_runtime():
+            """Signal after real handler/resource draining and engine disposal have completed."""
+            await original_stop()
+            drained.set()
+
+        monkeypatch.setattr(host, "stop_runtime", stop_runtime)
+        original_close = session.close
+
+        async def close_session():
+            """Record actual response completion at the original proxy-session lifetime boundary."""
+            session_closures.append(delivered.is_set())
+            await original_close()
+
+        monkeypatch.setattr(session, "close", close_session)
+        response = await client.get("/held-download", headers=HEADERS)
+        await asyncio.wait_for(writing.wait(), 2)
+        cleanup = asyncio.create_task(client.server.close())
+        try:
+            await asyncio.wait_for(drained.wait(), 5)
+            assert not cleanup.done()
+        finally:
+            release.set()
+        try:
+            assert response.status == 200
+            assert await asyncio.wait_for(response.read(), 5) == payload
+            await asyncio.wait_for(cleanup, 5)
+        finally:
+            await client.close()
+        assert session_closures == [True]
+        assert session.closed
+
+    asyncio.run(scenario())
+
+
 def test_gateway_shutdown_waits_for_transfer_before_draining_runtime(tmp_path, monkeypatch):
     """Public shutdown waits for a transfer, then closes the runtime, engine and session once."""
     from sqlalchemy import event
@@ -674,14 +760,14 @@ def test_gateway_shutdown_waits_for_transfer_before_draining_runtime(tmp_path, m
             await transfer_release.wait()
             operations.append("transfer drained")
 
-        original_close = host.close
+        original_drain = host.drain_runtime
 
-        async def close():
-            """Signal shutdown admission while preserving all original close behavior."""
+        async def drain_runtime():
+            """Signal shutdown admission while preserving all original runtime draining."""
             closing.set()
-            await original_close()
+            await original_drain()
 
-        monkeypatch.setattr(host, "close", close)
+        monkeypatch.setattr(host, "drain_runtime", drain_runtime)
         host.task = asyncio.create_task(transfer())
         cleanup = asyncio.create_task(client.server.close())
         try:

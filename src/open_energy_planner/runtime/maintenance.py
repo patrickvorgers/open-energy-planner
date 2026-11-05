@@ -378,17 +378,21 @@ class MaintenanceHost:
             )
             self.record_failure("The app could not start. Check the database connection and retry.")
 
-    async def close(self):
-        """Do not cancel a database thread mid-transfer during graceful process shutdown."""
+    async def drain_runtime(self):
+        """Finish admitted transfers and internal handlers without closing active gateway responses."""
         try:
             if self.task is not None:
                 await self.task
         finally:
-            try:
-                await self.stop_runtime()
-            finally:
-                if self.session is not None:
-                    await self.session.close()
+            await self.stop_runtime()
+
+    async def close(self):
+        """Close the proxy session after the public server has drained its gateway handlers."""
+        try:
+            await self.drain_runtime()
+        finally:
+            if self.session is not None:
+                await self.session.close()
 
 
 def create_managed_app(directory, token, *, factory, **options):
@@ -582,7 +586,7 @@ def create_managed_app(directory, token, *, factory, **options):
 
     async def shutdown(_app):
         """Drain transfers and the inner runtime before the gateway waits for proxied subscriptions."""
-        await host.close()
+        await host.drain_runtime()
 
     app.on_shutdown.append(shutdown)
     return app
