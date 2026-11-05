@@ -158,6 +158,41 @@ def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("failed", [False, True])
+def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
+    automatic_plan_overview, failed
+):
+    """Another selection never presents the previous plan's graphs or tables as its own, even on failure."""
+    state = automatic_plan_overview
+    page = state["page"]
+    state["hold_comparison"] = True
+    with page.expect_request("**/v1/plans/older-plan/comparison"):
+        page.locator("#plan-version").select_option("older-plan")
+    expect(page.locator("#overview-status")).to_have_text("Loading selected plan…")
+    expect(page.locator("#plan-description")).to_have_text("Loading selected plan…")
+    for rows in ("plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"):
+        expect(page.locator(f"#{rows} tr")).to_have_count(0)
+    assert page.evaluate("""() => ['plan-chart', 'reference-chart', 'self-consumption-chart',
+        'energy-chart', 'forecast-chart', 'price-chart'].every(id =>
+        Chart.getChart(document.getElementById(id)).data.datasets.length === 0)""")
+    expect(page.locator("#smart-benefit-value")).to_have_text("-")
+    expect(page.locator("#inspect-time")).to_be_disabled()
+    held = state["held_comparisons"].pop()
+    if failed:
+        held.fulfill(status=503, body="Temporary archive read failure")
+        expect(page.locator("#plan-description")).to_have_text("Selected plan could not be loaded.")
+        expect(page.locator("#plan-rows tr")).to_have_count(0)
+        assert page.evaluate(
+            "Chart.getChart(document.getElementById('plan-chart')).data.datasets.length === 0"
+        )
+    else:
+        held.fulfill(json=state["comparisons"]["older-plan"])
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
+        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        expect(page.locator("#plan-rows tr")).to_have_count(2)
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_current_plan_moves_at_quarter_boundary_without_reloading_data(automatic_plan_overview):
     """Exact quarter rollover clips elapsed advice while an unchanged plan keeps its chart and data."""
     state = automatic_plan_overview

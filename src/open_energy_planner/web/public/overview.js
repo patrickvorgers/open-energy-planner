@@ -342,6 +342,15 @@ async function showPlan(signal, background = false) {
     } else {
         renderedPlanId = null;
         planReadPending = false;
+        $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
+        $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
+        $("planning-window").textContent = "";
+        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
+        inspectSteps = [];
+        for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
+            if (charts.has(chartId)) chart(chartId, []);
+        }
+        $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
         renderSmartBenefit(null, "", id ? "Loading original plan comparison…" : "No plan selected.");
         for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs", "optimizer-total-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
         $("expected-benefit").textContent = "";
@@ -526,6 +535,7 @@ async function showPlan(signal, background = false) {
         if (request === selectionRequest) {
             renderedPlanId = null;
             $("overview-status").textContent = error.message;
+            $("plan-description").textContent = "Selected plan could not be loaded.";
             $("plan-evidence-status").textContent = $("evidence-issue").textContent = `Original evidence could not be loaded. ${error.message}`;
             $("inspect-values").textContent = "Original interval values could not be loaded.";
         }
