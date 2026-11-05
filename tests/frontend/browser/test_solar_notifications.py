@@ -46,9 +46,11 @@ def test_solar_forecast_notice_explains_automatic_recovery_and_clears(app_page, 
         page.get_by_role("button", name="Connect", exact=True).click()
     banner = page.get_by_role("region", name="Notifications", exact=True)
     expect(banner.get_by_role("heading", name="Solar forecast is unavailable")).to_be_visible()
-    expect(banner).to_contain_text("Weather data for the solar forecast is too old")
-    expect(banner).to_contain_text("automatically retries")
-    expect(banner).to_contain_text("clears when a valid, up-to-date solar forecast is available")
+    expect(banner.locator("article > p")).to_have_text(
+        "Weather data for the solar forecast is too old. Weather retrieval and solar forecast "
+        "updates are retried automatically. This notification clears when a valid, up-to-date "
+        "solar forecast is available. If it persists, review the solar forecast status."
+    )
     expect(banner.get_by_text("Technical details", exact=True)).to_have_count(0)
     expect(banner).not_to_contain_text("solar_weather_expired")
     expect(banner).not_to_contain_text("solar_forecast_unavailable")
