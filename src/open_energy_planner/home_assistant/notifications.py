@@ -37,11 +37,11 @@ def explain_measurement_problem(reason, configuration, report, now, names=None):
     if report is None or reason == "report_expired":
         return NoticeText(
             "Waiting for Home Assistant measurements",
-            "The OEP integration has not supplied a current measurement report. "
+            "The Open Energy Planner integration has not supplied a current measurement report. "
             f"Reports must be less than {MAX_OBSERVATION_AGE_SECONDS // 60} minutes old. "
             "Check that the Open Energy Planner integration is loaded and connected. "
-            "This concerns communication between Home Assistant and OEP, not the age "
-            "of an unchanged sensor value. OEP retries automatically.",
+            "This concerns communication between Home Assistant and this app, not the age "
+            "of an unchanged sensor value. Planning retries automatically.",
             "Check installation",
             "/setup",
         )
@@ -74,7 +74,7 @@ def explain_measurement_problem(reason, configuration, report, now, names=None):
     return NoticeText(
         "Required measurements are unavailable",
         "Check these sensors in Home Assistant and their selection in Installation settings. "
-        "OEP retries automatically when usable readings arrive.\n\n" + "\n\n".join(problems),
+        "Planning retries automatically when usable readings arrive.\n\n" + "\n\n".join(problems),
         "Check installation",
         "/setup",
     )

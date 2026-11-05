@@ -113,7 +113,7 @@ class MaintenanceHost:
             self.bootstrap_error = self.durability_error = True
             self.accepting = False
             logging.getLogger(__name__).error(
-                "Database recovery metadata could not be confirmed durable. Runtime admission is closed. Check OEP storage and restart before retrying recovery."
+                "Database recovery metadata could not be confirmed durable. Runtime admission is closed. Check the application storage and restart before retrying recovery."
             )
             raise
         self.journal = journal
@@ -144,7 +144,7 @@ class MaintenanceHost:
             self.journal = {
                 **self.journal,
                 "phase": MigrationPhase.FAILED,
-                "error": "Database recovery status could not be saved. Check free space and write permissions on the OEP data volume, then retry recovery.",
+                "error": "Database recovery status could not be saved. Check free space and write permissions on the application data volume, then retry recovery.",
             }
 
     def status(self):
@@ -156,9 +156,9 @@ class MaintenanceHost:
             if self.bootstrap_error
             else journal.get("phase", "idle"),
             "released": journal.get("released", False),
-            "error": "Database recovery state could not be durably saved. Check the OEP data volume, repair its storage error and restart OEP to read the retained recovery state."
+            "error": "Database recovery state could not be durably saved. Check the application data volume, repair its storage error and restart the app to read the retained recovery state."
             if self.durability_error
-            else "Private database recovery settings are unreadable. Restore the bootstrap backup before starting OEP."
+            else "Private database recovery settings are unreadable. Restore the bootstrap backup before starting the app."
             if self.bootstrap_error
             else journal.get("error"),
             "running": self.accepting,
@@ -258,13 +258,13 @@ class MaintenanceHost:
             try:
                 self.record(
                     phase=MigrationPhase.INTERRUPTED,
-                    error="OEP stopped before migration completed. Review recovery options.",
+                    error="The app stopped before migration completed. Review recovery options.",
                 )
             except BootstrapDurabilityError:
                 return
             except OSError:
                 self.record_failure(
-                    "Interrupted migration status could not be saved. Check free space and write permissions on the OEP data volume, then retry recovery."
+                    "Interrupted migration status could not be saved. Check free space and write permissions on the application data volume, then retry recovery."
                 )
             return
         try:
@@ -276,7 +276,7 @@ class MaintenanceHost:
             if self.journal is None:
                 raise
             self.record_failure(
-                "OEP could not start. Check database availability and retry startup."
+                "The app could not start. Check database availability and retry startup."
             )
 
     async def transfer(self):
@@ -327,7 +327,7 @@ class MaintenanceHost:
             self.record_failure(
                 f"Migration stopped during {failed_phase}. "
                 + (
-                    "The new database is selected. Check its connection and retry OEP startup."
+                    "The new database is selected. Check its connection and retry app startup."
                     if self.journal["released"]
                     else "The destination was not released. Check database connections and permissions, then retry or restore the previous database."
                 ),
@@ -376,7 +376,7 @@ class MaintenanceHost:
                 trace,
                 exc_info=False,
             )
-            self.record_failure("OEP could not start. Check the database connection and retry.")
+            self.record_failure("The app could not start. Check the database connection and retry.")
 
     async def close(self):
         """Do not cancel a database thread mid-transfer during graceful process shutdown."""
@@ -442,7 +442,7 @@ def create_managed_app(directory, token, *, factory, **options):
                     return outgoing
             except (ClientError, TimeoutError):
                 raise web.HTTPServiceUnavailable(
-                    text="OEP is restarting. Open Data storage for migration status."
+                    text="The app is restarting. Open Data storage for migration status."
                 ) from None
         if request.path == "/setup/session":
             return web.json_response(
@@ -454,7 +454,9 @@ def create_managed_app(directory, token, *, factory, **options):
             raise web.HTTPFound((prefix(request) or "") + "/data-storage" + embedded)
         if is_public(request):
             return await handler(request)
-        raise web.HTTPServiceUnavailable(text="OEP is in storage maintenance. Open Data storage.")
+        raise web.HTTPServiceUnavailable(
+            text="The app is in storage maintenance. Open Data storage."
+        )
 
     app = web.Application(middlewares=[gateway], client_max_size=MAX_REQUEST_BYTES)
     app[MAINTENANCE] = host
@@ -555,7 +557,7 @@ def create_managed_app(directory, token, *, factory, **options):
                 raise web.HTTPServiceUnavailable(
                     text=host.status()["error"]
                     if host.bootstrap_error
-                    else "Cannot save database maintenance state. Check free space and write permissions on the OEP data volume."
+                    else "Cannot save database maintenance state. Check free space and write permissions on the application data volume."
                 ) from None
             except (ValueError, TypeError, KeyError):
                 raise web.HTTPBadRequest(

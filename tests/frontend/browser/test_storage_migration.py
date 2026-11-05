@@ -133,8 +133,17 @@ def test_destination_edits_invalidate_checked_overwrite_consent(app_page):
     )
     page.get_by_role("button", name="Test connection", exact=True).click()
     expect(page.locator("#destination-result")).to_have_text(
-        "Connection verified: Existing OEP data will be replaced."
+        "Connection verified: Existing data belonging to this app will be replaced."
     )
+    expect(
+        page.get_by_text(
+            "After migration and successful startup checks, the app resumes automatically using the new database. "
+            "Planning may wait for fresh Home Assistant measurements and its other required inputs. "
+            "The original database is retained but is no longer updated.",
+            exact=True,
+        )
+    ).to_be_visible()
+    capture(page, "checked-destination")
     expect(page.get_by_role("button", name="Migrate database", exact=True)).to_be_disabled()
     page.locator("#overwrite-destination").check()
     expect(page.get_by_role("button", name="Migrate database", exact=True)).to_be_enabled()

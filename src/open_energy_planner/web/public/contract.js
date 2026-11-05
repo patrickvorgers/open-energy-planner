@@ -438,7 +438,7 @@ async function budgets(refreshed = false) {
             }
             const initialization = document.createElement("details"), initializationTitle = document.createElement("summary"), initializationText = document.createElement("p");
             initializationTitle.textContent = "How is the starting value set?";
-            initializationText.textContent = "OEP subtracts the annual boundary sum from the latest completed Home Assistant statistics sum for every export meter. When the boundary is missing, enter only the total exported between the annual period start and the displayed reference endpoint. OEP adds the measured sum difference after that reference. Enter zero only if that missing period had no export. Each annual period gets its own reference.";
+            initializationText.textContent = "For every export meter, the annual boundary sum is subtracted from the latest completed Home Assistant statistics sum. When the boundary is missing, enter only the total exported between the annual period start and the displayed reference endpoint. The measured sum difference after that reference is added automatically. Enter zero only if that missing period had no export. Each annual period gets its own reference.";
             initialization.append(initializationTitle, initializationText); panel.append(initialization, details);
             if (budget.issue) {
                 const issue = document.createElement("p"); issue.setAttribute("role", "status");

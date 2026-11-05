@@ -1,6 +1,6 @@
 /** Keep database maintenance visible independently of the runtime that is being restarted. */
 import {percentage} from "./display.js";
-const PHASES = {idle: "Ready to change database", preparing: "Preparing: Waiting for OEP tasks to stop", copying: "Copying OEP data", verifying: "Verifying copied data", checking: "Checking the new database and application", restarting: "Restarting OEP", completed: "Migration complete: OEP is using the new database", restored: "Previous database restored", interrupted: "Migration interrupted: Review recovery options", failed: "Migration needs attention"};
+const PHASES = {idle: "Ready to change database", preparing: "Preparing: Waiting for application tasks to stop", copying: "Copying application data", verifying: "Verifying copied data", checking: "Checking the new database and application", restarting: "Restarting the app", completed: "Migration complete: The app is using the new database", restored: "Previous database restored", interrupted: "Migration interrupted: Review recovery options", failed: "Migration needs attention"};
 const POLL_MILLISECONDS = 2000, STATUS_TIMEOUT_MILLISECONDS = 5000, ACTION_TIMEOUT_MILLISECONDS = 35000;
 
 /** Bind one explicit editor and an independently reconnecting, authenticated maintenance status. */
@@ -8,7 +8,7 @@ export function bindStorageMigration(getToken, onReady) {
     const find = id => document.getElementById(id);
     const base = document.querySelector('meta[name="oep-api-base"]').content;
     let checkId = null, checkGeneration = 0, latest = null, timer = null, requestPending = false, enabled = false, polling = false, recoveryError = "";
-    const recovery = "Open Energy Planner: Database migration recovery\n\nKeep the original database and the complete OEP data directory.\nBefore release: Use Restore previous database in Data storage.\nAfter release: Never select the old source directly: New data may exist. Use a new migration.\nIf the app cannot start: Stop OEP and add --recover-storage to the normal Python module startup command, keeping the normal --live/--demo and --data arguments. This only restores an unreleased migration.\nFor Home Assistant app recovery without a reachable maintenance screen: Enable recover_storage in the app configuration and start OEP. Disable it after the original database is restored. This only applies before release. A released migration requires repair of the selected database or a backup consistent with the released target. Never restore pre-migration bootstrap settings after release.\nThe private database-migration.json journal retains the original connection. database-selection.json overrides Supervisor/container connection settings. Do not delete these files or publish their credentials.\nA network timeout does not prove failure. Reconnect and check durable status before taking action.\n";
+    const recovery = "Open Energy Planner: Database migration recovery\n\nKeep the original database and the complete application data directory.\nBefore release: Use Restore previous database in Data storage.\nAfter release: Never select the old source directly: New data may exist. Use a new migration.\nIf the app cannot start: Stop the app and add --recover-storage to the normal Python module startup command, keeping the normal --live/--demo and --data arguments. This only restores an unreleased migration.\nFor Home Assistant app recovery without a reachable maintenance screen: Enable recover_storage in the app configuration and start the app. Disable it after the original database is restored. This only applies before release. A released migration requires repair of the selected database or a backup consistent with the released target. Never restore pre-migration bootstrap settings after release.\nThe private database-migration.json journal retains the original connection. database-selection.json overrides Supervisor/container connection settings. Do not delete these files or publish their credentials.\nA network timeout does not prove failure. Reconnect and check durable status before taking action.\n";
     const download = find("download-recovery");
     download.href = URL.createObjectURL(new Blob([recovery], {type: "text/plain"}));
     window.addEventListener("pagehide", () => {clearTimeout(timer); URL.revokeObjectURL(download.href);}, {once: true});
@@ -38,7 +38,7 @@ export function bindStorageMigration(getToken, onReady) {
         latest = status;
         find("connect").hidden = true;
         find("database-connection").dataset.running = String(status.running);
-        if (!status.running) find("status").textContent = "OEP is paused for database maintenance. Storage measurements return after restart.";
+        if (!status.running) find("status").textContent = "The app is paused for database maintenance. Storage measurements return after restart.";
         find("database-connection").hidden = false;
         find("connection-summary").textContent = status.connection || status.backend;
         find("change-database").disabled = !status.running || requestPending;
@@ -55,7 +55,7 @@ export function bindStorageMigration(getToken, onReady) {
         if (counted) meter.value = status.percent; else meter.removeAttribute("value");
         find("migration-count").textContent = counted ? `${status.done.toLocaleString()} of ${status.total.toLocaleString()} rows: ${percentage(status.percent)}` : "";
         find("retry-migration").hidden = !status.can_retry;
-        find("retry-migration").textContent = status.released ? "Retry OEP startup" : "Retry migration";
+        find("retry-migration").textContent = status.released ? "Retry app startup" : "Retry migration";
         find("restore-database").hidden = !status.can_restore;
         find("retry-connection").hidden = true;
         if (!status.running) {find("migration-editor").hidden = true; find("destination-url").value = "";}
@@ -103,7 +103,7 @@ export function bindStorageMigration(getToken, onReady) {
         invalidate();
         const kind = find("destination-kind").value, local = kind === "sqlite";
         find("destination-url-label").hidden = local; find("destination-url").required = !local; find("destination-url").value = "";
-        find("destination-format").textContent = {postgresql: "Format: postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE", mariadb: "Format: mariadb+pymysql://USER:PASSWORD@HOST:3306/DATABASE", mysql: "Format: mysql+pymysql://USER:PASSWORD@HOST:3306/DATABASE", sqlite: "Uses the local database in OEP's existing data directory."}[kind];
+        find("destination-format").textContent = {postgresql: "Format: postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE", mariadb: "Format: mariadb+pymysql://USER:PASSWORD@HOST:3306/DATABASE", mysql: "Format: mysql+pymysql://USER:PASSWORD@HOST:3306/DATABASE", sqlite: "Uses the local database in the existing application data directory."}[kind];
     };
     find("destination-url").oninput = invalidate;
     find("destination-url").required = true;
@@ -120,7 +120,7 @@ export function bindStorageMigration(getToken, onReady) {
             const result = await request("check", {url});
             if (generation !== checkGeneration) return;
             checkId = result.check_id;
-            find("destination-result").textContent = result.contains_oep_data ? "Connection verified: Existing OEP data will be replaced." : "Connection verified: No existing OEP tables found.";
+            find("destination-result").textContent = result.contains_oep_data ? "Connection verified: Existing data belonging to this app will be replaced." : "Connection verified: No existing tables belonging to this app found.";
             find("migration-route").textContent = `${latest.connection || latest.backend} → ${result.destination || result.backend}`;
             find("migration-confirmation").hidden = false;
         } catch (error) {if (generation === checkGeneration) find("destination-result").textContent = error.message;}
@@ -132,7 +132,7 @@ export function bindStorageMigration(getToken, onReady) {
         action("start", {check_id: checkId, overwrite: true});
     };
     find("retry-migration").onclick = () => {
-        if (!latest.released && !window.confirm("Retry migration? Existing OEP tables in the destination will be replaced again. The original database is retained.")) return;
+        if (!latest.released && !window.confirm("Retry migration? Existing tables belonging to this app in the destination will be replaced again. The original database is retained.")) return;
         action("retry", {overwrite: !latest.released});
     };
     find("restore-database").onclick = () => action("restore", {});

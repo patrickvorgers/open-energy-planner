@@ -241,7 +241,7 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     before = page.request.get(url + "/v1/ev", headers=headers).json()
     first, second = before["vehicles"]
     assert [row["maximum_w"] for row in before["vehicles"]] == [11001, 11001]
-    page.get_by_role("combobox", name="Appliance in OEP", exact=True).select_option(first["id"])
+    page.get_by_role("combobox", name="Appliance", exact=True).select_option(first["id"])
     expect(page.locator("#ev-summary")).to_contain_text("11.001 kW")
     expect(page.locator("#ev-editor")).to_be_hidden()
     expect(page.locator("#ev-summary")).to_be_visible()
@@ -264,7 +264,7 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     for save_removal in (False, True):
         page.once("dialog", lambda dialog: dialog.accept())
         page.locator("#ev-more summary").click()
-        page.get_by_role("button", name="Remove from OEP…", exact=True).click()
+        page.get_by_role("button", name="Remove appliance…", exact=True).click()
         expect(page.locator("#dirty")).to_contain_text("Unsaved changes")
         assert len(page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"]) == 2
         page.get_by_role(
@@ -324,14 +324,14 @@ def test_ev_removal_preserves_charge_point_vehicle_dependencies(app_page):
     page.goto(url + "/appliance-settings/ev")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    selector = page.get_by_role("combobox", name="Appliance in OEP", exact=True)
+    selector = page.get_by_role("combobox", name="Appliance", exact=True)
     expect(selector).to_have_value(vehicles[0]["id"])
     page.on("dialog", lambda dialog: dialog.accept())
 
     def remove_selected():
         """Use the actual dependency-aware More action rather than bypassing UI validation."""
         page.locator("#ev-more summary").click()
-        page.get_by_role("button", name="Remove from OEP…", exact=True).click()
+        page.get_by_role("button", name="Remove appliance…", exact=True).click()
 
     remove_selected()
     expect(page.locator("#dirty")).to_contain_text("only allowed vehicle")
@@ -946,7 +946,7 @@ def test_appliance_settings_lock_writes_reload_and_open_cycle_removal(app_page):
     page.locator("#appliance-more summary").click()
     page.get_by_role("button", name="Reload appliance settings", exact=True).click()
     page.locator("#appliance-more summary").click()
-    page.get_by_role("button", name="Remove from OEP…", exact=True).click()
+    page.get_by_role("button", name="Remove appliance…", exact=True).click()
     expect(page.locator("#save-state")).to_contain_text("Resolve this appliance's open cycle")
     expect(permission).to_be_disabled()
 
@@ -1003,7 +1003,7 @@ def test_removing_appliance_revokes_shifting_before_source_removal(app_page):
     expect(permission).to_be_checked()
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#appliance-more summary").click()
-    page.get_by_role("button", name="Remove from OEP…", exact=True).click()
+    page.get_by_role("button", name="Remove appliance…", exact=True).click()
     expect(page.locator("#appliance-empty")).to_be_visible()
     expect(page.locator("#save-state")).to_contain_text("All changes saved")
     assert writes == ["permission", "selection"]
@@ -1132,7 +1132,7 @@ def test_appliance_prototype_cycle_facts_keep_zero_power_phases(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.get_by_role("heading", name="Dishwasher", exact=True)).to_be_visible()
-    expect(page.locator("#appliance-membership")).to_have_text("Added to OEP")
+    expect(page.locator("#appliance-membership")).to_have_text("Added")
     expect(page.locator("#appliance-evidence")).to_contain_text("Profile: Learned: Simulated data")
     expect(page.locator("#appliance-evidence")).to_contain_text("0.25 kWh")
     expect(page.locator("#appliance-evidence")).to_contain_text("30 minutes")
@@ -1359,7 +1359,7 @@ def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.get_by_role("heading", name="Utility boiler", exact=True)).to_be_visible()
-    expect(page.get_by_role("combobox", name="Appliance in OEP", exact=True)).to_be_visible()
+    expect(page.get_by_role("combobox", name="Appliance", exact=True)).to_be_visible()
     expect(page.locator("#thermal-summary")).to_contain_text("sensor.boiler_energy")
     expect(page.locator("#thermal-editor")).to_be_hidden()
     directory = Path("results/ci")

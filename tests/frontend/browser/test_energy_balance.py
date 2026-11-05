@@ -14,8 +14,21 @@ from tests.frontend.browser.helpers import (
 )
 
 
-@pytest.mark.parametrize("app_site", ["savings", "savings_corrected"], indirect=True)
-def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(app_page):
+@pytest.mark.parametrize(
+    "app_site,correction",
+    [
+        ("savings", ""),
+        (
+            "savings_corrected",
+            (
+                "Contract updated. Self-consumption costs were repriced without re-optimization. "
+                "See the separate cost table. "
+            ),
+        ),
+    ],
+    indirect=["app_site"],
+)
+def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(app_page, correction):
     """Desktop/mobile lead with the optimizer, retain both references and keep .1/.3/0 original price inputs."""
     page, url = app_page
     page.goto(url + "/overview")
@@ -25,7 +38,12 @@ def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(ap
     expect(page.locator("#reference-scenario")).to_have_count(0)
     expect(page.locator("#reference-heading")).to_contain_text("Without battery")
     expect(page.locator("#reference-issue")).to_have_text("")
-    expect(page.locator("#expected-benefit")).to_contain_text("without battery")
+    expect(page.locator("#expected-benefit")).to_have_text(
+        "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. "
+        "Expected benefits include the difference in remaining battery value. "
+        "Benefits versus no battery include storage and smart planning. Excludes investment costs. "
+        f"{correction}Not evaluated lifetime savings. See Savings for evaluated results."
+    )
     expect(page.locator("#reference-costs")).to_contain_text("Expected economic cost")
     expect(page.locator("#self-consumption-costs")).to_contain_text(
         "Expected benefit versus without battery"
