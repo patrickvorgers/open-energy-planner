@@ -119,6 +119,14 @@ class ConfiguredPrices:
         async with self.lock:
             changed = await self.configure()
             if self.service is None or self.configuration_issue:
+                if self.events:
+                    from ..activities.events import Health
+
+                    self.events.availability(
+                        "prices",
+                        Health.UNAVAILABLE if self.configuration_issue else Health.UNKNOWN,
+                        "Configure current price sources in Contract settings.",
+                    )
                 return changed
             self.service.events = self.events
             return await self.service.refresh(now) or changed

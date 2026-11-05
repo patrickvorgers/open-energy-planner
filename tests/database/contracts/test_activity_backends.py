@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import create_engine
 
-from open_energy_planner.activities.storage import ActivityStore
+from open_energy_planner.storage.adapters.activities import ActivityStore
 from open_energy_planner.storage.adapters.lifecycle.migration import migrate_archive
 from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import (

@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
+from ..storage.adapters.activities import ActivityStore
 from .events import Events, Outcome
-from .storage import ActivityStore
 
 EVENTS = web.AppKey("events", Events)
 

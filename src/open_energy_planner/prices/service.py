@@ -194,6 +194,11 @@ class PriceService:
                 isinstance(error, PricesUnavailable)
                 and str(error) == "home_assistant_prices_pending"
             ):
+                await self.events.update(
+                    identity,
+                    f"Waiting for the requested Home Assistant price delivery. Market: {self.market_area}. "
+                    + self.activity_coverage(now),
+                )
                 self.events.availability(
                     owner,
                     Health.UNKNOWN,
@@ -512,6 +517,18 @@ class PriceService:
                 )
             self.last_coverage = current_coverage
             self.publish_schedule(now)
+            if self.events:
+                from ..activities.events import Health
+
+                self.events.availability(
+                    "prices",
+                    Health.AVAILABLE
+                    if current_timeline.status == PriceCoverage.READY
+                    else Health.DEGRADED
+                    if current_timeline.entries
+                    else Health.UNAVAILABLE,
+                    self.activity_coverage(now),
+                )
             return before != self.version or previous_coverage != current_coverage
 
     async def assess(self, now, paired=()):

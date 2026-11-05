@@ -6,7 +6,7 @@ from datetime import timedelta
 from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from ..storage.adapters.lifecycle.schema import ACTIVITIES
+from .lifecycle.schema import ACTIVITIES
 
 
 class ActivityStore:

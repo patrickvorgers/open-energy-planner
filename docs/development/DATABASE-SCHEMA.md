@@ -74,7 +74,7 @@ and removes stale evidence. No data is deleted or automatically compacted.
 
 ### `oep_activities`
 
-Owned by `activities/storage.py`. Retains seven days of execution evidence with
+Owned by `storage/adapters/activities.py`. Retains seven days of execution evidence with
 no foreign keys. Shared backend transfer copies and verifies this table.
 
 | Field | Type / key | Meaning and use |

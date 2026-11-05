@@ -441,6 +441,26 @@ class PlanningCoordinator:
             )
             self.block_reason = self.blocked_since = None
         self.status, self.reason = status, reason
+        if self.events:
+            from .activities.events import Health
+
+            health = (
+                Health.AVAILABLE
+                if status == "ready"
+                else Health.UNAVAILABLE
+                if status == "not_ready" and reason
+                else Health.DEGRADED
+                if status == "failed"
+                else Health.UNKNOWN
+            )
+            detail = (
+                self.explain(reason).message
+                if reason and status in {"not_ready", "failed"}
+                else "A validated plan is available."
+                if status == "ready"
+                else "Waiting for a validated plan. Existing commands retain their original validity."
+            )
+            self.events.availability("planning", health, detail)
 
     def submit(self, snapshot: InputSnapshot):
         """Replace the latest requested snapshot and start a worker task only when needed."""
@@ -576,7 +596,7 @@ class PlanningCoordinator:
                     self._set_status("failed", "planning_error")
             finally:
                 if activity:
-                    from .activities.events import Health, Outcome
+                    from .activities.events import Outcome
 
                     published = calculation_reason == "published"
                     superseded = (
@@ -599,13 +619,6 @@ class PlanningCoordinator:
                         if published
                         else "No plan was activated. Existing commands retain their original validity.",
                         usable=published,
-                    )
-                    self.events.availability(
-                        "planning",
-                        Health.AVAILABLE if published else Health.DEGRADED,
-                        "A validated plan is available."
-                        if published
-                        else "No new plan was activated.",
                     )
                 if self.record_calculation is not None:
                     try:

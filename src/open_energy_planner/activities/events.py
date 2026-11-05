@@ -238,6 +238,15 @@ class Events:
                     identity, Outcome.INTERRUPTED, "No definitive outcome was recorded."
                 )
 
+    async def update(self, identity, detail):
+        """Publish changed progress under the same execution without creating another attempt."""
+        row = self.running[identity]
+        if row["detail"] != detail:
+            row = {**row, "detail": detail}
+            self.running[identity] = row
+            self.publish("activity", row)
+            await self._save(row)
+
     async def finish(self, identity, outcome, detail, *, usable=False):
         """Only usable success ends a failure episode. Repeated failures remain real attempts."""
         outcome = Outcome(outcome)

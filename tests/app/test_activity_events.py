@@ -8,8 +8,8 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from open_energy_planner.activities.api import EVENTS
 from open_energy_planner.activities.events import Events, Health, Outcome
-from open_energy_planner.activities.storage import ActivityStore
 from open_energy_planner.app import create_app
+from open_energy_planner.storage.adapters.activities import ActivityStore
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 
 NOW = datetime(2026, 10, 25, 12, tzinfo=UTC)
@@ -232,6 +232,10 @@ def test_automatic_ha_price_delivery_has_one_activity_and_actual_transport(tmp_p
             identity = next(iter(events.running))
             await service.refresh(now + timedelta(minutes=1))
             assert list(events.running) == [identity]
+            assert (
+                "Waiting for the requested Home Assistant price delivery"
+                in events.running[identity]["detail"]
+            )
             body = report(source, now)
             body["responses"] = [response(source, now.date(), now)]
             source.receive(body, now)

@@ -31,7 +31,7 @@ function update(message) {
 
 /** Long polling supports bearer headers and resets explicitly when replay is no longer available. */
 export function connectEvents(base, token = "") {
-    if (current?.base === base && current?.token === token) return;
+    if (current?.base === base && current?.token === token && !controller?.signal.aborted) return;
     controller?.abort();
     current = {base, token};
     snapshot = undefined;
@@ -73,3 +73,6 @@ export function connectEvents(base, token = "") {
 }
 
 window.addEventListener("pagehide", () => controller?.abort());
+window.addEventListener("pageshow", event => {
+    if (event.persisted && current) connectEvents(current.base, current.token);
+});

@@ -230,19 +230,27 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                     current = datetime.now(UTC)
                     usable = bool(
                         runtime.configuration
+                        and runtime.configuration.sources
                         and not runtime.store.issue
                         and forecast_usable(
                             runtime.configuration, runtime.forecast, runtime.location, current
                         )
                     )
+                    no_sources = bool(
+                        runtime.configuration
+                        and not runtime.configuration.sources
+                        and not runtime.store.issue
+                    )
                     events.availability(
                         "solar",
                         Health.AVAILABLE
-                        if usable
+                        if usable or no_sources
                         else Health.UNAVAILABLE
                         if runtime.configuration
                         else Health.UNKNOWN,
-                        "A current solar forecast is available."
+                        "No solar forecast is required for this installation."
+                        if no_sources
+                        else "A current solar forecast is available."
                         if usable
                         else "Waiting for a usable solar forecast.",
                     )
