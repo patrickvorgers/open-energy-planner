@@ -553,8 +553,8 @@ def test_cached_page_restore_restarts_one_poll_and_updates_the_time_window(autom
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-def test_future_strategy_choice_shares_measured_soc_and_shows_extra_saving(app_page):
-    """Both forecasts spend the same initial 2 kWh. Equal costs show zero extra saving on desktop/mobile."""
+def test_future_strategy_choice_shares_measured_soc_and_shows_baseline_benefit(app_page):
+    """Both spend 2 kWh at 0.20 EUR stored value instead of 0.30 EUR grid cost, saving 0.20 EUR."""
     page, url = app_page
     headers = {"Authorization": "Bearer " + TOKEN}
     plan_id = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
@@ -574,18 +574,15 @@ def test_future_strategy_choice_shares_measured_soc_and_shows_extra_saving(app_p
         "Self-consumption and OEP start from the same measured SoC and opening bonus budgets."
     )
     expect(page.locator("#expected-benefit")).to_contain_text(
-        "The extra expected saving includes the difference in remaining battery value"
+        "Expected benefits include the difference in remaining battery value"
     )
     expect(page.locator("#expected-benefit")).not_to_contain_text("provisional")
     expect(page.locator("#self-consumption-issue")).to_be_empty()
-    expect(page.locator("#smart-benefit-value")).to_have_text("0.00")
-    expect(page.locator("#smart-benefit-label")).to_have_text(
-        "No extra expected savings from smart planning"
-    )
-    expect(page.locator("#optimizer-total-value")).to_have_text("0.00")
-    expect(page.locator(".optimizer-scenario .planning-benefit")).to_have_attribute(
-        "data-state", "zero"
-    )
+    for cost_id in ("ems-costs", "self-consumption-costs"):
+        expect(page.locator(f"#{cost_id} > dl dd")).to_have_text(["0.40 EUR", "0.20 EUR"])
+        expect(page.locator(f"#{cost_id} [data-benefit-state]")).to_have_attribute(
+            "data-benefit-state", "positive"
+        )
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.locator("#expected-benefit").scroll_into_view_if_needed()
     Path("results/ci").mkdir(parents=True, exist_ok=True)
@@ -882,7 +879,7 @@ def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
     page.get_by_text("Understand this plan", exact=True).click()
     page.get_by_text("Selected interval details", exact=True).click()
     expect(page.locator("#evidence-issue")).to_contain_text("Loading")
-    expect(page.locator("#smart-benefit-value")).to_have_text("-")
+    expect(page.locator("#ems-costs > dl dd")).to_have_text(["- ", "- "])
     expect(page.locator("#inspect-time")).to_be_disabled()
     page.locator("#inspect-time").dispatch_event("input")
     expect(page.locator("#evidence-issue")).to_contain_text("Loading")
@@ -894,7 +891,7 @@ def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
     held[0].fulfill(status=503, body="Temporary archive read failure")
     expect(page.locator("#evidence-issue")).to_contain_text("could not be loaded")
     expect(page.locator("#plan-evidence-status")).to_contain_text("could not be loaded")
-    expect(page.locator("#smart-benefit-value")).to_have_text("-")
+    expect(page.locator("#ems-costs > dl dd")).to_have_text(["- ", "- "])
     expect(page.locator("#inspect-time")).to_be_disabled()
     page.unroute("**/v1/plans/*/comparison")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
@@ -949,7 +946,7 @@ def test_plan_detail_failure_survives_initial_load_and_recovers(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
-    expect(page.locator("#smart-benefit-value")).to_have_text("-")
+    expect(page.locator("#ems-costs > dl dd")).to_have_text(["- ", "- "])
     page.unroute("**/v1/plans/*/comparison")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")

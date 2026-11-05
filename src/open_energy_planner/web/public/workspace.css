@@ -318,35 +318,22 @@
 @media(max-width:640px) { .workspace { --oep-panel-gap:16px; } }
 
 /* Financial hierarchy belongs to the original selected plan, independently of chart zoom. */
-.workspace .scenario-finances { display:flex; flex-wrap:wrap; align-items:start; gap:20px 48px; margin:20px 0 12px; }
-.workspace .planning-benefit { flex:1 1 280px; }
-.workspace .scenario-finances > .scenario-costs { flex:2 1 340px; }
-.workspace .scenario-finances .scenario-costs > dl { margin-top:4px; }
 .workspace .scenario-card .scenario-period { margin:12px 0; font-size:13px; color:var(--oep-muted); }
 .workspace .optimizer-scenario > figcaption > h3 { font-size:22px; }
-.workspace .planning-benefit p { margin:4px 0; font-size:14px; line-height:1.5; }
-.workspace .planning-benefit .planning-benefit-amount { font-family:'Space Grotesk',sans-serif; font-variant-numeric:tabular-nums; margin-top:8px; }
-.workspace [data-smart-benefit="value"] { font-size:36px; line-height:1.15; font-weight:600; color:var(--oep-ink); }
-.workspace [data-smart-benefit="currency"] { font-size:16px; color:var(--oep-muted); }
-.workspace .planning-benefit[data-state="positive"] [data-smart-benefit="value"] { color:#176449; }
-.workspace .planning-benefit[data-state="negative"] [data-smart-benefit="value"] { color:#a3312e; }
 .workspace #expected-benefit { padding:0; margin:8px 0 0; background:none; font-size:12px; color:var(--oep-muted); }
 .workspace .scenario-costs > dl { display:flex; flex-wrap:wrap; gap:16px 40px; margin:18px 0 12px; }
 .workspace .scenario-costs dt { font-size:14px; line-height:1.5; color:var(--oep-muted); }
 .workspace .scenario-costs dd { margin:4px 0 0; font:600 24px/1.3 'Space Grotesk',sans-serif; color:var(--oep-navy); font-variant-numeric:tabular-nums; }
+.workspace .scenario-costs [data-benefit-state="positive"] dd { color:#176449; }
+.workspace .scenario-costs [data-benefit-state="negative"] dd { color:#a3312e; }
 .workspace .scenario-costs details { border:0; padding:0; margin:12px 0 18px; border-radius:0; }
 .workspace .scenario-costs summary { min-height:32px; font-size:14px; }
 .workspace .scenario-costs details dl { display:flex; flex-wrap:wrap; gap:12px 32px; margin:10px 0; }
 .workspace .scenario-costs details dd { font-size:16px; font-weight:400; }
 .workspace .scenario-costs > p { font-size:13px; color:var(--oep-muted); }
 @media(max-width:640px) {
-    .workspace .scenario-finances { gap:18px; }
     .workspace .scenario-costs > dl { gap:14px 24px; }
 }
-
-.workspace .optimizer-total { padding:24px; }
-.workspace .optimizer-total > h3 { margin:0; font-size:20px; }
-.workspace .optimizer-total > p { font-size:13px; color:var(--oep-muted); }
 
 .workspace .scenario-chart-help { border:0; padding:0; margin:12px 0; }
 .workspace .scenario-chart-help summary { min-height:32px; font-size:14px; }
