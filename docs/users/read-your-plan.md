@@ -8,6 +8,8 @@ Start with the original plan's timestamp and input context. A chart describes th
 
 An original plan retains the prices, input versions, limits and expected costs used when it was calculated. Later tariff changes do not rewrite that original calculation. A failed new calculation does not overwrite the previous accepted plan or extend its commands indefinitely.
 
+During an automatic plan update, the previous complete comparison stays visible until the replacement has loaded. The status identifies when you are still viewing the previously loaded plan, including when an update cannot be read. Its original timestamp and period remain unchanged. Selecting a different historical plan clears its evidence while that selection loads.
+
 ## Read the balance
 
 The balance uses quarter-hour bars. Above zero means supply to the modeled balance, including grid import and battery discharge. Below zero means consumption, including household demand, grid export and battery charging. A separate battery-state series shows state of charge.
