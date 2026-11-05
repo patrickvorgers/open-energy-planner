@@ -195,11 +195,33 @@ function appendTemporaryIndicator(container, notice) {
     tooltip.setAttribute("aria-hidden", "true");
     tooltip.hidden = true;
     tooltip.textContent = explanation;
-    for (const event of ["pointerenter", "focus"]) badge.addEventListener(event, () => { tooltip.hidden = false; });
-    for (const event of ["pointerleave", "blur"]) badge.addEventListener(event, () => { tooltip.hidden = true; });
+    let hovered = false, focused = false, dismissed = false;
+    const syncTooltip = () => { tooltip.hidden = dismissed || !(hovered || focused); };
+    badge.addEventListener("pointerenter", event => {
+        if (event.pointerType === "touch") return;
+        hovered = true;
+        dismissed = false;
+        syncTooltip();
+    });
+    badge.addEventListener("pointerleave", event => {
+        if (event.pointerType === "touch") return;
+        hovered = false;
+        syncTooltip();
+    });
+    badge.addEventListener("focus", () => { focused = true; dismissed = false; syncTooltip(); });
+    badge.addEventListener("blur", () => { focused = false; syncTooltip(); });
+    badge.addEventListener("pointerdown", event => {
+        if (event.pointerType !== "touch") return;
+        event.preventDefault();
+        const reveal = tooltip.hidden;
+        badge.focus({preventScroll: true});
+        dismissed = !reveal;
+        syncTooltip();
+    });
     badge.addEventListener("keydown", event => {
         if (event.key !== "Escape" || tooltip.hidden) return;
-        tooltip.hidden = true;
+        dismissed = true;
+        syncTooltip();
         event.preventDefault();
         event.stopPropagation();
     });
@@ -332,7 +354,8 @@ export async function refreshNotifications(session, focus = false) {
         }
     } catch {
         if (requestGeneration !== generation) return;
-        render(lastDocument || {notifications: []}, lastDocument?.notifications.length ? "Notification status could not be refreshed. These are the last known notifications." : "Notification status is unavailable. Check the app connection before relying on an earlier plan.");
+        const retained = lastDocument ? {...lastDocument, notifications: lastDocument.notifications.map(notice => ({...notice, stale: true}))} : {notifications: []};
+        render(retained, lastDocument?.notifications.length ? "Notification status could not be refreshed. These are the last known notifications." : "Notification status is unavailable. Check the app connection before relying on an earlier plan.");
     } finally {
         if (focusedReadGeneration === requestGeneration) focusedReadGeneration = 0;
     }

@@ -134,7 +134,7 @@ def test_new_prefilled_solar_source_stays_unsaved_until_all_writes_succeed(app_p
     indirect=True,
 )
 def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
-    """Desktop, tablet and ingress retain converter drafts while HA owns linked geometry through outages and relinks."""
+    """Retain HA panel drafts and expose temporary badges with touch, hover, focus and Escape."""
     page, url = app_page
     page.clock.install()
     body = discover(page, url, devices=True)
@@ -235,8 +235,18 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
     expect(badge).to_be_visible()
     if page.viewport_size["width"] < 500:
         badge.tap()
+        badge.dispatch_event("pointerleave", {"pointerType": "touch"})
+        expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
+        badge.tap()
+        expect(badge.locator(".notification-expiry-tooltip")).to_be_hidden()
+        badge.tap()
     else:
         badge.hover()
+        badge.focus()
+        badge.dispatch_event("pointerleave", {"pointerType": "mouse"})
+        expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
+        badge.dispatch_event("pointerenter", {"pointerType": "mouse"})
+        popup.get_by_role("button", name="Close notifications", exact=True).focus()
     expect(badge.locator(".notification-expiry-tooltip")).to_be_visible()
     mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
     popup.screenshot(

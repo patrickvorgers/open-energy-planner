@@ -317,10 +317,11 @@ def test_center_is_available_on_every_page_and_details_only_on_the_recovery_page
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
 def test_status_outage_preserves_last_known_blocker_and_recovery_link_prefix(app_page):
-    """Lost reads never imply recovery and a later successful empty response clears stale evidence."""
+    """Lost reads retain notices without a lifetime promise. Fresh reads restore badges or confirm recovery."""
     page, url = app_page
     page.clock.install()
     result = blocked()
+    result["notifications"][0]["auto_clear_minutes"] = 5
     mode = ["ok"]
 
     def respond(route):
@@ -337,6 +338,7 @@ def test_status_outage_preserves_last_known_blocker_and_recovery_link_prefix(app
     banner = page.get_by_role("region", name="Notifications")
     popup = page.get_by_role("dialog", name="Notifications", exact=True)
     expect(banner).to_contain_text("Export bonus needs attention")
+    expect(banner.locator(".notification-expiry")).to_have_count(1)
     page.wait_for_function(
         "document.getElementById('integration-version-status').hasAttribute('title')"
     )
@@ -344,7 +346,14 @@ def test_status_outage_preserves_last_known_blocker_and_recovery_link_prefix(app
     page.clock.fast_forward(16000)
     expect(banner).to_contain_text("last known notifications")
     expect(banner).to_contain_text("Export bonus needs attention")
+    expect(banner.locator(".notification-expiry")).to_have_count(0)
+    page.locator(".notification-toggle").click()
+    expect(popup.locator(".notification-expiry")).to_have_count(0)
+    popup.get_by_role("button", name="Close notifications", exact=True).click()
     mode[0] = "ok"
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
+    expect(banner.locator(".notification-expiry")).to_have_count(1)
     result["notifications"] = []
     page.clock.fast_forward(16000)
     expect(banner).to_be_hidden()
