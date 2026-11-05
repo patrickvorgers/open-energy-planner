@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
@@ -98,6 +98,10 @@ def register(app, plans, demand, solar, catalogue, lock):
     """Reuse the active engine and paired integration, without opening another HA connection."""
     archive = HistoryArchive(SqlDocuments(plans.engine, "demand"))
     daily = DailyForecastArchive(archive.documents)
+    from ..activities.api import EVENTS
+
+    events = app.get(EVENTS)
+    daily.events = events
 
     def timezone():
         """Use only the discovered Home Assistant timezone, never the server or browser timezone."""
@@ -122,6 +126,19 @@ def register(app, plans, demand, solar, catalogue, lock):
                                 demand, solar, catalogue.value, plans.state.get("plan")
                             )
                     if zone:
+                        if events:
+                            from zoneinfo import ZoneInfo
+
+                            local_day = now.astimezone(ZoneInfo(zone)).date()
+                            next_midnight = datetime.combine(
+                                local_day + timedelta(days=1), datetime.min.time(), ZoneInfo(zone)
+                            )
+                            events.scheduled(
+                                "forecast-quality",
+                                "quality",
+                                "Archive daily forecast",
+                                next_midnight,
+                            )
                         cancellation = await complete_write(daily.observe, now, zone, context)
                         if cancellation:
                             raise cancellation

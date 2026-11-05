@@ -1,5 +1,9 @@
 # Module-owned notifications
 
+Live consumers receive notification-change signals through the authenticated
+[activity subscription](ACTIVITY-EVENTS.md). Sources retain the semantics below.
+Activity failures and recoveries never manufacture notifications.
+
 ## Ownership
 
 The shared contract, collector and authenticated status adapter live in

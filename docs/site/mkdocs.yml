@@ -33,6 +33,7 @@ nav:
       - Try your first plan: docs/users/first-plan.md
       - Connect Home Assistant: docs/users/home-assistant.md
       - Read your plan: docs/users/read-your-plan.md
+      - Activity: docs/development/ACTIVITY-EVENTS.md
       - Troubleshooting: docs/users/troubleshooting.md
   - Explore the details:
       - Installation: docs/development/INSTALLATION-PLANNING.md

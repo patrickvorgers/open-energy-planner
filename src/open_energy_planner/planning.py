@@ -402,6 +402,7 @@ class PlanningCoordinator:
         self.clock = clock or (lambda: datetime.now(UTC))
         self.explain = explain or explain_planning_problem
         self.record_calculation = record_calculation
+        self.events = None
         self.latest = None
         self.active = None
         self.published = None
@@ -510,6 +511,7 @@ class PlanningCoordinator:
             calculation_started = self.clock()
             outcome = None
             calculation_reason = "planning_error"
+            activity = None
             _LOGGER.debug(
                 "Planning calculation started. Snapshot: %s. Strategy: %s. Intervals: %d.",
                 snapshot.snapshot_id,
@@ -517,6 +519,10 @@ class PlanningCoordinator:
                 len(snapshot.problem.intervals),
             )
             try:
+                if self.events:
+                    activity = await self.events.start(
+                        "planning", "planning", "Calculate energy plan"
+                    )
                 outcome = await self.service.calculate(snapshot)
                 calculation_reason = outcome.reason
                 if self.closed:
@@ -560,12 +566,47 @@ class PlanningCoordinator:
                 )
                 if snapshot is self.latest:
                     self.invalidate(str(error) or "publication_inputs_expired")
+            except asyncio.CancelledError:
+                calculation_reason = "interrupted"
+                raise
             except Exception:
                 calculation_reason = "planning_error"
                 _LOGGER.exception("Planning round failed. No partial plan published")
                 if not self.closed and snapshot is self.latest:
                     self._set_status("failed", "planning_error")
             finally:
+                if activity:
+                    from .activities.events import Health, Outcome
+
+                    published = calculation_reason == "published"
+                    superseded = (
+                        outcome is not None and outcome.document is not None and not published
+                    )
+                    if published:
+                        state = Outcome.COMPLETED
+                    elif calculation_reason == "interrupted":
+                        state = Outcome.INTERRUPTED
+                    elif self.closed:
+                        state = Outcome.CANCELLED
+                    elif superseded:
+                        state = Outcome.SKIPPED
+                    else:
+                        state = Outcome.FAILED
+                    await self.events.finish(
+                        activity,
+                        state,
+                        "A validated plan was published."
+                        if published
+                        else "No plan was activated. Existing commands retain their original validity.",
+                        usable=published,
+                    )
+                    self.events.availability(
+                        "planning",
+                        Health.AVAILABLE if published else Health.DEGRADED,
+                        "A validated plan is available."
+                        if published
+                        else "No new plan was activated.",
+                    )
                 if self.record_calculation is not None:
                     try:
                         await self.record_calculation(

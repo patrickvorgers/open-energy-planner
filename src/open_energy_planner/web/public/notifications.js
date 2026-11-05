@@ -1,5 +1,6 @@
 /** Share active notices with navigation and show their full explanation on the recovery page. */
 import {when, useHomeAssistantTimezone} from "./display.js";
+import {connectEvents, observeEvents} from "./events.js";
 
 const NOTIFICATION_READ_TIMEOUT_MILLISECONDS = 5000;
 let banner, metadata = {}, controller, generation = 0, focusedReadGeneration = 0, lastDocument, lastSignature, token = "";
@@ -40,6 +41,9 @@ export function bindNotifications() {
     banner.setAttribute("aria-live", "polite");
     banner.hidden = true;
     main.prepend(banner);
+    observeEvents(message => {
+        if (message.reset || message.events?.some(event => event.topic === "notifications")) refreshNotifications();
+    });
     if (hostFrame) hostFrame.dispatchEvent(new CustomEvent("oep-notifications-loading", {detail: {source: document}}));
     else presentCenter({notifications: []});
     window.addEventListener("hashchange", () => {
@@ -318,6 +322,7 @@ export async function refreshNotifications(session, focus = false) {
         if (!response.ok) throw new Error("Notification status unavailable");
         const result = await response.json();
         if (requestGeneration !== generation) return;
+        connectEvents(document.querySelector('meta[name="oep-api-base"]').content, token);
         if (!Array.isArray(result.notifications) || result.notifications.some(item => !item ||
             [item.code, item.title, item.message].some(value => typeof value !== "string") ||
             [item.action_path, item.action_label, item.detail].some(value => value != null && typeof value !== "string") ||

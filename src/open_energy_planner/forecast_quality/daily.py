@@ -106,8 +106,39 @@ class DailyForecastArchive:
         self.documents = documents
         self.previous = None
         self.pending = None
+        self.events = None
 
     def _persist(self):
+        """Publish actual daily archive work, never the midnight watcher's idle polls."""
+        if self.pending is None or self.events is None:
+            return self._write_pending()
+        from ..activities.events import Health, Outcome
+
+        usable = not self.pending.get("capture_issue")
+        with self.events.thread_attempt(
+            "forecast-quality",
+            "quality",
+            "Archive daily forecast",
+            failure="Daily forecast retention failed. Planning continues independently.",
+        ) as identity:
+            self._write_pending()
+            self.events.finish_thread(
+                identity,
+                Outcome.COMPLETED if usable else Outcome.FAILED,
+                "The daily forecast baseline was archived."
+                if usable
+                else "Midnight was not continuously observed. No complete daily forecast was recorded.",
+                usable=usable,
+            )
+            self.events.availability_thread(
+                "forecast-quality",
+                Health.AVAILABLE if usable else Health.UNAVAILABLE,
+                "Daily baseline archived."
+                if usable
+                else "No complete daily baseline was recorded.",
+            )
+
+    def _write_pending(self):
         """Retry the same captured baseline after a transient failure, without replacing its original context."""
         if self.pending is None:
             return

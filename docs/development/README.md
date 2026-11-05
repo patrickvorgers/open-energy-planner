@@ -1,5 +1,8 @@
 # Development
 
+The [activity and module event guide](ACTIVITY-EVENTS.md) covers background work,
+six-hour schedules, module health, notifications and restart/reconnect behavior.
+
 The [planning notifications guide](PLANNING-NOTIFICATIONS.md) describes actionable
 app warnings, recovery, authenticated status reads and deduplicated diagnostics.
 

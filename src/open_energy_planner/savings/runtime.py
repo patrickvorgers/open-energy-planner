@@ -104,6 +104,7 @@ class SavingsRuntime:
         self.bonus = HistoricalBonuses(store)
         self.issue = None
         self.attention = False
+        self.events = None
         self.physical_issue = None
         self._bindings_plan, self._bindings = None, None
 
@@ -342,6 +343,42 @@ class SavingsRuntime:
             self.documents.write("working.json", head)
         state = self.store.state(head["revision"])
         rows = self.store.frames(datetime.fromisoformat(state["end"]) if state else None)
+        if self.events and rows:
+            from ..activities.events import Health, Outcome
+
+            with self.events.thread_attempt(
+                "settlement",
+                "settlement",
+                "Evaluate measured savings",
+                failure="Settlement processing failed. Last successful financial results remain available.",
+            ) as identity:
+                self._evaluate_rows(
+                    contract, now, book, head, published_state, price_cursor, state, rows
+                )
+                usable = self.issue is None
+                self.events.finish_thread(
+                    identity,
+                    Outcome.COMPLETED if usable else Outcome.FAILED,
+                    "Measured savings were evaluated."
+                    if usable
+                    else "No complete new savings result. Previous financial results remain available. Check Savings for missing evidence.",
+                    usable=usable,
+                )
+                self.events.availability_thread(
+                    "settlement",
+                    Health.AVAILABLE if usable else Health.DEGRADED,
+                    "Measured savings are current."
+                    if usable
+                    else "Previous financial results are retained. Check Savings for missing evidence.",
+                )
+        else:
+            self._evaluate_rows(
+                contract, now, book, head, published_state, price_cursor, state, rows
+            )
+
+    def _evaluate_rows(self, contract, now, book, head, published_state, price_cursor, state, rows):
+        """Evaluate one captured batch and retain the existing success-only publication boundary."""
+        counter_version = book.version if book else None
         for row in rows:
             frame = parse_frame(row["frame"])
             context = row["context"]

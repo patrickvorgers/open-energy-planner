@@ -117,6 +117,7 @@ class ModelSelection:
         self.rows = []
         self.preferences = {}
         self.issue = store.issue
+        self.events = None
 
     def process(self, original, choices, now):
         """Advance at most one expensive capture/evaluation per poll and refresh all current statuses."""
@@ -302,6 +303,44 @@ class ModelSelection:
         return True
 
     def _calculate(self, payload):
+        """Publish only real numerical comparisons, never idle preference checks."""
+        if self.events is None:
+            return self._execute(payload)
+        from ..activities.events import Health, Outcome
+
+        with self.events.thread_attempt(
+            "models",
+            "training",
+            "Compare forecast models",
+            failure="Model comparison failed. Baseline models remain active.",
+        ) as identity:
+            result = self._execute(payload)
+            usable = result["status"] == "ok"
+            outcome = (
+                Outcome.INTERRUPTED
+                if self.stop.is_set()
+                else Outcome.COMPLETED
+                if usable
+                else Outcome.FAILED
+            )
+            self.events.finish_thread(
+                identity,
+                outcome,
+                "Forecast comparison evidence is available."
+                if usable
+                else "No new usable comparison evidence. Baseline models remain active.",
+                usable=usable,
+            )
+            self.events.availability_thread(
+                "models",
+                Health.AVAILABLE if usable else Health.DEGRADED,
+                "Comparison evidence is available."
+                if usable
+                else "Baseline models remain active without new comparison evidence.",
+            )
+            return result
+
+    def _execute(self, payload):
         """Translate bounded process failure into explicit absent selection evidence, never a fabricated score."""
         try:
             timeout = (

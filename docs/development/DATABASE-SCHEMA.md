@@ -3,7 +3,7 @@
 This guide describes the implemented app database, not Home Assistant Recorder.
 The authoritative SQLAlchemy Core registry is
 [`storage/adapters/lifecycle/schema.py`](../../src/open_energy_planner/storage/adapters/lifecycle/schema.py).
-All 18 tables use the same app-owned engine: SQLite by default, or PostgreSQL,
+All 19 tables use the same app-owned engine: SQLite by default, or PostgreSQL,
 MariaDB or MySQL. The HA integration exchanges API messages and never reads SQL.
 See [the plan archive guide](PLAN-ARCHIVE.md) for deployment, backup and cross-backend transfer.
 
@@ -71,6 +71,30 @@ page, not background monitoring or an HA notification. Refresh retries failures
 and removes stale evidence. No data is deleted or automatically compacted.
 
 ## Relationships
+
+### `oep_activities`
+
+Owned by `activities/storage.py`. Retains seven days of execution evidence with
+no foreign keys. Shared backend transfer copies and verifies this table.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `id` | String(128), PK, binary collation | Opaque execution identity. Intermediate and terminal updates retain one row. |
+| `started_at` | String(40) | Aware UTC ISO start timestamp. Indexed with `id` by `oep_activity_chronology` for day paging and retention. |
+| `owner` | String(128), binary collation | Business producer identity. Price owners include adapter and bidding area. |
+| `kind` | String(128) | Activity type used by the history filter. |
+| `state` | String(128) | `running`, `completed`, `failed`, `interrupted`, `cancelled` or `skipped`. Restart marks running records interrupted. |
+| `payload` | Text / LONGTEXT | Detached finite JSON with ID, owner, kind, title, state, aware UTC start, nullable finish, safe detail, recovery flag, terminal usability and optional process-local terminal sequence. No credentials or raw provider payloads. |
+
+`finished_sequence` orders outcomes sharing a finish timestamp within one process.
+`recovered` marks the first usable completion after a producer/type failure.
+Completed requires `usable` to be true. Writes and startup prune records whose
+start is over seven days old. Reads also enforce that rolling boundary. Upsert
+and pruning share a transaction. Live replay, availability, schedules and
+notification projections remain process-local. See [activity events](ACTIVITY-EVENTS.md)
+for asynchronous-write limits and subscription recovery.
+
+## Relationships with plans
 
 Solid relationships below are SQL foreign keys. Other references, such as a
 contract version inside JSON or an evaluation revision in a document, are

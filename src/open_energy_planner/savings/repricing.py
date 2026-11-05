@@ -1,6 +1,7 @@
 """Revalue frozen plan flows under corrected contracts without rerunning an optimizer."""
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -300,6 +301,7 @@ class PlanValuations:
     def __init__(self, documents, plans):
         """Borrow the active database document adapter and original plan archive."""
         self.documents, self.plans = documents, plans
+        self.events = None
 
     def process(self, contract, book, now):
         """Reprice newest plans first, at most twenty per round. Never replace a successful result with failure."""
@@ -321,30 +323,60 @@ class PlanValuations:
                 and plan["input_snapshot"].get("contract_version") == contract.version
             ):
                 continue
-            identity = key([row["plan_id"], generation])
-            pointer = "planvalue-" + key(row["plan_id"]) + ".json"
-            attempt = "valueissue-" + key(row["plan_id"]) + ".json"
-            try:
-                result = reprice(plan, contract, book, now)
-                result = json.loads(
-                    json.dumps(result, default=lambda value: value.isoformat(), allow_nan=False)
+            attempt = (
+                self.events.thread_attempt(
+                    "contract-valuations",
+                    "settlement",
+                    "Recalculate plan value",
+                    failure="Plan repricing failed. The last successful valuation is retained.",
                 )
-            except (ValueError, KeyError, TypeError) as error:
-                self.documents.write(
-                    attempt,
-                    {
-                        "contract_version": contract.version,
-                        "issue": str(error),
-                        "evaluated_at": now.isoformat(),
-                    },
-                )
-                continue
-            with self.documents.transaction():
-                name = "valuation-" + identity + ".json"
-                if not self.documents.exists(name):
-                    self.documents.write(name, result)
-                self.documents.write(pointer, name)
-                self.documents.write(attempt, {"contract_version": contract.version, "issue": None})
+                if self.events
+                else nullcontext()
+            )
+            with attempt as activity:
+                identity = key([row["plan_id"], generation])
+                pointer = "planvalue-" + key(row["plan_id"]) + ".json"
+                attempt = "valueissue-" + key(row["plan_id"]) + ".json"
+                try:
+                    result = reprice(plan, contract, book, now)
+                    result = json.loads(
+                        json.dumps(result, default=lambda value: value.isoformat(), allow_nan=False)
+                    )
+                except (ValueError, KeyError, TypeError) as error:
+                    self.documents.write(
+                        attempt,
+                        {
+                            "contract_version": contract.version,
+                            "issue": str(error),
+                            "evaluated_at": now.isoformat(),
+                        },
+                    )
+                    if activity:
+                        from ..activities.events import Outcome
+
+                        self.events.finish_thread(
+                            activity,
+                            Outcome.FAILED,
+                            "Plan repricing failed. The last successful valuation is retained.",
+                        )
+                    continue
+                with self.documents.transaction():
+                    name = "valuation-" + identity + ".json"
+                    if not self.documents.exists(name):
+                        self.documents.write(name, result)
+                    self.documents.write(pointer, name)
+                    self.documents.write(
+                        attempt, {"contract_version": contract.version, "issue": None}
+                    )
+                if activity:
+                    from ..activities.events import Outcome
+
+                    self.events.finish_thread(
+                        activity,
+                        Outcome.COMPLETED,
+                        "The updated plan valuation was saved. The original plan remains unchanged.",
+                        usable=True,
+                    )
         queue.update(
             before=rows[-1]["plan_id"] if rows else queue["before"],
             complete=len(rows) < REPRICING_BATCH_SIZE,

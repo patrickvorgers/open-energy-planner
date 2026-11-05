@@ -166,6 +166,10 @@ def app_site(request):
                 from tests.frontend.browser.performance_fixture import seed
 
                 seed(Path(directory))
+            if getattr(request, "param", None) == "activity":
+                from tests.frontend.browser.activity_fixture import register as register_activity
+
+                register_activity(application)
             if ingress:
                 pairing = application[PAIRING_KEY]
                 pairing.supervisor_secret = "browser-supervisor-private-proof"
@@ -188,6 +192,10 @@ def app_site(request):
                 )
             runner = web.AppRunner(application)
             await runner.setup()
+            if getattr(request, "param", None) == "activity":
+                from tests.frontend.browser.activity_fixture import seed as seed_activity
+
+                await seed_activity(application)
             site = web.TCPSite(runner, "127.0.0.1", 0)
             await site.start()
             result["url"] = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"

@@ -295,7 +295,26 @@ def register(app, service, repository, live, lock):
                     """Capture the durable operation result without retrying an ambiguous write."""
                     result.append(function(*arguments, **keywords))
 
-                cancellation = await complete_write(apply)
+                from open_energy_planner.activities.api import EVENTS
+                from open_energy_planner.activities.events import Outcome
+
+                events = app.get(EVENTS)
+                if events and operation in ("history", "hourly_history", "cycles"):
+                    async with events.attempt(
+                        "appliances",
+                        "history",
+                        "Learn appliance cycles",
+                        failure="Cycle learning failed. Previously accepted profiles are retained.",
+                    ) as activity:
+                        cancellation = await complete_write(apply)
+                        await events.finish(
+                            activity,
+                            Outcome.COMPLETED,
+                            "Appliance history was processed. Detected cycles and usable profiles are shown in Appliance settings.",
+                            usable=True,
+                        )
+                else:
+                    cancellation = await complete_write(apply)
                 if (
                     live
                     and service.revision != previous_revision
