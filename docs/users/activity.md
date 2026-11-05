@@ -29,7 +29,9 @@ finish time. Keyboard focus and open details remain in place during live updates
 
 Price activity details identify the adapter, market and usable coverage. A failed
 fetch can leave earlier data usable until its existing expiry. Empty or rejected
-data never counts as recovery. Ad-hoc recalculations appear after they run,
+data never counts as recovery. A comparison is Failed when its evidence-wait
+limit expires and OEP abandons that window. Savings corrections that need another
+batch remain Skipped while the previous successful version stays visible. Ad-hoc recalculations appear after they run,
 without a predicted time in the upcoming list.
 
 ## Check what happens next

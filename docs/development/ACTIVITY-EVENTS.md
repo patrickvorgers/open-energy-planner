@@ -19,10 +19,14 @@ Each actual attempt has one execution ID. Intermediate changes reuse that ID.
 Repeated attempts remain separate records. Empty weather and rejected prices
 do not establish recovery. Already processed appliance-history uploads are
 Skipped, not recovery. Model comparisons awaiting evidence are Skipped with
-Unknown availability, not Failed. A comparison becomes Completed only after
-its capture or evaluation is committed. Price details name the actual adapter,
-market and usable coverage. Original source expiry remains authoritative. Failure details
-explain whether retained input or a baseline remains usable and its impact.
+Unknown availability, not Failed. When the evidence-wait deadline expires and
+the window is durably abandoned, it is Failed with Degraded availability.
+Partial savings correction batches and expected settlement evidence waits are
+also Skipped with Unknown availability. Earlier successful financial results
+remain visible. Invalid evidence and missing original plans remain failures.
+A comparison becomes Completed only after its capture or evaluation is committed.
+Price details name the actual adapter, market and usable coverage. Original
+source expiry remains authoritative. Failure details explain whether retained input or a baseline remains usable and its impact.
 
 Availability is separate. **Unknown** means the producer has not established its
 current state. **Available**, **Degraded** and **Unavailable** are source-owned

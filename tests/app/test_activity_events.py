@@ -323,12 +323,28 @@ def test_history_writer_survives_unexpected_row_failure(tmp_path, monkeypatch, f
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("operation", ["capture", "evaluate"])
-@pytest.mark.parametrize("result_status", ["pending", "failed", "commit_failed", "ok"])
+@pytest.mark.parametrize(
+    ("operation", "result_status", "elapsed", "expected_outcome"),
+    [
+        (operation, status, timedelta(), outcome)
+        for operation in ("capture", "evaluate")
+        for status, outcome in (
+            ("pending", "skipped"),
+            ("failed", "failed"),
+            ("commit_failed", "failed"),
+            ("ok", "completed"),
+        )
+    ]
+    + [
+        ("evaluate", "pending", timedelta(hours=24) - timedelta(microseconds=1), "skipped"),
+        ("evaluate", "pending", timedelta(hours=24), "failed"),
+        ("evaluate", "pending", timedelta(hours=24) + timedelta(microseconds=1), "failed"),
+    ],
+)
 def test_model_activity_waits_for_accepted_evidence(
-    tmp_path, monkeypatch, operation, result_status
+    tmp_path, monkeypatch, operation, result_status, elapsed, expected_outcome
 ):
-    """Pending evidence never fails, and capture/evaluation writes must succeed before recovery."""
+    """Only retryable evidence is pending. Abandonment fails and accepted writes alone recover."""
     from copy import deepcopy
     from types import SimpleNamespace
 
@@ -407,12 +423,12 @@ def test_model_activity_waits_for_accepted_evidence(
             if result_status == "commit_failed":
                 with pytest.raises(OSError, match="synthetic commit"):
                     await asyncio.to_thread(
-                        runtime._advance, original, {"family_id": "family"}, family, NOW
+                        runtime._advance, original, {"family_id": "family"}, family, NOW + elapsed
                     )
                 assert store.state == prior_state
             else:
                 assert await asyncio.to_thread(
-                    runtime._advance, original, {"family_id": "family"}, family, NOW
+                    runtime._advance, original, {"family_id": "family"}, family, NOW + elapsed
                 )
             await events.flush()
             terminal = [
@@ -422,30 +438,31 @@ def test_model_activity_waits_for_accepted_evidence(
             ]
             assert len(terminal) == 1
             row = terminal[0]
-            assert (
-                row["state"]
-                == {
-                    "pending": "skipped",
-                    "failed": "failed",
-                    "commit_failed": "failed",
-                    "ok": "completed",
-                }[result_status]
-            )
+            assert row["state"] == expected_outcome
             assert row["recovered"] is (result_status == "ok")
             assert row["usable"] is (result_status == "ok")
-            assert (("models", "training") in events.failed) is (
-                result_status in ("failed", "commit_failed")
-            )
+            assert (("models", "training") in events.failed) is (expected_outcome == "failed")
             health = events.health["models"]
             assert health["state"] == (
                 "available"
                 if result_status == "ok"
                 else "unknown"
-                if result_status == "pending"
+                if expected_outcome == "skipped"
                 else "degraded"
             )
             if result_status == "pending" and operation == "evaluate":
-                assert store.state["families"]["family"]["pending"] == version(capture)
+                retained = store.state["families"]["family"]
+                if expected_outcome == "skipped":
+                    assert retained["pending"] == version(capture)
+                    assert retained["retry_after"] is not None
+                else:
+                    assert retained["pending"] is None and retained["retry_after"] is None
+                    assert (
+                        store.read("evaluation", retained["last_failure"])["issue"]
+                        == "Settlement evidence is pending."
+                    )
+                    assert "pending" not in row["detail"].lower()
+                assert store.read("capture", version(capture)) == capture
         finally:
             await events.close()
             repository.close()

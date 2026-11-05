@@ -257,6 +257,7 @@ class ModelSelection:
                     ]
                     family["issue"] = None
                 else:
+                    result["status"] = "failed"
                     evaluation["issue"] = result["issue"]
                     family["issue"] = result["issue"]
                     family["last_failure"] = version(evaluation)
@@ -310,8 +311,10 @@ class ModelSelection:
         """Publish real comparisons only after their owning store accepts the result.
 
         The caller commits capture/evaluation evidence inside this context.
-        Pending evidence is skipped, not a failure or recovery. Calculation or
-        commit exceptions retain the failure episode and baseline availability.
+        Evidence still awaiting retry is skipped, not a failure or recovery.
+        The caller marks an abandoned evaluation failed at its evidence deadline.
+        Calculation or commit exceptions retain the failure episode and baseline
+        availability.
         """
         if self.events is None:
             yield self._execute(payload)

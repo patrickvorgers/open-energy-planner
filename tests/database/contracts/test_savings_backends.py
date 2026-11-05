@@ -1,5 +1,6 @@
 """Settlement continuity, corrections and complete evidence on every advertised database backend."""
 
+import asyncio
 import json
 from dataclasses import asdict, replace
 from datetime import timedelta
@@ -563,3 +564,86 @@ def test_physical_reference_advances_without_contract(settlement):
     assert docs.read("physical-reference.json")["reference_stored"] == {"battery": 0}
     assert runtime.issue == "Contract configuration is required for settlement"
     assert runtime.physical_issue is None
+
+
+@pytest.mark.parametrize("condition", ["partial", "pending", "invalid", "missing_plan"])
+def test_settlement_activity_distinguishes_waiting_from_failure(settlement, monkeypatch, condition):
+    """Partial replay and pending input retain prior results without inventing failure or recovery."""
+    from open_energy_planner.activities.events import Events, Outcome
+    from open_energy_planner.savings.model import PendingSettlement
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+
+    runtime, store, docs, engine, plans = settlement
+    now = END + timedelta(hours=1)
+    runtime.process(contract(), now)
+    original_plan = plans.get_plan("original-plan")
+    published = docs.read("head.json")
+    prior_intervals = runtime.overview(START, END + timedelta(minutes=15))["intervals"]
+
+    async def scenario():
+        """Run the real financial worker and activity writer with explicitly bounded source evidence."""
+        events = Events(ActivityStore(engine), lambda: now)
+        events.loop = asyncio.get_running_loop()
+        runtime.events = events
+        if condition in ("partial", "pending"):
+            failed = await events.start("settlement", "settlement", "Earlier savings evaluation")
+            await events.finish(failed, Outcome.FAILED, "Earlier rejected evidence.")
+        cursor = events.cursor
+        try:
+            with monkeypatch.context() as patch:
+                if condition == "partial":
+                    frames = store.frames
+
+                    def one_interval(after=None, *, end=None, limit=96):
+                        """Use the actual reader with a one-row cap to exercise multi-batch replay."""
+                        return frames(after, end=end, limit=1)
+
+                    patch.setattr(store, "frames", one_interval)
+                elif condition in ("pending", "invalid"):
+
+                    def reject(*args, **kwargs):
+                        """Keep expected evidence waiting distinct from invalid retained inputs."""
+                        if condition == "pending":
+                            raise PendingSettlement("Published price coverage is missing")
+                        raise ValueError("Contract coverage is missing")
+
+                    patch.setattr(runtime.bonus, "prepare", reject)
+                else:
+                    patch.setattr(store, "context_plan", lambda _start: None)
+                await asyncio.to_thread(runtime.process, contract(buy="0.4"), now)
+            await events.flush()
+            terminal = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity" and row["value"]["state"] != "running"
+            ]
+            assert len(terminal) == 1
+            row = terminal[0]
+            waiting = condition in ("partial", "pending")
+            assert row["state"] == ("skipped" if waiting else "failed")
+            assert not row["usable"] and not row["recovered"]
+            assert events.health["settlement"]["state"] == ("unknown" if waiting else "degraded")
+            assert ("settlement", "settlement") in events.failed
+            assert docs.read("head.json") == published
+            assert (
+                runtime.overview(START, END + timedelta(minutes=15))["intervals"] == prior_intervals
+            )
+            assert plans.get_plan("original-plan") == original_plan
+            cursor = events.cursor
+            await asyncio.to_thread(runtime.process, contract(buy="0.4"), now)
+            await events.flush()
+            recovered = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity" and row["value"]["state"] != "running"
+            ]
+            assert len(recovered) == 1
+            assert recovered[0]["state"] == "completed"
+            assert recovered[0]["usable"] and recovered[0]["recovered"]
+            assert events.health["settlement"]["state"] == "available"
+            assert ("settlement", "settlement") not in events.failed
+            assert len(runtime.overview(START, END + timedelta(minutes=15))["intervals"]) == 2
+        finally:
+            await events.close()
+
+    asyncio.run(scenario())
