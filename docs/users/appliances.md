@@ -39,7 +39,10 @@ integration's configured title supplies the vehicle name.
 For a charge point, choose the integration that supplies power and connection
 status. Its consumption meter is selected separately from Home Assistant Energy,
 so a utility-meter integration can own it. Use **Find connection sensor** to
-search by device name, sensor name or entity ID. **Vehicle connected** must be On
+search by device name, sensor name or entity ID. Changing the integration keeps
+your selected power and connection sources visible, so you can explicitly pair
+a charger's power sensor with a connection helper from another integration.
+**Vehicle connected** must be On
 while physically plugged in, including when charging is paused. Charging-active,
 door and fault sensors do not prove a connection. No source is chosen for you.
 Save settings only after checking the sources and limits. Cancel restores the

@@ -106,8 +106,11 @@ the cable is connected, including when charging is paused. Charging activity,
 door and fault sensors do not prove a connection. No connection source or vehicle
 identity is selected automatically.
 
-Changing the integration clears incompatible source choices without saving the
-draft. Cancel restores confirmed settings. A source list without compatible
+Changing the vehicle integration clears its incompatible SoC choice. For a charge
+point, the integration filters available sources without clearing explicitly
+selected power or connection sources. Choices outside the filter remain visible
+and can be combined with sources from another integration. Cancel restores
+confirmed settings. A source list without compatible
 metadata explains what to check instead of showing an unexplained empty dropdown.
 HA catalogue collection prioritizes the registered devices of Energy sources,
 including their connection sensors, within the existing entity and byte budgets.

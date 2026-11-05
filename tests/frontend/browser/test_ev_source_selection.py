@@ -29,6 +29,14 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
         ("binary_sensor.charge_plug", "Cable plugged in", "", "plug", "charger", "Garage charger"),
         ("binary_sensor.charge_fault", "Fault", "", "problem", "charger", "Garage charger"),
         ("sensor.empty_power", "Power", "W", "power", "empty", "No connection sensor"),
+        (
+            "binary_sensor.helper_plug",
+            "Cable connected helper",
+            "",
+            "plug",
+            "helper",
+            "Connection helper",
+        ),
     ):
         body["entities"].append(
             {
@@ -45,7 +53,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     body["suggestions"]["consumers"] = [{"entity_id": "sensor.charge_meter", "upstream": None}]
     headers = {"Authorization": "Bearer " + TOKEN}
     response = page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body)
-    assert response.ok, response.text()
+    assert response.ok, "Home Assistant catalogue request failed"
     page.goto(url + "/appliance-settings/ev")
     if "hassio_ingress" not in url:
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
@@ -56,6 +64,12 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     expect(soc.locator("option")).to_have_count(2)
     expect(soc).to_have_value("")
     soc.select_option("sensor.car_charge")
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
+        "car2"
+    )
+    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value("")
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("car")
+    page.get_by_label("Vehicle state of charge", exact=True).select_option("sensor.car_charge")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
     page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
     page.get_by_role("button", name="Save settings", exact=True).click()
@@ -115,7 +129,13 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
         "empty"
     )
-    expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value("")
+    expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
+        "binary_sensor.charge_plug"
+    )
+    expect(page.get_by_label("Measured AC charging power", exact=True)).to_have_value(
+        "sensor.charge_power"
+    )
+    page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.empty_power")
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == saved["points"]
@@ -131,4 +151,28 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     page.get_by_label("Find connection sensor", exact=True).fill("unrelated text")
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.charge_plug"
+    )
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
+        "helper"
+    )
+    page.get_by_label("Vehicle connected", exact=True).select_option("binary_sensor.helper_plug")
+    expect(page.get_by_label("Measured AC charging power", exact=True)).to_have_value(
+        "sensor.charge_power"
+    )
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
+        "empty"
+    )
+    page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.empty_power")
+    expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
+        "binary_sensor.helper_plug"
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved_point = page.request.get(url + "/v1/ev", headers=headers).json()["points"][0]
+    assert saved_point["power_entity"] == "sensor.empty_power"
+    assert saved_point["connected_entity"] == "binary_sensor.helper_plug"
+    assert saved_point["energy_entity"] == "sensor.charge_meter"
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
+        "binary_sensor.helper_plug"
     )

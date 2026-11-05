@@ -78,9 +78,9 @@ function integrationPicker(card, row, vehicle) {
     control.parentElement.style.gridColumn = "1 / -1";
     control.onchange = () => {
         integrationSelections.set(row.id, control.value);
-        for (const key of vehicle ? ["soc_entity"] : ["power_entity", "connected_entity"]) {
-            const entity = current.catalogue.entities.find(source => source.entity_id === row[key]);
-            if ((entity?.integration_id || "other") !== control.value) row[key] = "";
+        if (vehicle) {
+            const entity = current.catalogue.entities.find(source => source.entity_id === row.soc_entity);
+            if ((entity?.integration_id || "other") !== control.value) row.soc_entity = "";
         }
         render(); changed();
     };
