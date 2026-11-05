@@ -40,7 +40,7 @@ def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(ap
                 return [axis.min,axis.max,...axis.ticks.map(tick => tick.value)];
             }),
             prices: prices.data.datasets.map(dataset => ({label: dataset.label, values: dataset.data.map(point => point.y)})),
-            scenarioOrder: ['plan-chart','self-consumption-chart','reference-chart','current-price-chart'].map(id => document.getElementById(id).closest('figure').getBoundingClientRect().top),
+            scenarioOrder: ['plan-chart','self-consumption-chart','reference-chart','price-chart'].map(id => document.getElementById(id).closest('figure').getBoundingClientRect().top),
             evidenceLast: document.getElementById('plan-chart').getBoundingClientRect().top < document.getElementById('plan-evidence-panel').getBoundingClientRect().top};
     }""")
     assert not any("Battery" in name for name in state["reference"])

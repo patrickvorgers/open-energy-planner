@@ -1270,9 +1270,13 @@ caps. Missing location/window evidence produces an explicit unknown bonus while
 known base tariffs remain available. Missing price coverage is never filled with
 zero. No request fetches provider data or writes configuration/history.
 
-The UI independently loads Price inputs and original plan evidence. Current rates
-use the current containing quarter and selected 6/24/full-hour range. Archived
-plan prices retain their original contract and prepared rates. The browser uses
+The UI has one Price inputs chart. A selected plan supplies its frozen tariff
+evidence, original contract and prepared bonus rates. It shares that plan's time
+range. Only without a selected plan, read the current tariff preview independently
+of plan or bonus-volume availability. Label this fallback explicitly and use the
+current containing quarter and selected 6/24/full-hour range. Late preview reads
+cannot replace a plan chart. Failed plan updates retain the complete previous
+comparison and its original price inputs until a usable replacement is loaded. The browser uses
 recorded end timestamps instead of reconstructing them from floating duration
 hours when checking coverage. This prevents microsecond daylight boundaries from
 becoming false gaps after conversion to JavaScript millisecond precision.

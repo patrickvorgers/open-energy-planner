@@ -46,7 +46,7 @@ const MILLISECONDS_PER_MINUTE = 60000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
 const MAX_TIME_AXIS_LABELS = 6;
 const FORECAST_PRICE_DASH = [2, 4];
-let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0;
+let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0, priceInputPlanId = null;
 
 /** Render app-owned factual cards as text. Never infer reasons or interpret device names as markup. */
 function evidenceCards(parent, cards) {
@@ -156,7 +156,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         }
         if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd})));
         const color = s.color || palette[index % palette.length];
-        return {label: s.name, data: values, hidden: id === "current-price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, borderColor: color, backgroundColor: color, borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
+        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, borderColor: color, backgroundColor: color, borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
         type: "line", data: {datasets}, plugins: [intervalWidths, calendarDays],
@@ -178,7 +178,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
                     }
                     if (!items.length || ["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart"].includes(id)) return "";
                     const step = inspectSteps.find((step) => step.start <= items[0].parsed.x && items[0].parsed.x < step.end);
-                    return id === "current-price-chart" ? [] : id === "price-chart" ? step?.priceStatus || "" : step?.commands || [];
+                    return id === "price-chart" ? priceInputPlanId ? step?.priceStatus || "" : [] : step?.commands || [];
                 }
             }}},
             scales: {x: {type: "linear", offset: false, grid: {display: false},
@@ -194,7 +194,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
                 y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: false, title: {display: Boolean(unit), text: unit}, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
                 ...(series.some((entry) => entry.axis === "soc") ? {soc: {position: "right", min: 0, max: 100, stacked: false, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
             onClick: (_event, elements) => {
-                if (["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart", "current-price-chart"].includes(id) || !elements.length) return;
+                if (["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart"].includes(id) || id === "price-chart" && !priceInputPlanId || !elements.length) return;
                 const time = datasets[elements[0].datasetIndex].data[elements[0].index].x;
                 const index = inspectSteps.findIndex((step) => step.start <= time && time < step.end);
                 if (index >= 0) { $("inspect-time").value = index; inspect(); $("plan-evidence-panel").open = true; $("interval-evidence-panel").open = true; $("evidence-time").scrollIntoView({block: "nearest"}); }
@@ -206,7 +206,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         const label = document.createElement("label"), input = document.createElement("input");
         input.type = "checkbox"; input.checked = result.isDatasetVisible(index);
         input.addEventListener("change", () => {
-            if (id === "current-price-chart") {
+            if (id === "price-chart") {
                 if (input.checked) hiddenPriceSeries.delete(s.name); else hiddenPriceSeries.add(s.name);
             }
             result.setDatasetVisibility(index, input.checked); applyRange();
@@ -238,7 +238,7 @@ function applyRange() {
     const start = first == null ? undefined : currentPlan ? currentQuarter : Math.floor(first / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
     for (const [id, instance] of charts) {
         if (["savings-chart", "realization-chart"].includes(id)) continue;
-        if (id === "current-price-chart") {
+        if (id === "price-chart" && !priceInputPlanId) {
             const priceStart = currentPriceWindow ? Math.max(currentPriceWindow.start, currentQuarter) : undefined;
             const priceEnd = currentPriceWindow ? Math.max(currentPriceWindow.end, priceStart + QUARTER_MILLISECONDS) : undefined;
             instance.options.scales.x.min = priceStart;
@@ -333,6 +333,13 @@ async function showPlan(signal, background = false) {
     if (retainDisplayedPlan) {
         $("overview-status").textContent = "Loading plan update. Showing the previously loaded plan until the update is available.";
     } else {
+        const clearPrices = Boolean(id || priceInputPlanId);
+        if (clearPrices) {
+            priceInputPlanId = currentPriceWindow = null;
+            priceRequest++;
+            $("current-price-status").textContent = id ? "Loading selected plan prices…" : "Loading current price preview…";
+            $("price-chart").closest(".chart-wrap").hidden = true;
+        }
         renderedPlanId = null;
         planReadPending = false;
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
@@ -341,6 +348,7 @@ async function showPlan(signal, background = false) {
         for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
         inspectSteps = [];
         for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
+            if (chartId === "price-chart" && !clearPrices) continue;
             if (charts.has(chartId)) chart(chartId, []);
         }
         $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
@@ -353,7 +361,10 @@ async function showPlan(signal, background = false) {
         $("evidence-period").textContent = ""; $("plan-evidence-status").textContent = id ? "Loading original whole-plan evidence…" : "No plan selected.";
         evidenceCards($("plan-evidence"), []); evidenceCards($("interval-evidence"), []);
         $("evidence-time").textContent = ""; $("evidence-issue").textContent = id ? "Loading original plan evidence…" : "No plan selected.";
-        if (!id) { $("overview-status").textContent = CONNECTED_MESSAGE; return true; }
+        if (!id) {
+            $("overview-status").textContent = CONNECTED_MESSAGE;
+            return true;
+        }
     }
     try {
         const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison`, signal);
@@ -510,6 +521,10 @@ async function showPlan(signal, background = false) {
         }
         const priceSeries = [{name: "Spot market rate", points: spot, color: "#85919c"}, {name: "Import rate", points: buy, color: "#2586c4"}, {name: "Export rate", points: sell, color: "#23965e"}];
         if (bonusRules.length) priceSeries.push({name: "Export rate incl. bonus", points: bonusSell, color: "#9255b7"});
+        priceInputPlanId = id;
+        currentPriceWindow = null;
+        $("price-chart").closest(".chart-wrap").hidden = false;
+        $("current-price-status").textContent = `Selected plan: ${when(plan.generated_at)}: Original contract rates. ${bonusRules.length ? "Potential export bonus is shown before the volume cap." : "No bonus applies in this plan."}`;
         chart("price-chart", priceSeries, {unit: `${currency}/kWh`});
         const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
@@ -527,6 +542,7 @@ async function showPlan(signal, background = false) {
         if (request === selectionRequest) {
             for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = "Original plan comparison unavailable.";
             renderedPlanId = null;
+            $("current-price-status").textContent = `Selected plan prices could not be loaded. ${error.message}`;
             $("overview-status").textContent = error.message;
             $("plan-description").textContent = "Selected plan could not be loaded.";
             $("plan-evidence-status").textContent = $("evidence-issue").textContent = `Original evidence could not be loaded. ${error.message}`;
@@ -657,36 +673,37 @@ function selectOriginal(id) {
     location.hash = "planning"; view(); $("plan-version").value = id; showPlan(); $("plan-heading").scrollIntoView({behavior: "smooth"});
 }
 /**
- * Read current saved tariffs without changing frozen plan evidence.
+ * Read current saved tariffs only without a selected plan. Late preview reads never replace plan prices.
  * @param {AbortSignal} [signal] Aborting the newest request follows the read failure path.
- * @returns {Promise<boolean|undefined>} True after drawing, false after hiding the chart and
+ * @returns {Promise<boolean|undefined>} True after drawing or when a plan supplies prices, false after hiding the chart and
  * showing a read error, or undefined when superseded. Superseded reads leave chart and status
  * unchanged, including when aborted.
  */
 async function currentPrices(signal) {
+    if ($("plan-version").value) { priceRefreshPending = false; return true; }
     const request = ++priceRequest;
     try {
         const data = await api("v1/prices/inputs", signal);
-        if (request !== priceRequest) return;
+        if (request !== priceRequest || $("plan-version").value) return;
         const intervals = data.intervals || [], buy = [], sell = [], market = [], total = [];
         for (const interval of intervals) {
             const start = Date.parse(interval.start), end = Date.parse(interval.end);
             for (const [points, value] of [[buy, interval.buy_price], [sell, interval.sell_price], [market, interval.market_price], [total, interval.total_export_price]]) points.push([start, value, interval.price_kind], [end, value, interval.price_kind]);
         }
         currentPriceWindow = intervals.length ? {start: Math.floor(Date.parse(data.as_of) / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS, end: Date.parse(intervals.at(-1).end)} : null;
-        const series = [{name: "Spot market rate", points: market, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
-        if (data.has_bonus) series.push({name: "Export rate incl. bonus (before volume cap)", points: total, color: "#9255b7"});
-        $("current-price-chart").closest(".chart-wrap").hidden = !intervals.length;
-        chart("current-price-chart", series, {unit: `${data.currency || "EUR"}/kWh`});
-        $("current-price-status").textContent = data.issue ? `Current prices unavailable: ${optionLabel(data.issue)}` : `Saved contract rates as of: ${when(data.as_of)}: ${intervals.some(interval => interval.bonus_issue) ? "Bonus eligibility unavailable: Missing values remain gaps." : data.has_bonus ? "Bonus volume is not applied in this preview." : "No bonus applies in this period."}${data.coverage === "shortened_horizon" ? " Market-price coverage ends early." : ""}`;
+        const series = [{name: "Spot market rate", points: market, color: "#85919c"}, {name: "Import rate", points: buy, color: "#2586c4"}, {name: "Export rate", points: sell, color: "#23965e"}];
+        if (data.has_bonus) series.push({name: "Export rate incl. bonus", points: total, color: "#9255b7"});
+        $("price-chart").closest(".chart-wrap").hidden = !intervals.length;
+        chart("price-chart", series, {unit: `${data.currency || "EUR"}/kWh`});
+        $("current-price-status").textContent = data.issue ? `Current price preview unavailable: ${optionLabel(data.issue)}` : `No plan available: Current tariff preview: Saved contract rates as of: ${when(data.as_of)}: ${intervals.some(interval => interval.bonus_issue) ? "Bonus eligibility unavailable: Missing values remain gaps." : data.has_bonus ? "Bonus volume is not applied in this preview." : "No bonus applies in this period."}${data.coverage === "shortened_horizon" ? " Market-price coverage ends early." : ""}`;
         priceRefreshPending = false;
         return true;
     } catch (error) {
-        if (request !== priceRequest) return;
+        if (request !== priceRequest || $("plan-version").value) return;
         priceRefreshPending = true;
         currentPriceWindow = null;
-        $("current-price-chart").closest(".chart-wrap").hidden = true;
-        chart("current-price-chart", [], {unit: "EUR/kWh"});
+        $("price-chart").closest(".chart-wrap").hidden = true;
+        chart("price-chart", [], {unit: "EUR/kWh"});
         $("current-price-status").textContent = error.message;
         return false;
     }
@@ -696,7 +713,9 @@ async function load() {
     overviewLoads++;
     try {
         const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
-        const results = await Promise.allSettled([plans(false, signal), savings(signal), currentPrices(signal)]);
+        const planRead = plans(false, signal);
+        const previewRead = planRead.catch(() => {}).then(() => currentPrices(signal));
+        const results = await Promise.allSettled([planRead, savings(signal), previewRead]);
         const failure = results.find(result => result.status === "rejected");
         if (failure) throw failure.reason;
     }
