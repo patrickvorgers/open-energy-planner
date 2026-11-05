@@ -794,6 +794,13 @@ def test_first_run_auxiliary_views_retain_draft_and_keyboard_focus(app_page):
 def test_appliance_settings_categories_share_navigation_and_operational_links(app_page):
     """All device editors remain under Settings, including through the HA ingress prefix."""
     page, url = app_page
+    directory = Path("results/ci")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.goto(url + "/quality")
+    tab_style = """element => {const style = getComputedStyle(element); return Object.fromEntries(['fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'color', 'borderBottomWidth', 'borderBottomColor', 'backgroundColor', 'paddingTop', 'paddingBottom', 'marginTop', 'marginRight', 'marginBottom'].map(key => [key, style[key]]));}"""
+    reference = page.get_by_role("button", name="Household", exact=True).evaluate(tab_style)
+    assert reference["fontSize"] == "14px"
+    assert reference["lineHeight"] == "21px"
     page.goto(url + "/appliance-settings")
     for label, suffix, monitor in (
         ("Electric boilers", "/thermal", "/thermal"),
@@ -810,8 +817,17 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
         assert active.evaluate(
             "link => {const style = getComputedStyle(link); return style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.borderBottomWidth === '3px' && style.borderTopWidth === '0px' && link.getBoundingClientRect().height >= 44;}"
         )
+        assert active.evaluate(tab_style) == reference
         active.focus()
         assert active.evaluate("link => getComputedStyle(link).outlineStyle") != "none"
+        if suffix == "/thermal":
+            page.screenshot(
+                path=str(
+                    directory
+                    / f"section-tabs-keyboard-{page.viewport_size['width']}-{'ingress' in url}.png"
+                ),
+                full_page=True,
+            )
         open_primary_navigation(page)
         settings = page.get_by_role("region", name="Settings", exact=True)
         expect(settings.get_by_role("link", name="Appliances", exact=True)).to_have_attribute(
@@ -819,9 +835,9 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
         )
         if page.get_by_role("button", name="Menu", exact=True).is_visible():
             page.get_by_role("button", name="Menu", exact=True).click()
+        page.get_by_role("heading", name="Appliances settings", exact=True).click()
+        assert active.evaluate("link => getComputedStyle(link).outlineStyle") == "none"
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-        directory = Path("results/ci")
-        directory.mkdir(parents=True, exist_ok=True)
         page.screenshot(
             path=str(
                 directory

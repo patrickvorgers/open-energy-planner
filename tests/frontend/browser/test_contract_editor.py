@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -643,6 +644,11 @@ def test_replacement_retains_absolute_supplier_start_instead_of_reinterpreting_i
     assert [rule["rule_id"] for rule in saved["bonuses"]] == ["retained-counter"] * 2
 
 
+@pytest.mark.parametrize(
+    "app_page",
+    [{"width": 1280, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
+    indirect=True,
+)
 def test_contract_information_dialogs_explain_zonneplan_without_changing_the_draft(app_page):
     """Desktop/mobile supplier tabs keep values above their explanations, support keyboard navigation and preserve the draft."""
 
@@ -660,6 +666,25 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
 
     page, url = app_page
     discover(page, url)
+    page.goto(url + "/quality")
+    tab_style = """element => {const style = getComputedStyle(element); return Object.fromEntries(['fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'color', 'borderBottomWidth', 'borderBottomColor', 'backgroundColor', 'paddingTop', 'paddingBottom', 'marginTop', 'marginRight', 'marginBottom'].map(key => [key, style[key]]));}"""
+    reference = page.get_by_role("button", name="Household", exact=True).evaluate(tab_style)
+
+    def check_tabs(dialog, active, kind):
+        """Supplier tabs match the forecast row and keep normal selection separate from keyboard focus."""
+        assert active.evaluate(tab_style) == reference
+        assert active.evaluate("element => getComputedStyle(element).outlineStyle") == "none"
+        assert active.evaluate("element => element.getBoundingClientRect().height") >= 44
+        assert dialog.get_by_role("tablist").evaluate(
+            "element => {const style = getComputedStyle(element); return style.borderTopWidth === '0px' && style.borderRightWidth === '0px' && style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.columnGap === '24px';}"
+        )
+        directory = Path("results/ci")
+        directory.mkdir(parents=True, exist_ok=True)
+        page.screenshot(
+            path=str(directory / f"section-tabs-contract-{kind}-{page.viewport_size['width']}.png"),
+            full_page=False,
+        )
+
     page.goto(url + "/contract")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -697,8 +722,15 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(panel).to_contain_text("base export income is €0.06/kWh")
     expect(panel).to_contain_text("purchase fee above is not automatically an export fee")
     check_layout(panel)
+    check_tabs(dialog, nextenergy, "price")
     nextenergy.press("Home")
     expect(dialog.get_by_role("tab", name="Zonneplan", exact=True)).to_be_focused()
+    assert (
+        dialog.get_by_role("tab", name="Zonneplan", exact=True).evaluate(
+            "element => getComputedStyle(element).outlineStyle"
+        )
+        != "none"
+    )
     expect(zonneplan).to_be_visible()
     dialog.get_by_role("tab", name="Zonneplan", exact=True).press("ArrowLeft")
     expect(nextenergy).to_be_focused()
@@ -732,6 +764,7 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(panel).to_contain_text("06:00")
     expect(panel).to_contain_text("22:00")
     check_layout(panel)
+    check_tabs(dialog, nextenergy, "bonus")
     nextenergy.press("ArrowRight")
     expect(dialog.get_by_role("tab", name="Zonneplan", exact=True)).to_be_focused()
     assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
