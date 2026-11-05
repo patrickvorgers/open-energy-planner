@@ -1,6 +1,7 @@
 """Synthetic activity evidence through the same publishers used by real background work."""
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
@@ -44,10 +45,14 @@ def register(app):
 
 
 async def seed(app):
-    """Provide more than one page, a recovered outage and current planned work without provider traffic."""
+    """Seed the Amsterdam discovery scenario's current local day, recovery and upcoming work."""
     events = app[EVENTS]
     now = datetime.now(UTC)
-    seed_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    seed_time = (
+        now.astimezone(ZoneInfo("Europe/Amsterdam"))
+        .replace(hour=12, minute=0, second=0, microsecond=0)
+        .astimezone(UTC)
+    )
     try:
         for activity_index in range(104):
             events.clock = lambda activity_index=activity_index: (
