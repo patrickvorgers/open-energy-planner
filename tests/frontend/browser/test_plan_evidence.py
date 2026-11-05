@@ -517,7 +517,9 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
     with page.expect_event(
         "requestfailed", predicate=lambda request: request.url.endswith(held_path), timeout=8000
     ) as cancelled:
-        page.clock.run_for(15000)
+        # The archive response must start the bounded read before advancing its deadline.
+        with page.expect_request("**" + held_path):
+            page.clock.run_for(15000)
         page.clock.run_for(5001)
     assert cancelled.value.failure
     assert len(state["held_comparisons" if hung_view == "comparison" else "held_prices"]) == 1
