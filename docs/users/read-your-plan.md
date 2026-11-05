@@ -22,6 +22,10 @@ Use **Next 6 hours**, **Next 24 hours** or **Full horizon**. Tap or hover to ins
 | Battery self-consumption | A separate reference that stores surplus solar and covers deficits within its limits |
 | OEP | The proposed optimized operation under the selected strategy and contract |
 
+Each chart starts with **Expected economic cost**. Optimizer and battery self-consumption also show **Expected benefit versus without battery** against the same baseline. A negative benefit means higher expected cost than without battery. Missing comparisons stay unavailable. These amounts cover the complete original plan, even when you zoom into fewer hours. They are expectations, not measured savings or investment returns.
+
+Open **Cost breakdown** for net grid cash cost, battery wear and the change in stored-energy value. Economic cost includes wear and subtracts the stored-energy value change. That value change is not cash.
+
 For detailed comparison boundaries, use [Savings](../development/SAVINGS.md) and [plan evidence](../development/PLAN-EVIDENCE.md).
 
 ## Keep prices and commands clear
