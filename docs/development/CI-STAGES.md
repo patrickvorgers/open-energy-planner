@@ -7,7 +7,7 @@ It does not remove tests or change app behaviour.
 ## During development
 
 Each PR opening, new revision or reopening runs
-`Quick checks`. It verifies immutable documentation provenance and runs the
+`Quick checks`. It runs the
 centrally pinned Ruff lint and formatting checks, followed by CI policy tests.
 It installs the central development dependencies, Ruff and pytest, without
 building Docker images or installing app and HA dependencies. Trusted signature
@@ -54,16 +54,18 @@ frozen unless a new finding or failure requires a correction.
 
 ## Follow the intended merge order
 
-Develop Drafts and run independent local Codex reviews in parallel. Agree on one
-merge queue before requesting final CodeRabbit reviews. Review availability is
+Develop Drafts and run builder checks in parallel. Agree on one
+merge queue before requesting final automated reviews. Review availability is
 not a reason to review a later PR before its predecessor has merged.
 
 For a queue of PR A followed by PR B, finish A's review, required candidate CI,
-guarded merge and required main validation first. Then include that actual main
+and guarded merge first. Then include that actual main
 in B, resolve conflicts and run Quick, affected regression tests and CodeQL on
-the updated head. Reassess material changes with an independent reviewer. Only
-then freeze B's head and base and request its final CodeRabbit review. Complete
-B's selected candidate CI before merging B. Repeat this sequence for the next PR.
+the updated head. Inspect material changes and batch corrections. Only
+then freeze B's head and base and request its final automated review. Complete
+B's selected candidate CI before merging B. Automated review may run while A's
+main CI is pending. A's required main checks must succeed before B becomes Ready,
+requests candidate CI or merges. Repeat this sequence for the next PR.
 
 Do not request a second review while the first is running or push speculative
 base updates during a final review. If main advances before merge, synchronize
@@ -74,7 +76,38 @@ coordination chat, not in maintained product documentation.
 The preflight verifies that the selected current main commit is an ancestor of
 the frozen head and rechecks the current base and head before emitting a command.
 It cannot prove the human queue order. The operator must still confirm that all
-preceding PRs have completed the required merge and main checks.
+preceding PRs have merged before requesting review, and verify their successful
+main checks before Ready, candidate CI or merge.
+
+## Choose the reviewer before requesting a review
+
+Agents apply this order to each explicit automated-review request after the
+current-head cheap checks and coordinated merge slot are ready:
+
+1. Post `@coderabbitai rate limit` on the PR and wait for CodeRabbit's fresh reply.
+   This checks included review availability without starting a review, as
+   documented in [CodeRabbit's rate-limit guide](https://docs.coderabbit.ai/management/rate-limits).
+   Use the actual response for this request. Do not infer capacity from a fixed
+   plan allowance, an earlier review or a stale reply from another PR.
+2. If included capacity is available, follow the existing CodeRabbit preflight
+   and request one CodeRabbit review of the frozen head.
+3. If CodeRabbit explicitly reports no included capacity, request Kody-ai once
+   using `@kody start-review` with `<!-- oep-kody-head:<current-head-sha> -->`.
+   A positive availability check does not reserve capacity. If the subsequent
+   CodeRabbit request is explicitly rate-limited, switch to the same Kody route
+   without retrying CodeRabbit.
+
+Record the availability reply and chosen reviewer in the PR. Recheck the frozen
+head and base before sending either review command. Never launch both reviews
+in parallel, repeat an existing request or enable usage billing or paid credits.
+An unavailable status reply, provider outage or generic failure is not evidence
+of quota exhaustion. Stop and report that condition instead of guessing or
+silently switching providers. The existing Dependabot exception remains.
+
+This is the order agents use when requesting reviews. It does not change the
+candidate-admission rules. A completed substantive review of the current head
+from either CodeRabbit or Kody-ai remains valid for Ready, CI and merge. All
+findings from every reviewer still require evaluation, replies and resolution.
 
 ## Prepare one final CodeRabbit review
 
@@ -90,20 +123,17 @@ provider's applicable limit would leave a partial review.
 
 First obtain successful current-head Quick checks, GitHub Verified PR commits and
 CodeQL. Evaluate genuine findings and document any evidence-based disposition.
-Then use one independent local Codex context to review the Draft and record the
-reviewed SHA, evidence and finding dispositions in the PR. This is not Codex Cloud
-review and must not post `@codex review`. Cloud review remains optional and needs
-an explicit human request for that service and PR. Do not repeat independent
-review on every push. Batch corrections, run affected checks and reassess material
-scope changes before consuming another external review.
+Inspect your own changes, batch corrections, run affected checks and reassess
+material scope changes before consuming an external review. CodeRabbit provides
+the independent PR review. Do not add a separate local Codex reviewer, reviewer
+subagent or Codex Cloud review stage. Existing findings from any reviewer still
+require evidence-based disposition.
 
 After the preceding queued merge is complete, include and test the actual current
 main before freezing the final head and base. Run **Manual CodeRabbit review preflight** from
-`main` with the PR number, expected head/base and independent Codex review SHA.
-Affirm that the independent review and finding disposition are complete. The
-reviewed SHA must be the final head or an earlier commit in the complete PR
-history. Later correction commits are allowed. A rebase that removes that SHA
-requires a fresh valid independent review reference. The preflight uses only
+`main` with the PR number and expected head/base. Affirm that existing findings
+are dispositioned. No Codex review SHA or independent-Codex attestation is needed.
+The preflight uses only
 trusted main code and read-only metadata. It checks the file inventory, current
 Quick/signature/CodeQL results, resolved discussions, existing CodeRabbit activity
 and trusted same-head manual request markers.
@@ -121,28 +151,25 @@ Two successful preflights can still lead two people to post the command. The
 workflow concurrency group serializes preflights, not provider review capacity.
 All chats must coordinate one queue and use actual provider availability, not a
 hardcoded hourly allowance. Keep this conservative procedure during paid months
-too. Never remove a request marker, push an empty commit or retry autonomously to
-evade the duplicate guard. A rate-limited request needs deliberate operator
-handling after the provider reports capacity again and the prerequisites are
-rechecked.
+too. Never remove a request marker, push an empty commit or retry CodeRabbit
+automatically to evade the duplicate guard. A confirmed rate limit selects the
+Kody-ai fallback described above after the frozen identities and prerequisites
+are rechecked.
 
-For that deliberate recovery, inspect the actual provider result and current
-repository/account capacity or reset without making another review request.
-Confirm that the previous request did not run a substantive review. Recheck the
-exact current head and base, Quick/signature/CodeQL results, finding disposition
-and the absence of a running or completed substantive CodeRabbit review. Reuse
-the existing preflight summary and head marker, and consciously post the same
-manual command only when capacity is actually available. The normal preflight
-still refuses the existing marker. This is an explicit operator recovery outside
-that duplicate blocker, not a successful preflight rerun or an automatic retry.
+For that fallback, inspect the actual availability reply or rate-limit result
+and confirm that no substantive review ran. Recheck the exact current head and
+base, Quick/signature/CodeQL results, finding disposition and the absence of
+running or completed provider work. Request Kody-ai once with its own head
+marker. Do not repeat the existing CodeRabbit request or wait for its quota to
+refill when Kody-ai can review the frozen revision.
 
 Native automatic, incremental, positive-label and description-keyword triggers
 are disabled. GitHub cannot prevent a person with access from directly posting a
-CodeRabbit command. The operator attestations are not machine proof of independent
-review quality or finding correctness. No preflight receipt is a merge credential.
+CodeRabbit command. The operator attestation is not machine proof of finding
+correctness. No preflight receipt is a merge credential.
 Candidate admission separately enforces the file limit and actual current-head
-check evidence. It requires a substantive CodeRabbit result with completed scope,
-workspace, analysis, feedback and publication phases. A green skipped or
+check evidence. It accepts either a substantive CodeRabbit result with completed scope,
+workspace, analysis, feedback and publication phases, or a substantive Kody-ai result. A green skipped or
 rate-limited provider check does not meet that requirement. Unknown provider
 output fails closed and requires investigation instead of weakening the gate.
 Completed phases alone do not prove substantive coverage of every changed file;
@@ -152,27 +179,52 @@ Dependabot retains its documented CodeRabbit exception. Do not request manual
 CodeRabbit reviews for it. Its file limit, signatures, CodeQL, compatibility and
 required CI evidence still apply.
 
+## Kody-ai alternative
+
+Kody-ai can satisfy the same latest-head automated-review prerequisite as CodeRabbit.
+The candidate workflow validates `Kody Code Review` from GitHub App `413034`
+(`kody-ai`). It requires a completed successful check with the provider's
+`Code Review Complete` title and successful review-publication summary. Starting,
+skipped, warning, failed, unknown and older-head results do not qualify. The
+latest substantive Kody attempt supersedes earlier Kody evidence on that head.
+A completed `Code Review Skipped` check whose summary is exactly
+`No New Commits (No changes detected since last review)` is metadata from the
+unchanged revision. It preserves an earlier substantive success on that same
+head, but cannot supply missing review evidence or hide a later pending or
+failed review. Other skipped or unknown results still fail admission. Either provider
+may satisfy admission independently of the other provider's availability.
+The CodeRabbit-specific preflight and manual command above remain specific to
+CodeRabbit. They are not prerequisites for choosing Kody-ai.
+
+The same independent local review, coordinated merge order, current-head cheap
+checks and finding-disposition requirements apply to either reviewer. Inspect
+actual scope and exclusions. Address findings from both providers when both ran.
+A successful check does not prove that all findings have been addressed.
+
 ## Request candidate CI
 
 Ready for review starts candidate CI, not another CodeRabbit review. Native
 automatic review routes stay disabled, while the explicit manual command remains
 available. Admission reuses substantive review evidence for the exact same head,
 even if a later automatic metadata check is skipped. It reads the complete check
-history and still rejects later pending or failed reviews. A new head must obtain
+history and rejects later pending or failed attempts from the selected provider. A new head must obtain
 its own completed review before admission. A Ready transition must not be used to
 spend another review on an already reviewed, unchanged commit.
 
-First complete CodeRabbit review of the current head and address all findings,
+First complete a CodeRabbit or Kody-ai review of the current head and address all findings,
 including comments outside the diff. Resolve evaluated discussions, including
 outdated threads. Then select **Ready for review**. That transition automatically
 requests one candidate run without a CI label. For this repository Ready means
 ready for final candidate validation, rather than the start of bot review.
 The candidate gate requires a complete changed-file inventory within the 150-file
 limit, passing Quick checks, GitHub Verified PR commits, CodeQL and a substantive
-completed CodeRabbit check from the actual GitHub Apps on that head.
+completed CodeRabbit or Kody-ai check from its actual GitHub App on that head.
 The established Dependabot review exception remains in effect. An API outage,
 missing evidence, pending review, wrong app or changed PR fails before image builds.
 The gate checks the current base and head before and after reading the evidence.
+Every reviewer route must also prove that the frozen head includes the intended
+base through the GitHub comparison API. Missing, divergent or unavailable ancestry
+evidence fails admission.
 
 Admission also reads every review-thread page and rejects unresolved threads.
 The review check proves review completion, and thread resolution proves
@@ -210,162 +262,17 @@ checks. Retargeting a PR cancels the old candidate and reruns quick checks. It
 returns the PR to Draft and requires a fresh Ready transition. The admission log records the checked base
 and head so the operator can compare both before merging.
 
-## Personal runner execution
+## GitHub-hosted execution
 
-GitHub-hosted capacity is the default. No developer needs to install a runner.
-Only the owner of this private personal repository may request local execution
-for their own PR. The owner adds `ci-runner: prefer-local` before
-choosing Ready or requesting a manual `ci: run` retry. Admission still runs on GitHub and requires successful
-current-head Quick, signature and review checks. It rejects local requests for
-public repositories, fork heads and requests made by someone other than the PR
-author. Other PR authors or requesters always use GitHub, even if they apply
-the preference label. Missing owner metadata and organization-owned repositories
-also use GitHub. Same-repository writers are trusted collaborators, not an adversarial
-security boundary. Do not use this route for untrusted contributions.
+All candidate, main, manual and release jobs use GitHub-hosted Ubuntu runners.
+Contributors need no personal runner, runner preference label or availability
+credential. PR authors and labels cannot select personal hardware. The repository
+does not ship runner registration, workspace repair or host cleanup tooling.
 
-Personal runners have a server-enforced prerequisite: the repository must stay
-private and **Run workflows from fork pull requests** must remain disabled in
-GitHub's private-fork Actions settings. A PR-controlled workflow cannot enforce
-its own dispatch boundary. Disabling fork workflow execution at GitHub prevents
-fork code from starting that workflow at all. Admission verifies the actual
-repository and this policy through the read-only API before selecting capacity.
-Unknown or permissive settings fall back to GitHub. This check does not replace
-the server setting. Stop and unregister personal runners before enabling fork
-workflows or making the repository public. Do not use a personal runner to test
-untrusted fork contributions. That requires a separate trusted-dispatch design.
-
-The personal runner uses generic labels `self-hosted`, `X64` and `oep-ci-local`.
-Admission compares the PR author and requester with GitHub's personal repository
-owner metadata. No author name appears in the runner label. Dispatch also includes the
-Linux OS label that admission verified. No personal machine or username is
-hardcoded in the workflow. Contributors use GitHub-hosted capacity and do not
-register their own runners. The supplied Docker setup extends GitHub's pinned
-official Linux x64 runner image with Python and Docker Compose. Git, Bash and
-Docker CLI are supplied by the official image. On Windows, Docker Desktop runs
-the Linux container. No CI Python installation or script-policy change is needed
-on Windows. Native Windows, macOS and ARM runners are not selected.
-
-Before dispatch, admission reads the repository runner inventory and selects a
-matching online, idle personal runner. Offline, busy, missing, unreadable or
-unsupported capacity automatically selects GitHub-hosted execution instead.
-No local test failure is hidden or automatically rerun on GitHub. Availability
-is a point-in-time observation, not a reservation. A runner that disappears
-after selection can leave a queued job. Cancel that run and request another
-candidate to re-evaluate availability. A disconnect during execution retains
-the normal failed/cancelled job outcome.
-
-The `Quality and integration (AMD64)` job is the same for both locations. The
-immutable base still selects the required suites. Test images, deadlines,
-completion checks, source-tree markers, build identity and artifact uploads are
-unchanged. Local execution is not an agent-supplied attestation. Hosted admission
-and execution-location labeling remain lightweight GitHub-specific jobs. Main,
-manual and release events retain their existing hosted routing and main-reuse
-requirements. Matching successful personal candidates can supply the same
-original artifacts and exact-tree proof to main reuse.
-
-The job summary records actual execution when the job starts. A best-effort
-hosted metadata job applies `ci-execution: local` or `ci-execution: github` after
-the candidate finishes. It refuses to update a PR whose head has changed. These
-labels describe the latest completed candidate's location, including a failed
-candidate. They are not current-head test results or merge evidence. The
-`ci-runner: prefer-local` label records only the preference and remains set when
-fallback uses GitHub. Changing it does not cancel an active run or start a new
-one. Remove and reapply `ci: run` to request a new route on a frozen candidate.
-
-### One-time personal setup
-
-Contributors use GitHub-hosted execution by default. They need no personal
-runner, administrator role or local installation. The following setup applies
-only when the personal repository owner chooses optional local execution.
-
-1. Confirm the repository is private and GitHub's **Run workflows from fork pull
-   requests** setting is disabled. Keep this external boundary in place while
-   any personal runner is registered. Contributors need access to this private
-   repository. Use Docker Desktop in Linux-container mode or a local Linux x64
-   Docker engine with Compose. Test dependencies remain inside the existing
-   pinned test containers. The runner container has no published network ports.
-2. A GitHub account with repository administrator access must register the runner.
-   Write access alone is insufficient. Use the PowerShell setup below from the
-   repository root. The official image is pinned by AMD64 manifest digest.
-   The state volume retains registration and runner-managed updates across
-   container restarts. The separate work volume is mounted at its daemon-visible
-   absolute path so sibling test containers can bind the same source and reports.
-   The supplied setup requires the standard local-volume path shown below.
-   A different daemon storage layout needs its own verified matching mount setup.
-
-   ```powershell
-   $env:OEP_RUNNER_REPOSITORY = 'owner/repository'
-   docker volume create oep-ci-runner-work
-   $env:OEP_RUNNER_WORK_PATH = docker volume inspect oep-ci-runner-work --format '{{.Mountpoint}}'
-   if ($env:OEP_RUNNER_WORK_PATH -ne '/var/lib/docker/volumes/oep-ci-runner-work/_data') { throw 'Unsupported Docker volume layout' }
-   docker compose -p oep-ci-runner -f .github/runner/compose.yaml build
-   ```
-
-   Obtain a fresh one-hour registration token from Settings, Actions, Runners,
-   New self-hosted runner, Linux x64, or the GitHub registration-token API.
-   Enter it only at the secure prompt. It passes to the container through stdin,
-   never a committed file, Docker environment variable or shell-history argument.
-   The registration command adds `oep-ci-local` to the default Linux x64 labels.
-
-   ```powershell
-   $registrationToken = Read-Host 'One-hour runner registration token' -AsSecureString
-   [PSCredential]::new('runner', $registrationToken).GetNetworkCredential().Password | docker compose -p oep-ci-runner -f .github/runner/compose.yaml run --rm -T runner register
-   Remove-Variable registrationToken
-   docker compose -p oep-ci-runner -f .github/runner/compose.yaml up -d
-   ```
-
-3. Docker Desktop and the runner container must be running to receive jobs.
-   The container uses `unless-stopped` and starts with Docker Desktop unless it
-   was stopped manually. Explicitly start it to resume automatic startup after
-   a manual stop. Reapply the two
-   environment variables above in a new shell before using Compose commands.
-   Use `up -d` when local capacity is wanted. Use `stop` after the active job
-   finishes. Registration survives `stop`, `start` and `down` without `--volumes`.
-   Never delete the state volume as routine cleanup. To unregister, first stop
-   the idle listener, then pipe a fresh removal token from GitHub's runner API
-   into `compose run --rm -T runner remove`. Stop and unregister an older native
-   Windows runner before enabling the replacement to avoid two eligible listeners.
-4. A repository administrator configures the shared repository secret
-   `OEP_RUNNER_READ_TOKEN` with a fine-grained token whose owner has repository
-   administrator access. Contributors do not need this token on their computers.
-   Keep it restricted to this repository and **Administration: Read-only**, which GitHub
-   requires for [listing runner availability](https://docs.github.com/en/rest/actions/self-hosted-runners#list-self-hosted-runners-for-a-repository).
-   It needs no runner-registration write permission. Only hosted admission
-   receives this secret. It is not passed to the personal test job or logged.
-   Without a usable credential, local preference falls back to GitHub.
-5. Ensure the repository has the `ci-runner: prefer-local` label. Add it to a
-   reviewed Draft and choose Ready. Inspect the chosen labels in admission,
-   the job summary and the eventual execution label. Confirm the result and
-   source identities independently before merge.
-
-The runner separates CI dependencies and files from Windows, but it shares the
-local Docker socket. That socket grants authority over the entire engine, not a
-security sandbox against other containers or the host. Keep credentials and
-production workloads off this engine. Registration credentials remain in the
-dedicated state volume, not the repository or workspace. The runner drops from
-root initialization to its ordinary `runner` user and uses the socket's group
-without changing socket ownership. The workflow never changes or restarts the
-personal Docker daemon. Supervisor acceptance retains its disposable private
-inner engine and never receives this shared host socket.
-Its separate Buildx container retains reusable cache without global pruning.
-Before checkout, the official job-started hook restores runner ownership of
-generated files in the exact repository workspace. Test containers can write
-root-owned caches and screenshots into shared bind mounts. Resource cleanup does
-not make those directories removable by the ordinary runner user. The hook and
-its isolated standard-library Python helper are installed in the runner image,
-outside the checkout. It validates the configured volume, repository path,
-symlinked parents, nested mounts and filesystem boundaries before any change.
-It does not follow symlinks, cross mounts or make directories world-writable.
-Hard-linked files are rejected because changing their owner could affect an
-alias outside the workspace.
-Failure stops the job before checkout. This is workspace maintenance within the
-existing trusted owner and shared-engine boundary, not a sandbox for untrusted
-jobs.
-Preparation rejects remote Docker transports and non-Linux/non-x64 engines.
-Cleanup is restricted to the current `oep-check-<run>-<attempt>` containers,
-volumes and uniquely tagged images. It never prunes unrelated images, caches or
-persistent environments. Cancellation and host failure may interrupt cleanup.
-Inspect only the named invocation's resources before removing leftovers.
+During development, run Quick and affected regression tests locally. Execute the
+complete selected suite set once through the reviewed candidate workflow.
+An identical tested merge can reuse the original candidate proof through the
+checked main-reuse gate. Do not repeat the full suite locally as a prerequisite.
 
 ## Change-based candidate matrix
 
@@ -373,7 +280,8 @@ Inspect only the named invocation's resources before removing leftovers.
 
 Changes confined to `label_ci_scope.py`, `check_ci_candidate.py`,
 `check_commit_signatures.py`, `check_main_ci_reuse.py`,
-`check_suite_completion.py`, `check_provenance.py`, `review_preflight.py` and `scope_report.py` under `script/ci/` select
+`check_suite_completion.py`, `review_preflight.py` and `scope_report.py` under
+`script/ci/` select
 only the `ci` suite. These modules classify changes, verify admission and
 signatures, inspect original evidence or parse completion reports. They do not
 execute app, HA, database, migration or volume workloads. Mixed changes retain
@@ -512,7 +420,7 @@ The trusted workflow activates after this change reaches main. Local regression
 tests cover classification, stale events, label replacement and its privilege
 boundary before activation.
 
-Candidate admission, latest-head CodeRabbit review, evaluation and replies for
+Candidate admission, latest-head CodeRabbit or Kody-ai review, evaluation and replies for
 all findings, GitHub Verified commits and the final head/base identity checks
 are mandatory for every route. The matrix selects executable tests. It never
 weakens review or merge requirements. The Dependabot exception remains unchanged.
@@ -1038,13 +946,28 @@ The immutable base selects performance checks for storage and SQL owners,
 including nested domain storage, schema/lifecycle code and moves out of those
 areas. Changes anywhere in the shared `tests/database/support/` directory or the
 database conftest retain both database groups, without a fixture filename list.
-Changes to performance cases, the native image, database dependencies and the
-CI execution/selection harness also retain the group. Both sides of a move are classified.
+Changes to performance cases, the native image, `requirements.lock`, database
+dependencies and the shared database environment retain the group. CI controllers,
+workflows and selection metadata alone do not add query measurements. Shared
+execution and unknown CI owners still retain their full functional coverage.
+Both sides of a move are classified, so a simultaneous query or fixture change
+cannot lose its volume checks because the PR also changes CI.
 Shared Python fixture consumers are retained from both immutable revisions.
 An architectural regression rejects ORM imports outside SQL adapters or an
 adapter whose policy omits either functional database or performance coverage.
 New queries need volume assertions for their own access pattern. Running the
 existing price and settlement cases alone is not proof for an unrelated query.
+
+An update confined to the one SHA-pinned `actions/setup-python` reference in
+`checks.yaml` selects CI regressions. The selector compares immutable Git blobs
+and requires every other workflow byte to remain identical. It does not read the
+working copy or trust a PR label. Changing the Python version, runner, permissions,
+commands or another action, adding or deleting the workflow, an ambiguous setup
+reference or unavailable comparison evidence retains the normal full route.
+The reference must belong to a block-style workflow step. Matching text inside
+scripts or other scalar values never qualifies. Ambiguous YAML syntax before the
+reference conservatively retains full validation.
+Mixed changes retain the union of every affected owner's required suites.
 
 Central Python composition changes keep the original `full` matrix without
 inferring query impact from that breadth. SQLAlchemy ownership remains enforced

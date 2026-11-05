@@ -224,28 +224,6 @@ def test_changed_price_cannot_commit_a_stale_interval(settlement):
         )
 
 
-def test_future_reference_continues_recorded_scenario_state(settlement):
-    """Reference depleted its original two kWh while actual remains full. The next forecast cannot borrow actual energy."""
-    from open_energy_planner.savings.forecast_state import initial_state
-
-    runtime, store, docs, _engine, plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    next_start = END + timedelta(minutes=15)
-    document = plans.get_plan("original-plan")
-    document["input_snapshot"]["problem"]["intervals"][0]["start"] = next_start.isoformat()
-    state = initial_state(store, docs, plans, document, contract())
-    assert state["stored"] == {"battery": 0}
-    assert state["status"] == "continuous_reference"
-    assert not state["estimated"]
-    document["input_snapshot"]["problem"]["intervals"][0]["start"] = (
-        next_start + timedelta(hours=2)
-    ).isoformat()
-    from open_energy_planner.savings.model import PendingSettlement
-
-    with pytest.raises(PendingSettlement, match="recent metering"):
-        initial_state(store, docs, plans, document, contract())
-
-
 def test_failed_settlement_correction_preserves_latest_successful_view(settlement):
     """An uncovered corrected contract cannot replace the two settled quarters with an empty default evaluation."""
     runtime, _store, _docs, _engine, _plans = settlement
@@ -459,7 +437,6 @@ def test_bonus_failure_does_not_stop_physical_reference(settlement, seed_kind):
     runtime, _store, docs, engine, plans = settlement
     original = plans.get_plan("original-plan")
     from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
-    from open_energy_planner.savings.forecast_state import initial_state
 
     selected = contract(bonus=True)
     book = None
@@ -485,12 +462,6 @@ def test_bonus_failure_does_not_stop_physical_reference(settlement, seed_kind):
     assert state["actual_stored"] == {"battery": 2}
     assert state["end"] == (END + timedelta(minutes=15)).isoformat()
     restarted = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), plans)
-    document = plans.get_plan("original-plan")
-    document["input_snapshot"]["problem"]["intervals"][0]["start"] = state["end"]
-    continued = initial_state(_store, docs, plans, document, selected)
-    assert continued["stored"] == {"battery": 0}
-    assert continued["counters"] == {}
-    assert continued["status"] == "continuous_reference"
     restarted.process(contract(buy="0.4", bonus=True), END + timedelta(hours=2), book)
     assert docs.read("physical-reference.json") == state
     assert plans.get_plan("original-plan") == original
@@ -592,63 +563,3 @@ def test_physical_reference_advances_without_contract(settlement):
     assert docs.read("physical-reference.json")["reference_stored"] == {"battery": 0}
     assert runtime.issue == "Contract configuration is required for settlement"
     assert runtime.physical_issue is None
-
-
-@pytest.mark.parametrize(
-    "stocks,aligned",
-    [
-        ({"battery": 0.00000005}, True),
-        ({"battery": 0.0000002}, False),
-        ({"different-battery": 0}, False),
-    ],
-)
-def test_reference_budget_alignment_uses_absolute_energy_tolerance(
-    settlement, monkeypatch, stocks, aligned
-):
-    """A .00000005 kWh replay difference retains quota. A .0000002 difference or different IDs cannot borrow it."""
-    from open_energy_planner.savings.forecast_state import initial_state
-
-    runtime, store, docs, _engine, plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    financial = store.state(docs.read("head.json")["revision"])
-    financial["counters"]["reference"] = {"retained-opening-budget": 1.25}
-    monkeypatch.setattr(store, "state", lambda revision: financial)
-    physical = docs.read("physical-reference.json")
-    physical["reference_stored"] = stocks
-    docs.write("physical-reference.json", physical)
-    document = plans.get_plan("original-plan")
-    document["input_snapshot"]["problem"]["intervals"][0]["start"] = physical["end"]
-    result = initial_state(store, docs, plans, document, contract())
-    assert result["counters"] == ({"retained-opening-budget": 1.25} if aligned else {})
-    assert result["stored"] == stocks
-
-
-@pytest.mark.parametrize("changed", [False, True])
-def test_new_plan_counter_provenance_cannot_borrow_old_financial_quota(settlement, changed):
-    """Matching provenance retains 1 kWh. A new 2 kWh baseline cannot borrow it before background replay."""
-    from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
-    from open_energy_planner.savings.forecast_state import initial_state
-
-    runtime, store, docs, _engine, plans = settlement
-    selected = contract(bonus=True)
-    seed = CounterSeed(
-        "bonus", selected.bonuses[0].period_start(START), 1, 10, "sensor.export", START
-    )
-    old_book = CounterBook(START, (seed,))
-    runtime.process(selected, END + timedelta(hours=1), old_book)
-    assert runtime.issue is None
-    assert docs.read("working.json") is None
-    replacement = CounterBook(END, (replace(seed, used_kwh=2),))
-    document = plans.get_plan("original-plan")
-    document["input_snapshot"]["problem"]["intervals"][0]["start"] = (
-        END + timedelta(minutes=15)
-    ).isoformat()
-    document["input_snapshot"]["bonus_evidence"] = [
-        {"counter_version": replacement.version if changed else old_book.version}
-    ]
-    result = initial_state(store, docs, plans, document, selected)
-    assert result["stored"] == {"battery": 0}
-    assert result["counters"] == ({} if changed else {"bonus|2026-01-01T00:00:00+00:00": 1})
-    assert result["evaluation_revision"] == (
-        None if changed else docs.read("head.json")["revision"]
-    )

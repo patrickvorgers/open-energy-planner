@@ -7,6 +7,31 @@ import pytest
 from script.ci import proof_git
 
 
+@pytest.mark.parametrize("blob", ["--help", "HEAD", "a" * 39, "A" * 40, None])
+def test_immutable_blob_rejects_non_sha_without_starting_git(monkeypatch, blob):
+    """A workflow comparison cannot turn an unvalidated blob reference into a Git argument."""
+    calls = []
+    monkeypatch.setattr(
+        proof_git.subprocess, "check_output", lambda *args, **kwargs: calls.append(args)
+    )
+    with pytest.raises(proof_git.VerificationError, match="immutable 40-character commit SHA"):
+        proof_git.immutable_blob(blob)
+    assert calls == []
+
+
+def test_immutable_blob_uses_a_fixed_bounded_read(monkeypatch, tmp_path):
+    """Blob reads return raw bytes through cat-file with no checkout, diff driver or execution."""
+
+    def read(command, **options):
+        """Assert the complete process contract before returning independent workflow bytes."""
+        assert command == ["git", "cat-file", "blob", "a" * 40]
+        assert options == {"cwd": tmp_path, "stderr": subprocess.DEVNULL, "timeout": 60}
+        return b"workflow bytes\n"
+
+    monkeypatch.setattr(proof_git.subprocess, "check_output", read)
+    assert proof_git.immutable_blob("a" * 40, tmp_path) == b"workflow bytes\n"
+
+
 def test_history_fetch_timeout_becomes_credential_free_verification_failure(monkeypatch):
     """A stalled remote fetch gets a longer bounded deadline and fails signature verification cleanly."""
 
@@ -37,11 +62,11 @@ def test_commit_enumeration_timeout_remains_a_verification_failure(monkeypatch, 
         proof_git.introduced_commits("1" * 40, "2" * 40)
 
 
-@pytest.mark.parametrize("operation", ["checkout", "merge", "provenance"])
+@pytest.mark.parametrize("operation", ["checkout", "merge"])
 def test_standalone_metadata_operations_keep_process_failure_contract(
     monkeypatch, tmp_path, operation
 ):
-    """Standalone completion, label and provenance callers retain bounded process errors."""
+    """Standalone completion and label callers retain bounded process errors."""
 
     def timeout(command, **options):
         """The local deadline expires before any result can authorize completion or labels."""
@@ -52,10 +77,8 @@ def test_standalone_metadata_operations_keep_process_failure_contract(
     with pytest.raises(subprocess.TimeoutExpired):
         if operation == "checkout":
             proof_git.checkout_tree()
-        elif operation == "merge":
-            proof_git.merged_tree("1" * 40, "2" * 40, tmp_path)
         else:
-            proof_git.tree_records(tmp_path, "1" * 40)
+            proof_git.merged_tree("1" * 40, "2" * 40, tmp_path)
 
 
 def test_clean_checkout_check_bounds_every_local_process(monkeypatch):

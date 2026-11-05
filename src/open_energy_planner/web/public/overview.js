@@ -132,8 +132,8 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
  * axis: "soc" uses the right-hand 0–100% axis. utcDays selects UTC date labels.
  * Calendar headings, alternating bands and midnight separators follow installation
  * time unless utcDays selects UTC. Timestamped charts reserve heading space and
- * remove their headings on destruction. Clock ticks distinguish repeated hours
- * with timezone names while the headings supply the weekday and date.
+ * remove their headings on destruction. Clock ticks show installation time
+ * without timezone names while the headings supply the weekday and date.
  * unit names the default y unit. Minimum fixes a physical y baseline. balance stacks series
  * sharing a stack and includes zero. Rendering applies the selected planning range
  * without category-style end padding. Interval timestamps already determine bar widths.
@@ -146,7 +146,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
     tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); document.body.append(tooltip);
     const canvas = $(id), legend = $(`${id}-legend`);
     legend.replaceChildren();
-    const axisTime = utcDays ? (value) => new Date(value).toISOString().slice(0, 10) + " UTC" : value => when(value, {timeZoneName: "short"});
+    const axisTime = utcDays ? (value) => new Date(value).toISOString().slice(0, 10) : value => when(value);
     const datasets = series.map((s, index) => {
         const values = [];
         for (const segment of s.segments || [s.points || []]) {
@@ -189,7 +189,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
                     for (let quarter = first; quarter <= last; quarter += stride) scale.ticks.push({value: quarter * QUARTER_MILLISECONDS});
                 },
                 ticks: {maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays ? axisTime(value) : calendarTime(value)},
-                title: {display: utcDays, text: "UTC calendar date"}},
+                title: {display: utcDays, text: "Calendar date"}},
                 y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: false, title: {display: Boolean(unit), text: unit}, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
                 ...(series.some((entry) => entry.axis === "soc") ? {soc: {position: "right", min: 0, max: 100, stacked: false, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
             onClick: (_event, elements) => {
@@ -377,6 +377,7 @@ async function showPlan(signal) {
         const period = planEvidence?.period;
         renderSmartBenefit(self?.expected_savings, currency, period ? `From ${when(period.start)} to ${when(period.end)}: Whole original plan. Expected, not measured.` : undefined);
         let message = "Benefits versus without battery include storage and OEP. Excludes investment costs.";
+        if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and OEP start from the same measured SoC and opening bonus budgets. The extra expected saving includes the difference in remaining battery value. " + message;
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
         if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
         if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";

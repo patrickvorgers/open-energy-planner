@@ -25,7 +25,7 @@ from script.ci.ci_groups import (
     minimal_suites,
     selected_suites,
 )
-from script.ci.proof_git import immutable_test_sources, raw_changes
+from script.ci.proof_git import immutable_blob, immutable_test_sources, raw_changes
 
 __all__ = [
     "APP_TEST_AREAS",
@@ -114,7 +114,6 @@ PROOF_CI_FILES = frozenset(
         "check_commit_signatures",
         "check_main_ci_reuse",
         "check_suite_completion",
-        "check_provenance",
         "review_preflight",
         "scope_report",
         "ci_scope",
@@ -126,6 +125,10 @@ PROOF_CI_FILES = frozenset(
 HA_CI_FILES = frozenset({"script/ci/ha_suites.py", "script/ci/ha_shard.py"})
 ADMISSION_WORKFLOW = ".github/workflows/ci-admission.yaml"
 REVIEW_METADATA_FILES = frozenset({".coderabbit.yaml", ".github/workflows/review-preflight.yaml"})
+CHECKS_WORKFLOW = ".github/workflows/checks.yaml"
+SETUP_PYTHON_REFERENCE = (
+    r"(?m)^([ \t]*uses: actions/setup-python@)[0-9a-f]{40}(?:[ \t]+#[^\r\n]*)?[ \t]*$"
+)
 
 
 # Most-specific directories win. New files inherit their area's reviewed contract.
@@ -380,7 +383,11 @@ def path_profile(path):
         profile = DIRECTORY_PROFILES[directory]
         if name.startswith(directory):
             return profile
-    if name in {".github/workflows/developer-page.yaml", "Dockerfile.ui-test"}:
+    if name in {
+        ".github/workflows/developer-page.yaml",
+        ".github/workflows/pages.yaml",
+        "Dockerfile.ui-test",
+    }:
         return focused_profile("unit-frontend", "browser")
     if name == "Dockerfile.native-test":
         return focused_profile(
@@ -467,6 +474,60 @@ def name_is_shared_root(path):
     return str(path).startswith("src/open_energy_planner/") and len(path.parts) == 3
 
 
+def workflow_step_reference(text, position):
+    """Recognize a block-style step field, conservatively rejecting ambiguous YAML prefixes."""
+    parents = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        reference = offset == position
+        offset += len(line)
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "\t" in line:
+            return False
+        indentation = len(line) - len(line.lstrip(" "))
+        while parents and parents[-1][0] >= indentation:
+            parents.pop()
+        if parents and parents[-1][2]:
+            continue
+        if reference:
+            return (
+                len(parents) == 4
+                and [parent[1] for parent in parents][::2] == ["jobs", "steps"]
+                and parents[-1][1] == "-"
+                and indentation == parents[-1][0] + 2
+            )
+        field = re.fullmatch(
+            r" *(?P<item>- )?(?P<key>[A-Za-z_][A-Za-z0-9_-]*):(?P<value>[^\r\n]*)[\r\n]*", line
+        )
+        if field is None:
+            return False
+        value = field["value"].strip()
+        # shortcut: quoted, tagged and complex flow prefixes keep full CI until explicitly supported.
+        if value.startswith(("'", '"', "&", "*", "!", "{")) or (
+            value.startswith("[")
+            and re.fullmatch(r"\[[A-Za-z0-9_, .-]*\](?: +#.*)?", value) is None
+        ):
+            return False
+        if field["item"]:
+            parents.append((indentation, "-", False))
+            indentation += 2
+        parents.append((indentation, field["key"], bool(value and not value.startswith("#"))))
+    return False
+
+
+def setup_python_reference_only(old_blob, new_blob, root):
+    """Recognize one pinned setup action update in otherwise identical immutable workflow text."""
+    normalized = []
+    for blob in (old_blob, new_blob):
+        text = immutable_blob(blob.decode("ascii"), root).decode("utf-8")
+        matches = list(re.finditer(SETUP_PYTHON_REFERENCE, text))
+        if len(matches) != 1 or not workflow_step_reference(text, matches[0].start()):
+            return False
+        normalized.append(re.subn(SETUP_PYTHON_REFERENCE, r"\1PIN", text))
+    return normalized[0] == normalized[1] and normalized[0][1] == 1
+
+
 def _select_functional_profile(base, tested, root=".", *, reasons=None, fallback=None):
     """Union checks for every changed path. Uncertainty and special modes require full CI.
 
@@ -497,7 +558,7 @@ def _select_functional_profile(base, tested, root=".", *, reasons=None, fallback
         required = set()
         changed_helpers = set()
         for metadata, raw_path in zip(fields[::2], fields[1::2], strict=True):
-            old_mode, new_mode, _old_blob, _new_blob, status = metadata.split()
+            old_mode, new_mode, old_blob, new_blob, status = metadata.split()
             if (
                 old_mode.removeprefix(b":") not in REGULAR_FILE_MODES
                 or new_mode not in REGULAR_FILE_MODES
@@ -506,6 +567,12 @@ def _select_functional_profile(base, tested, root=".", *, reasons=None, fallback
                 return full("Unsupported file mode or change status")
             path = PurePosixPath(raw_path.decode("utf-8"))
             profile = path_profile(path)
+            if (
+                str(path) == CHECKS_WORKFLOW
+                and status == b"M"
+                and setup_python_reference_only(old_blob, new_blob, root)
+            ):
+                profile = "ci"
             # Unknown flat modules have no owner. Known directories inherit their
             # contract for additions and deletions as well as modifications.
             if status != b"M" and name_is_shared_root(path):
@@ -555,23 +622,14 @@ def _select_functional_profile(base, tested, root=".", *, reasons=None, fallback
 
 
 def performance_queries_path(path):
-    """Add volume proof only for recognized query, fixture, backend or CI-harness owners."""
+    """Add volume proof for measured query code, fixtures and runtime environments, not CI control."""
     name = str(path)
     if name in {
         "Dockerfile.native-test",
+        "requirements.lock",
         "pyproject.toml",
         "compose.yaml",
-        ".github/workflows/checks.yaml",
     }:
-        return True
-    if (
-        name in PROOF_CI_FILES
-        or name in HA_CI_FILES
-        or name == ADMISSION_WORKFLOW
-        or name in REVIEW_METADATA_FILES
-    ):
-        return False
-    if name.startswith("script/ci/"):
         return True
     if name.startswith(("tests/database/performance/", "tests/database/support/")) or name == (
         "tests/database/conftest.py"
@@ -585,7 +643,7 @@ def performance_queries_path(path):
 
 
 def select_profile(base, tested, root=".", *, reasons=None):
-    """Select the unchanged functional matrix, then independently add query-volume validation."""
+    """Select functional coverage, then independently add query-volume validation."""
     if reasons is None:
         reasons = []
     fallback = []

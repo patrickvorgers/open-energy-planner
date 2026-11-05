@@ -1,16 +1,23 @@
 # Contributing
 
+Every added or changed feature requires a documentation-site impact assessment.
+Check the beginner route, visible labels, installation/configuration steps,
+defaults, supported platforms, everyday behavior, limitations and troubleshooting.
+Update affected canonical guides in the same PR, or explain why no site update
+is needed. Reviewers must verify that decision. Keep one maintained source.
+See [documentation-site maintenance](docs/development/DOCUMENTATION-SITE.md#maintain-one-source).
+
 Read the [security policy](SECURITY.md) before reporting a vulnerability or
 attaching logs, screenshots or example configurations. Use synthetic inputs
 instead of personal measurements or credentials.
 
-AI-assisted development also follows the repository [AI development agreements](AGENTS.md), including evidence-based handling of all Codex and CodeRabbit review findings.
+AI-assisted development also follows the repository [AI development agreements](AGENTS.md), including evidence-based handling of all Codex, CodeRabbit and Kody-ai review findings.
 
-CodeRabbit is the only mandatory automated reviewer. Before merging, its review must be complete for the latest PR head commit, and every finding must be evaluated and addressed. Any new commit, including documentation-only changes, requires CodeRabbit review of the new head. Passing CI, an older review or an unavailable CodeRabbit service does not meet this requirement. Recheck the head SHA immediately before merging.
+At least one automated reviewer, CodeRabbit or Kody-ai, must complete a substantive review of the latest PR head before Ready for review or merge. Every new commit, including documentation-only changes, requires a completed review of that head from either provider. Evaluate and address every finding from all reviewers, including outside-diff comments, and resolve the evaluated threads. Passing CI, no comments, pending or skipped reviews, an unavailable provider and older-head reviews do not prove completion. Recheck the head SHA immediately before merging.
 
-Codex Cloud review is optional and runs only on an explicit human request for that service and PR. Keep automatic Codex reviews disabled for this repository. Do not routinely request or repeat Codex Cloud reviews after commits. A general request to check a PR does not authorize a cloud review. Existing findings from any reviewer still require evaluation and resolution.
+CodeRabbit is the preferred independent PR reviewer, with Kody-ai as the fallback after a confirmed rate limit. Do not add a separate local Codex reviewer, reviewer subagent or Codex Cloud review stage. Builders still inspect their own changes, run affected tests and evaluate every existing finding from any reviewer. Keep automatic Codex reviews disabled.
 
-Temporary exception: PRs authored by `dependabot[bot]` do not require CodeRabbit review, and manual CodeRabbit reviews must not be requested for them. Codex Cloud review is also optional and requires an explicit user request. Passing CI, verified commits, dependency compatibility and regression-coverage assessment remain required. Any existing findings must still be evaluated and addressed.
+Temporary exception: PRs authored by `dependabot[bot]` do not require automated review, and manual CodeRabbit reviews must not be requested for them. Passing CI, verified commits, dependency compatibility and regression-coverage assessment remain required. Any existing findings must still be evaluated and addressed.
 
 All documentation, directory/file names, code, comments, UI text and tests use English. Original revisions remain accessible through Git. Maintained specifications are in `design/`. Product and site documentation describe current behavior and help future maintenance. Keep delivery history, PR/review references and temporary test receipts in PRs or CI artifacts. Update existing guides instead of creating a report for each change. See the [maintained-guide policy](docs/development/CODE-DOCUMENTATION.md#maintained-guides).
 
@@ -29,19 +36,27 @@ regression tests before each push. Group related review corrections into one
 tested push. Build and review in Draft. Keep each PR within 150 changed files,
 including binary, removed and renamed files. Split a larger PR before review.
 First wait for current-head Quick, verified commits and CodeQL to pass and
-evaluate their findings. Then use one independent local Codex context to review
-the Draft. Record the reviewed commit SHA and finding dispositions in the PR.
-Batch corrections and retest instead of restarting independent review on every
-push. This local review is distinct from the optional Codex Cloud service above.
+evaluate their findings. Inspect your own changes, batch corrections and retest.
+The selected automated provider supplies the independent review after those builder checks.
 
-Develop Drafts and run independent local Codex reviews in parallel, but request
-final CodeRabbit reviews in the intended merge order. Wait for the preceding PR
-to merge and finish its required main checks. Include that actual main in this
+Before requesting an automated review, ask CodeRabbit for fresh availability
+with `@coderabbitai rate limit` on the PR. This does not start a review. Use
+CodeRabbit when included capacity is available and Kody-ai when CodeRabbit
+explicitly reports no capacity. A confirmed rate limit after a positive check
+also permits Kody fallback. Unknown status and ordinary failures do not.
+Record the response and selected provider, avoid concurrent or duplicate
+requests, and never enable paid credits. Both completed current-head reviewers
+remain equally valid for CI. See [provider selection](docs/development/CI-STAGES.md#choose-the-reviewer-before-requesting-a-review).
+
+Develop Drafts and run builder checks in parallel, but request
+final automated reviews in the intended merge order. Wait for the preceding PR
+to merge. Include that actual main in this
 PR, resolve conflicts, retest affected behavior and wait for current-head Quick,
 signature and CodeQL checks. Reassess material changes before final review.
-Only after that work is complete, freeze the final head and base. Run the
+Only after that work is complete, freeze the final head and base. Admission verifies
+that the frozen head includes the frozen base for either reviewer. When choosing CodeRabbit, run the
 **Manual CodeRabbit review preflight** workflow from `main`, with those SHAs,
-the independent Codex review SHA and affirmative review/disposition attestations.
+and an affirmative existing-finding-disposition attestation.
 Follow its job summary to request one manual CodeRabbit review. Automatic,
 incremental, label and description-keyword review triggers are disabled regardless
 of star count or paid plan. Retain the Dependabot exception above. All chats share
@@ -49,7 +64,12 @@ one coordinated review queue. Respect actual provider limits and never retry
 automatically. The read-only preflight neither spends nor reserves review quota.
 Always verify actual completed current-head analysis, not merely a green provider
 status. See [review and CI stages](docs/development/CI-STAGES.md) for the procedure
-and its limits.
+and its limits. Kody-ai is an alternative with the same independent-review,
+merge-order and finding-disposition requirements. The CodeRabbit-specific
+preflight is not required for Kody-ai.
+Automated review may run while the preceding merge's main CI is pending.
+Wait for that main CI to succeed before choosing Ready, requesting candidate CI
+or merging the next PR.
 After latest-head review and disposition of every finding, resolve the evaluated
 threads and choose **Ready for review** to start one selected candidate automatically.
 A PR returns to Draft when opened, reopened, given a new commit or retargeted.
@@ -67,23 +87,17 @@ the PR. Focused `--profile` and `--documentation-only` runs remain valid local c
 An informal local result does not replace the candidate merge gate. Candidate CI retains Ruff
 and formatting and executes the suites selected by the immutable base policy.
 Those suites include native/planner, database, app smoke, Home Assistant handoff
-and desktop/mobile browser checks when required by the matrix. CodeRabbit
-supplements executable checks and requires the GitHub App to have repository access.
+and desktop/mobile browser checks when required by the matrix. CodeRabbit or
+Kody-ai supplements executable checks and requires its GitHub App to have repository access.
 
-GitHub-hosted execution is the default and requires no developer-owned runner.
-Only the personal repository owner can apply `ci-runner: prefer-local` before
-choosing Ready to use their Linux x64 runner in Docker
-when it is online and idle. Other contributors always use GitHub, even with
-that preference label. The runner label is the generic `oep-ci-local`. Missing, offline,
-busy or unreadable capacity automatically falls back to GitHub. Both routes run
-the same workflow, suite selection, reports and installation packaging. See
-[personal runner setup and limits](docs/development/CI-STAGES.md#personal-runner-execution)
-for the one-time registration, read-only availability credential and location labels.
+All candidate jobs use GitHub-hosted Ubuntu runners. No developer-owned runner,
+runner preference label or availability credential is needed. See
+[GitHub-hosted execution](docs/development/CI-STAGES.md#github-hosted-execution).
 
 Contributors need no CI labels for the normal GitHub-hosted route. Ready attests
 that all findings, including outside-diff comments, were evaluated and addressed.
-The admission gate verifies current-head Quick, signatures, CodeRabbit and no
-unresolved discussions. Use `ci: run` only for a deliberate retry on a frozen,
+The admission gate verifies current-head Quick, signatures, CodeQL, a substantive
+CodeRabbit or Kody-ai review, inclusion of the intended base and no unresolved discussions. Use `ci: run` only for a deliberate retry on a frozen,
 reviewed candidate. It cannot bypass those gates. No periodic checks or automatic
 retries of failed tests are scheduled.
 

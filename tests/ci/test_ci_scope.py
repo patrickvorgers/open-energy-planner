@@ -94,6 +94,7 @@ def git_diff(monkeypatch):
 
     monkeypatch.setattr("script.ci.proof_git.subprocess.check_output", read_diff)
     monkeypatch.setattr("script.ci.ci_scope.immutable_test_sources", lambda *args: {})
+    monkeypatch.setattr("script.ci.ci_scope.immutable_blob", lambda *args: b"")
     return changes
 
 
@@ -113,9 +114,9 @@ def git_diff(monkeypatch):
         "docs/reference.pdf",
         "docs/example.json",
         "docs/data.csv",
-        "docs/developer/index.html",
-        "docs/developer/start.mjs",
-        "docs/developer/style.css",
+        "docs/site/provisioning/index.html",
+        "docs/site/provisioning/start.mjs",
+        "docs/site/provisioning/style.css",
         "docs/extensionless",
     ],
 )
@@ -126,6 +127,17 @@ def test_regular_documentation_changes_use_focused_checks(git_diff, path, modes)
     """All regular docs files and established root Markdown retain documentation-only checks."""
     git_diff.append(raw_change(path, *modes))
     assert documentation_only(BASE, TESTED)
+
+
+@pytest.mark.parametrize(
+    "path", [".github/workflows/developer-page.yaml", ".github/workflows/pages.yaml"]
+)
+def test_pages_publishers_retain_frontend_and_browser_validation(git_diff, path):
+    """The renamed site publisher retains real frontend/browser coverage without platform tests."""
+    from script.ci.ci_scope import selected_suites
+
+    git_diff.append(raw_change(path, "100644", "100644", "M"))
+    assert selected_suites(select_profile(BASE, TESTED)) == {"ci", "unit-frontend", "browser"}
 
 
 @pytest.mark.parametrize("module", ["model.py", "collection.py", "api.py", "serialization.py"])
@@ -302,7 +314,7 @@ def test_actions_output_defaults_to_full_except_valid_doc_pr(
 
 @pytest.mark.parametrize("focused", [False, True])
 def test_native_scope_keeps_lint_and_only_omits_unaffected_suites(monkeypatch, focused):
-    """Focused checks retain Ruff and all documentation/provenance/routing tests. Full scope retains smoke/scenarios."""
+    """Focused checks retain Ruff and documentation/routing tests. Full scope retains smoke/scenarios."""
     calls = []
     monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: calls.append(command))
     monkeypatch.setattr(
@@ -318,6 +330,7 @@ def test_native_scope_keeps_lint_and_only_omits_unaffected_suites(monkeypatch, f
         "script",
         "tests/frontend",
         "test_environment",
+        "docs/site",
     ]
     if focused:
         assert len(calls) == 3
@@ -326,7 +339,6 @@ def test_native_scope_keeps_lint_and_only_omits_unaffected_suites(monkeypatch, f
             "pytest",
             "-q",
             "tests/documentation",
-            "tests/ci/test_provenance.py",
             "tests/ci/test_ci_scope.py",
             "--junitxml=results/ci/documentation.xml",
             "-p",
@@ -341,7 +353,7 @@ def test_native_scope_keeps_lint_and_only_omits_unaffected_suites(monkeypatch, f
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_quick_checks_stop_before_any_test_runtime_or_docker_build(monkeypatch, fail):
-    """Quick mode runs only provenance and the existing full-scope Ruff checks, failing immediately on error."""
+    """Quick mode runs only the existing full-scope Ruff checks, failing immediately on error."""
     calls = []
 
     def run(command, **kwargs):
@@ -356,11 +368,7 @@ def test_quick_checks_stop_before_any_test_runtime_or_docker_build(monkeypatch, 
     if fail:
         with pytest.raises(subprocess.CalledProcessError):
             runpy.run_path(str(ROOT / "script/ci/check_native.py"), run_name="__main__")
-        assert calls == [["script/ci/check_provenance.py"]]
-    else:
-        runpy.run_path(str(ROOT / "script/ci/check_native.py"), run_name="__main__")
         assert calls == [
-            ["script/ci/check_provenance.py"],
             [
                 "-m",
                 "ruff",
@@ -371,6 +379,23 @@ def test_quick_checks_stop_before_any_test_runtime_or_docker_build(monkeypatch, 
                 "script",
                 "tests/frontend",
                 "test_environment",
+                "docs/site",
+            ]
+        ]
+    else:
+        runpy.run_path(str(ROOT / "script/ci/check_native.py"), run_name="__main__")
+        assert calls == [
+            [
+                "-m",
+                "ruff",
+                "check",
+                "src",
+                "custom_components",
+                "tests",
+                "script",
+                "tests/frontend",
+                "test_environment",
+                "docs/site",
             ],
             [
                 "-m",
@@ -383,6 +408,7 @@ def test_quick_checks_stop_before_any_test_runtime_or_docker_build(monkeypatch, 
                 "script",
                 "tests/frontend",
                 "test_environment",
+                "docs/site",
             ],
         ]
 
@@ -391,7 +417,7 @@ def test_quick_checks_stop_before_any_test_runtime_or_docker_build(monkeypatch, 
 @pytest.mark.parametrize("fail_build", [False, True])
 @pytest.mark.parametrize("prebuilt", [False, True])
 @pytest.mark.parametrize("performance", [False, True])
-def test_orchestrator_preserves_scope_provenance_failure_and_cleanup(
+def test_orchestrator_preserves_scope_failure_and_cleanup(
     monkeypatch, focused, fail_build, prebuilt, performance
 ):
     """Run only native for docs, retain all four database/framework suites otherwise, and always clean up after failures."""
@@ -431,16 +457,15 @@ def test_orchestrator_preserves_scope_provenance_failure_and_cleanup(
             runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
     else:
         runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
-    assert calls[0] == ([sys.executable, "script/ci/check_provenance.py"], True)
     supervisor = ([sys.executable, "-m", "script.supervisor.check_supervisor"], True)
     if not focused and not fail_build:
         assert calls.pop() == supervisor
     else:
         assert supervisor not in calls
     if prebuilt:
-        assert calls[1][0][:3] == ["docker", "image", "inspect"]
-        assert calls[1][1] is True
-        assert calls[1][0][3:] == [
+        assert calls[0][0][:3] == ["docker", "image", "inspect"]
+        assert calls[0][1] is True
+        assert calls[0][0][3:] == [
             f"oep-check-12345-1-{target}"
             for target in (
                 ["native"]
@@ -448,13 +473,13 @@ def test_orchestrator_preserves_scope_provenance_failure_and_cleanup(
                 else ["native", "app", "ha-tests", "provision-tests", "ui-tests", "db-tests"]
             )
         ]
-        calls.pop(1)
-    compose = calls[1][0][:6]
+        calls.pop(0)
+    compose = calls[0][0][:6]
     assert compose[:3] == ["docker", "compose", "-p"]
     assert compose[3].startswith("oep-check-")
     if prebuilt:
         assert compose[3] == "oep-check-12345-1"
-    operations = [command[6:] for command, _ in calls[1:]]
+    operations = [command[6:] for command, _ in calls]
     assert operations[-2:] == [
         ["logs", "--no-color"],
         ["--profile", "test", "down", "--volumes", "--remove-orphans"],
@@ -584,7 +609,7 @@ def test_prebuilt_missing_image_fails_before_any_suite(monkeypatch):
     calls = []
 
     def missing_image(command, **kwargs):
-        """Fail Docker's image check while allowing provenance and scoped teardown."""
+        """Fail Docker's image check while allowing scoped teardown."""
         calls.append(command)
         if command[:3] == ["docker", "image", "inspect"]:
             raise subprocess.CalledProcessError(1, command)
@@ -594,7 +619,7 @@ def test_prebuilt_missing_image_fails_before_any_suite(monkeypatch):
     monkeypatch.setattr(subprocess, "run", missing_image)
     with pytest.raises(subprocess.CalledProcessError):
         runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
-    assert len(calls) == 4
+    assert len(calls) == 3
     assert calls[-2][-2:] == ["logs", "--no-color"]
     assert calls[-1][-3:] == ["down", "--volumes", "--remove-orphans"]
 
@@ -820,21 +845,25 @@ def test_summary_includes_focused_documentation_and_early_ha_suites(monkeypatch,
     assert "| ha-contracts | Selected |" in summary.read_text()
 
 
-def test_provenance_failure_removes_stale_completion_before_any_container(monkeypatch, tmp_path):
-    """Even a failure before Compose execution cannot leave an earlier completion report eligible."""
+def test_build_failure_removes_stale_completion_before_any_suite(monkeypatch, tmp_path):
+    """Even the first build failing cannot leave an earlier completion report eligible."""
     report = tmp_path / "suite-completion.json"
     report.write_text("old proof")
     monkeypatch.setattr(check_suite_completion, "REPORT", report)
     calls = []
 
-    def fail_provenance(command, **options):
-        """Reject source provenance before builds or other suites have started."""
+    def fail_build(command, **options):
+        """Reject the first build while allowing the scoped cleanup to run."""
         calls.append(command)
-        raise subprocess.CalledProcessError(1, command)
+        if options["check"]:
+            assert command[6:9] == ["--profile", "test", "build"]
+            raise subprocess.CalledProcessError(1, command)
 
-    monkeypatch.setattr(subprocess, "run", fail_provenance)
+    monkeypatch.setattr(subprocess, "run", fail_build)
     monkeypatch.setattr(sys, "argv", ["ci.py"])
     with pytest.raises(subprocess.CalledProcessError):
         runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
-    assert calls == [[sys.executable, "script/ci/check_provenance.py"]]
+    assert len(calls) == 3
+    assert calls[-2][-2:] == ["logs", "--no-color"]
+    assert calls[-1][-3:] == ["down", "--volumes", "--remove-orphans"]
     assert not report.exists()

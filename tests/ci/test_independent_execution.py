@@ -135,7 +135,7 @@ def test_completion_rejects_an_omitted_independent_suite(tmp_path):
 
 
 def test_new_invocation_removes_stale_selected_junit_before_any_process(monkeypatch, tmp_path):
-    """Old XML cannot make an unexecuted suite appear complete after even an early provenance failure."""
+    """Old XML cannot make an unexecuted suite appear complete after even an early build failure."""
     report = tmp_path / "suite-completion.json"
     monkeypatch.setattr(check_suite_completion, "REPORT", report)
     selected = check_suite_completion.junit_reports("selected:ci,unit-supervisor")
@@ -146,10 +146,11 @@ def test_new_invocation_removes_stale_selected_junit_before_any_process(monkeypa
     unrelated.write_text("retained historical evidence", encoding="utf-8")
 
     def fail(command, **options):
-        """The first subprocess must still be provenance, after clearing selected evidence."""
-        assert command[-1] == "script/ci/check_provenance.py"
+        """Clear selected evidence before the first build and retain scoped cleanup on failure."""
         assert all(not junit.exists() for reports in selected.values() for junit in reports)
-        raise subprocess.CalledProcessError(1, command)
+        if options["check"]:
+            assert command[6:9] == ["--profile", "test", "build"]
+            raise subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(subprocess, "run", fail)
     monkeypatch.setattr(sys, "argv", ["ci.py", "--profile", "selected:ci,unit-supervisor"])
@@ -164,7 +165,7 @@ def test_timing_report_failure_cannot_skip_scoped_cleanup(monkeypatch):
     original_write = Path.write_text
 
     def write(path, *arguments, **options):
-        """Fail only the timing artifact, leaving other file and provenance behavior intact."""
+        """Fail only the timing artifact, leaving other file behavior intact."""
         if path.name == "phase-times.json":
             raise OSError("No diagnostic disk space")
         return original_write(path, *arguments, **options)

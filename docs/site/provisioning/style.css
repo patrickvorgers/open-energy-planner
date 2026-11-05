@@ -1,0 +1,22 @@
+.provisioning-header { max-width: 52rem; margin: auto; padding: 2rem 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.provisioning main { max-width: 52rem; margin: auto; padding: 1rem 1.5rem 3rem; }
+.provisioning h1 { font-size: clamp(2rem, 5vw, 3rem); line-height: 1.15; letter-spacing: -.035em; margin: 0 0 24px; }
+.provisioning h2 { font-size: 1.5rem; line-height: 1.3; }
+.provisioning p, .provisioning li { max-width: 65ch; }
+.provisioning .lead { font-size: 1.1rem; }
+.provisioning a { overflow-wrap: anywhere; }
+.provisioning label { display: block; font-weight: 600; margin-top: 2rem; }
+.provisioning input { display: block; width: 100%; margin-top: .5rem; }
+.provisioning li { margin: .7rem 0; }
+.provisioning section { margin-top: 3rem; }
+.provisioning code { overflow-wrap: anywhere; }
+#error { color: var(--error); }
+#help, .privacy { font-size: .87rem; color: var(--muted); }
+@media (max-width: 500px) {
+  .provisioning-header { padding: 1.25rem; align-items: flex-start; }
+  .provisioning-header .site-brand { font-size: 17px; }
+  .provisioning-header > a:last-child { font-size: 15px; }
+  .provisioning main { padding: 1rem 1.25rem 2rem; }
+  .provisioning ol { padding-left: 1.3rem; }
+  .provisioning .primary { display: block; text-align: center; }
+}

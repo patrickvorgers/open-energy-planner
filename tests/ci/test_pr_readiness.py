@@ -232,7 +232,7 @@ def test_ready_and_manual_retry_use_the_same_current_head_gate(action):
 
 
 def test_privileged_readiness_workflow_uses_only_immutable_base_code():
-    """The writer job cannot execute a PR checkout, use the runner secret or enter personal hardware."""
+    """The writer job cannot execute a PR checkout, access secrets or enter personal hardware."""
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/pr-readiness.yaml").read_text()
     assert "pull_request_target:" in workflow
@@ -241,7 +241,6 @@ def test_privileged_readiness_workflow_uses_only_immutable_base_code():
     assert "runs-on: ubuntu-24.04" in workflow
     assert "run: python3 -m script.ci.pr_readiness" in workflow
     assert "head.sha" not in workflow
-    assert "OEP_RUNNER_READ_TOKEN" not in workflow
     assert "secrets." not in workflow
     assert "actions: write" not in workflow
 

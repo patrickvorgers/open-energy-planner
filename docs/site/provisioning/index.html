@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Develop Open Energy Planner</title>
+  <link rel="icon" href="../assets/app.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../docs/assets/courtyard.css">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="start.mjs"></script>
+</head>
+<body class="provisioning">
+  <header class="provisioning-header">
+    <a class="site-brand" href="../docs/"><img src="../assets/app.svg" alt="" width="42" height="42"><span>Open Energy<br><strong>Planner</strong></span></a>
+    <a href="../docs/">Documentation</a>
+  </header>
+  <main>
+    <h1>Start developing</h1>
+    <p class="lead">Clone the project locally, prepare a tested installation package, then reopen
+      it in VS Code's Dev Container. It runs a separate Home Assistant test installation.</p>
+    <label for="repository">GitHub repository or branch URL</label>
+    <input id="repository" type="url" spellcheck="false" autocomplete="off"
+      value="https://github.com/patrickvorgers/open-energy-planner" aria-describedby="help privacy error">
+    <p id="help">Use a repository or branch root URL. Folder URLs are unsupported. Private repositories require GitHub access inside VS Code. No token belongs in this field.</p>
+    <p class="privacy" id="privacy">Opening the clone link sends the repository URL, including any private
+      repository name, to vscode.dev. This page collects no credentials or analytics. Provisioning runs locally.</p>
+    <p id="error" role="alert" hidden></p>
+    <a class="primary" id="launch" aria-disabled="true">Clone in VS Code</a>
+    <section>
+    <h2>Prepare your environment</h2>
+<p>Use an AMD64 (x86-64) environment. ARM hosts need AMD64 emulation and are outside the validated setup.</p>
+    <ol>
+      <li>Install <a href="https://code.visualstudio.com/">VS Code</a>,
+        <a href="https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers">Dev Containers</a>
+        and <a href="https://git-scm.com/downloads">Git</a>. Start
+        <a href="https://www.docker.com/products/docker-desktop/">Docker</a> with Linux containers.</li>
+      <li>Install Python 3.12 or newer as <code>python</code> in both your host terminal and VS Code.
+        Check <code>python --version</code> and follow the <a href="../docs/development/#first-start">host interpreter setup</a> if needed.
+        Use the project URL above to clone into
+        a local folder. Keep the folder open locally until package preparation finishes.</li>
+      <li>Follow <a href="https://github.com/patrickvorgers/open-energy-planner/blob/main/docs/development/DEVELOPER-ENVIRONMENT.md#start-and-stop">package preparation</a>:
+        download the original <code>installation-bundle-amd64</code> ZIP from a successful
+        Checks candidate merged onto main. Check out its matching verified merge,
+        then run the following in a host terminal from that checkout, replacing both placeholders:</li>
+    </ol>
+    <p><code>python -m script.supervisor.dev prepare --bundle /path/to/installation-bundle-amd64.zip --run-id RUN_ID</code></p>
+    <p>Verification needs existing GitHub read access through Git Credential Manager or
+      <code>GH_TOKEN</code>/<code>GITHUB_TOKEN</code> in your host terminal.
+      Never paste a token into this page.</p>
+    <p>After preparation succeeds, run <code>python -m script.supervisor.dev start</code>
+      in the same host terminal. This provisions the installation and copies its private login
+      details into your checkout. Then choose <strong>Dev Containers: Reopen in Container</strong>.
+      Do not clone into a container volume: preparation must run on the host first.
+      Unmerged branches can be edited and tested, but cannot provision a persistent installation.</p>
+    </section>
+    <section>
+      <h2>After setup</h2>
+      <p>Open <a href="http://localhost:7123/app/local_open_energy_planner">the local OEP test installation</a>.
+        Developer login details are in <code>.local/dev/developer.json</code> inside the checkout.
+        The EMS uses synthetic inputs and virtual commands.</p>
+      <p><a href="https://github.com/patrickvorgers/open-energy-planner/blob/main/docs/development/README.md">Developer guide</a></p>
+      <details>
+        <summary>If the button does not open VS Code</summary>
+        <p>In VS Code run <strong>Git: Clone</strong> and paste your repository URL.
+          Select a local folder, prepare and start the matching package in a host terminal,
+          then choose <strong>Dev Containers: Reopen in Container</strong>.</p>
+      </details>
+    </section>
+    <noscript>Enable JavaScript or use the VS Code clone command described above.</noscript>
+  </main>
+</body>
+</html>

@@ -381,7 +381,7 @@ Open: new model/dependency acceptance, budgets/tolerances/priorities, time-limit
 - UI-05: Default reference is `Self-consumption without EMS`: charge surplus PV, discharge to cover demand, no price-driven grid charging/battery export, same capacity/power/losses/reserve. Zero grid is best effort. Export overflow/import deficits. Without storage, direct self-consumption and surplus export. This is simulation, not measured alternate reality.
 - UI-05a: Reference PV produces/exports surplus even when export costs money. No price-driven curtailment, grid charging or battery export. Retain physical/self-consumption rules and use this reference for both strategies.
 - UI-05b: Estimate uncurtailed available PV with the yield model under physical/weather limits. The reference retains it. Permitted EMS controls may reduce/stop it. During curtailment, low measured production must not replace available reference PV. Preserve provenance/quality under STORAGE-09 and mark it as estimated.
-- UI-06: Show comparable EMS/reference plans with separate flows, battery trajectories and cash costs/revenues under the same external conditions/rules/installation. Report expected versus retrospective advantage. Continuity follows UI-12–15. Valuation follows HORIZON-09 and remains independently validated.
+- UI-06: Show comparable EMS/reference plans with separate flows, battery trajectories and cash costs/revenues under the same external conditions/rules/installation. Report expected versus retrospective advantage. Continuity follows UI-12–15. Valuation follows HORIZON-09 and remains independently validated. Compare future self-consumption and OEP from the same measured battery stock and opening bonus budgets frozen in the plan, using the same start, horizon, installation, tariffs and external forecasts. Show the expected extra saving from choosing OEP now, including remaining battery value and negative outcomes. Historical measurement gaps must not block this forecast. The continuous historical reference and its evaluated savings remain independent. Preserve existing archived expectations.
 - UI-06a: Distinguish original expected plan cost, actual EMS cost from realization, and simulated reference cost under the same retrospectively available conditions/rule versions. Never substitute predicted EMS cost for actual retrospective cost. Mark simulation/estimates. Do not claim measured counterfactual or causal proof. Separate cash/wear/inventory under UI-10. Version model/reference policy with results. Updates do not automatically overwrite/recompute historical plans/evaluations.
 - UI-07: Include remaining battery energy value using the same method, separately from grid cash. It is not realized cash revenue. Exact method remains open.
 - UI-08: The app supplies the full visual overview without user dashboard construction, reachable through one HA sidebar entry for plans, savings and adding/editing devices. Thin-integration summary entities remain reusable in personal dashboards. Select details and test HA OS/Container access during implementation.
@@ -531,8 +531,9 @@ ticks from their joint visible signed stacks. Recalculate on time-window, plan,
 legend and size changes. SoC remains on its own fixed percentage axis.
 
 UI-20 also requires two expected reference balances: default without battery versus
-OEP, and continuous battery self-consumption beside OEP. Keep the
-existing continuous evaluated-savings policy unchanged and explicitly labelled.
+OEP, and future battery self-consumption beside OEP. Both future battery
+scenarios start from the same measured stock and opening bonus budgets. Keep the
+separate continuous historical evaluated-savings policy unchanged and explicitly labelled.
 Use identical frozen external forecasts, physical converter limits and original
 price inputs. Show the reference above the optimized balance and the factual
 explanation below. Available solar/household forecasts and spot-market, import and
@@ -588,7 +589,7 @@ measured quarter evidence. See the demand and solar forecasting guides.
 
 ### Confirmed phasing: forecast-only consumers before shiftable appliances
 
-First implement Energy-owned individual-consumer discovery, user selection and per-device weather sensitivity, history-based local prediction, residual-household composition without double counting, UI/HA forecast visibility and consistent planning-benefit evaluation. Phase 1 issues no physical commands and requires no task feedback or blueprint. With insufficient device history, retain the existing total-household forecast rather than removing unknown demand. The [demand forecasting guide](../docs/development/DEMAND-FORECASTING.md#phased-individual-consumer-forecasting--24-october-2026) records the implementation and evidence limits.
+First implement Energy-owned individual-consumer discovery, user selection and per-device weather sensitivity, history-based local prediction, residual-household composition without double counting, UI/HA forecast visibility and consistent planning-benefit evaluation. Phase 1 issues no physical commands and requires no task feedback or blueprint. With insufficient device history, retain the existing total-household forecast rather than removing unknown demand. The [demand forecasting guide](../docs/development/DEMAND-FORECASTING.md#individual-consumer-forecasting) records the implementation and evidence limits.
 
 Only afterward implement the shiftable-appliance task, cycle-profile and mandatory feedback/blueprint requirements above. Use a simulated heat-pump consumer to exercise phase 1 in the real-Supervisor Docker developer environment. The simulated dishwasher end-to-end execution specification remains phase-2 acceptance work.
 
@@ -700,7 +701,7 @@ See [EV charging](../docs/development/EV-CHARGING.md) for the implemented comman
 
 ### Physical reference availability
 
-- The continuous self-consumption reference must advance from contiguous measured
+- The historical continuous self-consumption reference must advance from contiguous measured
   evidence independently of prices, contract coverage and bonus-budget availability.
 - Missing financial evidence must leave physical chart bars and reference SoC
   available. Show an explicit financial issue and unknown costs/benefit, never an

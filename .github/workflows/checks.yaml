@@ -26,8 +26,6 @@ jobs:
       (github.event.pull_request.draft == false &&
        (github.event.action == 'ready_for_review' || github.event.label.name == 'ci: run'))
     uses: ./.github/workflows/ci-admission.yaml
-    secrets:
-      OEP_RUNNER_READ_TOKEN: ${{ secrets.OEP_RUNNER_READ_TOKEN }}
     permissions:
       contents: read
       # Read candidate identities and original artifacts only in the admission job.
@@ -38,14 +36,13 @@ jobs:
     needs: candidate
     if: needs.candidate.outputs.reuse != 'true'
     name: Quality and integration (AMD64)
-    runs-on: ${{ fromJSON(needs.candidate.outputs.runner_labels) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     defaults:
       run:
         shell: bash
     outputs:
       build_attempt: ${{ steps.bundle.outputs.attempt }}
-      execution: ${{ steps.execution.outputs.location }}
     env:
       COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
       DOCKER_BUILD_RECORD_UPLOAD: false
@@ -55,20 +52,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up host orchestration Python
-        if: runner.environment == 'github-hosted'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
-      - name: Check personal Docker runner without changing its daemon
-        if: runner.environment == 'self-hosted'
-        run: python -m script.ci.local_runner prepare
-      - name: Record actual execution location
-        id: execution
-        env:
-          EXECUTION_LOCATION: ${{ runner.environment == 'self-hosted' && 'local' || 'github' }}
-        run: |
-          echo "location=$EXECUTION_LOCATION" >> "$GITHUB_OUTPUT"
-          echo "Execution location: $EXECUTION_LOCATION" >> "$GITHUB_STEP_SUMMARY"
       - name: Capture the checked-out source tree
         id: source
         run: echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
@@ -102,14 +88,13 @@ jobs:
       - name: Report authoritative CI selection
         run: python -m script.ci.scope_report
       - name: Release unused hosted-runner SDK storage
-        if: runner.environment == 'github-hosted' && steps.scope.outputs.documentation_only != 'true'
+        if: steps.scope.outputs.documentation_only != 'true'
         run: |
           # This job uses Python and Docker; unused mobile/.NET SDKs crowd out the private Supervisor engine.
           df -h /
           sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
           df -h /
       - name: Enable shared build and container image storage
-        if: runner.environment == 'github-hosted'
         run: |
           sudo python3 - <<'PY'
           import json
@@ -124,7 +109,7 @@ jobs:
       - name: Set up cached image builder
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:
-          driver: ${{ runner.environment == 'github-hosted' && 'docker' || 'docker-container' }}
+          driver: docker
       - name: Build current test images with reusable layers
         uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7
         with:
@@ -151,7 +136,7 @@ jobs:
         env:
           OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || (steps.scope.outputs.documentation_only == 'true' && 'documentation' || 'full') }}
         run: python script/ci/ci.py --prebuilt --stage preflight --profile "$OEP_CI_PROFILE"
-      - name: Documentation, provenance, Ruff and CI routing checks
+      - name: Documentation, Ruff and CI routing checks
         if: steps.scope.outputs.documentation_only == 'true'
         run: python script/ci/ci.py --documentation-only --prebuilt --stage tests
       - name: Native checks, planner scenarios, app smoke and real HA handoff
@@ -240,36 +225,6 @@ jobs:
             results/ci/supervisor-failure.log
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Clean only this personal runner test project
-        if: always() && runner.environment == 'self-hosted' && steps.execution.outputs.location == 'local'
-        run: python -m script.ci.local_runner cleanup
-
-  execution-label:
-    name: Label actual candidate execution location
-    needs: [candidate, quality]
-    if: always() && github.event_name == 'pull_request' && needs.quality.outputs.execution != ''
-    runs-on: ubuntu-24.04
-    continue-on-error: true
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
-      EXECUTION_LOCATION: ${{ needs.quality.outputs.execution }}
-    steps:
-      - name: Publish location without changing the test result
-        run: |
-          case "$EXECUTION_LOCATION" in local|github) ;; *) exit 1 ;; esac
-          current_head=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.sha')
-          if [[ "$current_head" != "$CANDIDATE_HEAD" ]]; then exit 0; fi
-          gh label create "ci-execution: local" --repo "$GH_REPO" --color 0e8a16 --description "Latest completed candidate executed on personal hardware, not a test result" --force
-          gh label create "ci-execution: github" --repo "$GH_REPO" --color 1d76db --description "Latest completed candidate executed on GitHub hardware, not a test result" --force
-          if [[ "$EXECUTION_LOCATION" == local ]]; then other=github; else other=local; fi
-          gh pr edit "$PR_NUMBER" --repo "$GH_REPO" --remove-label "ci-execution: $other" --add-label "ci-execution: $EXECUTION_LOCATION"
 
   publish-release:
     name: Attach tested release artifacts

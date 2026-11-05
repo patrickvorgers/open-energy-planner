@@ -312,7 +312,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     expect(page.locator("#quality-charts")).to_contain_text("Relative daily error: 2.0%")
     expect(page.locator("#quality-charts table")).to_contain_text("Eligible")
     expected_hour = page.evaluate(
-        "value => new Date(value).toLocaleString(undefined, {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/Amsterdam', timeZoneName: 'short'})",
+        "value => new Date(value).toLocaleString(undefined, {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/Amsterdam'})",
         start.isoformat(),
     )
     expect(page.locator("#quality-charts table")).to_contain_text(expected_hour)
@@ -332,6 +332,40 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     ]
     expect(page.locator("#quality-day")).to_have_value("2026-10-26")
     expect(page.locator("#quality-charts table")).to_have_count(1)
+    # Repeated local hours keep independent rows without exposing timezone names.
+    fold_body = deepcopy(body)
+    fold_body.update(day="2026-10-25", start="2026-10-24T22:00:00Z", end="2026-10-25T23:00:00Z")
+    fold_body["series"][0]["rows"] = [
+        dict(rows[0], start=f"2026-10-25T0{hour}:00:00Z", end=f"2026-10-25T0{hour + 1}:00:00Z")
+        for hour in range(3)
+    ]
+    page.route(
+        "**/v1/forecast-quality/days/2026-10-25", lambda route: route.fulfill(json=fold_body)
+    )
+    page.locator("#quality-day").select_option("2026-10-25")
+    local_labels = page.evaluate("""() => {
+        const options = {timeZone: 'Europe/Amsterdam', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'};
+        return [0, 1, 2].map(hour => new Date(`2026-10-25T0${hour}:00:00Z`).toLocaleString(undefined, options));
+    }""")
+    expect(page.locator("#quality-charts tbody tr td:first-child")).to_have_text(
+        [local_labels[0] + " (1 of 2)", local_labels[1] + " (2 of 2)", local_labels[2]]
+    )
+    canvas = page.locator("#quality-chart-0")
+    point = canvas.evaluate(
+        "canvas => Chart.getChart(canvas).getDatasetMeta(0).data[0].getCenterPoint()"
+    )
+    canvas.hover(position={"x": point["x"], "y": point["y"]})
+    end_label = page.evaluate(
+        "new Date('2026-10-25T01:00:00Z').toLocaleString(undefined, {timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit'})"
+    )
+    expected_title = [f"{local_labels[0]} (1 of 2) to {end_label} (2 of 2)"]
+    page.wait_for_function(
+        "title => JSON.stringify(Chart.getChart(document.querySelector('#quality-chart-0')).tooltip.title) === JSON.stringify(title)",
+        arg=expected_title,
+    )
+    assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == expected_title
+    page.locator("#quality-day").select_option("2026-10-26")
+    expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
     page.route(
         "**/v1/forecast-quality/days/2026-10-26",
         lambda route: route.fulfill(status=503, body="Unavailable"),

@@ -177,16 +177,6 @@ def checkout_tree(expected_head=None):
     ).strip()
 
 
-def tree_records(root, revision):
-    """Read provenance blob records from an immutable tree without executing its contents."""
-    return subprocess.check_output(
-        ["git", "-c", f"safe.directory={root}", "ls-tree", "-r", sha(revision)],
-        cwd=root,
-        text=True,
-        timeout=GIT_TIMEOUT_SECONDS,
-    )
-
-
 def immutable_test_sources(revision, root):
     """Read immutable blobs without candidate execution or archive attribute filtering."""
     listing = subprocess.run(
@@ -232,6 +222,16 @@ def immutable_test_sources(revision, root):
     if stream.read():
         raise ValueError("Unexpected trailing test source data")
     return sources
+
+
+def immutable_blob(blob, root="."):
+    """Read one immutable Git blob without checkout, filters or candidate execution."""
+    return subprocess.check_output(
+        ["git", "cat-file", "blob", sha(blob)],
+        cwd=root,
+        stderr=subprocess.DEVNULL,
+        timeout=GIT_TIMEOUT_SECONDS,
+    )
 
 
 def raw_changes(base, tested, root):
