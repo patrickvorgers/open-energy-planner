@@ -22,14 +22,16 @@ async function api(path) {
 
 /** Use inert text and native disclosure so every outcome remains keyboard accessible. */
 function activityRow(row) {
-    const item = document.createElement("details"), summary = document.createElement("summary"), time = document.createElement("time"), title = document.createElement("strong"), state = document.createElement("span");
+    const item = document.createElement("details"), summary = document.createElement("summary"), time = document.createElement("time"), title = document.createElement("strong"), type = document.createElement("span"), state = document.createElement("span");
     item.className = "activity-row";
+    item.dataset.activityId = row.id;
     time.dateTime = row.started_at;
     time.textContent = clock(row.started_at);
     title.textContent = row.title;
+    type.className = "activity-type"; type.textContent = label(row.kind);
     state.className = "activity-state"; state.dataset.state = row.state;
     state.textContent = row.recovered ? "Recovered" : label(row.state);
-    summary.append(time, title, state); item.append(summary);
+    summary.append(time, title, type, state); item.append(summary);
     for (const text of [row.detail, `Module: ${moduleName(row.owner)}`, row.finished_at ? `Finished: ${when(row.finished_at)}` : "In progress"]) {
         const paragraph = document.createElement("p"); paragraph.textContent = text; item.append(paragraph);
     }
@@ -40,10 +42,23 @@ function activityRow(row) {
 function render() {
     if (historyProblem) find("activity-status").textContent = historyProblem;
     const selected = find("activity-day").value, kind = find("activity-type").value;
+    const opened = new Set([...find("activity-list").querySelectorAll("details[open]")].map(item => item.dataset.activityId));
+    const focused = document.activeElement?.tagName === "SUMMARY" ? document.activeElement.parentElement.dataset.activityId : undefined;
     const merged = new Map([...rows, ...running.map(row => [row.id, row])]);
     const visible = [...merged.values()].filter(row => localDate(new Date(row.started_at)) === selected && (!kind || row.kind === kind)).sort((left,right) => right.started_at.localeCompare(left.started_at) || right.id.localeCompare(left.id));
-    find("activity-list").replaceChildren(...visible.map(activityRow));
-    if (!visible.length) find("activity-list").textContent = loading ? "Loading activities." : "No activities recorded for this selection.";
+    let restoreFocus;
+    find("activity-list").replaceChildren(...visible.map(row => {
+        const entry = document.createElement("li"), details = activityRow(row);
+        details.open = opened.has(row.id);
+        if (focused === row.id) restoreFocus = details.querySelector("summary");
+        entry.append(details); return entry;
+    }));
+    restoreFocus?.focus({preventScroll:true});
+    if (!visible.length) {
+        const empty = document.createElement("li"); empty.className = "activity-empty";
+        empty.textContent = loading ? "Loading activities." : "No activities recorded for this selection.";
+        find("activity-list").append(empty);
+    }
     find("activity-more").hidden = !next;
     const upcoming = scheduled.filter(row => Date.parse(row.due_at) >= Date.now() && Date.parse(row.due_at) <= Date.now() + 6*60*60*1000 && (!kind || row.kind === kind)).sort((left,right) => left.due_at.localeCompare(right.due_at));
     find("activity-upcoming").replaceChildren(...upcoming.map(row => {

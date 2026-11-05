@@ -17,13 +17,28 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    if page.viewport_size["width"] < 500:
+        day = page.get_by_label("Day", exact=True).bounding_box()
+        kind = page.get_by_label("Activity type").bounding_box()
+        assert abs(day["y"] - kind["y"]) < 4
     expect(page.locator("#activity-list")).to_contain_text("Recovered")
     expect(page.locator("#activity-list")).to_contain_text("Running")
     page.get_by_role("button", name="Load earlier activities").click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(107)
+    expect(
+        page.get_by_role("list", name="Recorded activities").get_by_role("listitem")
+    ).to_have_count(107)
+    row_span = page.locator("#activity-list summary").evaluate_all(
+        "rows => {const first = rows.slice(0,8).map(row => row.getBoundingClientRect()); return first.at(-1).bottom - first[0].top;}"
+    )
+    assert row_span <= (576 if page.viewport_size["width"] < 500 else 400)
+    capture = Path("results/ci/activity")
+    capture.mkdir(parents=True, exist_ok=True)
+    page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+    page.screenshot(path=str(capture / f"dense-{page.viewport_size['width']}.png"), full_page=False)
     page.get_by_label("Activity type").select_option("weather")
     expect(page.locator("#activity-list .activity-row")).to_have_count(2)
-    details = page.locator("#activity-list details").first
+    details = page.locator("#activity-list details").filter(has_text="Recovered")
     details.locator("summary").focus()
     page.keyboard.press("Enter")
     expect(details.locator("p").first).to_be_visible()
@@ -34,9 +49,9 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     assert response.ok
     expect(page.locator("#activity-list")).to_contain_text("Live weather refresh")
     expect(page.locator("#activity-list .activity-row")).to_have_count(3)
+    expect(details.locator("p").first).to_be_visible()
+    expect(details.locator("summary")).to_be_focused()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    capture = Path("results/ci/activity")
-    capture.mkdir(parents=True, exist_ok=True)
     page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
     expect(page.get_by_role("heading", name="Activity", exact=True)).to_be_in_viewport()
     page.screenshot(

@@ -90,6 +90,16 @@ APP_ROOT_PROFILES = {
     "live_inputs.py": focused_profile(
         "unit-app", "unit-ha-contract", "ha-contracts", "ha-controls"
     ),
+    "planning.py": focused_profile(
+        "unit-app",
+        "unit-ha-contract",
+        "browser",
+        "databases",
+        "ha-contracts",
+        "ha-controls",
+        "ha-history",
+        "ha-thermal",
+    ),
     "discovery.py": focused_profile(
         "unit-app-thermal", "unit-ha-contract", "unit-component", "ha-connection", "supervisor"
     ),
@@ -181,6 +191,9 @@ DIRECTORY_PROFILES = {
     "src/open_energy_planner/frontend/": focused_profile("unit-frontend", "browser"),
     "src/open_energy_planner/notifications/": focused_profile(
         "unit-app", "unit-frontend", "browser"
+    ),
+    "src/open_energy_planner/activities/": focused_profile(
+        "unit-app", "unit-frontend", "browser", "database-contracts"
     ),
     "src/open_energy_planner/web/": focused_profile("unit-frontend", "browser"),
     "src/open_energy_planner/home_assistant/": focused_profile(

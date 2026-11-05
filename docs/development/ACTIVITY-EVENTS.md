@@ -4,6 +4,9 @@ Open **Insights > Activity** to inspect background work. The page defaults to
 today in the Home Assistant timezone. Select another day or an activity type.
 History covers seven rolling days. **Load earlier activities** reads the next
 100 executions for the selected day and type. Open an activity for details.
+The history is a compact list with aligned time, activity, type and status.
+Phones use two short lines per execution. Details and keyboard focus stay with
+their execution when live updates insert another row.
 
 The right column shows known work within the next six hours and current module
 availability. Schedules are expectations. Configuration and missing inputs can
