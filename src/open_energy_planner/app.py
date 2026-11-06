@@ -5,7 +5,7 @@ import hmac
 import logging
 import os
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from aiohttp import web
@@ -401,6 +401,19 @@ def create_app(
 
     app.cleanup_ctx.append(archive_lifecycle)
 
+    from .activities.api import register as register_activities
+
+    events = register_activities(
+        app,
+        repository.engine,
+        notification_center,
+        lambda: (
+            (setup_catalogue.value or {}).get("timezone")
+            or ("UTC" if source == "synthetic" else None)
+        ),
+    )
+    planner.events = events
+
     planner.record_calculation = register_performance(
         app,
         SqlDocuments(repository.engine, "planning"),
@@ -482,6 +495,11 @@ def create_app(
     async def demand_lifecycle(_app):
         """Fit and archive in a background thread. Never block HTTP/HA on model work or provider fetching."""
         forecast_logger = BackgroundLog(_LOGGER, "Household demand forecast update")
+        from .activities.events import Health, Outcome
+        from .demand.basis import forecast_usable
+        from .installation.forecast_policy import next_update
+
+        events.availability("demand", Health.UNKNOWN, "Waiting for a current consumption forecast.")
 
         async def update():
             """Capture consistent input versions and install only still-current archived results."""
@@ -492,12 +510,38 @@ def create_app(
                         refresh_model_preferences()
                         job = demand.job(datetime.now(UTC))
                     if job is not None:
-                        result = await build_demand(job)
-                        async with lock:
-                            if (
-                                demand.install(result, datetime.now(UTC))
-                                and demand.forecast is not None
-                            ):
+                        async with events.attempt(
+                            "demand",
+                            "training",
+                            "Update consumption forecast",
+                            failure="The forecast update failed. Retained forecasts keep their original validity. Check Forecast quality before relying on learned models.",
+                        ) as activity:
+                            result = await build_demand(job)
+                            async with lock:
+                                installed = demand.install(result, datetime.now(UTC))
+                                usable = installed and forecast_usable(
+                                    demand.configuration, demand.forecast, datetime.now(UTC)
+                                )
+                            await events.finish(
+                                activity,
+                                Outcome.COMPLETED
+                                if usable
+                                else Outcome.FAILED
+                                if installed
+                                else Outcome.SKIPPED,
+                                "A new consumption forecast is available."
+                                if usable
+                                else "No new usable forecast was installed. Inputs may have changed or training evidence may be insufficient.",
+                                usable=usable,
+                            )
+                            events.availability(
+                                "demand",
+                                Health.AVAILABLE if usable else Health.DEGRADED,
+                                "Current consumption forecast installed."
+                                if usable
+                                else "Check current consumption forecast validity.",
+                            )
+                            if usable:
                                 forecast_logger.success(
                                     f"A new consumption forecast is available. Model status: {demand.model_status.replace('_', ' ')}."
                                 )
@@ -517,6 +561,29 @@ def create_app(
                         "The previous forecast keeps its original validity. Check storage and forecast status if this persists.",
                         retry_seconds=max(FORECAST_WORKER_POLL_SECONDS, round(retry_seconds)),
                     )
+                current = datetime.now(UTC)
+                usable = not demand.store.issue and forecast_usable(
+                    demand.configuration, demand.forecast, current
+                )
+                events.availability(
+                    "demand",
+                    Health.AVAILABLE
+                    if usable
+                    else Health.UNAVAILABLE
+                    if demand.configuration
+                    else Health.UNKNOWN,
+                    "A current consumption forecast is available."
+                    if usable
+                    else "Waiting for a usable consumption forecast.",
+                )
+                events.scheduled(
+                    "demand",
+                    "training",
+                    "Update consumption forecast",
+                    next_update(current, demand.retry_after)
+                    if demand.configuration and not demand.store.issue
+                    else None,
+                )
                 await asyncio.sleep(FORECAST_WORKER_POLL_SECONDS)
 
         task = asyncio.create_task(update())
@@ -535,6 +602,7 @@ def create_app(
             """Fetch temperature independently from planning, with hourly success and 30-minute failure retries."""
             async with weather_factory() as weather_source:
                 weather_logger = BackgroundLog(_LOGGER, "Temperature weather refresh")
+                from .activities.events import Health, Outcome
 
                 async def update_weather():
                     """Use HA's current location. Missing weather leaves calendar models available."""
@@ -548,13 +616,22 @@ def create_app(
                                 demand.weather(())
                                 last_location = location
                         if configured and location is not None:
+                            activity = await events.start(
+                                "temperature-weather", "weather", "Fetch temperature forecast"
+                            )
                             try:
                                 temperatures = await weather_source.read(
                                     location, datetime.now(UTC)
                                 )
+                                installed = False
                                 async with lock:
-                                    if live.report and live.report.location == location:
+                                    if (
+                                        demand.configuration is not None
+                                        and live.report
+                                        and live.report.location == location
+                                    ):
                                         demand.weather(temperatures)
+                                        installed = True
                                         if temperatures:
                                             weather_logger.success(
                                                 f"Received {len(temperatures)} temperature hours. Next refresh in {WEATHER_REFRESH_SECONDS / SECONDS_PER_MINUTE:g} minutes."
@@ -566,7 +643,39 @@ def create_app(
                                                 retry_seconds=WEATHER_REFRESH_SECONDS,
                                             )
                                 delay = WEATHER_REFRESH_SECONDS
+                                await events.finish(
+                                    activity,
+                                    Outcome.SKIPPED
+                                    if not installed
+                                    else Outcome.COMPLETED
+                                    if temperatures
+                                    else Outcome.FAILED,
+                                    "Temperature forecast was discarded because the location or demand configuration changed."
+                                    if not installed
+                                    else "Temperature forecast received."
+                                    if temperatures
+                                    else "No usable temperature hours returned. Calendar consumption forecasting remains available.",
+                                    usable=installed and bool(temperatures),
+                                )
+                                if installed:
+                                    events.availability(
+                                        "temperature-weather",
+                                        Health.AVAILABLE if temperatures else Health.DEGRADED,
+                                        "Temperature forecast available."
+                                        if temperatures
+                                        else "Calendar consumption forecasting remains available without temperature data.",
+                                    )
                             except Exception as error:
+                                await events.finish(
+                                    activity,
+                                    Outcome.FAILED,
+                                    "Weather refresh failed. Calendar consumption forecasting remains available. Existing forecasts keep their original expiry.",
+                                )
+                                events.availability(
+                                    "temperature-weather",
+                                    Health.DEGRADED,
+                                    "Calendar consumption forecasting remains available without fresh temperature data.",
+                                )
                                 weather_logger.exception(
                                     "Existing valid forecasts retain their expiry. Calendar consumption forecasting does not require fresh temperature data.",
                                     retry_seconds=WEATHER_RETRY_SECONDS,
@@ -577,6 +686,21 @@ def create_app(
                                 )
                         else:
                             delay = PRICE_SCHEDULE_POLL_SECONDS
+                        async with lock:
+                            active = bool(
+                                demand.configuration is not None
+                                and live.report
+                                and live.report.location
+                            )
+                        if active:
+                            events.scheduled(
+                                "temperature-weather",
+                                "weather",
+                                "Fetch temperature forecast",
+                                datetime.now(UTC) + timedelta(seconds=delay),
+                            )
+                        else:
+                            events.withdraw("temperature-weather")
                         await asyncio.sleep(delay)
 
                 task = asyncio.create_task(update_weather())
@@ -596,6 +720,7 @@ def create_app(
             nonlocal prices
             async with price_factory(repository.engine) as prices:
                 prices.persistence_lock = savings_mutation_lock
+                prices.events = events
                 price_logger = BackgroundLog(_LOGGER, "Market price refresh")
 
                 async def update_prices():

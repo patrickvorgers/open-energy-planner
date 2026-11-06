@@ -6,18 +6,20 @@ from playwright.sync_api import expect
 
 @pytest.fixture(params=[1280, 768, 390])
 def documentation_page(documentation_url, browser, request):
-    """Open the real artifact in isolated desktop, tablet and phone browser contexts."""
+    """Follow the root redirect before yielding an isolated desktop, tablet or phone page."""
     with browser.new_context(
         viewport={"width": request.param, "height": 900}, has_touch=request.param < 1000
     ) as context:
         page = context.new_page()
         page.goto(documentation_url)
+        expect(page.get_by_role("heading", name="Your energy, understood.")).to_be_visible()
         yield page
 
 
 def test_root_article_search_and_provisioning(documentation_page, documentation_url):
     """Keep redirects, search, nested articles and the existing provisioning entry functional."""
     page = documentation_page
+    assert page.url == documentation_url + "docs/"
     expect(page.get_by_role("heading", name="Your energy, understood.")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     assert page.evaluate("document.fonts.check('16px Outfit')")

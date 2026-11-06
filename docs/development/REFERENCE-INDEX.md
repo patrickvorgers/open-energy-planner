@@ -92,6 +92,7 @@ The [user appliance guide](../users/appliances.md) explains where to configure e
 | [EMS visualization](EMS-VISUALIZATION.md) | Chart boundaries, scales, interval semantics and accessibility |
 | [Courtyard theme](COURTYARD-THEME.md) | Shared identity, app navigation and UI verification |
 | [Notifications](PLANNING-NOTIFICATIONS.md) | Actionable explanations, source identity and recovery lifecycle |
+| [Activity and module events](ACTIVITY-EVENTS.md) | [Read background activities](../users/activity.md) |
 | [Logging](LOGGING.md) | Severity, safe context, timestamps and deduplication |
 | [Code documentation](CODE-DOCUMENTATION.md) | Useful docstrings, independent scenario explanations and guide maintenance |
 | [Documentation site](DOCUMENTATION-SITE.md) | Canonical Markdown, screenshots, local build and single Pages publication |

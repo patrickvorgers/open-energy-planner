@@ -5,7 +5,7 @@ from itertools import pairwise
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
 
 
 @pytest.mark.parametrize(
@@ -20,6 +20,7 @@ from tests.frontend.browser.helpers import TOKEN, discover
         "/appliance-settings/thermal",
         "/contract",
         "/quality",
+        "/activity",
         "/data-storage",
         "/setup",
     ],
@@ -31,7 +32,7 @@ def test_visible_peer_panels_do_not_touch_on_any_workspace_page(app_page, route)
     discover(page, url)
     page.goto(url + route)
     expect(page.get_by_role("heading", level=1)).to_be_visible()
-    page.wait_for_load_state("networkidle")
+    wait_for_product_reads(page)
     page.evaluate("document.fonts.ready")
     groups = page.locator(".chart-card, .panel-stack > .settings-layout").evaluate_all("""panels => {
         const groups = new Map();

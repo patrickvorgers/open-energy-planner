@@ -182,3 +182,67 @@ def test_cancelled_area_read_finishes_before_price_context_releases_engine(tmp_p
             assert finished.is_set()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("withdrawal_error", [False, True])
+def test_event_withdrawal_failure_closes_replacement_and_allows_retry(
+    tmp_path, monkeypatch, withdrawal_error
+):
+    """Broken activity bookkeeping cannot leak newly opened price resources or strand loading state."""
+    from open_energy_planner.activities.events import Events
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+
+    async def scenario():
+        """Use actual event withdrawal with a stale request ID and observe both provider lifetimes."""
+        area, closed = "NL", []
+
+        async def read_area():
+            """Return the current explicit market selection."""
+            return area, None
+
+        @asynccontextmanager
+        async def opened(selected):
+            """Own a synthetic provider with a deliberately stale outstanding request."""
+            try:
+                yield SimpleNamespace(
+                    series=(selected,),
+                    issues={},
+                    activity_requests={"old": "absent"},
+                    published=None,
+                    forecast=None,
+                    alternative=None,
+                    extra_forecasts=(),
+                )
+            finally:
+                closed.append(selected)
+
+        repository = SqlPlanRepository(tmp_path)
+        events = Events(ActivityStore(repository.engine))
+        prices = ConfiguredPrices(read_area, opened)
+        prices.events = events
+        try:
+            assert await prices.configure()
+            area = "BE"
+            if withdrawal_error:
+                withdraw = prices.withdraw_events
+
+                async def unavailable():
+                    """Fail optional event withdrawal before the replacement is installed."""
+                    raise RuntimeError("synthetic event bookkeeping failure")
+
+                monkeypatch.setattr(prices, "withdraw_events", unavailable)
+                with pytest.raises(RuntimeError, match="synthetic event"):
+                    await prices.configure()
+                assert closed == ["BE"] and prices.market_area == "NL"
+                assert prices.configuration_issue == "market_area_reload_failed"
+                monkeypatch.setattr(prices, "withdraw_events", withdraw)
+            assert await prices.configure()
+            assert prices.market_area == "BE" and prices.configuration_issue is None
+            assert closed == (["BE", "NL"] if withdrawal_error else ["NL"])
+        finally:
+            prices.service.activity_requests.clear()
+            await prices.close()
+            await events.close()
+            repository.close()
+
+    asyncio.run(scenario())

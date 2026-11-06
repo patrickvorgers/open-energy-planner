@@ -402,6 +402,7 @@ class PlanningCoordinator:
         self.clock = clock or (lambda: datetime.now(UTC))
         self.explain = explain or explain_planning_problem
         self.record_calculation = record_calculation
+        self.events = None
         self.latest = None
         self.active = None
         self.published = None
@@ -440,6 +441,26 @@ class PlanningCoordinator:
             )
             self.block_reason = self.blocked_since = None
         self.status, self.reason = status, reason
+        if self.events and status != "calculating":
+            from .activities.events import Health
+
+            health = (
+                Health.AVAILABLE
+                if status == "ready"
+                else Health.UNAVAILABLE
+                if status == "not_ready" and reason
+                else Health.DEGRADED
+                if status == "failed"
+                else Health.UNKNOWN
+            )
+            detail = (
+                self.explain(reason).message
+                if reason and status in {"not_ready", "failed"}
+                else "A validated plan is available."
+                if status == "ready"
+                else "Waiting for a validated plan. Existing commands retain their original validity."
+            )
+            self.events.availability("planning", health, detail)
 
     def submit(self, snapshot: InputSnapshot):
         """Replace the latest requested snapshot and start a worker task only when needed."""
@@ -510,6 +531,8 @@ class PlanningCoordinator:
             calculation_started = self.clock()
             outcome = None
             calculation_reason = "planning_error"
+            superseded = False
+            activity = None
             _LOGGER.debug(
                 "Planning calculation started. Snapshot: %s. Strategy: %s. Intervals: %d.",
                 snapshot.snapshot_id,
@@ -517,6 +540,10 @@ class PlanningCoordinator:
                 len(snapshot.problem.intervals),
             )
             try:
+                if self.events:
+                    activity = await self.events.start(
+                        "planning", "planning", "Calculate energy plan"
+                    )
                 outcome = await self.service.calculate(snapshot)
                 calculation_reason = outcome.reason
                 if self.closed:
@@ -550,6 +577,7 @@ class PlanningCoordinator:
                         continue
                     self._set_status("failed", outcome.reason or "no_usable_plan")
             except PublicationSuperseded as error:
+                superseded = True
                 calculation_reason = str(error) or "inputs_changed"
                 _LOGGER.info(
                     "Plan discarded before publication (%s). No partial plan was activated. %s",
@@ -560,12 +588,37 @@ class PlanningCoordinator:
                 )
                 if snapshot is self.latest:
                     self.invalidate(str(error) or "publication_inputs_expired")
+            except asyncio.CancelledError:
+                calculation_reason = "interrupted"
+                raise
             except Exception:
                 calculation_reason = "planning_error"
                 _LOGGER.exception("Planning round failed. No partial plan published")
                 if not self.closed and snapshot is self.latest:
                     self._set_status("failed", "planning_error")
             finally:
+                if activity:
+                    from .activities.events import Outcome
+
+                    published = calculation_reason == "published"
+                    if published:
+                        state = Outcome.COMPLETED
+                    elif calculation_reason == "interrupted":
+                        state = Outcome.INTERRUPTED
+                    elif self.closed:
+                        state = Outcome.CANCELLED
+                    elif superseded:
+                        state = Outcome.SKIPPED
+                    else:
+                        state = Outcome.FAILED
+                    await self.events.finish(
+                        activity,
+                        state,
+                        "A validated plan was published."
+                        if published
+                        else "No plan was activated. Existing commands retain their original validity.",
+                        usable=published,
+                    )
                 if self.record_calculation is not None:
                     try:
                         await self.record_calculation(

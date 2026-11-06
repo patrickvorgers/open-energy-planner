@@ -162,6 +162,103 @@ class PriceService:
         self.lock = asyncio.Lock()
         # The composition root replaces this before refresh starts to coordinate durable consumers.
         self.persistence_lock = asyncio.Lock()
+        self.events = None
+        self.activity_requests = {}
+
+    async def fetch_activity(self, source, now, day=None):
+        """Record actual requests and keep an asynchronous HA delivery request under one ID."""
+        from ..activities.events import Health, Outcome
+
+        if self.events is None:
+            candidate = await source.fetch_day(day, now) if day else await source.fetch(now)
+            await self._accept(candidate, day)
+            return candidate
+        owner = self.activity_owner(source)
+        title = "Fetch published prices" if day else "Fetch price forecast"
+        request_key = owner, day
+        identity = self.activity_requests.get(request_key)
+        if identity is None:
+            identity = await self.events.start(owner, "prices", title)
+            self.activity_requests[request_key] = identity
+        try:
+            candidate = await source.fetch_day(day, now) if day else await source.fetch(now)
+            await self._accept(candidate, day)
+        except asyncio.CancelledError:
+            await self.events.finish(
+                identity, Outcome.INTERRUPTED, "Stopped before the price request finished."
+            )
+            self.activity_requests.pop(request_key, None)
+            raise
+        except Exception as error:
+            if (
+                isinstance(error, PricesUnavailable)
+                and str(error) == "home_assistant_prices_pending"
+            ):
+                await self.events.update(
+                    identity,
+                    f"Waiting for the requested Home Assistant price delivery. Market: {self.market_area}. "
+                    + self.activity_coverage(now),
+                )
+                self.events.availability(
+                    owner,
+                    Health.UNKNOWN,
+                    "Waiting for the requested Home Assistant price delivery. "
+                    + self.activity_coverage(now),
+                )
+                raise
+            detail = (
+                f"Adapter: {getattr(source, 'SOURCE_ID', 'unknown')}. Market: {self.market_area}. "
+                + self.activity_coverage(now)
+            )
+            await self.events.finish(identity, Outcome.FAILED, detail)
+            self.activity_requests.pop(request_key, None)
+            self.events.availability(
+                owner, Health.DEGRADED if self.timeline(now).entries else Health.UNAVAILABLE, detail
+            )
+            raise
+        transport = getattr(source, "last_transport", None)
+        detail = f"Adapter: {candidate.source_id}. Market: {self.market_area}. "
+        if transport:
+            detail += f"Transport: {transport}. "
+        if day:
+            detail += f"Delivery day: {day.isoformat()}. "
+        detail += self.activity_coverage(now)
+        await self.events.finish(identity, Outcome.COMPLETED, detail, usable=True)
+        self.activity_requests.pop(request_key, None)
+        self.events.availability(owner, Health.AVAILABLE, detail)
+        return candidate
+
+    def activity_coverage(self, now):
+        """Describe retained usable coverage rather than guessing validity from a fetch exception."""
+        timeline = self.timeline(now)
+        if timeline.entries:
+            return f"Usable prices cover through {timeline.covered_until.astimezone(UTC):%Y-%m-%d %H:%M} UTC. Coverage: {timeline.status.value.replace('_', ' ')}. Original source expiry still applies."
+        return "No currently usable prices remain. Planning requires usable price coverage."
+
+    def activity_owner(self, source):
+        """Keep failure/recovery episodes independent when the bidding area changes."""
+        return f"prices:{getattr(source, 'SOURCE_ID', 'home_assistant')}:{self.market_area}"
+
+    def publish_schedule(self, now):
+        """Project existing publication, correction and retry clocks without running providers."""
+        if not self.events or self.published is None:
+            return
+        local = now.astimezone(ZoneInfo(self.schedule.timezone))
+        today = local.date()
+        tomorrow = today + timedelta(days=1)
+        due = [datetime.combine(tomorrow, self.schedule.publication, local.tzinfo)]
+        for day in (today, tomorrow):
+            publication = datetime.combine(today, self.schedule.publication, local.tzinfo)
+            correction = datetime.combine(today, self.schedule.correction, local.tzinfo)
+            if day == tomorrow and not self.complete(day) and local < publication:
+                due.append(publication)
+            elif not self.complete(day):
+                due.append(self.attempts.get(day, now) + self.schedule.retry)
+            elif day == tomorrow and day not in self.corrections and local < correction:
+                due.append(correction)
+        self.events.scheduled(
+            self.activity_owner(self.published), "prices", "Fetch published prices", min(due)
+        )
 
     @property
     def version(self):
@@ -339,7 +436,7 @@ class PriceService:
                     BackgroundLog(_LOGGER, f"Published market prices for {day.isoformat()}"),
                 )
                 try:
-                    await self._accept(await self.published.fetch_day(day, now), day)
+                    candidate = await self.fetch_activity(self.published, now, day)
                     if correction and self.complete(day):
                         self.corrections.add(day)
                     self.issues.pop(issue_key, None)
@@ -382,8 +479,7 @@ class PriceService:
                     BackgroundLog(_LOGGER, f"Price forecast {getattr(source, 'SOURCE_ID', key)}"),
                 )
                 try:
-                    candidate = await source.fetch(now)
-                    await self._accept(candidate)
+                    candidate = await self.fetch_activity(source, now)
                     paired.append(candidate)
                     self.issues.pop(key, None)
                     status.success(
@@ -397,6 +493,19 @@ class PriceService:
                         expected=True,
                         reason=price_failure_reason(error),
                     )
+                finally:
+                    if self.events:
+                        minutes = (
+                            FORECAST_FAILURE_RETRY_MINUTES
+                            if key in self.issues
+                            else FORECAST_REFRESH_INTERVAL_HOURS * MINUTES_PER_HOUR
+                        )
+                        self.events.scheduled(
+                            self.activity_owner(source),
+                            "prices",
+                            "Fetch price forecast",
+                            now + timedelta(minutes=minutes),
+                        )
             await self.assess(now, tuple(paired))
             current_timeline = self.timeline(now)
             current_coverage = self._coverage(current_timeline)
@@ -407,6 +516,19 @@ class PriceService:
                     len(current_timeline.entries),
                 )
             self.last_coverage = current_coverage
+            self.publish_schedule(now)
+            if self.events:
+                from ..activities.events import Health
+
+                self.events.availability(
+                    "prices",
+                    Health.AVAILABLE
+                    if current_timeline.status == PriceCoverage.READY
+                    else Health.DEGRADED
+                    if current_timeline.entries
+                    else Health.UNAVAILABLE,
+                    self.activity_coverage(now),
+                )
             return before != self.version or previous_coverage != current_coverage
 
     async def assess(self, now, paired=()):

@@ -24,6 +24,7 @@ def test_all_original_requirement_identifiers_remain_declared():
         + added_ev
         + added_quality
         + added_thermal
+        + [f"ACT-{index:02}" for index in range(1, 8)]
         + ["CONFIG-12", "DEV-02a", "FAILURE-13", "FAILURE-14", "FORE-17"]
     )
 

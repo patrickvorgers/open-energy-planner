@@ -170,6 +170,10 @@ def app_site(request):
                 from tests.frontend.browser.performance_fixture import seed
 
                 seed(Path(directory))
+            if getattr(request, "param", None) == "activity":
+                from tests.frontend.browser.activity_fixture import register as register_activity
+
+                register_activity(application)
             if ingress:
                 pairing = application[PAIRING_KEY]
                 pairing.supervisor_secret = "browser-supervisor-private-proof"
@@ -192,6 +196,10 @@ def app_site(request):
                 )
             runner = web.AppRunner(application)
             await runner.setup()
+            if getattr(request, "param", None) == "activity":
+                from tests.frontend.browser.activity_fixture import seed as seed_activity
+
+                await seed_activity(application)
             site = web.TCPSite(runner, "127.0.0.1", 0)
             await site.start()
             result["url"] = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
@@ -238,10 +246,10 @@ def app_site(request):
                 while not shutdown.is_set():
                     await asyncio.sleep(0.02)
             finally:
+                await runner.cleanup()
                 if proxy_runner:
                     await proxy_runner.cleanup()
                 await session.close()
-                await runner.cleanup()
 
         thread = Thread(target=lambda: asyncio.run(serve()), daemon=True)
         thread.start()
@@ -268,9 +276,30 @@ def app_page(app_site, request, browser):
         else DEFAULT_BROWSER_TIME_ZONE
     )
     with browser.new_context(
-        viewport=request.param, has_touch=request.param["width"] < 500, timezone_id=zone
+        viewport=request.param,
+        has_touch=request.param["width"] < 500,
+        timezone_id=zone,
+        locale="en-US",
     ) as context:
         page = context.new_page()
+        page.add_init_script("""(() => {
+            const original = window.fetch;
+            let pending = 0, waiters = [];
+            window.__oepProductReadsIdle = () => new Promise(resolve => {
+                if (!pending) resolve(); else waiters.push(resolve);
+            });
+            window.fetch = function(input, options) {
+                const result = original.call(this, input, options);
+                const url = new URL(input instanceof Request ? input.url : input, location.href);
+                if (url.pathname.endsWith('/v1/events')) return result;
+                pending++;
+                result.then(response => response.clone().arrayBuffer()).catch(() => {}).finally(() => {
+                    pending--;
+                    if (!pending) {const ready = waiters; waiters = []; ready.forEach(resolve => resolve());}
+                });
+                return result;
+            };
+        })();""")
         page.goto(app_site + "/setup")
         yield page, app_site
 

@@ -450,6 +450,69 @@ def test_notice_time_follows_newly_discovered_home_assistant_timezone(app_page):
     expect(banner).not_to_contain_text("12:45 UTC")
 
 
+@pytest.mark.parametrize(
+    ("notification_timezone", "notification_time"),
+    [
+        (None, "2026-10-30 12:45 UTC"),
+        ("Europe/Amsterdam", "1:45 PM"),
+        ("Pacific/Auckland", "1:45 AM"),
+    ],
+)
+def test_notification_timezone_does_not_change_saved_ev_departure(
+    app_page, notification_timezone, notification_time
+):
+    """Notification metadata formats its own incident without changing an existing EV editor's timezone."""
+    page, url = app_page
+    page.clock.install()
+    vehicle = {
+        "id": "00000000-0000-4000-8000-000000000201",
+        "name": "Family car",
+        "actual": {"soc": 50},
+        "target_soc": 80,
+        "departure_time": "07:00",
+        "departure_override": "2026-10-25T01:30:42+00:00",
+        "next_departure": "2026-10-25T01:30:42+00:00",
+    }
+    document = {"timezone": "Europe/Amsterdam", "vehicles": [vehicle], "points": [], "issue": None}
+    notices = blocked()
+    notices["notifications"][0]["action_path"] = "/ev"
+    intents = []
+    page.route(
+        "**/setup/session",
+        lambda route: route.fulfill(json={"ingress": False, "timezone": "Europe/Amsterdam"}),
+    )
+    page.route("**/v1/ev", lambda route: route.fulfill(json=document))
+    page.route("**/v1/notifications", lambda route: route.fulfill(json=notices))
+
+    def accept_intent(route):
+        """Capture the unchanged departure sent through the real form submission."""
+        intents.append(route.request.post_data_json)
+        route.fulfill(json={"accepted": True})
+
+    page.route("**/v1/ev/intent", accept_intent)
+    page.goto(url + "/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.get_by_label("One-off departure", exact=True)).to_have_value("2026-10-25T02:30")
+    page.evaluate(
+        """async timezone => {
+            const notifications = await import('/setup/notifications.js');
+            await notifications.refreshNotifications({ingress: true, timezone}, true);
+        }""",
+        notification_timezone,
+    )
+    expect(page.get_by_role("region", name="Notifications")).to_contain_text(notification_time)
+    page.get_by_role("button", name="Apply one-off departure", exact=True).click()
+    expect(page.get_by_label("One-off departure", exact=True)).to_be_enabled()
+    assert intents == [
+        {
+            "vehicle_id": vehicle["id"],
+            "field": "departure_override",
+            "value": "2026-10-25T01:30:42+00:00",
+        }
+    ]
+
+
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
 def test_empty_center_appears_for_a_new_notice_and_both_views_disappear_after_recovery(app_page):
     """A healthy read shows no bell, a later issue appears, and confirmed recovery clears both views."""

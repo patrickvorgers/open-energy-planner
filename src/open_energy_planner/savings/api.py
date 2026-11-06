@@ -91,6 +91,10 @@ def register(
     )
 
     valuations = PlanValuations(runtime.documents, plans)
+    from ..activities.api import EVENTS
+
+    runtime.events = app.get(EVENTS)
+    valuations.events = app.get(EVENTS)
 
     def pending():
         """Capture currently requested immutable bindings. Historic frames retain their own context."""

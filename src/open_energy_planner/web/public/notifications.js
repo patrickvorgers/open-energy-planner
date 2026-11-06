@@ -1,5 +1,6 @@
 /** Share active notices with navigation and show their full explanation on the recovery page. */
-import {when, useHomeAssistantTimezone} from "./display.js";
+import {when} from "./display.js";
+import {connectEvents, observeEvents} from "./events.js";
 
 const NOTIFICATION_READ_TIMEOUT_MILLISECONDS = 5000;
 let banner, metadata = {}, controller, generation = 0, focusedReadGeneration = 0, lastDocument, lastSignature, token = "";
@@ -40,6 +41,9 @@ export function bindNotifications() {
     banner.setAttribute("aria-live", "polite");
     banner.hidden = true;
     main.prepend(banner);
+    observeEvents(message => {
+        if (message.reset || message.events?.some(event => event.topic === "notifications")) refreshNotifications();
+    });
     if (hostFrame) hostFrame.dispatchEvent(new CustomEvent("oep-notifications-loading", {detail: {source: document}}));
     else presentCenter({notifications: []});
     window.addEventListener("hashchange", () => {
@@ -276,7 +280,7 @@ function render(payload, warning = "") {
         if (notice.since) {
             const since = window.document.createElement("p");
             since.className = "notification-since";
-            const started = metadata.timezone ? when(notice.since) : new Date(notice.since).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+            const started = metadata.timezone ? when(notice.since, {}, metadata.timezone) : new Date(notice.since).toISOString().slice(0, 16).replace("T", " ") + " UTC";
             const label = notice.blocks?.length === 0 ? "Active since" : "Blocked since";
             since.textContent = `${label}: ${started}`;
             article.append(since);
@@ -290,7 +294,6 @@ function render(payload, warning = "") {
 export async function refreshNotifications(session, focus = false) {
     if (!banner) return;
     if (session) metadata = session;
-    useHomeAssistantTimezone(metadata.timezone);
     if (!focus && focusedReadGeneration && (metadata.ingress || token)) return;
     const requestGeneration = ++generation;
     controller?.abort();
@@ -318,6 +321,7 @@ export async function refreshNotifications(session, focus = false) {
         if (!response.ok) throw new Error("Notification status unavailable");
         const result = await response.json();
         if (requestGeneration !== generation) return;
+        connectEvents(document.querySelector('meta[name="oep-api-base"]').content, token);
         if (!Array.isArray(result.notifications) || result.notifications.some(item => !item ||
             [item.code, item.title, item.message].some(value => typeof value !== "string") ||
             [item.action_path, item.action_label, item.detail].some(value => value != null && typeof value !== "string") ||

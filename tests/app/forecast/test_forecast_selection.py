@@ -401,7 +401,7 @@ def test_three_real_shadow_windows_promote_and_a_later_loss_restores_baseline(
             )
         return {"status": "ok", "value": value}
 
-    monkeypatch.setattr(runtime, "_calculate", calculate)
+    monkeypatch.setattr(runtime, "_execute", calculate)
     try:
         for window_index in range(4):
             issued = START + timedelta(days=window_index * 2)
@@ -669,7 +669,7 @@ def test_actual_capture_window_minimum_is_checked_before_launch(tmp_path, monkey
             """An undersized window must be rejected before any numerical worker or evidence collection."""
             raise AssertionError("Short comparison reached the worker")
 
-        monkeypatch.setattr(runtime, "_calculate", forbidden)
+        monkeypatch.setattr(runtime, "_execute", forbidden)
         original = {
             "valid_until": (START + timedelta(minutes=15)).isoformat(),
             "input_snapshot": {

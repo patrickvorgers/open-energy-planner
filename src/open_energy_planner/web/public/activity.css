@@ -1,0 +1,56 @@
+.activity-columns { display:grid; grid-template-columns:minmax(0,2fr) minmax(15rem,1fr); gap:2rem; align-items:start; }
+.activity-next { border-left:1px solid var(--oep-line); padding-left:1.5rem; }
+.activity-note { color:var(--oep-muted); font-size:.85rem; }
+.activity-list { list-style:none; margin:0; padding:0; }
+.activity-list-heading,#activity-list .activity-row > summary { display:grid; grid-template-columns:5.5rem minmax(0,1fr) 5.5rem 6.5rem .6rem; gap:.75rem; align-items:center; }
+.activity-list-heading { padding:8px 10px; color:var(--oep-muted); font-size:11px; border-bottom:1px solid var(--oep-line); }
+.workspace details.activity-row { margin:0; padding:0; border:0; border-bottom:1px solid var(--oep-line); border-radius:0; background:transparent; overflow-wrap:anywhere; }
+.activity-row > summary { cursor:pointer; list-style:none; }
+.activity-row > summary::-webkit-details-marker { display:none; }
+#activity-list .activity-row > summary { min-height:44px; box-sizing:border-box; padding:8px 10px; font-weight:400; }
+.activity-row > summary::after { content:""; display:block; width:5px; height:5px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(-45deg); }
+.activity-row[open] > summary::after { transform:rotate(45deg); }
+.activity-row > summary:focus-visible { outline:2px solid var(--oep-teal,#21836d); outline-offset:-2px; }
+.activity-row > summary:hover { background:#e5f0f5; }
+.activity-row[open] > summary { background:#e5f0f5; }
+.activity-row summary strong { font-weight:550; }
+.activity-row time { font-variant-numeric:tabular-nums; color:var(--oep-muted); font-size:12px; white-space:nowrap; }
+.activity-type { color:var(--oep-muted); font-size:12px; }
+.activity-state { display:inline-flex; align-items:center; gap:6px; color:var(--oep-muted); font-size:12px; white-space:nowrap; }
+.activity-state::before { content:""; width:6px; height:6px; flex:none; border-radius:50%; background:currentColor; }
+.activity-state[data-state=failed] { color:#99472c; }
+.activity-state[data-state=running] { color:#27638f; }
+.activity-state[data-state=completed] { color:#236752; }
+.activity-row p { margin:0; padding:6px 10px; font-size:12px; }
+.activity-row p:last-child { padding-bottom:12px; }
+.activity-next .activity-row { margin:0; padding:8px 0; border-bottom:1px solid var(--oep-line); }
+.activity-next details.activity-row { padding:0; }
+.activity-next .activity-row > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:40px; padding:6px 0; box-sizing:border-box; font-weight:400; }
+.activity-next h2:not(:first-child) { margin-top:1.5rem; }
+.activity-empty { padding:16px 10px; color:var(--oep-muted); }
+#activity-more { margin-top:1rem; }
+@media(max-width:1100px) and (min-width:851px) {
+    .activity-columns { grid-template-columns:minmax(0,1fr) 15rem; gap:1rem; }
+    .activity-list-heading,#activity-list .activity-row > summary { grid-template-columns:5rem minmax(0,1fr) 6rem .6rem; gap:.5rem; }
+    .activity-list-heading span:nth-child(3),.activity-type { display:none; }
+}
+@media(max-width:850px) {
+    .activity-columns { grid-template-columns:1fr; }
+    .activity-next { border-left:0; border-top:1px solid var(--oep-line); padding:1rem 0 0; }
+}
+@media(max-width:640px) {
+    .workspace .activity-toolbar { display:grid; grid-template-columns:1fr 1fr; grid-template-areas:"day type" "today refresh"; gap:8px 12px; }
+    .activity-toolbar label:first-child { grid-area:day; }
+    .activity-toolbar label:nth-of-type(2) { grid-area:type; }
+    #activity-today { grid-area:today; }
+    #activity-refresh { grid-area:refresh; }
+    .activity-toolbar label { min-width:0; }
+    .activity-toolbar input,.activity-toolbar select,.activity-toolbar button { width:100%; min-width:0; box-sizing:border-box; }
+    .activity-list-heading { display:none; }
+    #activity-list .activity-row > summary { grid-template-columns:5.3rem minmax(0,1fr) .6rem; grid-template-areas:"time title arrow" "type state arrow"; gap:3px 10px; padding:8px 4px; min-height:52px; }
+    #activity-list time { grid-area:time; font-size:11px; }
+    #activity-list strong { grid-area:title; }
+    #activity-list .activity-type { grid-area:type; display:block; font-size:11px; }
+    #activity-list .activity-state { grid-area:state; font-size:11px; }
+    #activity-list summary::after { grid-area:arrow; }
+}

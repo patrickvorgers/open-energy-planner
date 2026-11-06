@@ -18,6 +18,7 @@ from open_energy_planner.forecast_quality.evidence import evidence, measured
 from open_energy_planner.forecast_quality.history import HistoryArchive
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
+from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import archive_engine
 from tests.app.forecast.support.quality import START, prediction
 from tests.database.support.backends import BACKENDS
 
@@ -25,10 +26,10 @@ SOURCE = {"entity_id": "sensor.house", "device_id": "meter", "unit": "kWh", "ver
 
 
 @pytest.fixture(params=BACKENDS, ids=[name for name, _url in BACKENDS])
-def archive(request):
+def archive(request, tmp_path):
     """Own a disposable real backend. All durable evidence uses the shared document table."""
     backend, url = request.param
-    engine = create_engine("sqlite://" if backend == "sqlite" else url)
+    engine = archive_engine(tmp_path) if backend == "sqlite" else create_engine(url)
     SCHEMA.drop_all(engine)
     SCHEMA.create_all(engine)
     try:
@@ -1017,3 +1018,52 @@ def test_midnight_correction_cannot_mix_old_and_new_cumulative_pointer_versions(
     assert (
         archive.read(SOURCE, START + timedelta(hours=11), START + timedelta(hours=14))[0] == values
     )
+
+
+@pytest.mark.parametrize("has_evidence", [False, True])
+def test_daily_activity_requires_accepted_original_forecast_evidence(archive, has_evidence):
+    """A continuously observed midnight without forecast entries cannot claim availability or recovery."""
+    import asyncio
+    from copy import deepcopy
+
+    from open_energy_planner.activities.events import Events, Outcome
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+
+    _daily, record, _now, context = daily_fixture(archive)
+    context = deepcopy(context)
+    if not has_evidence:
+        context["input_snapshot"]["demand_evidence"] = []
+    start = datetime.fromisoformat(record["end"])
+
+    async def scenario():
+        """Archive the next real midnight on the shared backend with event-loop-owned outcomes."""
+        daily = DailyForecastArchive(archive.documents)
+        events = Events(ActivityStore(archive.documents.engine), lambda: start)
+        events.loop = asyncio.get_running_loop()
+        daily.events = events
+        try:
+            identity = await events.start("forecast-quality", "quality", "Earlier daily archive")
+            await events.finish(identity, Outcome.FAILED, "Earlier missing evidence.")
+            cursor = events.cursor
+            await asyncio.to_thread(
+                daily.observe, start - timedelta(seconds=3), "Europe/Amsterdam", context
+            )
+            await asyncio.to_thread(
+                daily.observe, start + timedelta(seconds=2), "Europe/Amsterdam", context
+            )
+            await events.flush()
+            terminal = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity" and row["value"]["state"] != "running"
+            ]
+            assert len(terminal) == 1
+            assert terminal[0]["state"] == ("completed" if has_evidence else "failed")
+            assert terminal[0]["recovered"] is has_evidence
+            assert events.health["forecast-quality"]["state"] == (
+                "available" if has_evidence else "unavailable"
+            )
+        finally:
+            await events.close()
+
+    asyncio.run(scenario())
