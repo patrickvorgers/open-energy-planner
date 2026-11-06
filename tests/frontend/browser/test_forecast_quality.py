@@ -26,8 +26,8 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     """Keep the fixed 24-kWh day unscored until its missing hour gives 24.5 kWh and -0.5 kWh error.
 
     Dataset 0 contains measured bars and dataset 1 the original forecast line.
-    Both retain hourly alignment after resizing and legend toggles.
-    Day and Refresh evidence align above the Household, Solar and Devices tabs.
+    Chart resizing, legend placement and independent visibility toggles are checked.
+    The day selector precedes the Household, Solar and Devices tabs.
     The refresh button stays at least 44 pixels high. Screenshots capture the
     responsive toolbar alignment.
     The app_site fixture covers direct and ingress access. The app_page fixture
