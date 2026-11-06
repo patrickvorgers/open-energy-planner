@@ -69,8 +69,8 @@ function devices(data) {
 }
 
 /** Plot archived numeric evidence. Null actuals remain gaps instead of measured zeros.
- * Bars and straight overlay lines use the same hourly kWh values. Lines never bridge missing hours.
- * Planning's accessible responsive legend toggles each bar/line pair. Tooltips list each series once.
+ * Measured bars and forecast lines retain their hourly kWh values. Lines never bridge missing hours.
+ * Accessible responsive controls toggle each series independently. Tooltips list each series once.
  * The physical lower bound is zero. Only the upper end receives clearance.
  */
 function graph(source, index, inProgress) {

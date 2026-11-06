@@ -23,7 +23,23 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
             datasets.push({label, type: "line", order: 0, borderColor: color, backgroundColor: color, borderWidth: 2.8, borderDash: dash, pointRadius: 0, pointHitRadius: 8, fill: false, spanGaps: false, tension: 0, yAxisID: "radiation", hidden: true, data: points(radiation.rows, field)});
         }
     }
-    const chart = new Chart(canvas, {type: "bar", plugins: [calendarDays], data: {datasets}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "nearest", axis: "x", intersect: false}, scales: {
+    const intervals = {id: "quality-interval-bounds",
+        /** Fit partial edge intervals in pixels without changing their original evidence timestamps or values. */
+        afterDatasetsUpdate(chart) {
+            datasets.forEach((dataset, datasetIndex) => {
+                const rows = dataset.yAxisID === "radiation" ? radiation.rows : datasetIndex === 0 ? source.rows : forecasts[datasetIndex - 1].rows;
+                chart.getDatasetMeta(datasetIndex).data.forEach((element, index) => {
+                    const start = Date.parse(rows[index].start), end = Date.parse(rows[index].end);
+                    const left = Math.max(start, Date.parse(day.start)), right = Math.min(end, Date.parse(day.end));
+                    const fraction = Math.max(0, right - left) / (end - start);
+                    if (fraction >= 1) return;
+                    element.x = chart.scales.x.getPixelForValue((left + right) / 2);
+                    if (dataset.type === "bar") element.width *= fraction;
+                });
+            });
+        }
+    };
+    const chart = new Chart(canvas, {type: "bar", plugins: [intervals, calendarDays], data: {datasets}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "nearest", axis: "x", intersect: false}, scales: {
         x: {type: "linear", offset: false, min: Date.parse(day.start), max: Date.parse(day.end), afterBuildTicks: scale => {const first = Math.ceil(scale.min / HOUR_MILLISECONDS), last = Math.floor(scale.max / HOUR_MILLISECONDS), stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_LABELS - 1))); scale.ticks = []; for (let hour = first; hour <= last; hour += stride) scale.ticks.push({value: hour * HOUR_MILLISECONDS});}, ticks: {stepSize: HOUR_MILLISECONDS, maxTicksLimit: MAX_TIME_LABELS, callback: calendarTime}},
         y: {min: 0, title: {display: true, text: "Energy per hour (kWh)"}},
         ...(radiation ? {radiation: {display: false, position: "right", min: 0, grid: {drawOnChartArea: false}, title: {display: true, text: "Global horizontal irradiance (W/m²)"}}} : {}),
