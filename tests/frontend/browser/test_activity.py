@@ -899,6 +899,7 @@ def test_error_stream_cancellation_settles_before_queued_history_read(app_page):
         const original = window.fetch;
         let sequence = 0;
         window.historyBodyLifecycle = [];
+        const cancellationGate = new Promise(resolve => { window.releaseHistoryCancellation = resolve; });
         window.fetch = async function(input, options) {
             const url = input instanceof Request ? input.url : String(input);
             if (!url.includes('v1/activities?')) return original.call(this, input, options);
@@ -911,6 +912,7 @@ def test_error_stream_cancellation_settles_before_queued_history_read(app_page):
                 response.body.cancel = async (...args) => {
                     record('cancel-start');
                     const result = await cancel(...args);
+                    await cancellationGate;
                     record('cancel-complete');
                     return result;
                 };
@@ -945,11 +947,12 @@ def test_error_stream_cancellation_settles_before_queued_history_read(app_page):
             "() => window.historyBodyLifecycle.some(item => item.event === 'cancel-start')"
         )
         lifecycle = page.evaluate("window.historyBodyLifecycle")
-        if not any(item["event"] == "cancel-complete" for item in lifecycle):
-            expect(next_page).to_be_disabled()
-            expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "true")
-            assert sum(item["event"] == "start" for item in lifecycle) == 1
+        assert not any(item["event"] == "cancel-complete" for item in lifecycle)
+        expect(next_page).to_be_disabled()
+        expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "true")
+        assert sum(item["event"] == "start" for item in lifecycle) == 1
     finally:
+        page.evaluate("window.releaseHistoryCancellation()")
         assert page.request.post(url + "/_test/activity-release-error-body", headers=headers).ok
     wait_for_product_reads(page)
     lifecycle = page.evaluate("window.historyBodyLifecycle")
