@@ -13,6 +13,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .measurement_sources import FULL_SOC_PERCENT, HomeAssistantMeasurementSource
 from .measurements import Quantity, SourceBinding
+from .subentries import add_grouped_entities, retire_empty_groups
 
 MAX_VEHICLES = 16
 MAX_CHARGE_POINTS = 4
@@ -279,6 +280,7 @@ def register_entities(hass, entry, add, definitions):
         entities.pop(key, None)
         removing.discard(key)
         update()
+        retire_empty_groups(coordinator)
 
     @callback
     def update():
@@ -299,7 +301,7 @@ def register_entities(hass, entry, add, definitions):
                 entities[key] = factory(coordinator, key[0], row, key[2])
                 additions.append(entities[key])
         if additions:
-            add(additions)
+            add_grouped_entities(coordinator, add, additions)
         for key, entity in list(entities.items()):
             if key not in desired and key not in removing:
                 removing.add(key)

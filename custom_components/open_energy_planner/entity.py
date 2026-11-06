@@ -48,6 +48,7 @@ class PlannerEntity(Entity):
 
     _attr_should_poll = False
     _attr_has_entity_name = True
+    planning_group = None
 
     def __init__(self, coordinator, device, key, name):
         """Bind entry-scoped identity and display metadata without controlling physical equipment."""

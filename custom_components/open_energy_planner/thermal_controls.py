@@ -29,6 +29,8 @@ LABELS = {
 class ThermalEntity(PlannerEntity):
     """Read committed app-owned settings using one stable virtual-device identity."""
 
+    planning_group = "thermal"
+
     def __init__(self, coordinator, row, key):
         """Bind the configured identity while preserving HA user-assigned device names."""
         super().__init__(coordinator, "thermal_" + row["id"], key, LABELS[key])

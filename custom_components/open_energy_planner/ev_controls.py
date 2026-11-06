@@ -52,6 +52,8 @@ EV_STATUSES = (
 class EVEntity(PlannerEntity):
     """Read committed app state, preserving stable HA IDs and user-assigned device names."""
 
+    planning_group = "ev"
+
     def __init__(self, coordinator, kind, row, key):
         """Group car intent separately from charger capabilities and currently permitted commands."""
         super().__init__(coordinator, "ev_" + row["id"], key, LABELS[key])

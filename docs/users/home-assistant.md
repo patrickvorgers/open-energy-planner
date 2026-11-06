@@ -20,6 +20,31 @@ For a standalone container, administration uses the app's own token and the inte
 
 ## Review installation settings
 
+### Find virtual devices in Home Assistant
+
+Open **Settings > Devices & services > Open Energy Planner**. One connection
+contains the configured groups **Solar**, **Batteries**, **Consumption and cycles**,
+**Electric boilers** and **EV charging**. Empty groups are hidden. General EMS
+and Grid devices remain directly under the connection.
+
+Each group can contain multiple virtual devices. A weather-sensitive heat pump
+or air conditioner belongs to **Consumption and cycles**. Names do not determine
+membership, so renaming a device does not move it. Your existing device and entity
+IDs, custom names, areas and labels remain intact when groups are introduced.
+
+Add or remove installation devices and appliances in the app. The HA groups
+follow that configuration automatically. A temporary connection failure keeps
+the existing groups. Groups are not extra hub devices and do not change physical
+device relationships.
+
+Do not use HA's group **Delete** action to hide or ungroup devices. It deletes
+their virtual registrations and can discard customizations. The integration
+automatically reconnects to restore groups and devices still configured in the
+app. If the app is unreachable, restoration finishes when it is available again.
+To remove a device permanently, remove it in the app.
+
+### Configure the installation
+
 Open **Settings > Installation**. A new or incomplete definition opens the five-stage wizard. A complete definition opens saved summaries and an area selector.
 
 Check source ownership in Energy, then confirm connection limits, household scale, solar properties and batteries. Zero solar sources and zero batteries are valid. Do not overwrite retained settings with a sample merely to reproduce a guide.

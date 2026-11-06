@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from .entity import PlannerEntity
 from .protocol import timestamp
+from .subentries import add_grouped_entities, retire_empty_groups
 
 MAX_CONSUMERS = 16
 MAX_STEPS = 256
@@ -113,6 +114,8 @@ def validate(value):
 
 class ConsumerSensor(PlannerEntity, SensorEntity):
     """Publish an explicitly estimated forecast independently of execution commands."""
+
+    planning_group = "consumption"
 
     def __init__(self, coordinator, entity_id, name, key):
         """Use a stable Energy-meter identity and physical device label."""
@@ -238,6 +241,7 @@ def register_consumers(hass, entry, async_add_entities):
         entities.pop(key, None)
         pending.discard(key)
         update()
+        retire_empty_groups(coordinator)
 
     @callback
     def update():
@@ -262,7 +266,7 @@ def register_consumers(hass, entry, async_add_entities):
                 entities[key] = ConsumerSensor(coordinator, key[0], names[key[0]], key[1])
                 added.append(entities[key])
         if added:
-            async_add_entities(added)
+            add_grouped_entities(coordinator, async_add_entities, added)
 
     entry.async_on_unload(coordinator.subscribe(update))
     update()

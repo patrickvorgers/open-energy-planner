@@ -18,6 +18,7 @@ from .protocol import (
     identifier,
     timestamp,
 )
+from .subentries import add_grouped_entities, retire_empty_groups
 
 MAX_THERMAL_DEVICES = 4
 MAX_THERMAL_STEPS = 1024
@@ -342,6 +343,7 @@ def register_entities(coordinator, async_add_entities, platform):
         entities.pop(key, None)
         removing.discard(key)
         update()
+        retire_empty_groups(coordinator)
 
     @callback
     def update():
@@ -362,7 +364,7 @@ def register_entities(coordinator, async_add_entities, platform):
                 entities[key] = factory(coordinator, row, key[1])
                 additions.append(entities[key])
         if additions:
-            async_add_entities(additions)
+            add_grouped_entities(coordinator, async_add_entities, additions)
         for key, entity in list(entities.items()):
             if key not in desired and key not in removing:
                 removing.add(key)

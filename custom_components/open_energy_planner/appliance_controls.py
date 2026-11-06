@@ -20,6 +20,8 @@ CLOSED_TASK_STATUSES = ("cancelled", "completed")
 class ApplianceControl(PlannerEntity):
     """Share the Energy-owned virtual device and authoritative task readiness checks."""
 
+    planning_group = "consumption"
+
     def __init__(self, coordinator, entity, name, key):
         """Keep editable deadline and readiness on the same device as task evidence."""
         super().__init__(

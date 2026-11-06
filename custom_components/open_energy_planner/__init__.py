@@ -58,6 +58,10 @@ async def async_setup_entry(hass, entry):
             # Retire the combined control. Its app-owned deadline remains available to the compact inputs.
             registry.async_remove(registered.entity_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    from .subentries import register_group_recovery, retire_empty_groups
+
+    retire_empty_groups(coordinator)
+    register_group_recovery(coordinator)
     coordinator.start()
     return True
 
