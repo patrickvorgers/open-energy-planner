@@ -7,7 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
-from open_energy_planner.core.units import BYTES_PER_KIB
+from open_energy_planner.contracts.bonus_statistics import (
+    MAX_STATISTICS_REPORT_BYTES,
+    parse_statistics,
+)
 from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import display_plan
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, request_error_message
@@ -168,7 +171,7 @@ def register(
         the same mutation lock as financial replay. Missing hours stay missing.
         """
         try:
-            body = await request.clone(client_max_size=BYTES_PER_KIB * BYTES_PER_KIB).json()
+            body = await request.clone(client_max_size=MAX_STATISTICS_REPORT_BYTES).json()
         except (ValueError, TypeError):
             raise web.HTTPBadRequest(text="Historical bonus body must be JSON") from None
         async with mutation_lock:
@@ -184,14 +187,24 @@ def register(
                 "recorder_unavailable",
                 "history_unavailable",
                 "unsupported_statistics",
+                "history_missing",
             ):
                 runtime.bonus.issue = "Historical bonus history unavailable: " + body["error"]
                 return web.json_response({"accepted": False})
             try:
-                history = parse_history(body)
-                cancelled = await complete_write(
-                    runtime.bonus.receive, pending, history, datetime.now(UTC)
-                )
+                if pending.statistics_sum:
+                    cancelled = await complete_write(
+                        runtime.bonus.receive_statistics,
+                        pending,
+                        parse_statistics(body, pending),
+                        counters.current,
+                        datetime.now(UTC),
+                    )
+                else:
+                    history = parse_history(body)
+                    cancelled = await complete_write(
+                        runtime.bonus.receive, pending, history, datetime.now(UTC)
+                    )
                 if cancelled:
                     raise cancelled
             except (ValueError, TypeError, KeyError) as error:

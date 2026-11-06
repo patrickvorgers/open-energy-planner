@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from math import ceil, fsum
 
 from open_energy_planner.contracts.bonus_history import BaselineRequest, BonusHistory
+from open_energy_planner.contracts.bonus_statistics import derive_statistics
 from open_energy_planner.history.model import COMPONENT_METER_TOLERANCE_KWH, MAX_HISTORY_HOURS
 from open_energy_planner.storage.counters import CounterStore
 
@@ -39,6 +40,7 @@ class HistoricalBonuses:
         self.pending = None
         self.issue = None
         self.backdated = {}
+        self.statistics_sources = {}
 
     def backdate(self, seed, start, exports):
         """Subtract measured exports between an older boundary and a confirmed seed.
@@ -173,7 +175,15 @@ class HistoricalBonuses:
         }
         exports = bindings["exports"]
         identity = export_identity(exports)
-        result, missing = [], []
+        result, missing, statistics_missing = [], [], []
+        historical = {
+            (seed.rule_id, seed.period_start, seed.entity_id): seed
+            for seed in (self.archive.current.seeds if self.archive.current else ())
+        }
+        endpoint = datetime.fromtimestamp(
+            ceil(frame.start.timestamp() / HISTORY_HOUR_SECONDS) * HISTORY_HOUR_SECONDS,
+            frame.start.tzinfo,
+        )
         for family, versions in BonusCompiler().families(contract).items():
             policy = versions[0]
             if policy.contract_start is not None and frame.start < policy.contract_start:
@@ -190,16 +200,44 @@ class HistoricalBonuses:
                     missing.append((family, period))
                 continue
             _require_physical_statistics(seed)
+            if (
+                seed.statistics
+                and book is not None
+                and seed in book.seeds
+                and seed.observed_at > frame.start
+            ):
+                if endpoint < seed.statistics.reference_at:
+                    raise PendingSettlement(
+                        "Historical bonus interval predates the confirmed statistics reference"
+                    )
+                cached = historical.get((family, period, identity))
+                if (
+                    book is None
+                    or cached is None
+                    or self.statistics_sources.get(cached) != book.version
+                    or cached.observed_at != endpoint
+                ):
+                    try:
+                        result.append(self.backdate(seed, frame.start, exports))
+                        continue
+                    except PendingSettlement as error:
+                        if (
+                            str(error)
+                            != "Historical bonus baseline awaits captured export evidence"
+                        ):
+                            raise
+                    statistics_missing.append((family, period))
+                    continue
+                _require_physical_statistics(cached)
+                seed = cached
             result.append(
                 self.backdate(seed, frame.start, exports)
                 if seed.observed_at > frame.start
                 else seed
             )
-        if missing:
-            end = datetime.fromtimestamp(
-                ceil(frame.start.timestamp() / HISTORY_HOUR_SECONDS) * HISTORY_HOUR_SECONDS,
-                frame.start.tzinfo,
-            )
+        if missing or statistics_missing:
+            end = endpoint
+            missing = statistics_missing or missing
             if end <= min(period for _, period in missing):
                 end += timedelta(hours=1)
             if end > now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1):
@@ -221,6 +259,7 @@ class HistoricalBonuses:
                 periods,
                 end,
                 tuple(sorted(exports)),
+                bool(statistics_missing),
             )
             raise PendingSettlement(
                 self.issue or "Historical bonus baseline is being read from Home Assistant"
@@ -237,19 +276,83 @@ class HistoricalBonuses:
         are never changed by this historical cache.
         """
         book = BonusHistory().derive(request, history, None, now)
-        requested = {(seed.rule_id, seed.period_start) for seed in book.seeds}
+        kept = self._retain_other_periods(book.seeds)
+        self.archive.save_history(CounterBook(now, kept), request=request, history=history)
+        self.pending, self.issue = None, None
+
+    def receive_statistics(self, request, channels, book, now):
+        """Archive a historical endpoint against the current validated reference and correction.
+
+        Request versions prevent delayed reports from replacing a newer confirmation.
+        A new live counter version or restart revalidates the historical checkpoint.
+        Neither current planning counters nor original measurement frames are changed.
+        """
+        if book is None or book.version != request.counter_version:
+            raise ValueError("Historical bonus counter changed")
+        current = {
+            (seed.rule_id, seed.period_start): seed
+            for seed in book.seeds
+            if seed.entity_id == request.entity_id
+        }
+        seeds = []
+        for key in request.periods:
+            seed = current.get(key)
+            if seed is None or seed.statistics is None:
+                raise ValueError("Historical bonus statistics reference is unavailable")
+            _require_physical_statistics(seed)
+            basis = seed.statistics
+            selected = tuple(
+                replace(
+                    channel,
+                    hours=tuple(
+                        row
+                        for row in channel.hours
+                        if row[0] >= basis.reference_at - timedelta(hours=1)
+                    ),
+                )
+                for channel in channels
+            )
+            historical = derive_statistics(
+                replace(request, periods=(key,), active_periods=(key,)),
+                selected,
+                None,
+                request.end,
+            ).seeds[0]
+            if historical.statistics.reference_version != basis.reference_version:
+                raise ValueError("Historical bonus statistics reference changed")
+            statistics = replace(
+                historical.statistics, prefix_kwh=basis.prefix_kwh, confirmed_at=basis.confirmed_at
+            )
+            historical = replace(
+                historical,
+                statistics=statistics,
+                used_kwh=basis.prefix_kwh + sum(item.exported_kwh for item in statistics.series),
+            )
+            _require_physical_statistics(historical)
+            seeds.append(historical)
+        # The immutable archive keeps provenance. Only this process remembers validation
+        # against a live counter version, so restart safely requests fresh HA evidence.
+        saved = CounterBook(now, self._retain_other_periods(seeds))
+        self.archive.save_statistics(saved)
+        self.statistics_sources = {
+            seed: self.statistics_sources[seed]
+            for seed in saved.seeds
+            if seed in self.statistics_sources
+        } | {seed: book.version for seed in seeds}
+        self.pending, self.issue = None, None
+
+    def _retain_other_periods(self, seeds):
+        """Keep requested periods and the most recent other anchors within the existing archive bound."""
+        requested = {(seed.rule_id, seed.period_start) for seed in seeds}
         retained = tuple(
             seed
             for seed in (self.archive.current.seeds if self.archive.current else ())
             if (seed.rule_id, seed.period_start) not in requested
         )
-        available = MAX_COUNTER_SEEDS - len(book.seeds)
+        available = MAX_COUNTER_SEEDS - len(seeds)
         kept = (
             tuple(sorted(retained, key=lambda seed: seed.observed_at)[-available:])
             if available
             else ()
         )
-        self.archive.save_history(
-            CounterBook(now, (*kept, *book.seeds)), request=request, history=history
-        )
-        self.pending, self.issue = None, None
+        return (*kept, *seeds)

@@ -36,7 +36,9 @@ PENDING_SETTLEMENT_MESSAGES = {
     "Confirmed bonus meter is outside its historical interval": "The confirmed export reading falls outside the historical interval's readings.",
     "Continuous reference awaits recent metering. No SoC reset was performed": "Recent meter readings are missing from the continuous comparison scenario.",
     "Historical bonus anchor does not match the export meters or period": "The bonus starting reading belongs to different export meters or a different period.",
-    "Historical bonus baseline awaits captured export evidence": "The captured export readings needed to establish the bonus starting total are missing.",
+    "Historical bonus baseline awaits captured export evidence": "The stored export measurements cannot yet connect the historical interval to the bonus checkpoint.",
+    "Historical bonus interval predates the confirmed statistics reference": "The requested interval starts before the confirmed bonus statistics reference.",
+    "Historical bonus history unavailable: history_missing": "The requested historical bonus statistics endpoints are missing from Home Assistant.",
     "Historical bonus baseline awaits completed hourly statistics": "The hourly export statistics needed for the bonus starting total are not complete yet.",
     "Historical bonus baseline is being read from Home Assistant": "The bonus starting total is still being read from Home Assistant.",
     "Historical bonus counter archive is unreadable": "The stored bonus starting totals cannot currently be read.",
@@ -94,10 +96,14 @@ def settlement_activity_detail(result, issue):
     elif issue in (
         "Historical bonus baseline is being read from Home Assistant",
         "Historical bonus baseline awaits completed hourly statistics",
-        "Historical bonus baseline awaits captured export evidence",
     ):
         reason = "The historical export total needed for the bonus is not yet available. Home Assistant history is being collected or is not complete yet. The next background check tries again. Check the bonus budget under Contract if this persists."
+    elif issue == "Historical bonus baseline awaits captured export evidence":
+        reason = "The historical bonus calculation needs stored export measurements around its checkpoint. The next background check rechecks the measurement coverage. Do not change a valid contract start date or enter an estimated bonus total to bypass this wait. If it persists, report this activity for investigation."
+    elif issue == "Historical bonus interval predates the confirmed statistics reference":
+        reason = "A confirmed missing-period total does not identify how much was exported before this historical interval. Keep the confirmed bonus settings. Report this activity if the interval needs historical evaluation."
     elif issue in (
+        "Historical bonus history unavailable: history_missing",
         "Historical bonus history unavailable: history_unavailable",
         "Historical bonus history unavailable: recorder_unavailable",
         "Historical bonus history unavailable: unsupported_statistics",

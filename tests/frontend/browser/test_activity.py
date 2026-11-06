@@ -1097,3 +1097,27 @@ def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
     page.unroute("**/v1/activities?**")
     refresh.click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_historical_bonus_wait_does_not_request_contract_reconfiguration(app_page):
+    """Desktop and mobile identify historical checkpoint evidence without asking users to alter a valid contract."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    assert page.request.post(
+        url + "/_test/activity-bonus-wait", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    page.get_by_label("Activity type").select_option("settlement")
+    waiting = page.locator("#activity-list details").filter(has_text="Evaluate measured savings")
+    waiting.locator("summary").click()
+    expect(waiting).to_contain_text("processed 0 of 96 measured intervals")
+    expect(waiting).to_contain_text("Do not change a valid contract start date")
+    expect(waiting).to_contain_text("Previous published financial results remain available")
+    expect(waiting).not_to_contain_text("Check the bonus budget under Contract")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    directory = Path("results/ci/historical-bonus")
+    directory.mkdir(parents=True, exist_ok=True)
+    waiting.screenshot(path=str(directory / f"waiting-{page.viewport_size['width']}.png"))

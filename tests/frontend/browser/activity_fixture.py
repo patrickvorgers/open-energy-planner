@@ -194,6 +194,39 @@ def register(app):
         await events.flush()
         return web.json_response({"accepted": True})
 
+    async def bonus_wait(_request):
+        """Publish the production historical-bonus explanation with independently chosen synthetic dates."""
+        from open_energy_planner.savings.runtime import (
+            EvaluationResult,
+            EvaluationState,
+            settlement_activity_detail,
+        )
+
+        start = datetime(2026, 11, 1, 12, 15, tzinfo=UTC)
+        end = start + timedelta(minutes=15)
+        events = app[EVENTS]
+        identity = await events.start(
+            "settlement",
+            "settlement",
+            "Evaluate measured savings",
+            context={"start": start.isoformat(), "end": end.isoformat()},
+        )
+        result = EvaluationResult(
+            EvaluationState.PENDING, 0, 96, start.isoformat(), end.isoformat()
+        )
+        await events.finish(
+            identity,
+            Outcome.SKIPPED,
+            settlement_activity_detail(
+                result, "Historical bonus baseline awaits captured export evidence"
+            ),
+            context={"waiting_start": start.isoformat(), "waiting_end": end.isoformat()},
+        )
+        await events.flush()
+        return web.json_response({"accepted": True})
+
+    app.router.add_post("/_test/activity-bonus-wait", bonus_wait)
+
     app.router.add_post("/_test/activity-burst", burst)
     app.router.add_post("/_test/activity", live)
     app.router.add_post("/_test/activity-history", history_state)

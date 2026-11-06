@@ -136,3 +136,27 @@ existing transport and physical endpoint semantics. The HA integration only
 reads metadata and normalized rows through Recorder's public statistics API.
 Annual arithmetic, continuity decisions, persistence and concurrency belong to
 the app. Physical equipment and production Home Assistant are not touched.
+
+
+## Historical settlement checkpoints
+
+A valid current statistics checkpoint can be newer than the first interval being
+re-evaluated. Settlement first uses exact retained physical measurements when
+available. If the stored sequence ends before the checkpoint, it requests the
+completed hourly endpoint at or immediately after the historical interval.
+The existing statistics transport supplies each meter's identity, sum and
+physical endpoint. The app reuses endpoint derivation and verifies the same
+reference date, metadata identities, units and reference sums as the current
+validated counter. The confirmed missing-period prefix and its confirmation
+remain authoritative. Missing physical endpoints or changed references fail
+closed. Hourly gaps do not invent quarter measurements or imply zero export.
+
+The historical result belongs to `savings-bonus-counters`, with immutable
+statistics provenance. Current planning counters and original frames remain
+unchanged. Historical cache reuse is bound to the current counter-book version
+in process memory. Restart or a new live book requests fresh historical evidence
+before reuse, including when a historical endpoint may have been corrected.
+The existing historical ingress binds reports to the contract, configuration,
+meters and counter version under the settlement mutation lock. Its TLS gateway
+route uses the same bounded 16 MiB annual-statistics allowance. Other peer routes
+retain their existing body limits.

@@ -443,3 +443,156 @@ def test_historical_reception_retains_old_periods_and_always_keeps_requested_see
     assert older.used_kwh == 1
     assert older.observed_at == START
     assert sum(seed in kept for seed in seeds) == min(63, cached_count)
+
+
+@pytest.mark.parametrize("minute", [0, 15])
+@pytest.mark.parametrize("prefix", [0, 5])
+@pytest.mark.parametrize(
+    "fault", [None, "metadata", "reference", "physical", "missing_end", "stale_book"]
+)
+def test_statistics_replay_requests_historical_endpoint_without_latest_capture(
+    evidence, minute, prefix, fault
+):
+    """A June contract replays November from annual sums without capturing quarters up to today's moving counter."""
+    from datetime import UTC, datetime
+
+    store, baselines = evidence
+    period = datetime(2026, 6, 1, tzinfo=UTC)
+    start = datetime(2026, 11, 1, 13, minute, tzinfo=UTC)
+    endpoint = start.replace(minute=0) + timedelta(hours=bool(minute))
+    latest = start.replace(minute=0) + timedelta(days=5)
+    reference = StatisticsBasis(
+        period + timedelta(days=bool(prefix)),
+        latest,
+        (
+            StatisticReference(EXPORTS[0], 9, "recorder", "kWh", 1000, 1100),
+            StatisticReference(EXPORTS[1], 10, "recorder", "kWh", 2000, 2050),
+        ),
+        prefix,
+        period + timedelta(days=1) if prefix else None,
+        "a" * 64,
+        True,
+    )
+    current = CounterSeed(
+        "bonus",
+        period,
+        150 + prefix,
+        800,
+        export_identity(EXPORTS),
+        latest,
+        ((EXPORTS[0], 400), (EXPORTS[1], 400)),
+        reference,
+    )
+    selected = contract(bonus=True)
+    selected = replace(selected, bonuses=(replace(selected.bonuses[0], contract_start=period),))
+    rows = []
+    for index in range(5):
+        instant = start + timedelta(minutes=15 * index)
+        frame = Frame(
+            instant,
+            instant + timedelta(minutes=15),
+            dict.fromkeys(EXPORTS, 0),
+            {},
+            {},
+            {EXPORTS[0]: 300, EXPORTS[1]: 400},
+            "recorded",
+        )
+        rows.append((frame, {"bindings": {"exports": EXPORTS}}))
+    retain(store, rows)
+    book = CounterBook(latest, (current,))
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        baselines.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=3),
+            "bindings",
+        )
+    request = baselines.pending
+    assert request.statistics_sum and request.end == endpoint
+    assert request.counter_version == book.version
+
+    from open_energy_planner.contracts.bonus_statistics import StatisticsChannel
+
+    channels = tuple(
+        StatisticsChannel(
+            identity,
+            (
+                (reference.reference_at - timedelta(hours=1), identity.reference_sum, 0),
+                (endpoint - timedelta(hours=1), total, physical),
+            ),
+        )
+        for identity, total, physical in zip(reference.series, (1080, 2020), (300, 400))
+    )
+    original_frames = store.frames()
+    if fault:
+        first = channels[0]
+        if fault == "metadata":
+            channels = (
+                replace(first, identity=replace(first.identity, metadata_id=99)),
+                *channels[1:],
+            )
+        elif fault == "reference":
+            channels = (
+                replace(first, hours=((first.hours[0][0], 999, 0), first.hours[1])),
+                *channels[1:],
+            )
+        elif fault == "physical":
+            channels = (
+                replace(
+                    first, hours=(first.hours[0], (first.hours[1][0], first.hours[1][1], None))
+                ),
+                *channels[1:],
+            )
+        elif fault == "missing_end":
+            channels = (replace(first, hours=first.hours[:1]), *channels[1:])
+        else:
+            book = replace(book, recorded_at=latest + timedelta(hours=1))
+        with pytest.raises(ValueError):
+            baselines.receive_statistics(request, channels, book, latest + timedelta(hours=3))
+        assert baselines.archive.current is None and store.frames() == original_frames
+        return
+    baselines.receive_statistics(request, channels, book, latest + timedelta(hours=3))
+    seeds = baselines.prepare(
+        selected,
+        rows[0][0],
+        rows[0][1]["bindings"],
+        (),
+        book,
+        latest + timedelta(hours=3),
+        "bindings",
+    )
+    assert seeds[0].used_kwh == 100 + prefix
+    assert seeds[0].observed_at == start
+    assert seeds[0].component_meters == ((EXPORTS[0], 300), (EXPORTS[1], 400))
+    assert current.used_kwh == 150 + prefix and book.seeds == (current,)
+    assert store.frames() == original_frames
+    assert (
+        baselines.archive.provenance(baselines.archive.current.seeds[0])["statistics"]["prefix_kwh"]
+        == prefix
+    )
+    restarted = HistoricalBonuses(store)
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        restarted.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=3),
+            "bindings",
+        )
+    # A revalidated historical correction must not silently reuse an older endpoint.
+    updated = replace(book, recorded_at=latest + timedelta(hours=1))
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        baselines.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            updated,
+            latest + timedelta(hours=3),
+            "bindings",
+        )

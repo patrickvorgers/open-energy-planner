@@ -37,6 +37,21 @@ PRIVATE_EVIDENCE = (
     "issue,cause,action",
     [
         (
+            "Historical bonus baseline awaits captured export evidence",
+            "cannot yet connect the historical interval",
+            "Do not change a valid contract start date",
+        ),
+        (
+            "Historical bonus interval predates the confirmed statistics reference",
+            "before the confirmed bonus statistics reference",
+            "Keep the confirmed bonus settings",
+        ),
+        (
+            "Historical bonus history unavailable: history_missing",
+            "endpoints are missing",
+            "Check Recorder",
+        ),
+        (
             "Historical bonus baseline awaits completed hourly statistics",
             "hourly export statistics",
             "bonus budget under Contract",
@@ -231,5 +246,115 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
         assert not documents.exists("head.json")
         assert store.results(documents.read("working.json")["revision"], START, END) == []
         assert repository.get_plan(document["plan_id"]) == document
+    finally:
+        repository.close()
+
+
+def test_statistics_checkpoint_recovery_publishes_new_version_and_retains_previous_results(
+    tmp_path,
+):
+    """A 1-kWh import costs .30 versus .20 reference depletion, retaining -.10 savings across historical recovery."""
+    from dataclasses import replace
+
+    from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
+    from open_energy_planner.contracts.bonus_statistics import (
+        StatisticReference,
+        StatisticsBasis,
+        StatisticsChannel,
+    )
+
+    repository = SqlPlanRepository(tmp_path)
+    selected_contract = contract(bonus=True)
+    period = selected_contract.bonuses[0].period_start(START)
+    original_plan = {
+        "plan_id": "historical-recovery-original",
+        "generated_at": START.isoformat(),
+        "strategy": "minimize cost",
+        "solution_status": "optimal",
+        "steps": [],
+        "input_snapshot": {
+            "contract_version": selected_contract.version,
+            "problem": json.loads(
+                json.dumps(asdict(problem()), default=lambda value: value.isoformat())
+            ),
+        },
+    }
+    repository.state["plan"] = original_plan
+    repository.save()
+    store = SettlementStore(repository.engine)
+    documents = SqlDocuments(repository.engine, "savings")
+    with repository.engine.begin() as connection:
+        connection.execute(
+            ACTIVATIONS.insert().values(activated_at=stamp(START), plan_id=original_plan["plan_id"])
+        )
+        retain(
+            connection,
+            (
+                PriceSeries(
+                    "published",
+                    "NL",
+                    "EUR",
+                    START - timedelta(hours=1),
+                    None,
+                    None,
+                    (PricePoint(START, END, 0.1, PriceKind.PUBLISHED, 15),),
+                ),
+            ),
+        )
+    store.put_frames((frame(),), {"bindings": bindings(), "seeds": [], "location": None})
+    basis = StatisticsBasis(
+        period,
+        START,
+        (StatisticReference("sensor.export", 1, "recorder", "kWh", 0, 1),),
+        0,
+        None,
+        "a" * 64,
+        True,
+    )
+    first = CounterSeed(
+        "bonus", period, 1, 10, "sensor.export", START, (("sensor.export", 10),), basis
+    )
+    initial = CounterBook(START, (first,))
+    now = START + timedelta(days=5)
+    later = replace(
+        first,
+        used_kwh=2,
+        meter_kwh=20,
+        observed_at=now,
+        component_meters=(("sensor.export", 20),),
+        statistics=replace(basis, latest_at=now, series=(replace(basis.series[0], latest_sum=2),)),
+    )
+    current = CounterBook(now, (later,))
+    runtime = SavingsRuntime(store, documents, repository)
+    try:
+        runtime.process(selected_contract, now, initial)
+        assert runtime.issue is None
+        before = runtime.overview(START, END)
+        assert before["coverage"]["evaluated"] == 1
+        assert before["savings"] == pytest.approx(-0.1)
+        original_frames = store.frames()
+        runtime.process(selected_contract, now, current)
+        assert runtime.issue == "Historical bonus baseline is being read from Home Assistant"
+        assert runtime.overview(START, END)["revision"] == before["revision"]
+        pending = runtime.bonus.pending
+        channels = (
+            StatisticsChannel(
+                basis.series[0],
+                (
+                    (period - timedelta(hours=1), 0, 0),
+                    (START - timedelta(hours=1), 1, 10),
+                ),
+            ),
+        )
+        runtime.bonus.receive_statistics(pending, channels, current, now)
+        runtime.process(selected_contract, now, current)
+        assert runtime.issue is None
+        after = runtime.overview(START, END)
+        assert after["revision"] != before["revision"]
+        assert after["savings"] == pytest.approx(-0.1)
+        assert runtime.overview(START, END, before["revision"])["savings"] == pytest.approx(-0.1)
+        assert store.frames() == original_frames
+        assert repository.get_plan(original_plan["plan_id"]) == original_plan
+        assert current.seeds == (later,)
     finally:
         repository.close()
