@@ -8,7 +8,16 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
+from tests.frontend.browser.activity_fixture import ACTIVITY_SCENARIO_TIME
 from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
+
+
+@pytest.fixture
+def app_page(app_page):
+    """Keep browser dates aligned with the Activity publisher and its seeded local day."""
+    page, url = app_page
+    page.clock.install(time=ACTIVITY_SCENARIO_TIME)
+    return page, url
 
 
 def assert_serial_requests(requests):
@@ -243,7 +252,6 @@ def test_activity_plan_link_reads_exact_archive_without_mutation_or_fallback(app
             "plan_strategy": plan["strategy"],
         },
     ).ok
-    page.clock.install()
     page.goto(url + "/activity?embedded=1")
     if "/api/hassio_ingress/" not in url:
         expect(page.locator("#connect")).to_be_visible()
@@ -1130,7 +1138,6 @@ def test_activity_keeps_live_history_bounded_and_later_schedules_visible(app_pag
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     expect(page.locator("#activity-upcoming")).not_to_contain_text("Later model training")
-    page.clock.install()
     page.clock.fast_forward(2 * 60 * 60 * 1000)
     expect(page.locator("#activity-upcoming")).to_contain_text("Later model training")
     page.get_by_label("Activity type").select_option("weather")
