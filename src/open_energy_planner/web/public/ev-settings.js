@@ -75,6 +75,7 @@ function integrationPicker(card, row, vehicle) {
     const selectedIntegration = integrationSelections.get(row.id) ?? (source ? source.integration_id || "other" : "");
     const selection = {integration: selectedIntegration};
     const control = select(card, selection, "integration", "Home Assistant integration", vehicle ? "Choose the integration that manages this car. Its title supplies the vehicle name." : "Choose the integration that reports the charge point's power and physical connection. Its Energy meter is selected separately.", [...groups].sort((left, right) => left[1].localeCompare(right[1])));
+    control.required = false;
     control.parentElement.style.gridColumn = "1 / -1";
     control.onchange = () => {
         integrationSelections.set(row.id, control.value);

@@ -107,7 +107,9 @@ door and fault sensors do not prove a connection. No connection source or vehicl
 identity is selected automatically.
 
 Choosing a different nonblank vehicle integration clears its incompatible SoC
-choice. Clearing the integration filter retains the explicit SoC choice. For a charge
+choice. Clearing the optional integration filter retains the explicit SoC choice
+and does not block saving valid source settings. Actual source fields remain
+required. For a charge
 point, the integration filters available sources without clearing explicitly
 selected power or connection sources. Choices outside the filter remain visible
 and can be combined with sources from another integration. Cancel restores

@@ -64,6 +64,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     soc = page.get_by_label("Vehicle state of charge", exact=True)
     expect(soc.locator("option")).to_have_count(2)
     expect(soc).to_have_value("")
+    assert soc.evaluate("control => control.required && !control.validity.valid")
     soc.select_option("sensor.car_charge")
     page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
@@ -98,9 +99,11 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]
     page.get_by_role("button", name="Edit settings", exact=True).click()
     page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("car")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("61")
     page.get_by_role("button", name="Save settings", exact=True).click()
+    assert page.get_by_role("combobox", name="Home Assistant integration", exact=True).evaluate(
+        "control => control.validity.valid"
+    ), "Integration filter blocked saving a valid explicit SoC source"
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     saved_vehicle = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
     assert saved_vehicle["soc_entity"] == "sensor.car_charge"
