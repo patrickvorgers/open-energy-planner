@@ -7,8 +7,10 @@ is expected next. Activity is the last item in the Insights group.
 
 The page opens on today in the Home Assistant timezone. Choose **Day** to inspect
 another date or **Activity type** to filter the list. History covers seven rolling
-days. **Load earlier activities** loads the next 100 executions for that day and
-type. **Today** returns to the current day.
+days. Each page shows up to 25 activities. Use **Next** for older activities and
+**Previous** to go back. The page number shows your position within the selected
+day and type. Changing the day opens its newest page and keeps the type filter.
+**Today** returns to the newest page of the current day with that filter unchanged.
 
 New activities appear automatically while the page is connected. Running work
 updates in the same row. Open a row for its explanation, responsible module and
@@ -22,9 +24,10 @@ History names stay on one line. Long names are shortened visually to fit the scr
 Open the activity to read the full name. Activities without a known source retain
 their general name. Historical records are not rewritten to add missing context.
 **Refresh** retries a failed history read without restarting background work.
-Refresh and earlier-page actions become available again when the current read
-finishes. Live updates retain the loaded amount of history. Older records remain
-available through **Load earlier activities** when new work pushes them out of view.
+Refresh and page navigation become available again when the current read
+finishes. **Refresh** opens the newest page. New activities appear on page one.
+While you read an older page, new work does not move its rows or change its page
+number. Outcomes of activities already on that page still update live.
 
 ## Open related data
 

@@ -160,12 +160,16 @@ the shared database closes.
 `activities/` owns an SQL history store on the app-owned active engine. The shared
 schema and four-backend transfer include its table. Day paging uses UTC start
 time and ID with installation-local day bounds, including 23-hour and 25-hour
-days. The browser retains live terminal rows only for the active day/type.
-Automatic growth stays within the loaded history capacity, initially 100 rows.
-Loading an earlier page explicitly increases that capacity by 100. Trimmed older
-records remain reachable through the normal history cursor, without deleting SQL
-evidence. Refresh and earlier-page actions stay disabled while a read is active. Start time determines retention. Original plans and financial archives are
-unchanged.
+days. `GET /v1/activities` accepts a `limit` from 1 to 100, defaulting to 100.
+One lookahead row determines whether a next page exists, including exact page
+boundaries. The browser shows 25 rows and retains cursor boundaries for Previous
+and Next instead of accumulating history. New executions enter page one only.
+Visible older executions still receive live outcomes. A late history response
+cannot overwrite an outcome received while it was loading. Day or type changes
+reset the page, while day changes preserve the type filter. Refresh opens page
+one. Navigation stays disabled during reads, and a failed navigation retains the
+current page. Start time determines retention. Original plans and financial
+archives are unchanged.
 
 Producers enqueue detached updates without waiting for SQL. One writer handles
 up to 512 queued updates. Individual write failures do not terminate that writer

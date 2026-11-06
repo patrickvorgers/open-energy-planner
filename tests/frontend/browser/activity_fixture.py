@@ -1,6 +1,8 @@
 """Synthetic activity evidence through the same publishers used by real background work."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiohttp import web
@@ -11,6 +13,24 @@ from open_energy_planner.activities.events import Health, Outcome
 
 def register(app):
     """Install fixture-only triggers before freezing the router. Production has no event-write API."""
+    error_body_release = asyncio.Event()
+
+    async def streamed_error(request):
+        """Send real 503 headers while retaining an unfinished synthetic response body."""
+        response = web.StreamResponse(status=503, headers={"Content-Type": "text/plain"})
+        await response.prepare(request)
+        await response.write(b"PRIVATE_ACTIVITY_ERROR_BODY")
+        await error_body_release.wait()
+        try:
+            await response.write_eof()
+        except ConnectionResetError:
+            pass
+        return response
+
+    async def release_error_body(_request):
+        """Release the fixture writer even when the browser has already cancelled its stream."""
+        error_body_release.set()
+        return web.json_response({"accepted": True})
 
     async def live(_request):
         """Publish a real same-process transition while the browser is subscribed."""
@@ -26,6 +46,33 @@ def register(app):
         events = app[EVENTS]
         events.history_available = (await request.json())["available"]
         events.publish("history", {"available": events.history_available, "lost_updates": 0})
+        return web.json_response({"accepted": True})
+
+    async def finish(request):
+        """Complete an older synthetic execution through the real live publisher."""
+        body = await request.json()
+        identity = body["activity_id"]
+        await app[EVENTS].finish(
+            identity, Outcome.COMPLETED, "Older activity completed successfully.", usable=True
+        )
+        if body.get("reset"):
+            app[EVENTS].epoch = uuid4().hex
+            app[EVENTS].availability("weather", Health.AVAILABLE, "Missed completion recovered.")
+        return web.json_response({"accepted": True})
+
+    async def progress(request):
+        """Publish a running update before a deliberately missed terminal event."""
+        await app[EVENTS].update(
+            (await request.json())["activity_id"], "Still running before reset."
+        )
+        app[EVENTS].availability("weather", Health.AVAILABLE, "Pre-reset progress received.")
+        return web.json_response({"accepted": True})
+
+    async def reset(request):
+        """Invalidate the real replay cursor and wake subscriptions with an authoritative snapshot."""
+        events = app[EVENTS]
+        events.epoch = uuid4().hex
+        events.availability("weather", Health.AVAILABLE, (await request.json())["detail"])
         return web.json_response({"accepted": True})
 
     async def burst(_request):
@@ -151,6 +198,11 @@ def register(app):
     app.router.add_post("/_test/activity", live)
     app.router.add_post("/_test/activity-history", history_state)
     app.router.add_post("/_test/activity-health", health)
+    app.router.add_post("/_test/activity-finish", finish)
+    app.router.add_post("/_test/activity-progress", progress)
+    app.router.add_get("/_test/activity-streamed-error", streamed_error)
+    app.router.add_post("/_test/activity-release-error-body", release_error_body)
+    app.router.add_post("/_test/activity-reset", reset)
     app.router.add_post("/_test/activity-contexts", contexts)
     app.router.add_post("/_test/activity-plan", plan_link)
 
@@ -165,6 +217,16 @@ async def seed(app):
         .astimezone(UTC)
     )
     try:
+        for activity_index in range(32):
+            events.clock = lambda activity_index=activity_index: (
+                seed_time - timedelta(days=1, minutes=32 - activity_index)
+            )
+            identity = await events.start(
+                "prices:nord_pool", "prices", f"Earlier-day prices {activity_index}"
+            )
+            await events.finish(
+                identity, Outcome.COMPLETED, "Synthetic prices accepted.", usable=True
+            )
         for activity_index in range(104):
             events.clock = lambda activity_index=activity_index: (
                 seed_time - timedelta(minutes=110 - activity_index)
@@ -176,6 +238,8 @@ async def seed(app):
                 owner, provider = "prices:epex_predictor:NL", "EpexPredictor"
                 title = "Fetch price forecast for the next planning horizon and retain previously accepted prices"
             identity = await events.start(owner, "prices", title)
+            if activity_index == 50:
+                continue
             await events.finish(
                 identity,
                 Outcome.COMPLETED,

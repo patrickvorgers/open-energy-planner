@@ -51,7 +51,7 @@ def test_activity_subjects_and_failed_plan_periods_remain_readable(app_page):
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     assert page.request.post(
         url + "/_test/activity-contexts", headers={"Authorization": f"Bearer {TOKEN}"}
     ).ok
@@ -113,7 +113,7 @@ def test_activity_subjects_and_failed_plan_periods_remain_readable(app_page):
         path=str(directory / f"savings-waiting-detail-{page.viewport_size['width']}.png")
     )
     page.get_by_label("Activity type").select_option("")
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     page.screenshot(path=str(directory / f"modules-{page.viewport_size['width']}.png"))
 
 
@@ -377,24 +377,41 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     if page.viewport_size["width"] < 500:
         day = page.get_by_label("Day", exact=True).bounding_box()
         kind = page.get_by_label("Activity type").bounding_box()
         assert abs(day["y"] - kind["y"]) < 4
     expect(page.locator("#activity-list")).to_contain_text("Recovered")
     expect(page.locator("#activity-list")).to_contain_text("Running")
-    page.get_by_role("button", name="Load earlier activities").click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(107)
-    expect(
-        page.get_by_role("list", name="Recorded activities").get_by_role("listitem")
-    ).to_have_count(107)
+    history = page.locator("#activity-list .activity-row")
+    capture = Path("results/ci/activity")
+    capture.mkdir(parents=True, exist_ok=True)
+    first_page = history.evaluate_all("rows => rows.map(row => row.dataset.activityId)")
+    identities = set(first_page)
+    for page_number, count in ((2, 25), (3, 25), (4, 25), (5, 7)):
+        page.get_by_role("button", name="Next", exact=True).click()
+        expect(page.locator("#activity-page")).to_have_text(f"Page {page_number}")
+        expect(history).to_have_count(count)
+        current = history.evaluate_all("rows => rows.map(row => row.dataset.activityId)")
+        assert identities.isdisjoint(current)
+        identities.update(current)
+        if page_number in (2, 5):
+            page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+            page.screenshot(
+                path=str(capture / f"page-{page_number}-{page.viewport_size['width']}.png")
+            )
+    assert len(identities) == 107
+    expect(page.get_by_role("button", name="Next", exact=True)).to_be_disabled()
+    for page_number in (4, 3, 2, 1):
+        page.get_by_role("button", name="Previous", exact=True).click()
+        expect(page.locator("#activity-page")).to_have_text(f"Page {page_number}")
+    assert history.evaluate_all("rows => rows.map(row => row.dataset.activityId)") == first_page
+    expect(page.get_by_role("button", name="Previous", exact=True)).to_be_disabled()
     row_span = page.locator("#activity-list summary").evaluate_all(
         "rows => {const first = rows.slice(0,8).map(row => row.getBoundingClientRect()); return first.at(-1).bottom - first[0].top;}"
     )
     assert row_span <= (576 if page.viewport_size["width"] < 500 else 400)
-    capture = Path("results/ci/activity")
-    capture.mkdir(parents=True, exist_ok=True)
     page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(path=str(capture / f"dense-{page.viewport_size['width']}.png"), full_page=False)
     page.get_by_label("Activity type").select_option("weather")
@@ -427,6 +444,530 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_day_changes_keep_type_filter_and_open_newest_page(app_page):
+    """Day changes start at page one of the same type, with the newest records first."""
+    from datetime import date, timedelta
+
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_label("Activity type").select_option("prices")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    day = page.get_by_label("Day", exact=True)
+    today = day.input_value()
+    day.fill((date.fromisoformat(today) - timedelta(days=1)).isoformat())
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(page.get_by_label("Activity type")).to_have_value("prices")
+    expect(page.locator("#activity-list strong").first).to_have_text(
+        "Earlier-day prices 31: Nord Pool"
+    )
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(7)
+    page.get_by_role("button", name="Today", exact=True).click()
+    expect(day).to_have_value(today)
+    expect(page.get_by_label("Activity type")).to_have_value("prices")
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(page.locator("#activity-list strong").first).to_have_text(
+        "Fetch price forecast: Jeroen.nl"
+    )
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_older_page_receives_its_live_outcome_without_changing_position(app_page):
+    """An older execution finishes in place while its open details and focus survive."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_label("Activity type").select_option("prices")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    document = page.request.get(
+        url + "/v1/activities",
+        params={"day": page.get_by_label("Day", exact=True).input_value(), "kind": "prices"},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    ).json()
+    identity = next(row["id"] for row in document["activities"] if row["state"] == "running")
+    for page_number in (2, 3):
+        page.get_by_role("button", name="Next", exact=True).click()
+        expect(page.locator("#activity-page")).to_have_text(f"Page {page_number}")
+    details = page.locator(f'#activity-list [data-activity-id="{identity}"]')
+    details.locator("summary").focus()
+    details.locator("summary").press("Enter")
+    expect(details.locator(".activity-state")).to_have_text("Running")
+    assert page.request.post(
+        url + "/_test/activity-finish",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"activity_id": identity},
+    ).ok
+    expect(details.locator(".activity-state")).to_have_text("Completed")
+    expect(details.get_by_text("Older activity completed successfully.")).to_be_visible()
+    expect(details.locator("summary")).to_be_focused()
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_failed_navigation_and_late_old_day_response_preserve_selection(app_page):
+    """A failed Next retains its page, and an obsolete reply cannot replace another day's page."""
+    from datetime import date, timedelta
+
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_label("Activity type").select_option("prices")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    original = page.locator("#activity-list").inner_text()
+    page.route("**/v1/activities?**", lambda route: route.fulfill(status=503))
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-status")).to_contain_text("could not be loaded")
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    assert page.locator("#activity-list").inner_text() == original
+    page.unroute("**/v1/activities?**")
+    held = []
+
+    def hold_older_page(route):
+        """Delay only cursor navigation, allowing a new day to load normally."""
+        if "before=" in route.request.url:
+            held.append(route)
+            page.evaluate("window.olderActivityPageHeld = true")
+        else:
+            route.continue_()
+
+    page.route("**/v1/activities?**", hold_older_page)
+    page.get_by_role("button", name="Next", exact=True).click()
+    page.wait_for_function("window.olderActivityPageHeld === true")
+    expect(page.get_by_role("button", name="Next", exact=True)).to_be_disabled()
+    expect(page.get_by_role("button", name="Previous", exact=True)).to_be_disabled()
+    response = page.request.get(
+        held[0].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    day = page.get_by_label("Day", exact=True)
+    day.fill((date.fromisoformat(day.input_value()) - timedelta(days=1)).isoformat())
+    expect(page.locator("#activity-list strong").first).to_have_text(
+        "Earlier-day prices 31: Nord Pool"
+    )
+    held[0].fulfill(json=response)
+    wait_for_product_reads(page)
+    expect(page.locator("#activity-list strong").first).to_have_text(
+        "Earlier-day prices 31: Nord Pool"
+    )
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(page.get_by_label("Activity type")).to_have_value("prices")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_pagination_restores_keyboard_focus_after_held_and_failed_reads(app_page):
+    """Keyboard navigation retains an enabled control at both boundaries and after failure."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    held = []
+
+    def hold_page(route):
+        """Capture only real page requests so completion and failure are controlled."""
+        held.append(route)
+        page.evaluate("count => window.paginationFocusRequestCount = count", len(held))
+
+    page.route("**/v1/activities?**", hold_page)
+
+    def navigate(name, number, focus, *, failed=False):
+        """Activate by keyboard, reject duplicate activation and complete the held request."""
+        button = page.get_by_role("button", name=name, exact=True)
+        count = len(held) + 1
+        button.focus()
+        button.press("Enter")
+        page.wait_for_function("count => window.paginationFocusRequestCount === count", arg=count)
+        expect(button).to_be_disabled()
+        button.dispatch_event("click")
+        assert len(held) == count
+        if failed:
+            held[-1].fulfill(status=503)
+            expect(page.locator("#activity-status")).to_contain_text("could not be loaded")
+        else:
+            response = page.request.get(
+                held[-1].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+            ).json()
+            held[-1].fulfill(json=response)
+        expect(page.locator("#activity-page")).to_have_text(f"Page {number}")
+        wait_for_product_reads(page)
+        expect(page.get_by_role("button", name=focus, exact=True)).to_be_focused()
+        assert len(held) == count
+
+    for number in (2, 3, 4):
+        navigate("Next", number, "Next")
+    navigate("Next", 5, "Previous")
+    for number in (4, 3, 2):
+        navigate("Previous", number, "Previous")
+    navigate("Previous", 1, "Next")
+    navigate("Next", 1, "Next", failed=True)
+    page.get_by_role("button", name="Next", exact=True).focus()
+    page.get_by_role("button", name="Next", exact=True).press("Enter")
+    page.wait_for_function("() => window.paginationFocusRequestCount === 10")
+    day = page.get_by_label("Day", exact=True)
+    day.focus()
+    response = page.request.get(
+        held[-1].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    held[-1].fulfill(json=response)
+    wait_for_product_reads(page)
+    expect(day).to_be_focused()
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+@pytest.mark.parametrize(
+    ("first_failure", "move_focus"), [(False, False), (True, False), (False, True)]
+)
+def test_live_resets_queue_one_read_without_releasing_pagination_focus(
+    app_page, first_failure, move_focus
+):
+    """Real replay resets coalesce behind a held keyboard read, including failure recovery."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    wait_for_product_reads(page)
+    held, active, peak = [], set(), [0]
+
+    def started(request):
+        """Measure only browser history requests, excluding the independent fixture API client."""
+        if "/v1/activities?" in request.url:
+            active.add(request)
+            peak[0] = max(peak[0], len(active))
+
+    def hold(route):
+        """Keep each actual history response pending until the test explicitly completes it."""
+        held.append(route)
+        page.evaluate("count => window.resetHistoryReads = count", len(held))
+
+    page.on("request", started)
+    page.on("requestfinished", lambda request: active.discard(request))
+    page.on("requestfailed", lambda request: active.discard(request))
+    page.route("**/v1/activities?**", hold)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.focus()
+    next_page.press("Enter")
+    page.wait_for_function("() => window.resetHistoryReads === 1")
+    for reset_number in (1, 2):
+        marker = f"Synthetic subscription reset {reset_number}."
+        assert page.request.post(
+            url + "/_test/activity-reset",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            data={"detail": marker},
+        ).ok
+        expect(page.locator("#activity-health")).to_contain_text(marker)
+    assert len(held) == 1 and peak[0] == 1
+    expect(next_page).to_be_disabled()
+    next_page.dispatch_event("click")
+    assert len(held) == 1
+    if move_focus:
+        page.get_by_label("Day", exact=True).focus()
+    if first_failure:
+        held[0].fulfill(status=503)
+    else:
+        response = page.request.get(
+            held[0].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+        ).json()
+        held[0].fulfill(json=response)
+    page.wait_for_function("() => window.resetHistoryReads === 2")
+    expect(next_page).to_be_disabled()
+    expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "true")
+    next_page.dispatch_event("click")
+    response = page.request.get(
+        held[1].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    identity = next(row["id"] for row in response["activities"] if row["state"] == "running")
+    assert page.request.post(
+        url + "/_test/activity-finish",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"activity_id": identity},
+    ).ok
+    assert page.request.post(
+        url + "/_test/activity-health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"owner": "weather", "state": "available", "detail": "Post-reset outcome received."},
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Post-reset outcome received.")
+    held[1].fulfill(json=response)
+    wait_for_product_reads(page)
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+    expect(page.locator(f'[data-activity-id="{identity}"] .activity-state')).to_have_text(
+        "Completed"
+    )
+    expect(page.locator("#activity-status")).to_have_text("")
+    expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "false")
+    expect(next_page).to_be_enabled()
+    expect(page.get_by_label("Day", exact=True) if move_focus else next_page).to_be_focused()
+    assert len(held) == 2 and peak[0] == 1 and not active
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_history_processing_errors_use_safe_public_message(app_page):
+    """Valid JSON with malformed history cannot display technical errors or private payload values."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    original = page.locator("#activity-list").inner_text()
+    private_value = "PRIVATE_ACTIVITY_PROCESSING_VALUE"
+    page.route(
+        "**/v1/activities?**",
+        lambda route: route.fulfill(
+            json={"timezone": "Europe/Amsterdam", "activities": {"private": private_value}}
+        ),
+    )
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-status")).to_have_text(
+        "Activity history could not be loaded. Check the connection and try Refresh."
+    )
+    assert private_value not in page.locator("body").inner_text()
+    assert page.locator("#activity-list").inner_text() == original
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    page.unroute("**/v1/activities?**")
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-status")).to_have_text("")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+@pytest.mark.parametrize(
+    ("rejected_zone", "malformed_rows", "recovery_zone"),
+    [("America/New_York", True, None), ("PRIVATE_INVALID_IANA_ZONE", False, "America/New_York")],
+)
+def test_history_zone_is_committed_only_with_valid_rows(
+    app_page, rejected_zone, malformed_rows, recovery_zone
+):
+    """Reject invalid successful replies atomically, retaining clocks, details and a usable retry."""
+    from zoneinfo import ZoneInfo
+
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    details = page.locator("#activity-list details").first
+    details.locator("summary").click()
+    original = page.locator("#activity-list").inner_text()
+    errors, reject = [], [True]
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def history_reply(route):
+        """Vary only the synthetic history reply while retaining real row data and cursors."""
+        body = page.request.get(
+            route.request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+        ).json()
+        body["timezone"] = rejected_zone if reject[0] else recovery_zone
+        if reject[0] and malformed_rows:
+            body["activities"] = {"private": "PRIVATE_ACTIVITY_ZONE_PAYLOAD"}
+        route.fulfill(json=body)
+
+    page.route("**/v1/activities?**", history_reply)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.focus()
+    next_page.press("Enter")
+    expect(page.locator("#activity-status")).to_have_text(
+        "Activity history could not be loaded. Check the connection and try Refresh."
+    )
+    wait_for_product_reads(page)
+    assert page.locator("#activity-list").inner_text() == original
+    expect(details).to_have_attribute("open", "")
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(next_page).to_be_enabled()
+    expect(next_page).to_be_focused()
+    assert errors == []
+    assert "PRIVATE_" not in page.locator("body").inner_text()
+    reject[0] = False
+    next_page.press("Enter")
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-status")).to_have_text("")
+    first_time = page.locator("#activity-list time").first
+    expected = (
+        datetime.fromisoformat(first_time.get_attribute("datetime"))
+        .astimezone(ZoneInfo(recovery_zone or "UTC"))
+        .strftime("%I:%M %p")
+    )
+    expect(first_time).to_have_text(expected)
+    assert errors == []
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_completed_history_wins_over_pre_reset_running_update(app_page):
+    """A completion missed in a replay gap wins over a cached running event from the prior read."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    wait_for_product_reads(page)
+    held = []
+
+    def hold(route):
+        """Hold both actual attempts while preserving the real event subscription."""
+        held.append(route)
+        page.evaluate("count => window.attemptHistoryReads = count", len(held))
+
+    page.route("**/v1/activities?**", hold)
+    next_page.focus()
+    next_page.press("Enter")
+    page.wait_for_function("() => window.attemptHistoryReads === 1")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    old_response = page.request.get(held[0].request.url, headers=headers).json()
+    identity = next(row["id"] for row in old_response["activities"] if row["state"] == "running")
+    assert page.request.post(
+        url + "/_test/activity-progress", headers=headers, data={"activity_id": identity}
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Pre-reset progress received.")
+    with page.expect_response(
+        lambda response: (
+            "/v1/events" in response.url
+            and response.status == 200
+            and response.json().get("reset") is True
+        )
+    ) as reset_reply:
+        assert page.request.post(
+            url + "/_test/activity-finish",
+            headers=headers,
+            data={"activity_id": identity, "reset": True},
+        ).ok
+    snapshot = reset_reply.value.json()
+    assert snapshot["events"] == []
+    assert all(row["id"] != identity for row in snapshot["snapshot"]["running"])
+    expect(page.locator("#activity-health")).to_contain_text("Missed completion recovered.")
+    held[0].fulfill(json=old_response)
+    page.wait_for_function("() => window.attemptHistoryReads === 2")
+    fresh_response = page.request.get(held[1].request.url, headers=headers).json()
+    assert next(row["state"] for row in fresh_response["activities"] if row["id"] == identity) == (
+        "completed"
+    )
+    held[1].fulfill(json=fresh_response)
+    wait_for_product_reads(page)
+    expect(page.locator(f'[data-activity-id="{identity}"] .activity-state')).to_have_text(
+        "Completed"
+    )
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+    expect(next_page).to_be_focused()
+    assert len(held) == 2
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_error_stream_cancellation_settles_before_queued_history_read(app_page):
+    """A real streaming 503 is explicitly cancelled before reset recovery releases navigation."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    wait_for_product_reads(page)
+    page.evaluate("""() => {
+        const original = window.fetch;
+        let sequence = 0;
+        window.historyBodyLifecycle = [];
+        const cancellationGate = new Promise(resolve => { window.releaseHistoryCancellation = resolve; });
+        window.fetch = async function(input, options) {
+            const url = input instanceof Request ? input.url : String(input);
+            if (!url.includes('v1/activities?')) return original.call(this, input, options);
+            const request = ++sequence;
+            const record = event => window.historyBodyLifecycle.push({request, event});
+            record('start');
+            const response = await original.call(this, input, options);
+            if (!response.ok && response.body) {
+                const cancel = response.body.cancel.bind(response.body);
+                response.body.cancel = async (...args) => {
+                    record('cancel-start');
+                    const result = await cancel(...args);
+                    await cancellationGate;
+                    record('cancel-complete');
+                    return result;
+                };
+            }
+            return response;
+        };
+    }""")
+    held = []
+
+    def history(route):
+        """Hold the original read and let the queued recovery use the real history endpoint."""
+        if not held:
+            held.append(route)
+            page.evaluate("window.streamingHistoryHeld = true")
+        else:
+            route.continue_()
+
+    page.route("**/v1/activities?**", history)
+    next_page.focus()
+    next_page.press("Enter")
+    page.wait_for_function("() => window.streamingHistoryHeld === true")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    assert page.request.post(
+        url + "/_test/activity-reset",
+        headers=headers,
+        data={"detail": "Streaming error recovery queued."},
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Streaming error recovery queued.")
+    try:
+        held[0].continue_(url=url + "/_test/activity-streamed-error")
+        page.wait_for_function(
+            "() => window.historyBodyLifecycle.some(item => item.event === 'cancel-start')"
+        )
+        lifecycle = page.evaluate("window.historyBodyLifecycle")
+        assert not any(item["event"] == "cancel-complete" for item in lifecycle)
+        expect(next_page).to_be_disabled()
+        expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "true")
+        assert sum(item["event"] == "start" for item in lifecycle) == 1
+    finally:
+        page.evaluate("window.releaseHistoryCancellation()")
+        assert page.request.post(url + "/_test/activity-release-error-body", headers=headers).ok
+    wait_for_product_reads(page)
+    lifecycle = page.evaluate("window.historyBodyLifecycle")
+    cancelled = lifecycle.index({"request": 1, "event": "cancel-complete"})
+    following = lifecycle.index({"request": 2, "event": "start"})
+    assert cancelled < following
+    assert sum(item["event"] == "start" for item in lifecycle) == 2
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+    expect(page.locator("#activity-status")).to_have_text("")
+    expect(next_page).to_be_enabled()
+    expect(next_page).to_be_focused()
+    assert "PRIVATE_ACTIVITY_ERROR_BODY" not in page.locator("body").inner_text()
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     """Live and storage recovery clear stale warnings but preserve a failed explicit history read."""
     page, url = app_page
@@ -434,7 +975,7 @@ def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     status = page.locator("#activity-status")
     headers = {"Authorization": f"Bearer {TOKEN}"}
     response = page.request.post(
@@ -482,7 +1023,7 @@ def test_activity_keeps_live_history_bounded_and_later_schedules_visible(app_pag
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     expect(page.locator("#activity-upcoming")).not_to_contain_text("Later model training")
     page.clock.install()
     page.clock.fast_forward(2 * 60 * 60 * 1000)
@@ -493,9 +1034,29 @@ def test_activity_keeps_live_history_bounded_and_later_schedules_visible(app_pag
         url + "/_test/activity-burst", headers={"Authorization": f"Bearer {TOKEN}"}
     ).ok
     expect(page.locator("#activity-list")).to_contain_text("Weather burst 149")
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
-    page.get_by_role("button", name="Load earlier activities").click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(152)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    older_ids = page.locator("#activity-list .activity-row").evaluate_all(
+        "rows => rows.map(row => row.dataset.activityId)"
+    )
+    assert page.request.post(
+        url + "/_test/activity", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    assert page.request.post(
+        url + "/_test/activity-health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"owner": "weather", "state": "available", "detail": "Paging live update received."},
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Paging live update received.")
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    assert (
+        page.locator("#activity-list .activity-row").evaluate_all(
+            "rows => rows.map(row => row.dataset.activityId)"
+        )
+        == older_ids
+    )
     page.get_by_label("Activity type").select_option("training")
     expect(page.locator("#activity-list .activity-row")).to_have_count(1)
     assert page.request.post(
@@ -512,7 +1073,7 @@ def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     requests = []
 
     def intercept(route):
@@ -535,4 +1096,4 @@ def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
     expect(refresh).to_be_enabled()
     page.unroute("**/v1/activities?**")
     refresh.click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
