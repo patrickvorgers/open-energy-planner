@@ -22,7 +22,10 @@ async function api(path) {
     try {
         const response = await fetch(base + path, {headers: token ? {Authorization:`Bearer ${token}`} : {}, cache:"no-store", redirect:"error", signal:AbortSignal.timeout(10000)});
         if ([401,403].includes(response.status)) find("connect").hidden = false;
-        if (!response.ok) throw new Error();
+        if (!response.ok) {
+            await response.body?.cancel();
+            throw new Error();
+        }
         return await response.json();
     } catch {
         throw new Error(historyFailure);

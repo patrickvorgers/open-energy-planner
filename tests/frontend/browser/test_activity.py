@@ -881,6 +881,90 @@ def test_completed_history_wins_over_pre_reset_running_update(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_error_stream_cancellation_settles_before_queued_history_read(app_page):
+    """A real streaming 503 is explicitly cancelled before reset recovery releases navigation."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    wait_for_product_reads(page)
+    page.evaluate("""() => {
+        const original = window.fetch;
+        let sequence = 0;
+        window.historyBodyLifecycle = [];
+        window.fetch = async function(input, options) {
+            const url = input instanceof Request ? input.url : String(input);
+            if (!url.includes('v1/activities?')) return original.call(this, input, options);
+            const request = ++sequence;
+            const record = event => window.historyBodyLifecycle.push({request, event});
+            record('start');
+            const response = await original.call(this, input, options);
+            if (!response.ok && response.body) {
+                const cancel = response.body.cancel.bind(response.body);
+                response.body.cancel = async (...args) => {
+                    record('cancel-start');
+                    const result = await cancel(...args);
+                    record('cancel-complete');
+                    return result;
+                };
+            }
+            return response;
+        };
+    }""")
+    held = []
+
+    def history(route):
+        """Hold the original read and let the queued recovery use the real history endpoint."""
+        if not held:
+            held.append(route)
+            page.evaluate("window.streamingHistoryHeld = true")
+        else:
+            route.continue_()
+
+    page.route("**/v1/activities?**", history)
+    next_page.focus()
+    next_page.press("Enter")
+    page.wait_for_function("() => window.streamingHistoryHeld === true")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    assert page.request.post(
+        url + "/_test/activity-reset",
+        headers=headers,
+        data={"detail": "Streaming error recovery queued."},
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Streaming error recovery queued.")
+    try:
+        held[0].continue_(url=url + "/_test/activity-streamed-error")
+        page.wait_for_function(
+            "() => window.historyBodyLifecycle.some(item => item.event === 'cancel-start')"
+        )
+        lifecycle = page.evaluate("window.historyBodyLifecycle")
+        if not any(item["event"] == "cancel-complete" for item in lifecycle):
+            expect(next_page).to_be_disabled()
+            expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "true")
+            assert sum(item["event"] == "start" for item in lifecycle) == 1
+    finally:
+        assert page.request.post(url + "/_test/activity-release-error-body", headers=headers).ok
+    wait_for_product_reads(page)
+    lifecycle = page.evaluate("window.historyBodyLifecycle")
+    cancelled = lifecycle.index({"request": 1, "event": "cancel-complete"})
+    following = lifecycle.index({"request": 2, "event": "start"})
+    assert cancelled < following
+    assert sum(item["event"] == "start" for item in lifecycle) == 2
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+    expect(page.locator("#activity-status")).to_have_text("")
+    expect(next_page).to_be_enabled()
+    expect(next_page).to_be_focused()
+    assert "PRIVATE_ACTIVITY_ERROR_BODY" not in page.locator("body").inner_text()
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     """Live and storage recovery clear stale warnings but preserve a failed explicit history read."""
     page, url = app_page

@@ -1,5 +1,6 @@
 """Synthetic activity evidence through the same publishers used by real background work."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -12,6 +13,24 @@ from open_energy_planner.activities.events import Health, Outcome
 
 def register(app):
     """Install fixture-only triggers before freezing the router. Production has no event-write API."""
+    error_body_release = asyncio.Event()
+
+    async def streamed_error(request):
+        """Send real 503 headers while retaining an unfinished synthetic response body."""
+        response = web.StreamResponse(status=503, headers={"Content-Type": "text/plain"})
+        await response.prepare(request)
+        await response.write(b"PRIVATE_ACTIVITY_ERROR_BODY")
+        await error_body_release.wait()
+        try:
+            await response.write_eof()
+        except ConnectionResetError:
+            pass
+        return response
+
+    async def release_error_body(_request):
+        """Release the fixture writer even when the browser has already cancelled its stream."""
+        error_body_release.set()
+        return web.json_response({"accepted": True})
 
     async def live(_request):
         """Publish a real same-process transition while the browser is subscribed."""
@@ -181,6 +200,8 @@ def register(app):
     app.router.add_post("/_test/activity-health", health)
     app.router.add_post("/_test/activity-finish", finish)
     app.router.add_post("/_test/activity-progress", progress)
+    app.router.add_get("/_test/activity-streamed-error", streamed_error)
+    app.router.add_post("/_test/activity-release-error-body", release_error_body)
     app.router.add_post("/_test/activity-reset", reset)
     app.router.add_post("/_test/activity-contexts", contexts)
     app.router.add_post("/_test/activity-plan", plan_link)
