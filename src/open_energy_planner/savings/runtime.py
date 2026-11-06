@@ -1,7 +1,7 @@
 """App-owned settlement orchestration. Original plans and measured evidence are never rewritten."""
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
@@ -30,31 +30,31 @@ MAX_EVALUATION_VERSIONS = 20
 SHA256_HEX_LENGTH = 64
 
 # Only fixed owned guidance is public. Other caught exceptions may contain stored or driver values.
-PENDING_SETTLEMENT_MESSAGES = (
-    "A reset inside the bonus anchor interval prevents exact reconstruction",
-    "Confirmed bonus meter disagrees with its historical boundary",
-    "Confirmed bonus meter is outside its historical interval",
-    "Continuous reference awaits recent metering. No SoC reset was performed",
-    "Historical bonus anchor does not match the export meters or period",
-    "Historical bonus baseline awaits captured export evidence",
-    "Historical bonus baseline awaits completed hourly statistics",
-    "Historical bonus baseline is being read from Home Assistant",
-    "Historical bonus counter archive is unreadable",
-    "Historical bonus export evidence has a gap or changed meters",
-    "Historical bonus history is incomplete or invalid",
-    "Historical bonus history unavailable: history_unavailable",
-    "Historical bonus history unavailable: recorder_unavailable",
-    "Historical bonus history unavailable: unsupported_statistics",
-    "Historical bonus period does not start on a whole UTC hour. Confirm a manual baseline",
-    "Historical exports exceed the confirmed used bonus volume",
-    "No original installation plan covers this interval",
-    "Published price coverage is missing",
-    "Published prices changed during settlement. Retrying",
-    "Reference awaits metering across the installation change",
-    "Reference forecast context is missing",
-    "Retained forecast cannot bridge the reference metering delay",
-    "Validated physical bonus endpoint is unavailable",
-)
+PENDING_SETTLEMENT_MESSAGES = {
+    "A reset inside the bonus anchor interval prevents exact reconstruction": "An export meter reset prevents reconstruction of the bonus starting total.",
+    "Confirmed bonus meter disagrees with its historical boundary": "The confirmed export reading disagrees with the reading in history.",
+    "Confirmed bonus meter is outside its historical interval": "The confirmed export reading falls outside the historical interval's readings.",
+    "Continuous reference awaits recent metering. No SoC reset was performed": "Recent meter readings are missing from the continuous comparison scenario.",
+    "Historical bonus anchor does not match the export meters or period": "The bonus starting reading belongs to different export meters or a different period.",
+    "Historical bonus baseline awaits captured export evidence": "The captured export readings needed to establish the bonus starting total are missing.",
+    "Historical bonus baseline awaits completed hourly statistics": "The hourly export statistics needed for the bonus starting total are not complete yet.",
+    "Historical bonus baseline is being read from Home Assistant": "The bonus starting total is still being read from Home Assistant.",
+    "Historical bonus counter archive is unreadable": "The stored bonus starting totals cannot currently be read.",
+    "Historical bonus export evidence has a gap or changed meters": "Historical export readings have a gap or use different export meters.",
+    "Historical bonus history is incomplete or invalid": "The received bonus export history is incomplete or invalid.",
+    "Historical bonus history unavailable: history_unavailable": "Historical export measurements are unavailable from Home Assistant.",
+    "Historical bonus history unavailable: recorder_unavailable": "Home Assistant Recorder is unavailable for the historical export read.",
+    "Historical bonus history unavailable: unsupported_statistics": "Home Assistant cannot supply supported statistics for these export meters.",
+    "Historical bonus period does not start on a whole UTC hour. Confirm a manual baseline": "The bonus period starts between hourly readings and needs a confirmed manual starting total.",
+    "Historical exports exceed the confirmed used bonus volume": "Historical exports exceed the confirmed export total used for the bonus.",
+    "No original installation plan covers this interval": "The original energy plan for this measurement interval is missing.",
+    "Published price coverage is missing": "Published electricity prices are missing for this measurement interval.",
+    "Published prices changed during settlement. Retrying": "Published prices changed while this measurement interval was being evaluated.",
+    "Reference awaits metering across the installation change": "Meter readings are missing across an installation change.",
+    "Reference forecast context is missing": "The captured inputs for the original comparison forecast are missing.",
+    "Retained forecast cannot bridge the reference metering delay": "The retained forecast cannot cover the gap in comparison meter readings.",
+    "Validated physical bonus endpoint is unavailable": "The confirmed export measurement needed to continue the bonus calculation is unavailable.",
+}
 SETTLEMENT_VALIDATION_MESSAGES = (
     "Contract coverage is missing",
     "Reference continuity requires the missing interval first",
@@ -67,6 +67,67 @@ class EvaluationState(StrEnum):
     COMPLETE = "complete"
     PENDING = "pending"
     FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    """Describe one measured batch without confusing committed intervals with published results."""
+
+    state: EvaluationState
+    processed: int
+    total: int
+    waiting_start: str | None = None
+    waiting_end: str | None = None
+
+
+def settlement_activity_detail(result, issue):
+    """Explain the actual bounded attempt using only admitted causes and owned recovery advice."""
+    progress = f"This attempt processed {result.processed} of {result.total} measured intervals. "
+    if result.state == EvaluationState.COMPLETE:
+        return progress + "Measured savings were evaluated and the result was published."
+    if result.waiting_start is None:
+        reason = "The correction has not yet caught up with the previously published period. The next background check continues with the next batch."
+    elif issue == "Published price coverage is missing":
+        reason = "The next background check tries again. No action is needed while waiting for price publication. If this persists, check price sources under Installation."
+    elif issue == "Published prices changed during settlement. Retrying":
+        reason = "The next background check uses the updated prices. No action is needed."
+    elif issue in (
+        "Historical bonus baseline is being read from Home Assistant",
+        "Historical bonus baseline awaits completed hourly statistics",
+        "Historical bonus baseline awaits captured export evidence",
+    ):
+        reason = "The historical export total needed for the bonus is not yet available. Home Assistant history is being collected or is not complete yet. The next background check tries again. Check the bonus budget under Contract if this persists."
+    elif issue in (
+        "Historical bonus history unavailable: history_unavailable",
+        "Historical bonus history unavailable: recorder_unavailable",
+        "Historical bonus history unavailable: unsupported_statistics",
+    ):
+        reason = "Home Assistant cannot currently supply the historical export statistics needed for the bonus. Check Recorder and export statistics in Home Assistant, then check the bonus budget under Contract. The next background check tries again."
+    elif issue and issue in PENDING_SETTLEMENT_MESSAGES and "bonus" in issue.lower():
+        reason = "The retained export history or bonus baseline cannot yet establish an exact historical total. Review the export meters and bonus baseline under Contract. The next background check rechecks the evidence. If it remains unresolved, report this activity for investigation."
+    elif issue in (
+        "Continuous reference awaits recent metering. No SoC reset was performed",
+        "Reference awaits metering across the installation change",
+        "Retained forecast cannot bridge the reference metering delay",
+    ):
+        reason = "The comparison scenario needs continuous meter history for the indicated interval. Check that Home Assistant records the required meters without gaps. The next background check rechecks the evidence. The comparison's battery state is not reset."
+    elif issue == "Reference forecast context is missing":
+        reason = "The original comparison forecast evidence is missing for the indicated interval. Inspect the original plan under Planning and report this activity if the evidence remains unavailable. The next background check rechecks the evidence."
+    elif issue == "No original installation plan covers this interval":
+        reason = "No original energy plan covers the indicated measurement interval. Check the retained plans under Planning. If that historical plan is unavailable, report this activity. A new plan does not reconstruct missing original advice."
+    elif issue == "Contract coverage is missing":
+        reason = "No contract price rule covers the indicated interval. Add or correct the dated rule under Contract. The next background check uses the saved contract."
+    elif issue == "Reference continuity requires the missing interval first":
+        reason = "An earlier measurement interval is missing, so the comparison cannot continue chronologically. Check meter history in Home Assistant and the coverage under Savings. The next background check rechecks the evidence."
+    else:
+        reason = "The required historical evidence is incomplete or invalid. The exact missing or invalid item could not be identified. Open Savings to check the available coverage. If the cause remains unclear, report this activity for investigation. The next background check rechecks the evidence."
+    cause = PENDING_SETTLEMENT_MESSAGES.get(issue)
+    return (
+        progress
+        + (cause + " " if cause else "")
+        + reason
+        + " Previous published financial results remain available. Refreshing Activity reloads history and does not start a calculation."
+    )
 
 
 def settlement_issue(error):
@@ -355,26 +416,33 @@ class SavingsRuntime:
         if self.events and rows:
             from ..activities.events import Health, Outcome
 
+            first_frame, last_frame = rows[0].get("frame"), rows[-1].get("frame")
+            activity_context = (
+                {"start": first_frame.get("start"), "end": last_frame.get("end")}
+                if isinstance(first_frame, dict) and isinstance(last_frame, dict)
+                else None
+            )
             with self.events.thread_attempt(
                 "settlement",
                 "settlement",
                 "Evaluate measured savings",
+                context=activity_context,
                 failure="Settlement processing failed. Last successful financial results remain available.",
             ) as identity:
                 evaluation = self._evaluate_rows(
                     contract, now, book, head, published_state, price_cursor, state, rows
                 )
-                usable = evaluation == EvaluationState.COMPLETE
-                pending = evaluation == EvaluationState.PENDING
+                usable = evaluation.state == EvaluationState.COMPLETE
+                pending = evaluation.state == EvaluationState.PENDING
                 self.events.finish_thread(
                     identity,
                     Outcome.COMPLETED if usable else Outcome.SKIPPED if pending else Outcome.FAILED,
-                    "Measured savings were evaluated."
-                    if usable
-                    else "Savings evaluation awaits complete evidence or the next correction batch. Previous financial results remain available."
-                    if pending
-                    else "No complete new savings result. Previous financial results remain available. Check Savings for missing evidence.",
+                    settlement_activity_detail(evaluation, self.issue),
                     usable=usable,
+                    context={
+                        "waiting_start": evaluation.waiting_start,
+                        "waiting_end": evaluation.waiting_end,
+                    },
                 )
                 self.events.availability_thread(
                     "settlement",
@@ -404,7 +472,7 @@ class SavingsRuntime:
             rows: Captured measurements and contexts in chronological order.
 
         Returns:
-            COMPLETE after accepted publication, PENDING while evidence or further
+            A result describing COMPLETE after accepted publication, PENDING while evidence or further
             correction batches are needed, or FAILED for rejected evidence or a
             missing original plan. These states do not depend on display text.
 
@@ -414,13 +482,19 @@ class SavingsRuntime:
         or working state, preserving the previous successful publication.
         """
         counter_version = book.version if book else None
-        for row in rows:
+        for processed, row in enumerate(rows):
             frame = parse_frame(row["frame"])
             context = row["context"]
             plan_id = self.store.context_plan(frame.start)
             if plan_id is None:
                 self.issue = "No original installation plan covers this interval"
-                return EvaluationState.FAILED
+                return EvaluationResult(
+                    EvaluationState.FAILED,
+                    processed,
+                    len(rows),
+                    frame.start.isoformat(),
+                    frame.end.isoformat(),
+                )
             plan = self.plans.get_plan(plan_id)
             try:
                 problem = physical_context(plan)
@@ -478,10 +552,14 @@ class SavingsRuntime:
             except (ValueError, KeyError, TypeError) as error:
                 self.issue = settlement_issue(error)
                 self.attention = not isinstance(error, PendingSettlement)
-                return (
+                return EvaluationResult(
                     EvaluationState.PENDING
                     if isinstance(error, PendingSettlement)
-                    else EvaluationState.FAILED
+                    else EvaluationState.FAILED,
+                    processed,
+                    len(rows),
+                    frame.start.isoformat(),
+                    frame.end.isoformat(),
                 )
         head["price_cursor"] = price_cursor
         with self.documents.transaction():
@@ -500,7 +578,9 @@ class SavingsRuntime:
             else None
         )
         self.attention = False
-        return EvaluationState.PENDING if pending else EvaluationState.COMPLETE
+        return EvaluationResult(
+            EvaluationState.PENDING if pending else EvaluationState.COMPLETE, len(rows), len(rows)
+        )
 
     def overview(self, start, end, revision=None):
         """Filter stored nonoverlapping results. Never reset either scenario or run a historical optimizer."""

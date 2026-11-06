@@ -16,7 +16,12 @@ from open_energy_planner.prices.storage.adapters.published import retain
 from open_energy_planner.savings import api as savings_api
 from open_energy_planner.savings.bonus import HistoricalBonuses
 from open_energy_planner.savings.model import PendingSettlement
-from open_energy_planner.savings.runtime import SavingsRuntime
+from open_energy_planner.savings.runtime import (
+    EvaluationResult,
+    EvaluationState,
+    SavingsRuntime,
+    settlement_activity_detail,
+)
 from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore, stamp
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS, PUBLISHED_PRICES
@@ -26,6 +31,63 @@ from tests.app.savings.support.scenarios import END, START, bindings, contract, 
 PRIVATE_EVIDENCE = (
     "postgresql://private-user:SECRET_PASSWORD@private.invalid/archive?token=SECRET_TOKEN"
 )
+
+
+@pytest.mark.parametrize(
+    "issue,cause,action",
+    [
+        (
+            "Historical bonus baseline awaits completed hourly statistics",
+            "hourly export statistics",
+            "bonus budget under Contract",
+        ),
+        (
+            "Historical bonus baseline is being read from Home Assistant",
+            "still being read from Home Assistant",
+            "next background check tries again",
+        ),
+        (
+            "Historical bonus history unavailable: recorder_unavailable",
+            "Recorder is unavailable",
+            "Check Recorder",
+        ),
+        (
+            "Historical bonus history unavailable: unsupported_statistics",
+            "cannot supply supported statistics",
+            "export statistics in Home Assistant",
+        ),
+        (
+            "Historical bonus export evidence has a gap or changed meters",
+            "gap or use different export meters",
+            "export meters and bonus baseline under Contract",
+        ),
+        (
+            "Historical bonus period does not start on a whole UTC hour. Confirm a manual baseline",
+            "needs a confirmed manual starting total",
+            "bonus baseline under Contract",
+        ),
+        (
+            "Reference awaits metering across the installation change",
+            "missing across an installation change",
+            "Check that Home Assistant records",
+        ),
+        (
+            PRIVATE_EVIDENCE,
+            "required historical evidence is incomplete or invalid",
+            "report this activity",
+        ),
+    ],
+)
+def test_savings_waiting_details_identify_safe_cause_progress_and_action(issue, cause, action):
+    """Different waiting causes stay distinguishable while arbitrary evidence never becomes public text."""
+    result = EvaluationResult(EvaluationState.PENDING, 1, 2, START.isoformat(), END.isoformat())
+    detail = settlement_activity_detail(result, issue)
+    assert "processed 1 of 2 measured intervals" in detail
+    assert cause in detail and action in detail
+    assert "Previous published financial results remain available" in detail
+    assert PRIVATE_EVIDENCE not in detail
+    if issue == PRIVATE_EVIDENCE:
+        assert "exact missing or invalid item could not be identified" in detail
 
 
 @pytest.mark.parametrize(

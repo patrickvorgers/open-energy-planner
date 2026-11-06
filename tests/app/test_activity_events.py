@@ -8,13 +8,130 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from open_energy_planner.activities.api import EVENTS
-from open_energy_planner.activities.events import Events, Health, Outcome
+from open_energy_planner.activities.events import Events, Health, Outcome, public_context
 from open_energy_planner.app import create_app
 from open_energy_planner.storage.adapters.activities import ActivityStore
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 
 NOW = datetime(2026, 10, 25, 12, tzinfo=UTC)
 TOKEN = "activity-test-only-0123456789abcdef"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "private", [], {"private_url": "private"}, {"label": " \n\t"}],
+)
+def test_unusable_activity_context_is_omitted(value):
+    """Optional diagnostic fields cannot require domain work to fail."""
+    assert public_context(value) == {}
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        None,
+        "",
+        "x" * 129,
+        "https://example.invalid",
+        "../other",
+        "bad\nidentity",
+        "x?token=private",
+    ],
+)
+def test_activity_plan_identity_rejects_unsafe_navigation_inputs(identity):
+    """Only bounded application plan identities can become read-only navigation parameters."""
+    assert public_context({"plan_id": identity}) == {}
+
+
+@pytest.mark.parametrize(
+    "start,end",
+    [
+        (None, None),
+        ("2026-10-25T12:00:00+00:00", None),
+        ("2026-10-25T12:00:00", "2026-10-25T13:00:00"),
+        ("2026-10-25T12:00:00+00:00", "2026-10-25T12:00:00+00:00"),
+        ("2026-10-25T13:00:00+00:00", "2026-10-25T12:00:00+00:00"),
+        ("invalid", "2026-10-25T13:00:00+00:00"),
+        ("x" * 41, "2026-10-25T13:00:00+00:00"),
+    ],
+)
+def test_invalid_activity_range_preserves_only_the_safe_label(start, end):
+    """Never publish a partial, reversed, naive or malformed range."""
+    assert public_context({"label": "Household", "start": start, "end": end}) == {
+        "label": "Household"
+    }
+
+
+@pytest.mark.parametrize("generated", [None, "invalid", "2026-10-25T12:00:00", "x" * 41])
+def test_invalid_plan_context_keeps_subject_without_unknown_strategy(generated):
+    """An unusable creation time cannot make a plan caption ambiguous or expose arbitrary archive strings."""
+    assert public_context(
+        {
+            "label": "Archived plan",
+            "plan_generated_at": generated,
+            "plan_strategy": "PRIVATE_STRATEGY",
+        }
+    ) == {"label": "Archived plan"}
+
+
+def test_plan_context_never_publishes_unknown_strategy_values():
+    """A valid creation time does not admit arbitrary retained strategy text."""
+    assert public_context(
+        {"plan_generated_at": "2026-10-25T03:15:17+01:00", "plan_strategy": "PRIVATE_STRATEGY"}
+    ) == {"plan_generated_at": "2026-10-25T02:15:17+00:00"}
+
+
+def test_activity_context_is_detached_bounded_and_preserved_across_restart(tmp_path):
+    """Capture safe producer context once and retain it through live progress and restart."""
+
+    async def scenario():
+        """Exercise actual publication and SQL history with an independently specified UTC range."""
+        repository = SqlPlanRepository(tmp_path)
+        events = Events(ActivityStore(repository.engine), lambda: NOW)
+        supplied = {
+            "label": "  Household\nconsumption\t" + "x" * 200,
+            "start": "2026-10-25T01:00:00+02:00",
+            "end": "2026-10-25T03:00:00+01:00",
+            "private_url": "PRIVATE_CONTEXT_SENTINEL",
+            "plan_generated_at": "2026-10-25T03:15:17+01:00",
+            "plan_strategy": "minimize cost",
+            "plan_id": "retained-plan",
+        }
+        expected = {
+            "label": ("Household consumption " + "x" * 200)[:160],
+            "start": "2026-10-24T23:00:00+00:00",
+            "end": "2026-10-25T02:00:00+00:00",
+            "plan_generated_at": "2026-10-25T02:15:17+00:00",
+            "plan_strategy": "minimize cost",
+            "plan_id": "retained-plan",
+        }
+        try:
+            identity = await events.start(
+                "settlement", "settlement", "Evaluate savings", context=supplied
+            )
+            supplied["label"] = "Changed after publication"
+            assert events.running[identity]["context"] == expected
+            cursor = events.cursor
+            await events.update(identity, "Waiting for complete measurements.")
+            update = events.changes(cursor)["events"][-1]["value"]
+            assert update["id"] == identity and update["context"] == expected
+            update["context"]["label"] = "Changed detached replay"
+            assert events.running[identity]["context"] == expected
+            await events.flush()
+            events.store.restart(NOW + timedelta(minutes=1))
+            retained = events.store.read(NOW - timedelta(days=1), NOW + timedelta(days=1))
+            assert retained[0]["id"] == identity and retained[0]["state"] == "interrupted"
+            assert retained[0]["context"] == expected
+            assert "PRIVATE_CONTEXT_SENTINEL" not in str(retained)
+            scheduled = {"label": "Solar"}
+            events.scheduled("solar", "forecast", "Update forecast", NOW, context=scheduled)
+            scheduled["label"] = "Caller mutation"
+            assert events.snapshot()["scheduled"][0]["context"] == {"label": "Solar"}
+        finally:
+            await events.close()
+            repository.close()
+
+    asyncio.run(scenario())
 
 
 def test_replay_atomic_subscription_reset_and_detached_snapshots(tmp_path):
@@ -127,7 +244,10 @@ def test_api_authentication_day_validation_and_live_cursor(tmp_path):
             initial = await response.json()
             assert initial["reset"]
             identity = await app[EVENTS].start(
-                "prices:nord_pool", "prices", "Fetch published prices"
+                "prices:nord_pool",
+                "prices",
+                "Fetch published prices",
+                context={"label": "Nord Pool", "private_url": "PRIVATE_CONTEXT_SENTINEL"},
             )
             await app[EVENTS].finish(
                 identity, Outcome.COMPLETED, "Market: NL. Usable prices received.", usable=True
@@ -138,12 +258,19 @@ def test_api_authentication_day_validation_and_live_cursor(tmp_path):
                 )
             ).json()
             assert any(
-                row["topic"] == "activity" and row["value"]["id"] == identity
+                row["topic"] == "activity"
+                and row["value"]["id"] == identity
+                and row["value"]["context"] == {"label": "Nord Pool"}
                 for row in changes["events"]
             )
+            await app[EVENTS].flush()
             history = await (await client.get("/v1/activities", headers=headers)).json()
             assert history["timezone"] == "UTC"
-            assert any(row["id"] == identity for row in history["activities"])
+            assert any(
+                row["id"] == identity and row["context"] == {"label": "Nord Pool"}
+                for row in history["activities"]
+            )
+            assert "PRIVATE_CONTEXT_SENTINEL" not in str(changes) + str(history)
             assert (await client.get("/v1/activities?day=invalid", headers=headers)).status == 400
             assert (
                 await client.get("/v1/activities?before=invalid", headers=headers)
@@ -188,7 +315,11 @@ def test_threaded_producer_drains_and_restores_recovery_after_restart(tmp_path):
             def calculate():
                 """Publish the actual worker-owned failure before propagating its domain exception."""
                 with events.thread_attempt(
-                    "models", "training", "Compare models", failure="Baseline models remain active."
+                    "models",
+                    "training",
+                    "Compare models",
+                    failure="Baseline models remain active.",
+                    context={"label": "Household"},
                 ):
                     raise ValueError("Synthetic numerical failure")
 
@@ -204,6 +335,8 @@ def test_threaded_producer_drains_and_restores_recovery_after_restart(tmp_path):
             assert store.restart(NOW)[0] == set()
             rows = store.read(NOW - timedelta(days=1), NOW + timedelta(days=1))
             assert next(row for row in rows if row["id"] == identity)["recovered"]
+            failed = next(row for row in rows if row["state"] == "failed")
+            assert failed["context"] == {"label": "Household"}
         finally:
             repository.close()
 

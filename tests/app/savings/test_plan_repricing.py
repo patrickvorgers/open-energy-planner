@@ -11,8 +11,23 @@ from open_energy_planner.contracts.bonus import BonusRule, CounterBook, CounterS
 from open_energy_planner.contracts.calculation.formula import Formula
 from open_energy_planner.contracts.model import TariffEvidence
 from open_energy_planner.savings.forecast import comparison
-from open_energy_planner.savings.repricing import initial_counters, reprice
+from open_energy_planner.savings.repricing import initial_counters, plan_activity_context, reprice
 from tests.app.savings.support.scenarios import END, START, contract, problem
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        None,
+        "invalid",
+        {"problem": {"intervals": []}},
+        {"problem": {"intervals": [{"start": "invalid", "duration_h": 0.25}]}},
+        {"problem": {"intervals": [{"start": START.isoformat(), "duration_h": "invalid"}]}},
+    ],
+)
+def test_plan_activity_context_does_not_obscure_invalid_archive_failure(snapshot):
+    """Unusable horizon evidence keeps a safe subject without aborting failure bookkeeping."""
+    assert plan_activity_context({"input_snapshot": snapshot}) == {"label": "Archived plan"}
 
 
 def original_plan(*, solar=False):

@@ -20,6 +20,74 @@ from open_energy_planner.savings.model import Frame, PendingSettlement
 from tests.app.savings.support.scenarios import START, contract, problem
 
 
+@pytest.mark.parametrize("operation", ["capture", "evaluate"])
+@pytest.mark.parametrize(
+    "kind, names, expected_label",
+    [
+        ("demand", {}, "Household consumption"),
+        ("solar", {"opaque-source": "Garden roof"}, "Garden roof"),
+        ("solar", {}, "Solar production"),
+    ],
+)
+def test_model_comparison_activity_names_its_captured_subject(
+    tmp_path, monkeypatch, operation, kind, names, expected_label
+):
+    """Capture and evaluation identify the compared household or roof without exposing opaque IDs."""
+    import asyncio
+
+    from open_energy_planner.activities.events import Events
+    from open_energy_planner.forecast_selection.runtime import ModelSelection
+    from open_energy_planner.forecast_selection.storage import SelectionStore
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+
+    async def scenario():
+        """Publish a pending real comparison activity on the event loop from its worker thread."""
+        repository = SqlPlanRepository(tmp_path)
+        events = Events(ActivityStore(repository.engine), lambda: START)
+        cursor = events.cursor
+        events.loop = asyncio.get_running_loop()
+        runtime = ModelSelection(
+            SelectionStore(SqlDocuments(repository.engine, "planning")),
+            repository,
+            None,
+            None,
+            None,
+        )
+        runtime.events = events
+        monkeypatch.setattr(runtime, "_execute", lambda payload: {"status": "pending"})
+        payload = {
+            "operation": operation,
+            "original": {"comparison_names": names},
+            "variant" if operation == "capture" else "capture": {
+                "kind": kind,
+                "source_id": "opaque-source",
+                "label": "Solar: opaque-source",
+            },
+        }
+
+        def compare():
+            """Leave missing evidence pending while executing the actual activity lifecycle."""
+            with runtime._comparison(payload) as result:
+                assert result == {"status": "pending"}
+
+        try:
+            await asyncio.to_thread(compare)
+            rows = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity"
+            ]
+            assert [row["state"] for row in rows] == ["running", "skipped"]
+            assert all(row["context"] == {"label": expected_label} for row in rows)
+        finally:
+            await events.close()
+            repository.engine.dispose()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("kind", ["ev_work", "appliances"])
 def test_controlled_work_cannot_create_unmatched_shadow_decision_evidence(kind):
     """A shadow evaluator lacking realized controlled-load boundaries must reject comparisons, not promote a model."""

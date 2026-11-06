@@ -13,6 +13,58 @@ from ..runtime.diagnostics.logging import failure_trace
 from ..storage.writes import complete_write
 
 _LOGGER = logging.getLogger(__name__)
+MAX_CONTEXT_LABEL_CHARACTERS = 160
+MAX_CONTEXT_TIMESTAMP_CHARACTERS = 40
+MAX_CONTEXT_PLAN_ID_CHARACTERS = 128
+
+
+def context_instant(value):
+    """Admit one bounded aware diagnostic timestamp without rejecting domain work."""
+    if isinstance(value, str) and len(value) <= MAX_CONTEXT_TIMESTAMP_CHARACTERS:
+        try:
+            instant = datetime.fromisoformat(value)
+            if instant.utcoffset() is not None:
+                return instant.astimezone(UTC)
+        except (ValueError, OverflowError):
+            pass
+    return None
+
+
+def public_context(value):
+    """Keep optional producer-owned labels and aware ranges without blocking business work.
+
+    Unknown fields are never published. A malformed label or range is omitted
+    independently, so diagnostic context cannot revoke an otherwise valid result.
+    Producers supply human labels, never provider payloads or credentials.
+    """
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    plan_id = value.get("plan_id")
+    if (
+        isinstance(plan_id, str)
+        and 1 <= len(plan_id) <= MAX_CONTEXT_PLAN_ID_CHARACTERS
+        and plan_id.isascii()
+        and all(character.isalnum() or character in "-_" for character in plan_id)
+    ):
+        result["plan_id"] = plan_id
+    label = value.get("label")
+    if isinstance(label, str):
+        label = " ".join(
+            "".join(character if character.isprintable() else " " for character in label).split()
+        )[:MAX_CONTEXT_LABEL_CHARACTERS]
+        if label:
+            result["label"] = label
+    for start_field, end_field in (("start", "end"), ("waiting_start", "waiting_end")):
+        start, end = (context_instant(value.get(field)) for field in (start_field, end_field))
+        if start is not None and end is not None and end > start:
+            result.update({start_field: start.isoformat(), end_field: end.isoformat()})
+    generated = context_instant(value.get("plan_generated_at"))
+    if generated is not None:
+        result["plan_generated_at"] = generated.isoformat()
+        if value.get("plan_strategy") in ("minimize cost", "minimize consumption"):
+            result["plan_strategy"] = value["plan_strategy"]
+    return result
 
 
 class Outcome(StrEnum):
@@ -57,26 +109,28 @@ class Events:
         self.lost_updates = 0
 
     @contextmanager
-    def thread_attempt(self, owner, kind, title, *, failure):
+    def thread_attempt(self, owner, kind, title, *, failure, context=None):
         """Let an owned numerical worker publish through the event loop without sharing SQL connections."""
-        context = self.attempt(owner, kind, title, failure=failure)
-        identity = asyncio.run_coroutine_threadsafe(context.__aenter__(), self.loop).result()
+        attempt_context = self.attempt(owner, kind, title, failure=failure, context=context)
+        identity = asyncio.run_coroutine_threadsafe(
+            attempt_context.__aenter__(), self.loop
+        ).result()
         try:
             yield identity
         except BaseException as error:
             asyncio.run_coroutine_threadsafe(
-                context.__aexit__(type(error), error, error.__traceback__), self.loop
+                attempt_context.__aexit__(type(error), error, error.__traceback__), self.loop
             ).result()
             raise
         else:
             asyncio.run_coroutine_threadsafe(
-                context.__aexit__(None, None, None), self.loop
+                attempt_context.__aexit__(None, None, None), self.loop
             ).result()
 
-    def finish_thread(self, identity, outcome, detail, *, usable=False):
+    def finish_thread(self, identity, outcome, detail, *, usable=False, context=None):
         """Complete a worker-owned execution on the same serialized event loop."""
         asyncio.run_coroutine_threadsafe(
-            self.finish(identity, outcome, detail, usable=usable), self.loop
+            self.finish(identity, outcome, detail, usable=usable, context=context), self.loop
         ).result()
 
     def availability_thread(self, owner, state, detail):
@@ -102,7 +156,7 @@ class Events:
             self.health[owner] = row
             self.publish("health", row)
 
-    def scheduled(self, owner, kind, title, due=None):
+    def scheduled(self, owner, kind, title, due=None, *, context=None):
         """Replace or cancel the owner's next known execution. No guessed ad-hoc work."""
         key = f"{owner}:{kind}"
         if due is not None and due.utcoffset() is None:
@@ -118,6 +172,8 @@ class Events:
             if due
             else None
         )
+        if row is not None and (captured := public_context(context)):
+            row["context"] = captured
         if self.schedules.get(key) != row:
             if row is None:
                 self.schedules.pop(key, None)
@@ -201,7 +257,7 @@ class Events:
             with suppress(asyncio.CancelledError):
                 await self.writer
 
-    async def start(self, owner, kind, title, *, detail=""):
+    async def start(self, owner, kind, title, *, detail="", context=None):
         """Allocate one ID for an actual attempt, before the underlying work starts."""
         if owner not in self.health:
             self.availability(owner, Health.UNKNOWN, "Waiting for current module evidence.")
@@ -216,15 +272,17 @@ class Events:
             "detail": detail,
             "recovered": False,
         }
+        if captured := public_context(context):
+            row["context"] = captured
         self.running[row["id"]] = row
         self.publish("activity", row)
         await self._save(row)
         return row["id"]
 
     @asynccontextmanager
-    async def attempt(self, owner, kind, title, *, failure):
+    async def attempt(self, owner, kind, title, *, failure, context=None):
         """Contain execution bookkeeping while the producer owns outcomes and safe failure text."""
-        identity = await self.start(owner, kind, title)
+        identity = await self.start(owner, kind, title, context=context)
         try:
             yield identity
         except asyncio.CancelledError:
@@ -254,12 +312,14 @@ class Events:
             self.publish("activity", row)
             await self._save(row)
 
-    async def finish(self, identity, outcome, detail, *, usable=False):
+    async def finish(self, identity, outcome, detail, *, usable=False, context=None):
         """Only usable success ends a failure episode. Repeated failures remain real attempts."""
         outcome = Outcome(outcome)
         if outcome == Outcome.COMPLETED and not usable:
             raise ValueError("Completed activity requires a usable result")
         row = deepcopy(self.running[identity])
+        if captured := public_context(context):
+            row["context"] = {**row.get("context", {}), **captured}
         key = (row["owner"], row["kind"])
         row.update(
             state=outcome.value,

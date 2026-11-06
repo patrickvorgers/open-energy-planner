@@ -304,6 +304,16 @@ def register(app, service, repository, live, lock):
                         "appliances",
                         "history",
                         "Learn appliance cycles",
+                        context={
+                            "label": next(
+                                (
+                                    option["name"]
+                                    for option in service.consumers.options
+                                    if option["entity_id"] == body["entity_id"]
+                                ),
+                                "Appliance",
+                            )
+                        },
                         failure="Cycle learning failed. Previously accepted profiles are retained.",
                     ) as activity:
                         previous_cursor = (

@@ -39,6 +39,11 @@ def test_activity_restart_paging_retention_and_backend_transfer(tmp_path, backen
                 "detail": "Market: NL. No private provider payload.",
                 "recovered": False,
                 "usable": state == "completed",
+                "context": {
+                    "label": "Nord Pool",
+                    "start": "2026-10-25T00:00:00+00:00",
+                    "end": "2026-10-26T00:00:00+00:00",
+                },
             }
             store.write(row, NOW)
         assert store.read(NOW - timedelta(days=1), NOW + timedelta(days=1), kind="weather") == []
@@ -55,6 +60,7 @@ def test_activity_restart_paging_retention_and_backend_transfer(tmp_path, backen
             NOW - timedelta(days=1), NOW + timedelta(days=1), (rows[0]["started_at"], rows[0]["id"])
         )
         assert len({row["id"] for row in rows + remaining}) == 3
+        assert all(row["context"] == original[0]["context"] for row in rows + remaining)
         assert sorted(row["state"] for row in rows + remaining) == [
             "completed",
             "failed",
