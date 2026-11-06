@@ -169,7 +169,7 @@ find("remove-thermal").onclick = async () => {
     find("thermal-more").open = false;
     const store = selected(), openingDraft = draft, openingId = selectedId;
     if (saveState.busy || editing || !store) return;
-    if (!await confirmAction({title: "Remove electric boiler?", message: `${displayName(store)} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Save settings applies the removal. Cancel in the editor restores the saved settings.`, confirmLabel: "Remove boiler", returnFocus: find("thermal-more").querySelector("summary")})) return;
+    if (!await confirmAction({title: "Remove electric boiler?", message: `${displayName(store)} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Choose Save settings to apply the removal. Cancel in the editor restores the saved settings.`, confirmLabel: "Remove boiler", returnFocus: find("thermal-more").querySelector("summary")})) return;
     if (saveState.busy || editing || conflict || draft !== openingDraft || selectedId !== openingId || selected() !== store) return;
     editOriginId = selectedId; draft.stores = draft.stores.filter(store => store.id !== selectedId); selectedId = null; editing = true; renderEditor(); saveState.update();
 };

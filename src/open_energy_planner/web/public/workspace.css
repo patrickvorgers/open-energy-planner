@@ -198,7 +198,7 @@
 .workspace dialog.confirmation-dialog::backdrop { background:#19263f80; }
 .confirmation-dialog form { margin:0; }
 .workspace .confirmation-dialog h2 { margin:0 0 14px; font-size:24px; line-height:1.25; overflow-wrap:anywhere; }
-.confirmation-dialog p { margin:0; color:var(--oep-muted); line-height:1.6; white-space:pre-line; overflow-wrap:anywhere; }
+.workspace .confirmation-dialog p { margin:0; color:var(--oep-muted); font-size:14px; line-height:1.6; white-space:pre-line; overflow-wrap:anywhere; }
 .confirmation-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-top:24px; }
 .workspace .confirmation-actions button { min-height:44px; margin:0; font-size:14px; }
 .workspace .confirmation-actions .confirmation-accept { background:var(--oep-danger); color:white; border:1px solid var(--oep-danger); }

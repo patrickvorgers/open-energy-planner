@@ -121,7 +121,7 @@ async function removeSelected() {
     }
     const openingDraft = draft, openingId = selectedId;
     const kind = draft.vehicles.includes(row) ? "vehicle" : "charge point";
-    if (!await confirmAction({title: `Remove ${kind}?`, message: `${displayName(row, kind === "vehicle")} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Save settings applies the removal. Cancel in the editor restores the saved settings.`, confirmLabel: `Remove ${kind}`, returnFocus: find("ev-more").querySelector("summary")})) return;
+    if (!await confirmAction({title: `Remove ${kind}?`, message: `${displayName(row, kind === "vehicle")} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Choose Save settings to apply the removal. Cancel in the editor restores the saved settings.`, confirmLabel: `Remove ${kind}`, returnFocus: find("ev-more").querySelector("summary")})) return;
     if (saveState.busy || saveState.dirty || draft !== openingDraft || selectedId !== openingId || selected() !== row) return;
     editOriginId = selectedId;
     const rows = draft.vehicles.includes(row) ? draft.vehicles : draft.points;
