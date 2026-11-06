@@ -297,12 +297,14 @@ def test_selected_boiler_remove_cancel_and_save_preserve_other_identity_and_phys
     selector.select_option(second["id"])
     expect(page.locator("#thermal-summary")).to_contain_text(second["energy_entity"])
     expect(page.locator("#thermal-editor")).to_be_hidden()
-    page.on("dialog", lambda dialog: dialog.accept())
 
     def remove_selected():
         """Use the visible More action rather than bypassing the saved-state toolbar."""
         page.locator("#thermal-more summary").click()
         page.locator("#remove-thermal").click()
+        page.get_by_role("alertdialog", name="Remove electric boiler?", exact=True).get_by_role(
+            "button", name="Remove boiler", exact=True
+        ).click()
 
     remove_selected()
     expect(selector).to_be_disabled()
