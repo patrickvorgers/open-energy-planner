@@ -440,7 +440,7 @@ def test_notice_time_follows_newly_discovered_home_assistant_timezone(app_page):
     page.route("**/v1/notifications", lambda route: route.fulfill(json=blocked()))
     page.goto(url + "/contract")
     banner = page.get_by_role("region", name="Notifications")
-    expect(banner).to_contain_text("2026-10-30 12:45 UTC")
+    expect(banner).to_contain_text("10/30/2026, 12:45 PM UTC")
     page.wait_for_function(
         "document.getElementById('integration-version-status').hasAttribute('title')"
     )
@@ -453,7 +453,7 @@ def test_notice_time_follows_newly_discovered_home_assistant_timezone(app_page):
 @pytest.mark.parametrize(
     ("notification_timezone", "notification_time"),
     [
-        (None, "2026-10-30 12:45 UTC"),
+        (None, "10/30/2026, 12:45 PM UTC"),
         ("Europe/Amsterdam", "1:45 PM"),
         ("Pacific/Auckland", "1:45 AM"),
     ],

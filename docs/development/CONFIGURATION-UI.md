@@ -7,6 +7,26 @@ change its presentation rather than replacing the persistence boundary.
 
 ## Interface wording
 
+### Date presentation
+
+All app-owned dates use `dateLabel` or `when` from `display.js`, including
+rule summaries, selectors, status messages, tables, chart labels and tooltips.
+`dateLabel` preserves a calendar date without interpreting it as an instant.
+`when` retains the Home Assistant installation timezone and minute precision.
+
+Through same-origin ingress, the formatter reads only the current HA user's
+`hass.locale` language and date-format preference from the enclosing
+`home-assistant` element. Nested workspace frames inherit that same preference.
+Language, system, DMY, MDY and YMD follow HA's numeric date ordering and locale
+separators. Month names use the HA language. Preferences are read when formatting,
+so a subsequent render uses current values without saving application settings.
+Standalone or cross-origin pages fall back to the browser locale when HA
+preferences are unavailable. Do not fetch or persist another user's preferences.
+
+Native date and datetime picker presentation belongs to the browser. Their ISO
+values remain unchanged, as do timezone conversion, API contracts and stored
+seconds. Never localize a value used for sorting, filtering, editing or saving.
+
 Describe what the user can do or what has happened. The surrounding application
 already supplies the context, so omit "OEP" and repeated product names from
 ordinary labels, help, confirmations and notifications, including messages
