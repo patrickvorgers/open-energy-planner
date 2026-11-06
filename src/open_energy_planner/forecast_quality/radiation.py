@@ -88,7 +88,7 @@ class RadiationArchive:
     def __init__(self, documents):
         """Borrow solar documents and require an explicitly opened satellite adapter."""
         self.documents, self.source = documents, None
-        self.lock = asyncio.Lock()
+        self.locks = {}
         self.retry_after = {}
         self.status = BackgroundLog(logging.getLogger(__name__), "Satellite irradiance refresh")
 
@@ -99,6 +99,18 @@ class RadiationArchive:
             if not self.documents.exists(name):
                 self.documents.write(name, receipt)
             self.documents.write(key, receipt)
+
+    def result(self, receipt):
+        """Report availability only for accepted observations, including a real zero irradiance."""
+        if receipt["hours"]:
+            self.status.success("Satellite observations are available for forecast quality.")
+            return receipt, None
+        issue = "Satellite observations are unavailable for this day. Refresh later as new observations arrive."
+        self.status.unavailable(
+            "Forecast quality has no satellite observations for this day. Energy evaluation and planning continue.",
+            reason="No complete observed hours",
+        )
+        return receipt, issue
 
     async def read(self, location, start, end, now):
         """Cache one site/day for ten minutes and retain explicitly stale evidence on failure."""
@@ -114,14 +126,14 @@ class RadiationArchive:
             )
             + ".json"
         )
-        async with self.lock:
+        async with self.locks.setdefault(key, asyncio.Lock()):
             exists = await asyncio.to_thread(self.documents.exists, key)
             cached = await asyncio.to_thread(self.documents.read, key) if exists else {}
             try:
                 if cached and now < datetime.fromisoformat(cached["received_at"]) + timedelta(
                     minutes=SATELLITE_REFRESH_MINUTES
                 ):
-                    return cached, None
+                    return self.result(cached)
             except (KeyError, TypeError, ValueError, OverflowError):
                 cached = {}
             if self.source is None:
@@ -158,5 +170,4 @@ class RadiationArchive:
                     "Satellite refresh failed. Retained observations are shown. Retry after ten minutes.",
                 )
             self.retry_after.pop(key, None)
-            self.status.success("Satellite observations are available for forecast quality.")
-            return receipt, None
+            return self.result(receipt)

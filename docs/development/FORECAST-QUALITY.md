@@ -122,7 +122,10 @@ complete-day marker for a fractional UTC-hour day boundary.
 
 Satellite reads happen only for displayed archived solar evidence, outside the
 planning state lock. One site/day cache is refreshed at most once per ten minutes
-in a running instance. Concurrent readers share the refresh. Immutable receipts
+in a running instance. Concurrent readers of the same site/day share the refresh.
+Other cached days remain readable while a provider request is pending. Empty
+results retain the cache interval but report unavailable evidence until accepted
+observations arrive. They never announce readiness or recovery. Immutable receipts
 and the latest pointer use the active database and survive restart and backend
 transfer. A failed refresh retains earlier evidence with an explicit warning and
 a ten-minute retry delay. Neither satellite gaps nor outages change production

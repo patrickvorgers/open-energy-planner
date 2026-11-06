@@ -1183,6 +1183,122 @@ def test_satellite_corrupt_pointer_recovers_without_rewriting_receipts(archive, 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("other_key", ["site", "day"])
+def test_satellite_pending_refresh_does_not_block_another_cached_key(archive, other_key):
+    """Hold provider I/O explicitly while another cache hit completes and same-key readers share the fetch."""
+    from open_energy_planner.forecast_quality.radiation import RadiationArchive
+    from open_energy_planner.solar.satellite import RadiationHour
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class Source:
+            calls = 0
+            hold = False
+
+            async def read(self, location, start, end, now):
+                self.calls += 1
+                if self.hold:
+                    entered.set()
+                    await release.wait()
+                return (RadiationHour(start, 0),)
+
+        service = RadiationArchive(SqlDocuments(archive.documents.engine, "solar"))
+        service.source = Source()
+        location = {"latitude": 52.52, "longitude": 13.41}
+        other_location = {**location, "latitude": 53.0} if other_key == "site" else location
+        other_start = START + timedelta(days=1) if other_key == "day" else START
+        now = START + timedelta(days=2)
+        cached = await service.read(
+            other_location, other_start, other_start + timedelta(days=1), now
+        )
+        service.source.hold = True
+        pending = asyncio.create_task(service.read(location, START, START + timedelta(days=1), now))
+        await asyncio.wait_for(entered.wait(), 3)
+        same_key = asyncio.create_task(
+            service.read(location, START, START + timedelta(days=1), now)
+        )
+        try:
+            assert (
+                await asyncio.wait_for(
+                    service.read(other_location, other_start, other_start + timedelta(days=1), now),
+                    1,
+                )
+                == cached
+            )
+            assert service.source.calls == 2
+        finally:
+            release.set()
+            results = await asyncio.gather(pending, same_key)
+        assert results[0] == results[1]
+        assert service.source.calls == 2
+
+    asyncio.run(scenario())
+
+
+def test_satellite_empty_receipts_never_announce_recovery(archive, caplog):
+    """Empty fresh, cached and stale receipts remain unavailable until a real zero observation recovers."""
+    import logging
+
+    from open_energy_planner.forecast_quality.radiation import RadiationArchive
+    from open_energy_planner.solar.calculation.model import version
+    from open_energy_planner.solar.satellite import RadiationHour
+
+    async def scenario():
+        class Source:
+            calls = 0
+            mode = "failure"
+
+            async def read(self, location, start, end, now):
+                self.calls += 1
+                if self.mode == "failure":
+                    raise OSError("provider unavailable")
+                return (RadiationHour(start, 0),) if self.mode == "observed" else ()
+
+        documents = SqlDocuments(archive.documents.engine, "solar")
+        service = RadiationArchive(documents)
+        service.source = Source()
+        location = {"latitude": 52.52, "longitude": 13.41}
+        end, now = START + timedelta(days=1), START + timedelta(days=2)
+        _missing, issue = await service.read(location, START, end, now)
+        assert issue and not service.status.has_succeeded
+        service.source.mode = "empty"
+        empty, issue = await service.read(location, START, end, now + timedelta(minutes=10))
+        assert empty["hours"] == [] and "unavailable" in issue
+        assert not service.status.has_succeeded
+        assert await service.read(
+            location, START, end, now + timedelta(minutes=19, seconds=59)
+        ) == (empty, issue)
+        assert service.source.calls == 2
+        refreshed, issue = await service.read(location, START, end, now + timedelta(minutes=20))
+        assert refreshed["hours"] == [] and "unavailable" in issue
+        assert not service.status.has_succeeded
+        service.source.mode = "failure"
+        stale, issue = await service.read(location, START, end, now + timedelta(minutes=30))
+        assert stale == refreshed and "refresh failed" in issue
+        assert not service.status.has_succeeded
+        assert not any(
+            "ready." in record.message or "recovered." in record.message
+            for record in caplog.records
+        )
+        service.source.mode = "observed"
+        recovered, issue = await service.read(location, START, end, now + timedelta(minutes=40))
+        assert issue is None and recovered["hours"] == [{"start": START.isoformat(), "ghi": 0}]
+        assert service.status.has_succeeded
+        for receipt in (empty, refreshed, recovered):
+            assert (
+                documents.read("quality-satellite-receipt-" + version(receipt) + ".json") == receipt
+            )
+        assert sum("recovered." in record.message for record in caplog.records) == 1
+        service.source.mode = "empty"
+        later, issue = await service.read(location, START, end, now + timedelta(minutes=50))
+        assert later["hours"] == [] and "unavailable" in issue
+        assert sum("recovered." in record.message for record in caplog.records) == 1
+
+    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.forecast_quality.radiation"):
+        asyncio.run(scenario())
+
+
 def test_original_radiation_uses_frozen_manifest_not_newer_weather(archive):
     """A changed weather block cannot replace the original values or admit evidence received after issuance."""
     from open_energy_planner.forecast_quality.radiation import original_radiation
@@ -1330,12 +1446,15 @@ def test_solar_day_api_combines_original_weather_and_independent_satellite_cache
         """Provide independently observed hours and count actual provider calls."""
 
         calls = 0
+        empty = False
 
         async def read(self, location, requested_start, requested_end, now):
             """Return a zero, a gap and a later observation on the exact requested local day."""
             self.calls += 1
             assert (requested_start, requested_end) == (start, end)
             assert location["latitude"] == 52.52
+            if self.empty:
+                return ()
             return (RadiationHour(start, 0), RadiationHour(start + timedelta(hours=2), 300))
 
     source = Source()
@@ -1357,7 +1476,7 @@ def test_solar_day_api_combines_original_weather_and_independent_satellite_cache
             ) as client:
                 path = "/v1/forecast-quality/days/2026-10-26"
                 assert (await client.get(path)).status == 401
-                assert source.calls == (0 if restart == 0 else 2)
+                assert source.calls == (0 if restart == 0 else 4)
                 assert (
                     await client.post("/v1/ha/catalogue", headers=headers, json=setup_metadata())
                 ).status == 200
@@ -1375,11 +1494,11 @@ def test_solar_day_api_combines_original_weather_and_independent_satellite_cache
                 assert reference["rows"][0]["satellite_w_m2"] == 0
                 assert reference["rows"][1]["satellite_w_m2"] is None
                 assert reference["rows"][2]["satellite_w_m2"] == 300
-                assert source.calls == (1 if restart == 0 else 2)
+                assert source.calls == (1 if restart == 0 else 4)
                 repeated = await (await client.get(path, headers=headers)).json()
                 assert repeated["series"][0]["rows"] == roof["rows"]
                 assert repeated["series"][0]["daily"] == roof["daily"]
-                assert source.calls == (1 if restart == 0 else 2)
+                assert source.calls == (1 if restart == 0 else 4)
                 if restart == 0:
                     from open_energy_planner.solar.calculation.model import version
 
@@ -1418,6 +1537,31 @@ def test_solar_day_api_combines_original_weather_and_independent_satellite_cache
                     assert recovered["rows"] == roof["rows"]
                     assert recovered["daily"] == roof["daily"]
                     assert source.calls == 2
+                    source.empty = True
+                    documents.write(key, {**saved, "received_at": start.isoformat()})
+                    unavailable_response = await client.get(path, headers=headers)
+                    assert unavailable_response.status == 200
+                    unavailable = (await unavailable_response.json())["series"][0]
+                    assert "unavailable" in unavailable["radiation"]["issue"]
+                    assert unavailable["radiation"]["observed_hours"] == 0
+                    assert unavailable["rows"] == roof["rows"]
+                    assert unavailable["daily"] == roof["daily"]
+                    empty_cached = (await (await client.get(path, headers=headers)).json())[
+                        "series"
+                    ][0]
+                    assert "unavailable" in empty_cached["radiation"]["issue"]
+                    assert empty_cached["rows"] == roof["rows"]
+                    assert empty_cached["daily"] == roof["daily"]
+                    assert source.calls == 3
+                    source.empty = False
+                    empty_receipt = documents.read(key)
+                    documents.write(key, {**empty_receipt, "received_at": start.isoformat()})
+                    restored = (await (await client.get(path, headers=headers)).json())["series"][0]
+                    assert restored["radiation"]["issue"] is None
+                    assert restored["radiation"]["rows"] == reference["rows"]
+                    assert restored["rows"] == roof["rows"]
+                    assert restored["daily"] == roof["daily"]
+                    assert source.calls == 4
 
     asyncio.run(scenario())
 
