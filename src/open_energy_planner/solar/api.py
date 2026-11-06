@@ -14,7 +14,7 @@ from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import source_names
 from open_energy_planner.installation.forecast_policy import next_update
 from open_energy_planner.notifications.api import NOTIFICATIONS
-from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, request_error_message
 
 from .basis import forecast_usable
 from .ha_forecasts import parse_ha_predictions
@@ -25,6 +25,13 @@ SOLAR_WORKER_POLL_SECONDS = 5
 WEATHER_RETRY_MINUTES = 30
 WEATHER_REFRESH_HOURS = 1
 MAX_HA_FORECAST_BODY_BYTES = 32 * BYTES_PER_KIB * BYTES_PER_KIB
+PUBLIC_VALIDATION_MESSAGES = (
+    "Complete the Home Assistant Energy dashboard first",
+    "Device membership is managed in the Home Assistant Energy dashboard",
+    "Wait for complete Home Assistant panel settings",
+    "Panel settings are managed in Home Assistant. Reload before saving",
+    "The solar forecast link changed. Reload before saving",
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,7 +105,15 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                     candidate, runtime.configuration, datetime.now(UTC)
                 )
             except ValueError as error:
-                raise web.HTTPBadRequest(text=str(error)) from None
+                raise web.HTTPBadRequest(
+                    text=request_error_message(
+                        error,
+                        logger=_LOGGER,
+                        operation="Solar configuration validation",
+                        safe_messages=PUBLIC_VALIDATION_MESSAGES,
+                        fallback="Cannot validate solar settings. Reload the Home Assistant Energy configuration before saving again.",
+                    )
+                ) from None
             current = runtime.configuration.version if runtime.configuration else None
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Solar configuration changed. Reload before saving")
