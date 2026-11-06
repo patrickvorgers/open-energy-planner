@@ -311,12 +311,16 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
     const details = document.createElement("details"), summary = document.createElement("summary"), breakdown = document.createElement("dl");
     summary.textContent = "Cost breakdown"; details.open = expanded;
     const cash = costs && [costs.purchase, costs.sale, costs.bonus].every(value => typeof value === "number" && Number.isFinite(value)) ? costs.purchase - costs.sale - costs.bonus : null;
+    metric(breakdown, "Import cost", costs?.purchase);
+    metric(breakdown, "Export income", costs?.sale);
+    metric(breakdown, "Bonus income", costs?.bonus);
     metric(breakdown, "Net grid cash cost", cash);
     metric(breakdown, "Wear", costs?.wear);
     metric(breakdown, "Battery value change (not cash)", costs?.inventory_change);
-    const explanation = document.createElement("p");
+    const cashExplanation = document.createElement("p"), explanation = document.createElement("p");
+    cashExplanation.textContent = "Net grid cash cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.";
     explanation.textContent = "Economic cost = net grid cash cost + wear - battery value change. A positive value change reduces economic cost. Battery value change is not cash.";
-    details.append(summary, breakdown, explanation);
+    details.append(summary, breakdown, cashExplanation, explanation);
     host.replaceChildren(totals, details);
     if (!showBenefit) {
         const note = document.createElement("p"); note.textContent = "Baseline without storage"; host.append(note);
