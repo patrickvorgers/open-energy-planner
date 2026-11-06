@@ -14,17 +14,18 @@ from tests.frontend.browser.helpers import TOKEN, discover
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
 @pytest.mark.parametrize(
-    "day,hours,timezone",
+    "day,hours,timezone,solar_reference",
     [
-        ("2026-02-12", 24, "Europe/Amsterdam"),
-        ("2026-03-29", 23, "Europe/Amsterdam"),
-        ("2026-10-25", 25, "Europe/Amsterdam"),
-        ("2026-09-05", 24, "America/Santiago"),
-        ("2026-09-06", 23, "America/Santiago"),
-        ("2026-04-05", 24.5, "Australia/Lord_Howe"),
+        ("2026-02-12", 24, "Europe/Amsterdam", False),
+        ("2026-03-29", 23, "Europe/Amsterdam", False),
+        ("2026-10-25", 25, "Europe/Amsterdam", False),
+        ("2026-09-05", 24, "America/Santiago", False),
+        ("2026-09-06", 23, "America/Santiago", False),
+        ("2026-04-05", 24.5, "Australia/Lord_Howe", False),
+        ("2026-04-05", 24.5, "Australia/Lord_Howe", True),
     ],
 )
-def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone):
+def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, solar_reference):
     """Both plots fill an HA day across DST while optional runs preserve their values.
 
     Discovery defaults to Europe/Amsterdam. Explicit overrides cover a missing
@@ -100,8 +101,8 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone):
             "start": (start + timedelta(hours=index)).isoformat(),
             "end": (start + timedelta(hours=index + 1)).isoformat(),
             "predicted_kwh": 1,
-            "measured_kwh": None,
-            "error_kwh": None,
+            "measured_kwh": None if index == 1 else 0.5,
+            "error_kwh": None if index == 1 else 0.5,
             "evaluation_issue": None,
         }
         for index in range(ceil(hours))
@@ -115,13 +116,55 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone):
             "error_kwh": None,
             "evaluation_issue": None,
         },
-        "coverage": {"hours": ceil(hours), "measured_hours": 0, "paired_hours": 0},
+        "coverage": {
+            "hours": ceil(hours),
+            "measured_hours": ceil(hours) - 1,
+            "paired_hours": ceil(hours) - 1,
+        },
         "rows": rows,
         "metrics": {},
         "issued_at": start.isoformat(),
         "model_label": "Synthetic",
         "forecast_version": "synthetic",
     }
+    if solar_reference:
+        source.update(id="roof", title="Synthetic roof", scope="solar")
+        source["alternatives"] = [
+            {
+                **source,
+                "model_label": "Alternative",
+                "forecast_version": "alternative",
+                "daily": {**source["daily"], "predicted_kwh": 35.25},
+                "coverage": {"hours": 24, "measured_hours": 23, "paired_hours": 23},
+                "rows": [
+                    {
+                        **row,
+                        "predicted_kwh": 1.5,
+                        "error_kwh": None if row["measured_kwh"] is None else 1.0,
+                    }
+                    for row in rows[1:]
+                ],
+            }
+        ]
+        # Exercise independently supplied render intervals. Provider hour admission has separate contracts.
+        radiation_start = start + timedelta(hours=2)
+        source["radiation"] = {
+            "rows": [
+                {
+                    "start": (radiation_start + timedelta(hours=index)).isoformat(),
+                    "end": (radiation_start + timedelta(hours=index + 1)).isoformat(),
+                    "forecast_w_m2": 200 + index * 10,
+                    "satellite_w_m2": None if index == 1 else 150 + index * 10,
+                }
+                for index in range(23)
+            ],
+            "complete_until": None,
+            "observed_hours": 22,
+            "hours": 23,
+            "source": "Synthetic independent reference",
+            "received_at": end.isoformat(),
+            "issue": None,
+        }
     body = {
         "day": day,
         "start": start.isoformat(),
@@ -145,29 +188,116 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone):
     page.goto(url + "/quality")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
+    if solar_reference:
+        page.get_by_role("button", name="Solar", exact=True).click()
+        page.get_by_label("Solar source", exact=True).select_option("roof")
     expect(page.locator("#quality-chart-0")).to_be_visible()
     canvas = page.locator("#quality-chart-0")
     assert_bounds(canvas, start, end)
-    points = canvas.evaluate("canvas => Chart.getChart(canvas).data.datasets[0].data")
+    points = canvas.evaluate(
+        "canvas => Chart.getChart(canvas).data.datasets.find(dataset => dataset.type === 'line' && dataset.label === 'Synthetic: Original choice').data"
+    )
     assert points[0] == {"x": (start + timedelta(minutes=30)).timestamp() * 1000, "y": 1}
     last_start = start + timedelta(hours=ceil(hours) - 1)
     last_end = last_start + timedelta(hours=1)
     assert points[-1]["x"] == (last_start + timedelta(minutes=30)).timestamp() * 1000
     assert len(points) == ceil(hours)
-    geometry = canvas.evaluate("""canvas => {
-        const chart=Chart.getChart(canvas);
-        return chart.getDatasetMeta(0).data.map(bar=>({
-            left:bar.x-bar.width/2,right:bar.x+bar.width/2,width:bar.width,
-            minimum:chart.chartArea.left,maximum:chart.chartArea.right
-        }));
-    }""")
-    hourly_width = (geometry[0]["maximum"] - geometry[0]["minimum"]) / hours * 0.8 * 0.9 / 2
-    for index, bar in enumerate(geometry):
-        visible_hours = min(1, hours - index)
-        assert bar["width"] == pytest.approx(hourly_width * visible_hours)
-        assert bar["left"] >= bar["minimum"] - 0.01
-        assert bar["right"] <= bar["maximum"] + 0.01
+    assert [point["y"] for point in points] == [1] * ceil(hours)
+    measured = canvas.evaluate(
+        "canvas => Chart.getChart(canvas).data.datasets.find(dataset => dataset.type === 'bar' && dataset.label === 'Measured').data"
+    )
+    assert measured == [
+        {
+            "x": (start + timedelta(hours=index, minutes=30)).timestamp() * 1000,
+            "y": None if index == 1 else 0.5,
+        }
+        for index in range(ceil(hours))
+    ]
+    if solar_reference:
+        for label in ("Forecast irradiance", "Satellite estimate"):
+            control = page.get_by_role("checkbox", name=label, exact=True)
+            expect(control).not_to_be_checked()
+            control.check()
+
+    def check_intervals():
+        """Check independent single-bar widths and clipped centres without changing the original evidence."""
+        geometry = canvas.evaluate("""canvas => {
+            const chart=Chart.getChart(canvas);
+            const measured=chart.data.datasets.findIndex(dataset=>dataset.type==='bar' && dataset.label==='Measured');
+            const forecast=chart.data.datasets.findIndex(dataset=>dataset.type==='line' && dataset.label==='Synthetic: Original choice');
+            return chart.getDatasetMeta(measured).data.map((bar,index)=>({
+                left:bar.x-bar.width/2,right:bar.x+bar.width/2,width:bar.width,
+                centre:bar.x,forecastCentre:chart.getDatasetMeta(forecast).data[index].x,
+                minimum:chart.chartArea.left,maximum:chart.chartArea.right
+            }));
+        }""")
+        hourly_width = (geometry[0]["maximum"] - geometry[0]["minimum"]) / hours * 0.8 * 0.9
+        for index, bar in enumerate(geometry):
+            visible_hours = min(1, hours - index)
+            assert bar["width"] == pytest.approx(hourly_width * visible_hours)
+            assert bar["left"] >= bar["minimum"] - 0.01
+            assert bar["right"] <= bar["maximum"] + 0.01
+            expected_centre = (
+                bar["minimum"]
+                + (bar["maximum"] - bar["minimum"]) * (index + visible_hours / 2) / hours
+            )
+            assert bar["centre"] == pytest.approx(expected_centre)
+            assert bar["forecastCentre"] == pytest.approx(expected_centre)
+        if solar_reference:
+            references = canvas.evaluate("""canvas => {
+                const chart=Chart.getChart(canvas);
+                return {unit:chart.options.scales.radiation.title.text,
+                    series:chart.data.datasets.filter(dataset=>['Alternative','Forecast irradiance','Satellite estimate'].includes(dataset.label)).map(dataset=>({
+                        label:dataset.label, axis:dataset.yAxisID, points:dataset.data,
+                        centres:chart.getDatasetMeta(chart.data.datasets.indexOf(dataset)).data.map(point=>point.x)
+                    }))};
+            }""")
+            assert references["unit"] == "Global horizontal irradiance (W/m²)"
+            assert {reference["label"] for reference in references["series"]} == {
+                "Alternative",
+                "Forecast irradiance",
+                "Satellite estimate",
+            }
+            for reference in references["series"]:
+                alternative = reference["label"] == "Alternative"
+                assert reference["axis"] == ("y" if alternative else "radiation")
+                assert len(reference["points"]) == (24 if alternative else 23)
+                offset_hours = 1 if alternative else 2
+                for index, point in enumerate(reference["points"]):
+                    instant = start + timedelta(hours=index + offset_hours + 0.5)
+                    assert point["x"] == instant.timestamp() * 1000
+                    if alternative:
+                        expected_value = 1.5
+                    elif reference["label"] == "Forecast irradiance":
+                        expected_value = 200 + index * 10
+                    else:
+                        expected_value = None if index == 1 else 150 + index * 10
+                    assert point["y"] == expected_value
+                    centre_hours = index + offset_hours + min(1, hours - index - offset_hours) / 2
+                    expected_centre = (
+                        geometry[0]["minimum"]
+                        + (geometry[0]["maximum"] - geometry[0]["minimum"]) * centre_hours / hours
+                    )
+                    assert reference["centres"][index] == pytest.approx(expected_centre)
+
+    check_intervals()
     if hours != int(hours):
+        measured_control = page.get_by_role("checkbox", name="Measured", exact=True)
+        measured_control.uncheck()
+        measured_control.check()
+        check_intervals()
+        original_viewport = page.viewport_size
+        for viewport in (
+            {**original_viewport, "width": original_viewport["width"] - 24},
+            original_viewport,
+        ):
+            page.set_viewport_size(viewport)
+            page.wait_for_function(
+                "width => {const canvas=document.getElementById('quality-chart-0');return window.innerWidth===width && Math.abs(Chart.getChart(canvas).width-canvas.parentElement.clientWidth)<=1;}",
+                arg=viewport["width"],
+            )
+            assert_bounds(canvas, start, end)
+            check_intervals()
         expected_title = page.evaluate(
             """async ({start,end}) => {
                 const {when}=await import('/setup/display.js');
@@ -176,12 +306,15 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone):
             {"start": last_start.isoformat(), "end": last_end.isoformat()},
         )
         canvas.evaluate("""canvas => {
-            const chart=Chart.getChart(canvas),index=chart.data.datasets[0].data.length-1;
-            chart.tooltip.setActiveElements([{datasetIndex:0,index}],{x:0,y:0});chart.update();
+            const chart=Chart.getChart(canvas),datasetIndex=chart.data.datasets.findIndex(dataset=>dataset.type==='bar' && dataset.label==='Measured'),index=chart.data.datasets[datasetIndex].data.length-1;
+            chart.tooltip.setActiveElements([{datasetIndex,index}],{x:0,y:0});chart.update();
         }""")
         assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == [expected_title]
+        check_intervals()
     assert not errors
-    page.screenshot(path=str(capture / f"quality-{day}-{width}.png"), full_page=True)
+    suffix = "-solar-reference" if solar_reference else ""
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(path=str(capture / f"quality-{day}-{width}{suffix}.png"), full_page=True)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 

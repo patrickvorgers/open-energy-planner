@@ -67,8 +67,8 @@
 .settings-workspace { font-size:14px; }
 .settings-workspace label { font-size:14px; font-weight:400; }
 .settings-workspace small { font-size:12px; line-height:1.55; font-weight:400; }
-.settings-workspace button:not(.info-button),.settings-workspace input,.settings-workspace select { font-size:14px; }
-.settings-workspace button:not(.info-button) { min-height:44px; font-weight:500; }
+.settings-workspace button:not(.info-button, .section-tabs > button),.settings-workspace input,.settings-workspace select { font-size:14px; }
+.settings-workspace button:not(.info-button, .section-tabs > button) { min-height:44px; font-weight:500; }
 .settings-workspace h2 { font-family:Outfit,system-ui,sans-serif; font-size:18px; letter-spacing:0; font-weight:600; }
 .settings-workspace .chart-card { padding:24px; border-radius:16px; }
 .settings-workspace .settings-toolbar { background:white; }

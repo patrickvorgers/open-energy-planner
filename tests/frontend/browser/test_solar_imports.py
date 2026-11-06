@@ -567,6 +567,11 @@ def test_solar_accuracy_comparison_explains_current_source_and_matched_error(app
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     source = page.locator("#quality-models article").filter(has_text="South roof")
+    page.get_by_role("button", name="Solar", exact=True).click()
+    expect(page.get_by_role("button", name="Solar", exact=True)).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    page.get_by_label("Solar source", exact=True).select_option("roof")
     source.get_by_text("Current model and learning", exact=True).click()
     expect(source).to_contain_text("Forecast source: Automatic: Active: Home Assistant")
     expect(source).to_contain_text("3 of 3 complete days")

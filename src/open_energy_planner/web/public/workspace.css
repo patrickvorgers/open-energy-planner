@@ -169,10 +169,6 @@
 .contract-help dt { font-weight:700; margin-top:12px; }
 .contract-help dd { margin:4px 0 12px; }
 .contract-help code { overflow-wrap:anywhere; }
-.example-tabs { display:flex; gap:8px; flex-wrap:wrap; margin:16px 0; }
-.workspace .example-tabs [role="tab"] { background:#fff; color:#354c61; border:1px solid #60768c; }
-.workspace .example-tabs [aria-selected="true"] { background:#087f76; color:#fff; border-color:#087f76; }
-.example-tabs [role="tab"]:focus-visible { outline:2px solid #087f76; outline-offset:3px; }
 .contract-help [role="tabpanel"][hidden] { display:none; }
 .contract-help .example-value { display:block; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap:anywhere; }
 .contract-help dd > p { margin:6px 0 12px; }
@@ -211,7 +207,7 @@
 .workspace h1,.workspace h2 { font-family:"Space Grotesk",Outfit,sans-serif; letter-spacing:-.03em; }
 .workspace button { background:var(--oep-blue); font-family:inherit; }
 .workspace button.secondary { background:white; color:var(--oep-navy); border-color:var(--oep-line); }
-.workspace button[aria-pressed="true"],.workspace .example-tabs [aria-selected="true"] { background:var(--oep-navy); color:white; border-color:var(--oep-navy); }
+.workspace button[aria-pressed="true"] { background:var(--oep-navy); color:white; border-color:var(--oep-navy); }
 .workspace select,.workspace input:not([type="checkbox"]):not([type="range"]) { color:var(--oep-ink); border-color:var(--oep-line); font-family:inherit; }
 .workspace input[type="checkbox"],.workspace input[type="range"] { accent-color:var(--oep-blue); }
 .workspace .page-header p,.workspace label,.workspace .muted,.workspace #plan-description,.workspace #evaluation-version-info,.workspace #coverage { color:var(--oep-muted); }
@@ -224,7 +220,6 @@
 .workspace .inspector { background:#eaf3f9; }
 .workspace summary,.workspace .contract-actions p,.workspace .evidence-card h4 { color:var(--oep-navy); }
 .workspace .info-button { background:transparent; color:var(--oep-navy); border-color:var(--oep-muted); }
-.workspace .example-tabs [role="tab"]:not([aria-selected="true"]) { background:white; color:var(--oep-navy); border-color:var(--oep-muted); }
 .workspace .contract-help { color:var(--oep-ink); border-color:var(--oep-line); font-family:inherit; }
 .workspace .contract-help::backdrop { background:#1a306099; }
 .workspace th { background:var(--oep-paper); color:var(--oep-muted); }
@@ -292,9 +287,6 @@
 @media(max-width:640px) { #contract-editor .bonus-editor { padding:10px; } #contract-editor .monthly-window { padding:4px; border:0; } }
 
 /* One Settings entry and shared category navigation for the existing device editors. */
-.device-settings-navigation { display:flex; flex-wrap:wrap; gap:.6rem; margin:0 0 1.25rem; }
-.device-settings-navigation a { display:flex; align-items:center; min-height:44px; padding:.65rem 1rem; border:1px solid #cbdde9; border-radius:10px; color:inherit; text-decoration:none; background:#fff; }
-.device-settings-navigation a[aria-current="page"] { background:#e7f4fd; font-weight:700; border-color:#4387bf; }
 #vehicle-controls form, #comfort-request { display:flex; flex-wrap:wrap; align-items:end; gap:.6rem; margin-top:1rem; }
 #vehicle-controls form label, #comfort-request label { flex:1 1 180px; }
 #vehicle-controls > article { display:grid; grid-template-columns:minmax(0,1fr) auto auto; column-gap:.6rem; align-content:start; }
@@ -344,3 +336,16 @@
 
 .workspace .scenario-chart-help { border:0; padding:0; margin:12px 0; }
 .workspace .scenario-chart-help summary { min-height:32px; font-size:14px; }
+
+/* Shared section navigation keeps selection distinct from keyboard focus. */
+.section-tabs { display:flex; flex-wrap:wrap; gap:0 24px; margin:0 0 24px; padding:0; border:0; background:transparent; font-size:14px; line-height:1.5; }
+.workspace .section-tabs > a,.workspace .section-tabs > button { display:inline-flex; align-items:center; min-height:44px; margin:0; padding:8px 0 12px; border:0; border-bottom:3px solid transparent; border-radius:0; background:transparent; box-shadow:none; color:var(--oep-muted); font:inherit; text-decoration:none; }
+.workspace .section-tabs > [aria-current="page"],.workspace .section-tabs > [aria-selected="true"],.workspace .section-tabs > [aria-pressed="true"] { color:var(--oep-action-blue, #006da6); background:transparent; border-color:var(--oep-action-blue, #006da6); font-weight:600; }
+.workspace .section-tabs > :focus-visible { outline:2px solid var(--oep-action-blue, #006da6); outline-offset:4px; }
+#quality-source-label { display:grid; gap:8px; max-width:360px; margin-bottom:24px; }
+#quality-source-label[hidden] { display:none; }
+.quality-line-swatch { display:inline-block; width:24px; border-top:3px solid var(--series-color); flex-shrink:0; }
+.quality-radiation-status,.quality-radiation-source { line-height:1.6; max-width:85ch; }
+.quality-comparison { margin:24px 0; }
+
+@media(max-width:640px) { .forecast-workspace .quality-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }.forecast-workspace .quality-summary div { min-width:0; }.forecast-workspace .quality-summary dd { font-size:16px; overflow-wrap:anywhere; } }

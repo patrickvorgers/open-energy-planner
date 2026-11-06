@@ -22,7 +22,13 @@ Available solar DC energy and measured inverter AC production are different quan
 
 ## Read Forecast quality
 
-Open **Insights > Forecast quality**, choose a day and optionally select a device. The page compares the original midnight forecast with received hourly measurements for that same Home Assistant calendar day.
+Open **Insights > Forecast quality** and choose a day above the **Household**,
+**Solar** and **Devices** tabs. The same day applies to all three views. Solar and
+Devices each show one selected source at a time. The page compares the original
+midnight forecast with received hourly measurements for that same Home Assistant
+calendar day. Measured energy uses fill-only bars. The originally selected model
+uses a solid line and retained same-issue alternatives use dashed or dotted lines.
+The comparison table keeps the original choice separate from later model status.
 
 [![A populated forecast-quality chart comparing a fixed prediction with measured hourly energy.](../assets/forecast-quality.png)](../assets/forecast-quality.png)
 
@@ -40,6 +46,24 @@ Expand the metrics when you need them:
 | WAPE | Total absolute hourly error relative to measured energy, exposing timing errors hidden by daily totals |
 
 A zero measured total has no meaningful relative percentage. Controlled appliance timing and some solar measurement boundaries can make an accuracy comparison ineligible even when values remain visible. Read the exclusion reason before comparing models.
+
+## Compare irradiance separately
+
+For Solar, optionally enable **Forecast irradiance** and **Satellite estimate**.
+These use the right-hand W/m² axis, separate from production in kWh. Forecast
+irradiance comes from the weather retained with the original prediction.
+Satellite irradiance estimates sunlight from satellite observations. It is not
+a sensor on your roof. The named DWD / EUMETSAT MTG source has approximately
+20 minutes of provider delay and historical coverage from February 2026.
+Actual availability depends on the response. Older or missing data stays unavailable.
+
+**Satellite data complete through** identifies the last uninterrupted hour from
+the selected day's start. A gap stops that marker even if later hours exist.
+**Last fetched** only indicates when the app retrieved the observations.
+Missing satellite hours do not affect the separate evaluation against measured
+solar production. **Refresh evidence** retrieves newer observations without
+replacing the original forecast. A failed satellite refresh retains available
+observations with an explicit warning.
 
 ## Separate historical accuracy from the current model
 
