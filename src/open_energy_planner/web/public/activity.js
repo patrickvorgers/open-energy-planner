@@ -178,6 +178,7 @@ function render() {
 /** A late page response must not replace newer live outcomes for the same execution. */
 async function load(page = 0) {
     const version = ++generation;
+    const focusedPageControl = ["activity-previous", "activity-next"].includes(document.activeElement?.id) ? document.activeElement.id : undefined;
     requestedPage = page;
     loading = true;
     loadProblem = "";
@@ -198,7 +199,15 @@ async function load(page = 0) {
         if (next) pageCursors[page + 1] = next;
         loadProblem = "";
     } catch (error) {if (version === generation) loadProblem = error.message;}
-    finally {if (version === generation) {loading = false; requestedPage = pageIndex; render();}}
+    finally {
+        if (version === generation) {
+            loading = false; requestedPage = pageIndex; render();
+            if (focusedPageControl && document.activeElement === document.body) {
+                const otherControl = focusedPageControl === "activity-next" ? "activity-previous" : "activity-next";
+                [focusedPageControl, otherControl, "activity-refresh"].map(find).find(button => !button.disabled)?.focus({preventScroll:true});
+            }
+        }
+    }
 }
 
 /** Start at the newest matching activity without changing the selected day or type. */

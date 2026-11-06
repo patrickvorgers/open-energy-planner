@@ -564,6 +564,69 @@ def test_failed_navigation_and_late_old_day_response_preserve_selection(app_page
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_pagination_restores_keyboard_focus_after_held_and_failed_reads(app_page):
+    """Keyboard navigation retains an enabled control at both boundaries and after failure."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    held = []
+
+    def hold_page(route):
+        """Capture only real page requests so completion and failure are controlled."""
+        held.append(route)
+        page.evaluate("count => window.paginationFocusRequestCount = count", len(held))
+
+    page.route("**/v1/activities?**", hold_page)
+
+    def navigate(name, number, focus, *, failed=False):
+        """Activate by keyboard, reject duplicate activation and complete the held request."""
+        button = page.get_by_role("button", name=name, exact=True)
+        count = len(held) + 1
+        button.focus()
+        button.press("Enter")
+        page.wait_for_function("count => window.paginationFocusRequestCount === count", arg=count)
+        expect(button).to_be_disabled()
+        button.dispatch_event("click")
+        assert len(held) == count
+        if failed:
+            held[-1].fulfill(status=503)
+            expect(page.locator("#activity-status")).to_contain_text("could not be loaded")
+        else:
+            response = page.request.get(
+                held[-1].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+            ).json()
+            held[-1].fulfill(json=response)
+        expect(page.locator("#activity-page")).to_have_text(f"Page {number}")
+        wait_for_product_reads(page)
+        expect(page.get_by_role("button", name=focus, exact=True)).to_be_focused()
+        assert len(held) == count
+
+    for number in (2, 3, 4):
+        navigate("Next", number, "Next")
+    navigate("Next", 5, "Previous")
+    for number in (4, 3, 2):
+        navigate("Previous", number, "Previous")
+    navigate("Previous", 1, "Next")
+    navigate("Next", 1, "Next", failed=True)
+    page.get_by_role("button", name="Next", exact=True).focus()
+    page.get_by_role("button", name="Next", exact=True).press("Enter")
+    page.wait_for_function("window.paginationFocusRequestCount === 10")
+    day = page.get_by_label("Day", exact=True)
+    day.focus()
+    response = page.request.get(
+        held[-1].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    held[-1].fulfill(json=response)
+    wait_for_product_reads(page)
+    expect(day).to_be_focused()
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     """Live and storage recovery clear stale warnings but preserve a failed explicit history read."""
     page, url = app_page
