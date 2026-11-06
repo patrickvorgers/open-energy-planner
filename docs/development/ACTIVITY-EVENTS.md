@@ -61,6 +61,73 @@ normal app is stopped. Activity does not replace that recovery mechanism.
 
 ## Snapshot, replay and restart
 
+### Optional execution context
+
+`Events.start`, `attempt`, `thread_attempt` and `scheduled` accept an optional
+`context` dictionary. Producers provide safe human names through `label` and,
+when meaningful, the actual work horizon through paired ISO `start` and `end`
+strings. Both timestamps must have an explicit offset and end must follow start.
+Archived valuations also capture `plan_generated_at` and `plan_strategy` so the
+browser uses the same creation-time and strategy caption as the Planning selector.
+The creation timestamp must be aware. Only `minimize cost` and `minimize consumption`
+are admitted strategies, and only with a valid creation timestamp. Unknown strategy
+values are omitted. The original work horizon remains separate from plan creation.
+Optional `plan_id` admits one to 128 ASCII letters, digits, underscores or hyphens.
+It retains the actual immutable plan reference, never an arbitrary navigation URL.
+Optional paired `waiting_start`/`waiting_end` identifies the interval where a
+measured batch stopped. It uses the same aware, increasing UTC normalization as
+the overall batch range. `finish` and `finish_thread` can enrich context at the
+terminal boundary, preserving the captured horizon. Planning supplies its saved
+plan reference only after successful publication. Financial evaluation supplies
+the stopping interval after examining the captured measurements.
+The collector normalizes valid ranges to UTC and limits input timestamps to 40
+characters. It collapses label whitespace, replaces nonprinting characters and
+limits the single-line label to 160 characters. Unknown keys are discarded.
+Malformed labels and ranges are omitted independently, without failing domain
+work. Context contains no raw provider payloads, exceptions, URLs, credentials or
+precise coordinates; producers remain responsible for safe label content.
+
+Context is captured as detached execution evidence, retained through progress,
+terminal outcomes, replay, restart and database transfer. It changes no execution
+identity, outcome, retry or recovery semantics. Existing records without context
+remain unchanged. Storage uses the existing payload JSON, without extra columns.
+
+| Producer | Context choice |
+| --- | --- |
+| Prices | Existing shared adapter display name from the owner. Unknown adapter identities do not become a title suffix. |
+| Household forecast and temperature weather | Household consumption, without location or sensor identities. |
+| Solar forecast | All available human source names in the captured configuration, otherwise Solar production. |
+| Solar weather | Solar production. The weather request serves the whole installation. |
+| Appliance learning | The selected appliance's admitted display name, otherwise Appliance. |
+| Model comparison | Household consumption or the solar display name captured with the original plan, otherwise Solar production. |
+| Planning | The actual captured problem horizon. No guessed upcoming ad-hoc horizon. |
+| Forecast quality archive | The pending archive's captured start/end. Scheduled work uses its installation-local day, including DST. |
+| Measured savings | The captured measurement batch range being investigated, including when settlement remains pending. |
+| Archived plan valuation | The same creation-time and strategy caption as Planning, plus the original problem horizon. Missing creation evidence falls back to Archived plan. Malformed horizon evidence omits the range without preventing failure recording. |
+
+The browser uses inert text and the shared minute-precision installation-timezone
+formatter. Names stay on one line with visual truncation. Native disclosure and
+the title attribute retain the full context. Generic executions without meaningful
+subjects keep their original title. Context never derives from detail or exception
+text. Per-plan financial failures stay separate, retain Failed and explain the
+effect and next action without promising an automatic retry. See the user guide
+for batch semantics and troubleshooting.
+
+Read-only navigation is a frontend-owned mapping from known producer owners to
+existing data screens. A saved plan reference opens that exact archive through
+the existing authenticated comparison reader. Linked selections remain pinned
+through background publication polls. A missing archive never falls back to
+another plan. Navigation retains HA ingress and embedded-workspace prefixes.
+Other links explicitly name the general destination and promise no unimplemented
+source, appliance or date selection. Unknown owners have no inferred destination.
+The collector discards unknown context keys, including URLs and provider payloads.
+
+Measured evaluation returns its actual per-attempt processed/total counts and
+stopping frame separately from its outcome. Fixed admitted causes own readable
+explanations and recovery advice. Unknown exceptions receive bounded generic
+guidance without their values. These additions change no interval commits,
+publication pointers, financial calculations, retry clocks or outcome semantics.
+
 `GET /v1/events` uses existing bearer or trusted-ingress authorization. Credentials
 never enter URLs. Its first response contains an authoritative snapshot and a
 process-epoch cursor. The snapshot retains all known future deadlines, so an

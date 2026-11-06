@@ -14,6 +14,62 @@ from open_energy_planner.synthetic import capture
 from tests.app.planning.test_planning_pipeline import NOW, ImmediateSolver, service
 
 
+def test_planning_activity_captures_the_actual_calculation_horizon(tmp_path):
+    """A real successful calculation publishes its captured interval range on every activity update."""
+    from open_energy_planner.activities.events import Events
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+
+    async def scenario():
+        """Run the coordinator with SQL activities while preserving actual plan publication."""
+        repository = SqlPlanRepository(tmp_path)
+        events = Events(ActivityStore(repository.engine), lambda: NOW)
+        cursor = events.cursor
+        published = []
+
+        async def publish(document):
+            """Retain the accepted plan independently of its diagnostic activity."""
+            published.append(document)
+
+        coordinator = PlanningCoordinator(service(ImmediateSolver()), publish)
+        coordinator.events = events
+        snapshot = capture(NOW, 0.5)
+        try:
+            coordinator.submit(snapshot)
+            await coordinator.wait()
+            assert len(published) == 1
+            rows = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity"
+            ]
+            assert [row["state"] for row in rows] == ["running", "completed"]
+            assert all(
+                {
+                    field: value
+                    for field, value in row["context"].items()
+                    if field in ("start", "end")
+                }
+                == {
+                    "start": snapshot.problem.intervals[0].start.isoformat(),
+                    "end": (
+                        snapshot.problem.intervals[-1].start
+                        + timedelta(hours=snapshot.problem.intervals[-1].duration_h)
+                    ).isoformat(),
+                }
+                for row in rows
+            )
+            assert "plan_id" not in rows[0]["context"]
+            assert rows[1]["context"]["plan_id"] == published[0]["plan_id"]
+            assert rows[1]["context"]["plan_generated_at"] == published[0]["generated_at"]
+            assert rows[1]["context"]["plan_strategy"] == snapshot.strategy
+        finally:
+            await events.close()
+            repository.engine.dispose()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("hard_change", [False, True])
 def test_updates_during_every_solve_do_not_starve_publication(hard_change):
     """Ordinary updates permit each valid result. A changed configuration blocks only the old generation."""

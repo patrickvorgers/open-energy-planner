@@ -864,6 +864,16 @@ the current bounds, equations, virtual entities and acceptance evidence.
   Current health begins unknown and producers rebuild actual state and schedules.
   The collector never independently retries work. Preserve the separate database
   maintenance recovery mechanism while the app is unavailable.
+- ACT-08: Activity titles include a safe human subject or captured work period
+  where useful across all producers. Keep titles on one line with the complete
+  name available through disclosure. Context never changes an execution's ID or
+  outcome. Financial failure explanations distinguish archived plan valuation
+  from active device commands and provide the actual next action.
+- ACT-09: Where a relevant data screen exists, provide a clearly named read-only
+  link from activity details. A plan link opens that exact retained plan without
+  activating it or falling back to another version. Measured-savings details
+  identify per-attempt progress, the stopping interval, known waiting cause and
+  actual continuation or user action. Preserve separate execution evidence.
 
 See [activity and module events](../docs/development/ACTIVITY-EVENTS.md) for the
 implemented producer inventory, storage limits, API and UI behavior.

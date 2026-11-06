@@ -1605,6 +1605,10 @@ def test_daily_activity_requires_accepted_original_forecast_evidence(archive, ha
             ]
             assert len(terminal) == 1
             assert terminal[0]["state"] == ("completed" if has_evidence else "failed")
+            assert terminal[0]["context"] == {
+                "start": start.isoformat(),
+                "end": (start + timedelta(days=1)).isoformat(),
+            }
             assert terminal[0]["recovered"] is has_evidence
             assert events.health["forecast-quality"]["state"] == (
                 "available" if has_evidence else "unavailable"

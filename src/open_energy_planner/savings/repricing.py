@@ -26,6 +26,38 @@ REPRICING_FAILURE_MESSAGE = (
     "Plan repricing evidence is unavailable. Check archived inputs and contract coverage. "
     "The last successful valuation is retained."
 )
+REPRICING_ACTIVITY_FAILURE = (
+    "Could not update the financial estimate for this archived plan. "
+    "Its last successful estimate is retained. This does not change the active energy plan "
+    "or its device commands. Open the corresponding plan under Planning to check its cost "
+    "information and review Contract settings. If the cause is still unclear, report this "
+    "activity for investigation."
+)
+
+
+def plan_activity_context(plan):
+    """Identify the captured plan horizon without exposing opaque IDs or assuming valid archive inputs."""
+    context = {"label": "Archived plan"}
+    if plan.get("plan_id"):
+        context["plan_id"] = plan["plan_id"]
+    if plan.get("generated_at"):
+        context.update(plan_generated_at=plan["generated_at"], plan_strategy=plan.get("strategy"))
+    snapshot = plan.get("input_snapshot")
+    problem = snapshot.get("problem") if isinstance(snapshot, dict) else None
+    intervals = problem.get("intervals") if isinstance(problem, dict) else None
+    if (
+        isinstance(intervals, list)
+        and intervals
+        and isinstance(intervals[0], dict)
+        and isinstance(intervals[-1], dict)
+    ):
+        try:
+            last = intervals[-1]
+            end = datetime.fromisoformat(last["start"]) + timedelta(hours=last["duration_h"])
+            context.update(start=intervals[0].get("start"), end=end.isoformat())
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+    return context
 
 
 @dataclass(frozen=True)
@@ -335,7 +367,8 @@ class PlanValuations:
                     "contract-valuations",
                     "settlement",
                     "Recalculate plan value",
-                    failure="Plan repricing failed. The last successful valuation is retained.",
+                    context=plan_activity_context(plan),
+                    failure=REPRICING_ACTIVITY_FAILURE,
                 )
                 if self.events
                 else nullcontext()
@@ -369,7 +402,7 @@ class PlanValuations:
                         self.events.finish_thread(
                             activity,
                             Outcome.FAILED,
-                            "Plan repricing failed. The last successful valuation is retained.",
+                            REPRICING_ACTIVITY_FAILURE,
                         )
                     continue
                 with self.documents.transaction():

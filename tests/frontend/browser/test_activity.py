@@ -1,11 +1,12 @@
 """Activity is readable and live on desktop and mobile without changing energy configuration."""
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
@@ -40,6 +41,210 @@ def test_activity_titles_show_source_context_without_wrapping(app_page):
     page.keyboard.press("Enter")
     expect(details.locator("p").first).to_have_text(full_title)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_activity_subjects_and_failed_plan_periods_remain_readable(app_page):
+    """Render captured subjects inertly and distinguish financial failures in HA time across DST."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    assert page.request.post(
+        url + "/_test/activity-contexts", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    for title in (
+        "Update consumption forecast: Household consumption",
+        "Update solar forecast: East roof, West roof",
+        "Learn appliance cycles: Laundry <img src=x>",
+        "Compare forecast models: East roof",
+        "Archive daily forecast: 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM",
+        "Calculate energy plan: 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM",
+        "Evaluate measured savings: 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM",
+    ):
+        label = page.locator("#activity-list summary strong").get_by_text(title, exact=True)
+        expect(label).to_have_attribute("title", title)
+        assert label.bounding_box()["height"] < 30
+    expect(page.locator("#activity-list img")).to_have_count(0)
+    expect(page.locator("#activity-upcoming")).to_contain_text(
+        "Update solar forecast: East roof, West roof"
+    )
+    page.get_by_label("Activity type").select_option("settlement")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(3)
+    failed = page.locator("#activity-list details").filter(has_text="Recalculate plan value")
+    expect(failed).to_have_count(2)
+    expect(failed.locator("[data-state=failed]")).to_have_count(2)
+    assert len(set(failed.locator("summary strong").all_text_contents())) == 2
+    assert set(failed.locator("summary strong").all_text_contents()) == {
+        "Recalculate plan value: Plan 10/24/2026, 12:00 PM: Minimize cost, 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM",
+        "Recalculate plan value: Plan 10/24/2026, 12:15 PM: Minimize cost, 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM",
+    }
+    assert len(set(failed.evaluate_all("items => items.map(item => item.dataset.activityId)"))) == 2
+    first = failed.filter(has_text="10/24/2026, 12:15 PM")
+    first.locator("summary").focus()
+    page.keyboard.press("Enter")
+    expect(first).to_have_attribute("open", "")
+    expect(first).to_contain_text("does not change the active energy plan or its device commands")
+    expect(first).to_contain_text("under Planning")
+    expect(first).to_contain_text("review Contract settings")
+    expect(first).to_contain_text("report this activity for investigation")
+    expect(first.get_by_role("link", name="View this plan")).to_have_attribute(
+        "href", f"{url}/overview?plan=example-plan-1#planning"
+    )
+    directory = Path("results/ci/activity-context")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(directory / f"failures-{page.viewport_size['width']}.png"))
+    first.locator("summary").click()
+    waiting = page.locator("#activity-list details").filter(has_text="Evaluate measured savings")
+    waiting.locator("summary").click()
+    expect(waiting).to_contain_text("processed 1 of 2 measured intervals")
+    expect(waiting).to_contain_text("Published electricity prices are missing")
+    expect(waiting).to_contain_text(
+        "Processing stopped at: 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM"
+    )
+    expect(waiting.get_by_role("link", name="View savings")).to_have_attribute(
+        "href", f"{url}/overview#savings"
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(directory / f"savings-waiting-{page.viewport_size['width']}.png"))
+    waiting.screenshot(
+        path=str(directory / f"savings-waiting-detail-{page.viewport_size['width']}.png")
+    )
+    page.get_by_label("Activity type").select_option("")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    page.screenshot(path=str(directory / f"modules-{page.viewport_size['width']}.png"))
+
+
+@pytest.mark.parametrize("app_site", ["activity_plans", "activity_ingress"], indirect=True)
+@pytest.mark.parametrize("selection", ["listed", "older", "missing"])
+def test_activity_plan_link_reads_exact_archive_without_mutation_or_fallback(app_page, selection):
+    """Open the exact saved plan through native or ingress navigation, including missing and older archives."""
+    page, url = app_page
+    discover(page, url, devices=True)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    original = page.request.get(url + "/v1/plans/browser-original-plan", headers=headers).json()
+    plan = original.get("plan", original)
+    identity = "missing-plan" if selection == "missing" else "browser-original-plan"
+    assert page.request.post(
+        url + "/_test/activity-plan",
+        headers=headers,
+        data={
+            "plan_id": identity,
+            "plan_generated_at": plan["generated_at"],
+            "plan_strategy": plan["strategy"],
+        },
+    ).ok
+    page.clock.install()
+    page.goto(url + "/activity?embedded=1")
+    if "/api/hassio_ingress/" not in url:
+        expect(page.locator("#connect")).to_be_visible()
+        page.get_by_label("Installation API token").fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    row = page.locator("#activity-list details").filter(has_text="Recalculate plan value")
+    expect(row).to_have_count(1)
+    row.locator("summary").click()
+    writes, comparisons = [], []
+    page.on(
+        "request",
+        lambda request: (
+            writes.append(request.url) if request.method not in ("GET", "HEAD") else None
+        ),
+    )
+    page.on(
+        "request",
+        lambda request: comparisons.append(request.url) if "/comparison" in request.url else None,
+    )
+    if selection == "older":
+        page.route(
+            "**/v1/plans?limit=20",
+            lambda route: route.fulfill(json={"plans": [], "next_before": None}),
+        )
+    row.get_by_role("link", name="View this plan").click()
+    assert page.url == f"{url}/overview?plan={identity}&embedded=1#planning"
+    if "/api/hassio_ingress/" not in url:
+        expect(page.locator("#overview-connect")).to_be_visible()
+        expect(page.locator("#overview-status")).to_have_text(
+            "Connect to view your plans and savings."
+        )
+        page.get_by_label("Installation API token").fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#plan-version")).to_have_value(identity)
+    if selection == "missing":
+        expect(page.locator("#overview-status")).to_contain_text(
+            "The linked plan could not be loaded"
+        )
+        expect(page.locator("#plan-description")).to_have_text("Selected plan could not be loaded.")
+    else:
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
+        expect(page.locator("#plan-description")).to_contain_text("Generated:")
+        expect(page.locator("#plan-version option:checked")).not_to_have_text(
+            "Selected archived plan"
+        )
+    page.clock.run_for(15001)
+    wait_for_product_reads(page)
+    expect(page.locator("#plan-version")).to_have_value(identity)
+    if selection != "missing":
+        assert (
+            page.evaluate(
+                "Chart.getChart(document.getElementById('plan-chart')).options.scales.x.min"
+            )
+            == datetime.fromisoformat(plan["steps"][0]["start"]).timestamp() * 1000
+        )
+    assert comparisons and all(f"/{identity}/comparison" in request for request in comparisons)
+    assert writes == []
+    assert (
+        page.request.get(url + "/v1/plans/browser-original-plan", headers=headers).json()
+        == original
+    )
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+@pytest.mark.parametrize(
+    "title,action,destination,heading",
+    [
+        ("Compare forecast models", "View forecast quality", "quality", "Forecast quality"),
+        ("Learn appliance cycles", "View appliance profiles", "appliances", "Appliances"),
+        ("Evaluate measured savings", "View savings", "overview#savings", "Savings"),
+        (
+            "Fetch price forecast: Jeroen.nl",
+            "View planning and prices",
+            "overview#planning",
+            "Planning",
+        ),
+    ],
+)
+def test_activity_data_links_open_the_named_read_only_page(
+    app_page, title, action, destination, heading
+):
+    """Related activities navigate to the named real data screen without issuing a domain mutation."""
+    page, url = app_page
+    discover(page, url)
+    assert page.request.post(
+        url + "/_test/activity-contexts", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    page.goto(url + "/activity")
+    expect(page.locator("#connect")).to_be_visible()
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    row = (
+        page.locator("#activity-list details")
+        .filter(has=page.locator("summary strong").filter(has_text=title))
+        .first
+    )
+    row.locator("summary").click()
+    writes = []
+    page.on(
+        "request",
+        lambda request: (
+            writes.append(request.url) if request.method not in ("GET", "HEAD") else None
+        ),
+    )
+    row.get_by_role("link", name=action).click()
+    assert page.url == f"{url}/{destination}"
+    expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
+    assert writes == []
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)

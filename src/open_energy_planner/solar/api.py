@@ -11,6 +11,7 @@ from open_energy_planner.activities.api import EVENTS
 from open_energy_planner.activities.events import Health, Outcome
 from open_energy_planner.core.units import BYTES_PER_KIB, MINUTES_PER_HOUR, SECONDS_PER_MINUTE
 from open_energy_planner.history.wire import parse_history
+from open_energy_planner.home_assistant.names import source_names
 from open_energy_planner.installation.forecast_policy import next_update
 from open_energy_planner.notifications.api import NOTIFICATIONS
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
@@ -47,6 +48,18 @@ async def worker(runtime, job):
 
 def register(app, runtime, live, lock, persist, snapshot, weather_factory, membership):
     """Wire authenticated routes and one coalesced model/weather lifecycle into the existing app."""
+
+    def activity_context(configuration):
+        """Name all captured PV sources without exposing opaque source identities or location."""
+        names = source_names(membership.value if membership is not None else None)
+        labels = (
+            dict.fromkeys(
+                names.get(source.entity_id, "Solar production") for source in configuration.sources
+            )
+            if configuration is not None
+            else {}
+        )
+        return {"label": ", ".join(labels) or "Solar production"}
 
     def current_notifications():
         """Read cached forecast availability. Unreadable configuration cannot confirm recovery."""
@@ -166,9 +179,12 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                 try:
                     async with lock:
                         job = runtime.job(datetime.now(UTC))
+                        context = activity_context(job[1]) if job else None
                     if job:
                         activity = (
-                            await events.start("solar", "training", "Update solar forecast")
+                            await events.start(
+                                "solar", "training", "Update solar forecast", context=context
+                            )
                             if events
                             else None
                         )
@@ -267,6 +283,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                         "training",
                         "Update solar forecast",
                         next_update(current, retry) if usable or retry else None,
+                        context=activity_context(runtime.configuration),
                     )
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
@@ -304,7 +321,10 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                             due = now + timedelta(minutes=WEATHER_RETRY_MINUTES)
                             activity = (
                                 await events.start(
-                                    "solar-weather", "weather", "Fetch solar weather"
+                                    "solar-weather",
+                                    "weather",
+                                    "Fetch solar weather",
+                                    context={"label": "Solar production"},
                                 )
                                 if events
                                 else None
@@ -380,7 +400,11 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                         if events:
                             if configured and location:
                                 events.scheduled(
-                                    "solar-weather", "weather", "Fetch solar weather", due
+                                    "solar-weather",
+                                    "weather",
+                                    "Fetch solar weather",
+                                    due,
+                                    context={"label": "Solar production"},
                                 )
                             else:
                                 events.withdraw("solar-weather")

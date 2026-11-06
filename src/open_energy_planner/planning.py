@@ -541,8 +541,19 @@ class PlanningCoordinator:
             )
             try:
                 if self.events:
+                    intervals = snapshot.problem.intervals
+                    context = (
+                        {
+                            "start": intervals[0].start.isoformat(),
+                            "end": (
+                                intervals[-1].start + timedelta(hours=intervals[-1].duration_h)
+                            ).isoformat(),
+                        }
+                        if intervals
+                        else None
+                    )
                     activity = await self.events.start(
-                        "planning", "planning", "Calculate energy plan"
+                        "planning", "planning", "Calculate energy plan", context=context
                     )
                 outcome = await self.service.calculate(snapshot)
                 calculation_reason = outcome.reason
@@ -618,6 +629,13 @@ class PlanningCoordinator:
                         if published
                         else "No plan was activated. Existing commands retain their original validity.",
                         usable=published,
+                        context={
+                            "plan_id": outcome.document.get("plan_id"),
+                            "plan_generated_at": outcome.document.get("generated_at"),
+                            "plan_strategy": outcome.document.get("strategy"),
+                        }
+                        if published
+                        else None,
                     )
                 if self.record_calculation is not None:
                     try:

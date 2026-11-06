@@ -124,6 +124,7 @@ class DailyForecastArchive:
             "quality",
             "Archive daily forecast",
             failure="Daily forecast retention failed. Planning continues independently.",
+            context={"start": self.pending.get("start"), "end": self.pending.get("end")},
         ) as identity:
             self._write_pending()
             self.events.finish_thread(

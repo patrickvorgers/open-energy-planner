@@ -566,7 +566,10 @@ def test_physical_reference_advances_without_contract(settlement):
     assert runtime.physical_issue is None
 
 
-@pytest.mark.parametrize("condition", ["partial", "pending", "invalid", "missing_plan"])
+@pytest.mark.parametrize(
+    "condition",
+    ["partial", "pending", "pending_second", "private_pending", "invalid", "missing_plan"],
+)
 def test_settlement_activity_distinguishes_waiting_from_failure(settlement, monkeypatch, condition):
     """Partial replay and pending input retain prior results without inventing failure or recovery."""
     from open_energy_planner.activities.events import Events, Outcome
@@ -585,7 +588,7 @@ def test_settlement_activity_distinguishes_waiting_from_failure(settlement, monk
         events = Events(ActivityStore(engine), lambda: now)
         events.loop = asyncio.get_running_loop()
         runtime.events = events
-        if condition in ("partial", "pending"):
+        if condition in ("partial", "pending", "pending_second", "private_pending"):
             failed = await events.start("settlement", "settlement", "Earlier savings evaluation")
             await events.finish(failed, Outcome.FAILED, "Earlier rejected evidence.")
         cursor = events.cursor
@@ -599,12 +602,17 @@ def test_settlement_activity_distinguishes_waiting_from_failure(settlement, monk
                         return frames(after, end=end, limit=1)
 
                     patch.setattr(store, "frames", one_interval)
-                elif condition in ("pending", "invalid"):
+                elif condition in ("pending", "pending_second", "private_pending", "invalid"):
+                    prepare = runtime.bonus.prepare
 
                     def reject(*args, **kwargs):
                         """Keep expected evidence waiting distinct from invalid retained inputs."""
-                        if condition == "pending":
+                        if condition == "pending_second" and args[1].start == START:
+                            return prepare(*args, **kwargs)
+                        if condition in ("pending", "pending_second"):
                             raise PendingSettlement("Published price coverage is missing")
+                        if condition == "private_pending":
+                            raise PendingSettlement("PRIVATE_WAITING_EVIDENCE")
                         raise ValueError("Contract coverage is missing")
 
                     patch.setattr(runtime.bonus, "prepare", reject)
@@ -619,7 +627,42 @@ def test_settlement_activity_distinguishes_waiting_from_failure(settlement, monk
             ]
             assert len(terminal) == 1
             row = terminal[0]
-            waiting = condition in ("partial", "pending")
+            assert {
+                field: value for field, value in row["context"].items() if field in ("start", "end")
+            } == {
+                "start": START.isoformat(),
+                "end": (END if condition == "partial" else END + timedelta(minutes=15)).isoformat(),
+            }
+            waiting = condition in ("partial", "pending", "pending_second", "private_pending")
+            assert "PRIVATE_WAITING_EVIDENCE" not in json.dumps(row)
+            if condition == "partial":
+                assert "processed 1 of 1 measured intervals" in row["detail"]
+                assert "next background check continues with the next batch" in row["detail"]
+                assert "waiting_start" not in row["context"]
+            else:
+                assert (
+                    row["context"]["waiting_start"]
+                    == (END if condition == "pending_second" else START).isoformat()
+                )
+                assert (
+                    row["context"]["waiting_end"]
+                    == (
+                        END + timedelta(minutes=15) if condition == "pending_second" else END
+                    ).isoformat()
+                )
+                assert (
+                    f"processed {1 if condition == 'pending_second' else 0} of 2 measured intervals"
+                    in row["detail"]
+                )
+            if condition in ("pending", "pending_second"):
+                assert "Published electricity prices are missing" in row["detail"]
+                assert "next background check tries again" in row["detail"]
+                assert "price sources under Installation" in row["detail"]
+            elif condition == "invalid":
+                assert "No contract price rule covers" in row["detail"]
+                assert "dated rule under Contract" in row["detail"]
+            elif condition == "missing_plan":
+                assert "No original energy plan covers" in row["detail"]
             assert row["state"] == ("skipped" if waiting else "failed")
             assert not row["usable"] and not row["recovered"]
             assert events.health["settlement"]["state"] == ("unknown" if waiting else "degraded")
@@ -675,6 +718,72 @@ def test_repricing_failure_hides_private_exception_values(settlement, monkeypatc
     diagnostics = [row for row in caplog.records if row.name.endswith("savings.repricing")]
     assert diagnostics and all(row.exc_info is None for row in diagnostics)
     assert "ValueError" in diagnostics[0].getMessage()
+
+
+def test_repricing_activity_identifies_plan_period_and_preserves_safe_failure(
+    settlement, monkeypatch
+):
+    """Real stored activities identify the original horizon and explain financial failure without changing advice."""
+    import asyncio
+
+    from open_energy_planner.activities.events import Events
+    from open_energy_planner.savings import repricing
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+    from tests.app.savings.support.scenarios import START
+    from tests.app.savings.test_plan_repricing import original_plan
+
+    async def scenario():
+        """Keep both real attempts and the prior successful estimate when the next generation fails."""
+        _runtime, _store, docs, engine, plans = settlement
+        original = original_plan()
+        plans.state["plan"] = original
+        plans.save()
+        list_plans = plans.list_plans
+
+        def selected_plans(**options):
+            """Isolate the fully valued archive while preserving real repository reads and writes."""
+            return [row for row in list_plans(**options) if row["plan_id"] == original["plan_id"]]
+
+        monkeypatch.setattr(plans, "list_plans", selected_plans)
+        events = Events(ActivityStore(engine), lambda: END)
+        events.loop = asyncio.get_running_loop()
+        values = repricing.PlanValuations(docs, plans)
+        values.events = events
+        try:
+            await asyncio.to_thread(values.process, contract(buy="0.4"), None, END)
+            accepted = values.latest(original["plan_id"])["valuation"]
+
+            def reject(*args, **kwargs):
+                """Private archived evidence is never suitable activity guidance."""
+                raise ValueError("PRIVATE_ACTIVITY_REPRICING_EVIDENCE")
+
+            monkeypatch.setattr(repricing, "reprice", reject)
+            changed = contract(buy="0.5")
+            await asyncio.to_thread(values.process, changed, None, END)
+            await asyncio.to_thread(values.process, changed, None, END)
+            await events.flush()
+            rows = events.store.read(END - timedelta(days=1), END + timedelta(days=1))
+            assert len(rows) == 2
+            failed = next(row for row in rows if row["state"] == "failed")
+            assert failed["context"] == {
+                "label": "Archived plan",
+                "plan_id": "repricing-source",
+                "plan_generated_at": START.isoformat(),
+                "plan_strategy": "minimize cost",
+                "start": START.isoformat(),
+                "end": END.isoformat(),
+            }
+            assert (
+                "does not change the active energy plan or its device commands" in failed["detail"]
+            )
+            assert "under Planning" in failed["detail"] and "Contract settings" in failed["detail"]
+            assert "PRIVATE_ACTIVITY_REPRICING_EVIDENCE" not in json.dumps(rows)
+            assert values.latest(original["plan_id"])["valuation"] == accepted
+            assert plans.get_plan(original["plan_id"]) == original
+        finally:
+            await events.close()
+
+    asyncio.run(scenario())
 
 
 def test_old_repricing_failure_status_is_sanitized_without_rewriting_evidence(settlement):

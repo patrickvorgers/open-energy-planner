@@ -61,8 +61,13 @@ def app_site(request):
 
         async def serve():
             """Own the app lifecycle and close its forecast/solver tasks before deleting the temporary store."""
-            ingress = getattr(request, "param", None) == "ingress"
-            if getattr(request, "param", None) in ("savings", "savings_corrected"):
+            ingress = getattr(request, "param", None) in ("ingress", "activity_ingress")
+            if getattr(request, "param", None) in (
+                "savings",
+                "savings_corrected",
+                "activity_plans",
+                "activity_ingress",
+            ):
                 from tests.frontend.browser.savings_fixture import seed
 
                 seed(Path(directory), corrected=request.param == "savings_corrected")
@@ -170,7 +175,11 @@ def app_site(request):
                 from tests.frontend.browser.performance_fixture import seed
 
                 seed(Path(directory))
-            if getattr(request, "param", None) == "activity":
+            if getattr(request, "param", None) in (
+                "activity",
+                "activity_plans",
+                "activity_ingress",
+            ):
                 from tests.frontend.browser.activity_fixture import register as register_activity
 
                 register_activity(application)
@@ -196,7 +205,11 @@ def app_site(request):
                 )
             runner = web.AppRunner(application)
             await runner.setup()
-            if getattr(request, "param", None) == "activity":
+            if getattr(request, "param", None) in (
+                "activity",
+                "activity_plans",
+                "activity_ingress",
+            ):
                 from tests.frontend.browser.activity_fixture import seed as seed_activity
 
                 await seed_activity(application)
