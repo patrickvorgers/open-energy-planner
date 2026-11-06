@@ -1,5 +1,6 @@
 /** Type-specific configuration reuses versioned app settings and shared save controls. */
 import {SaveBar} from "./save-bar.js";
+import {confirmAction} from "./confirmation.js";
 import {bindApplianceSettingsNavigation} from "./appliance-settings-navigation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {useHomeAssistantTimezone, sourceName} from "./display.js";
@@ -164,9 +165,12 @@ find("thermal-settings").onsubmit = async event => {
 };
 find("cancel-thermal").onclick = () => saveState.refresh(() => load(editOriginId), {discard: true}).finally(syncEditor);
 find("refresh-thermal").onclick = () => { find("thermal-more").open = false; return saveState.refresh(load).finally(syncEditor); };
-find("remove-thermal").onclick = () => {
+find("remove-thermal").onclick = async () => {
     find("thermal-more").open = false;
-    if (saveState.busy || editing || !selected() || !confirm("Remove this boiler? Home Assistant sources and historical evidence are retained. Save settings to apply the removal.")) return;
+    const store = selected(), openingDraft = draft, openingId = selectedId;
+    if (saveState.busy || editing || !store) return;
+    if (!await confirmAction({title: "Remove electric boiler?", message: `${displayName(store)} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Choose Save settings to apply the removal. Cancel in the editor restores the saved settings.`, confirmLabel: "Remove boiler", returnFocus: find("thermal-more").querySelector("summary")})) return;
+    if (saveState.busy || editing || conflict || draft !== openingDraft || selectedId !== openingId || selected() !== store) return;
     editOriginId = selectedId; draft.stores = draft.stores.filter(store => store.id !== selectedId); selectedId = null; editing = true; renderEditor(); saveState.update();
 };
 find("refresh-thermal-evidence").onclick = refreshEvidence;

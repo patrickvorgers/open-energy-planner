@@ -1,6 +1,7 @@
 import {money, when, localDate, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {SaveBar} from "./save-bar.js";
+import {confirmAction} from "./confirmation.js";
 import {refreshNotifications} from "./notifications.js";
 /** Edit app-owned dated rules. Arithmetic and money validation stay on the server. */
 const base = document.querySelector('meta[name="oep-api-base"]').content;
@@ -545,12 +546,14 @@ find("price-rule-select").onchange = event => {
     editing = false; selectPeriod(Number(event.target.value));
 };
 find("edit-period").onclick = () => { editing = true; syncEditor(); };
-find("delete-period").onclick = () => {
+find("delete-period").onclick = async () => {
     find("contract-more").open = false;
     if (busy || saveState.busy || saveState.dirty) { say("Save or cancel your changes before deleting a rule."); return; }
     if (periods.length <= 1) { say("Keep at least one price rule. Edit it or add a replacement first."); return; }
     const selected = periods[selectedPeriod];
-    if (!confirm(`Delete the price rule starting ${selected.effective_from.value}? The preceding rule will extend until the next rule. Deleting the first rule removes coverage before the next rule. Save contract applies this change. Original plans remain unchanged.`)) return;
+    const openingVersion = version;
+    if (!await confirmAction({title: "Delete price rule?", message: `Price rule starting ${selected.effective_from.value} will be removed.\n\nThe preceding rule extends until the next rule. Deleting the first rule removes coverage before the next rule. Save contract applies this change. Original plans remain unchanged.`, confirmLabel: "Delete price rule", returnFocus: find("contract-more").querySelector("summary")})) return;
+    if (busy || saveState.busy || saveState.dirty || version !== openingVersion || periods[selectedPeriod] !== selected || periods.length <= 1) return;
     removeRule(periods, selected, "Price rule"); editing = true; syncEditor();
 };
 find("preview-contract").onclick = preview;
