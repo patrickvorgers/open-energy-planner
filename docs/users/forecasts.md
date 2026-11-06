@@ -10,6 +10,29 @@ The startup estimate includes the household's normal background use. There is no
 
 If a heat pump or another consumer is weather-sensitive, select that option under **Settings > Appliances** when appropriate. Weather sensitivity affects prediction. It does not authorize temperature control or cycle scheduling.
 
+For these selected devices, a nonlinear weather candidate learns from completed
+hourly consumption, outdoor temperature, local time, weekday, season and the
+preceding day's measured consumption. The measured weekday profile and Ridge
+regression remain available as simpler alternatives. Devices without weather
+sensitivity retain their existing forecasting behavior.
+
+After at least 28 days of usable paired consumption and temperature history,
+the candidate saves predictions for a future day. Later measurements score those
+original predictions. Three nonoverlapping complete days must each improve mean
+absolute hourly error against both simpler alternatives by more than 5.0% and
+0.001 kWh per hour. These are forward comparisons, not training fit or a random
+split. A tie retains the simpler model. The household composition still needs
+its existing independent decision comparison before activation.
+
+Under **Insights > Forecast quality > Devices**, expand **Current model and
+learning** to see the component's model, pending day, comparison errors and why
+the candidate is waiting or rejected. Missing measurements, missing weather,
+temperatures outside the observed training range or unusable model evidence
+keep the simpler forecast. Real cold spells and defrost peaks are not removed
+as statistical outliers. Weather-sensitive prediction does not introduce
+operating-mode, indoor-temperature or setpoint inputs that the existing history
+transport does not supply. Home Assistant retains comfort and safety control.
+
 Unreliable history can be excluded from training without changing Home Assistant Recorder. Too little usable history keeps a simpler model available. A notification about substantial excluded history calls for checking overlapping or incorrectly signed Energy sources, not editing recorded values to match a prediction.
 
 ## Solar production

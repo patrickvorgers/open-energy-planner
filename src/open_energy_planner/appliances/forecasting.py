@@ -177,7 +177,9 @@ class ConsumerForecasts:
         }
 
 
-def build_components(configuration, household_histories, temperatures, now, inputs):
+def build_components(
+    configuration, household_histories, temperatures, now, inputs, *, documents=None
+):
     """Build a whole-house challenger as residual plus disjoint consumer forecasts exactly once.
 
     The existing total-household model remains active until the shared decision
@@ -220,6 +222,13 @@ def build_components(configuration, household_histories, temperatures, now, inpu
             model, forecast = component(
                 single, samples, temperatures, now, item["weather_sensitive"]
             )
+            selection = None
+            if item["weather_sensitive"]:
+                from open_energy_planner.appliances.weather_learning import select_weather_model
+
+                model, forecast, selection = select_weather_model(
+                    single, samples, temperatures, now, model, forecast, documents
+                )
             baseline_forecast = forecast_document(
                 predict(single, samples, now, WeekdayProfile.fit(single, samples))
             )
@@ -233,8 +242,8 @@ def build_components(configuration, household_histories, temperatures, now, inpu
                 {
                     **item,
                     "status": "shadow_waiting_for_decision_evidence",
-                    "weather_features_used": isinstance(model, RidgeDemandModel)
-                    and model.temperature_enabled,
+                    "weather_features_used": bool(getattr(model, "temperature_enabled", False)),
+                    "weather_learning": selection,
                     "forecast": forecast_document(forecast),
                     "baseline_forecast": baseline_forecast,
                 }
