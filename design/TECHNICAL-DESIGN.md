@@ -1657,6 +1657,12 @@ changes and explicit refresh reset to page one. Pending reads disable page
 navigation, obsolete responses retain their existing generation guard, and
 failed reads clear the list rather than leaving another day's rows visible.
 
+The duration chart groups tooltip entries by calculation index, so either
+stacked section shows all its visible timing stages together with the total
+duration and publication outcome. The existing locale-aware seconds formatter
+limits tooltip and dialog times to one decimal place without changing saved
+timings, plotted values or the monetary precision of progress observations.
+
 The HiGHS adapter observes only the final financial search, after all service and optional consumption priorities. Solver-neutral `SolveSample` values carry elapsed seconds, financial incumbent objective and finite lower bound through the existing bounded worker. At most 256 samples preserve the first and latest while compacting intermediate observations. Final extraction adds an observation without inventing a first-candidate time when callbacks are absent. The actual solver start instant aligns observations with the whole calculation, including worker startup.
 
 The planning service retains the result alongside validation outcome. The serial coordinator invokes its optional observer after publication disposition, including failed and discarded attempts. Callback and persistence faults remain contained and cannot change priorities, the shared solver budget, independent validation or commands. Existing process deadlines remain authoritative.

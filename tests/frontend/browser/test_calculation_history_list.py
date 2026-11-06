@@ -177,3 +177,113 @@ def test_calculation_paging_waits_for_reads_and_recovers_from_failure(daily_hist
     page.get_by_label("Day", exact=True).fill("2020-01-02")
     expect(page.locator(".performance-row")).to_have_count(0)
     expect(page.locator("#performance-list")).to_contain_text("No completed calculations")
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+@pytest.mark.parametrize(
+    ("locale", "first_time", "further_time", "total_time", "unknown_time"),
+    [("en-US", "11.2", "15.6", "26.8", "8.5"), ("nl-NL", "11,2", "15,6", "26,8", "8,5")],
+)
+def test_stacked_calculation_tooltip_combines_sections_and_rounds_seconds(
+    daily_history, browser, locale, first_time, further_time, total_time, unknown_time
+):
+    """Either section reveals the same complete localized tooltip without rounding stored chart values."""
+    original_page, evidence, _, _ = daily_history
+    address = urlsplit(original_page.url)
+    url = f"{address.scheme}://{address.netloc}"
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    original_summary = original_page.request.get(
+        url + "/v1/planning-performance", headers=headers
+    ).json()["calculations"][0]
+    original_detail = original_page.request.get(
+        url + "/v1/planning-performance/" + original_summary["id"], headers=headers
+    ).json()
+    rows = [dict(row) for row in evidence["calculations"]]
+    rows[4].update(first_candidate_seconds=11.24982, duration_seconds=26.80314)
+    rows[5].update(first_candidate_seconds=None, duration_seconds=8.456789)
+    calculation = {
+        **original_detail,
+        **rows[4],
+        "progress": [
+            {"elapsed_seconds": 11.24982, "objective": 10.0, "best_bound": 9.8},
+            {"elapsed_seconds": 26.80314, "objective": 9.9, "best_bound": 9.8},
+        ],
+    }
+    detail_reads = []
+
+    def respond(route):
+        """Keep precise independent timings and route the clicked identity to its original detail contract."""
+        if urlsplit(route.request.url).path.endswith("/v1/planning-performance"):
+            route.fulfill(json={**evidence, "calculations": rows})
+        else:
+            detail_reads.append(route.request.url.rsplit("/", 1)[-1])
+            route.fulfill(json=calculation)
+
+    with browser.new_context(
+        viewport=original_page.viewport_size,
+        has_touch=original_page.viewport_size["width"] < 500,
+        locale=locale,
+        timezone_id="UTC",
+    ) as context:
+        page = context.new_page()
+        page.route("**/v1/planning-performance**", respond)
+        page.goto(url + "/planning-performance")
+        page.get_by_label("Installation API token").fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+        expect(page.locator("#performance-summary")).to_contain_text("96 completed calculations")
+
+        def hover_segment(canvas, dataset_index, row_index):
+            """Move the actual pointer into a rendered segment, then read the tooltip produced by Chart.js."""
+            canvas.scroll_into_view_if_needed()
+            point = canvas.evaluate(
+                """(canvas, indices) => {
+                    const bar = Chart.getChart(canvas).getDatasetMeta(indices[0]).data[indices[1]];
+                    return {x: bar.x, y: Number.isFinite(bar.base) ? (bar.y + bar.base) / 2 : bar.y};
+                }""",
+                [dataset_index, row_index],
+            )
+            box = canvas.bounding_box()
+            page.mouse.move(box["x"] + point["x"], box["y"] + point["y"])
+            page.wait_for_function(
+                """({canvas, index}) => {const tooltip = Chart.getChart(canvas).tooltip;
+                    return tooltip.opacity > 0 && tooltip.dataPoints.some(item => item.dataIndex === index);} """,
+                arg={"canvas": canvas.element_handle(), "index": row_index},
+            )
+            return canvas.evaluate(
+                """canvas => {const tooltip = Chart.getChart(canvas).tooltip;
+                    return {body: tooltip.body.flatMap(item => item.lines), after: tooltip.afterBody,
+                            title: tooltip.title};} """
+            )
+
+        canvas = page.locator("#performance-chart")
+        first = hover_segment(canvas, 0, 4)
+        assert first["body"] == [
+            f"First candidate observed: {first_time} s",
+            f"Further calculation: {further_time} s",
+        ]
+        assert first["after"] == [f"Total calculation: {total_time} s", "Plan available"]
+        assert hover_segment(canvas, 1, 4) == first
+        assert (
+            canvas.evaluate("canvas => Chart.getChart(canvas).data.datasets[0].data[4].y")
+            == 11.24982
+        )
+        if locale == "nl-NL":
+            captures = Path("results/ci/calculation-history-list")
+            canvas.screenshot(
+                path=str(captures / f"combined-tooltip-{page.viewport_size['width']}.png")
+            )
+        unknown = hover_segment(canvas, 2, 5)
+        assert unknown["body"] == [f"First time unknown: {unknown_time} s"]
+        assert unknown["after"] == [
+            f"Total calculation: {unknown_time} s",
+            "First candidate time not recorded.",
+            "Plan available",
+        ]
+        hover_segment(canvas, 0, 4)
+        page.mouse.down()
+        page.mouse.up()
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_be_visible()
+        assert detail_reads == ["synthetic-calculation-004"]
+        improvement = hover_segment(page.locator("#improvement-chart"), 0, 0)
+        assert improvement["title"] == [f"{first_time} s"]

@@ -20,6 +20,12 @@ dialog.
 
 The stacked bars separate the first observed financial candidate from further calculation time when both were recorded. An unknown first-candidate time produces a total-only bar. Missing historical progress cannot be reconstructed from the total duration.
 
+Hover over either section of a bar to see one tooltip for that calculation,
+including both recorded stages, the total duration and the publication result.
+Times use at most one decimal place in your browser's number format. Missing
+first-candidate times remain explicitly unrecorded. Clicking the bar still opens
+the full calculation dialog. Its progress tooltip uses the same time precision.
+
 [![Calculation history with three synthetic durations, including a budget-limited result and an unknown first-candidate time.](../assets/planning-performance.png)](../assets/planning-performance.png)
 
 *The first two bars separate the observed first candidate from further calculation. The third has no recorded first time. These are synthetic history records, not a solver benchmark.*
