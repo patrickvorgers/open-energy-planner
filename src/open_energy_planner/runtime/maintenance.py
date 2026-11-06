@@ -15,7 +15,7 @@ from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.frontend.assets import is_public
 from open_energy_planner.frontend.assets import register as register_assets
 from open_energy_planner.ingress import INGRESS_PEER, prefix
-from open_energy_planner.runtime.diagnostics.logging import failure_trace
+from open_energy_planner.runtime.diagnostics.logging import failure_trace, request_error_message
 from open_energy_planner.storage.adapters.lifecycle.files import BootstrapDurabilityError
 from open_energy_planner.storage.adapters.lifecycle.maintenance import (
     JOURNAL_FILE,
@@ -554,7 +554,18 @@ def create_managed_app(directory, token, *, factory, **options):
                 else:
                     raise ValueError
             except DestinationCheckError as error:
-                raise web.HTTPBadRequest(text=str(error)) from None
+                raise web.HTTPBadRequest(
+                    text=request_error_message(
+                        error,
+                        logger=logging.getLogger(__name__),
+                        operation="Database destination check",
+                        safe_messages=(
+                            "Source and destination are the same database. Choose a different destination.",
+                            "Connection check failed. Check the destination, credentials and database permissions. Source and destination must differ.",
+                        ),
+                        fallback="Connection check failed. Check the destination, credentials and database permissions. Source and destination must differ.",
+                    )
+                ) from None
             except OSError:
                 if host.bootstrap_error:
                     await host.stop_runtime()
