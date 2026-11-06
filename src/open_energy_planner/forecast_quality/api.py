@@ -149,11 +149,18 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                             next_midnight = datetime.combine(
                                 local_day + timedelta(days=1), datetime.min.time(), ZoneInfo(zone)
                             )
+                            forecast_start, forecast_end = day_window(
+                                next_midnight.date().isoformat(), zone
+                            )
                             events.scheduled(
                                 "forecast-quality",
                                 "quality",
                                 "Archive daily forecast",
                                 next_midnight,
+                                context={
+                                    "start": forecast_start.isoformat(),
+                                    "end": forecast_end.isoformat(),
+                                },
                             )
                         cancellation = await complete_write(daily.observe, now, zone, context)
                         if cancellation:

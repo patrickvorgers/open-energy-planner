@@ -52,11 +52,11 @@ def controlled_poll(monkeypatch):
     return clock, sleeps, resume
 
 
-def solar_app(runtime, *, live=None, weather_factory=None):
+def solar_app(runtime, *, live=None, weather_factory=None, membership=None):
     """Register the actual solar lifecycle while leaving unrelated HTTP composition inactive."""
     app = web.Application()
     app[NOTIFICATIONS] = NotificationCenter()
-    solar_api.register(app, runtime, live, asyncio.Lock(), None, None, weather_factory, None)
+    solar_api.register(app, runtime, live, asyncio.Lock(), None, None, weather_factory, membership)
     return app
 
 
@@ -237,12 +237,23 @@ def test_disabled_weather_producer_withdraws_health_and_schedule(tmp_path, monke
         app = solar_app(runtime, live=live, weather_factory=factory)
         events = Events(ActivityStore(runtime.store.documents.engine), lambda: START)
         app[EVENTS] = events
+        cursor = events.cursor
         lifecycle = app.cleanup_ctx[1](app)
         await anext(lifecycle)
         try:
             await asyncio.wait_for(sleeps.get(), 3)
             assert events.health["solar-weather"]["state"] == "available"
             assert "solar-weather:weather" in events.schedules
+            assert events.schedules["solar-weather:weather"]["context"] == {
+                "label": "Solar production"
+            }
+            weather_events = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity"
+            ]
+            assert weather_events
+            assert all(row["context"] == {"label": "Solar production"} for row in weather_events)
             runtime.configure(plant(count=0))
             resume.put_nowait(None)
             await asyncio.wait_for(sleeps.get(), 3)
@@ -320,8 +331,9 @@ def test_changed_installation_discards_weather_without_recovery(tmp_path, monkey
 
 
 @pytest.mark.parametrize("failure_minute, expected_minute", [(0, 5), (10, 15), (14, 15), (15, 20)])
+@pytest.mark.parametrize("named_sources", [False, True])
 def test_failed_solar_forecast_exposes_its_known_retry_without_a_usable_forecast(
-    tmp_path, monkeypatch, failure_minute, expected_minute
+    tmp_path, monkeypatch, failure_minute, expected_minute, named_sources
 ):
     """Advertise the next admitted attempt, including a new quarter before the old key's backoff."""
     from open_energy_planner.activities.api import EVENTS
@@ -329,7 +341,20 @@ def test_failed_solar_forecast_exposes_its_known_retry_without_a_usable_forecast
     from open_energy_planner.storage.adapters.activities import ActivityStore
 
     runtime = SolarRuntime(make_store(tmp_path, SolarStore))
-    runtime.configure(plant())
+    runtime.configure(plant(count=2))
+    membership = (
+        SimpleNamespace(
+            value={
+                "entities": [
+                    {"entity_id": "sensor.pv0", "energy_name": "East roof"},
+                    {"entity_id": "sensor.pv1", "device_name": "West roof"},
+                ]
+            }
+        )
+        if named_sources
+        else None
+    )
+    expected_context = {"label": "East roof, West roof" if named_sources else "Solar production"}
     failed_at = START.replace(hour=12, minute=failure_minute)
     expected = START.replace(hour=12, minute=expected_minute)
     runtime.set_weather(SITE, weather(failed_at))
@@ -343,9 +368,10 @@ def test_failed_solar_forecast_exposes_its_known_retry_without_a_usable_forecast
         clock, sleeps, _resume = controlled_poll(monkeypatch)
         clock[0] = failed_at
         monkeypatch.setattr(solar_api, "worker", reject)
-        app = solar_app(runtime)
+        app = solar_app(runtime, membership=membership)
         events = Events(ActivityStore(runtime.store.documents.engine), lambda: clock[0])
         app[EVENTS] = events
+        cursor = events.cursor
         lifecycle = app.cleanup_ctx[0](app)
         await anext(lifecycle)
         try:
@@ -353,6 +379,14 @@ def test_failed_solar_forecast_exposes_its_known_retry_without_a_usable_forecast
             assert runtime.forecast is None
             assert runtime.retry_after == failed_at + timedelta(minutes=5)
             assert events.schedules["solar:training"]["due_at"] == expected.isoformat()
+            assert events.schedules["solar:training"]["context"] == expected_context
+            forecast_events = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity"
+            ]
+            assert forecast_events
+            assert all(row["context"] == expected_context for row in forecast_events)
             assert runtime.job(expected - timedelta(microseconds=1)) is None
             assert runtime.job(expected) is not None
         finally:

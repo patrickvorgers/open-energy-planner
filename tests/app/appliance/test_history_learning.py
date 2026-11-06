@@ -431,6 +431,7 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
                 if row["topic"] == "activity" and row["value"]["state"] != "running"
             ]
             assert len(terminal) == 1
+            assert terminal[0]["context"] == {"label": "Washer"}
             assert terminal[0]["state"] == "skipped"
             assert not terminal[0]["usable"] and not terminal[0]["recovered"]
             assert ("appliances", "history") in events.failed

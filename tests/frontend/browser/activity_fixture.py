@@ -56,11 +56,112 @@ def register(app):
             app[EVENTS].availability(body["owner"], Health(body["state"]), body["detail"])
         return web.json_response({"accepted": True})
 
+    async def contexts(_request):
+        """Publish independent synthetic subjects and two failed plan valuations without hiding either."""
+        events = app[EVENTS]
+        start = datetime(2026, 10, 25, 0, 0, 17, tzinfo=UTC)
+        end = start + timedelta(hours=2)
+        subjects = [
+            (
+                "demand",
+                "training",
+                "Update consumption forecast",
+                {"label": "Household consumption"},
+            ),
+            ("solar", "training", "Update solar forecast", {"label": "East roof, West roof"}),
+            ("appliances", "history", "Learn appliance cycles", {"label": "Laundry <img src=x>"}),
+            ("models", "training", "Compare forecast models", {"label": "East roof"}),
+            (
+                "forecast-quality",
+                "quality",
+                "Archive daily forecast",
+                {"start": start.isoformat(), "end": end.isoformat()},
+            ),
+            (
+                "planning",
+                "planning",
+                "Calculate energy plan",
+                {"start": start.isoformat(), "end": end.isoformat()},
+            ),
+            (
+                "settlement",
+                "settlement",
+                "Evaluate measured savings",
+                {"start": start.isoformat(), "end": end.isoformat()},
+            ),
+        ]
+        for owner, kind, title, context in subjects:
+            if owner == "settlement":
+                context.update(
+                    waiting_start=(start + timedelta(hours=1)).isoformat(),
+                    waiting_end=end.isoformat(),
+                )
+            identity = await events.start(owner, kind, title, context=context)
+            await events.finish(
+                identity,
+                Outcome.SKIPPED,
+                "This attempt processed 1 of 2 measured intervals. Published electricity prices are missing for the indicated interval. The next background check tries again. Previous published financial results remain available."
+                if owner == "settlement"
+                else "The captured period is being investigated.",
+            )
+        for offset in (0, 1):
+            identity = await events.start(
+                "contract-valuations",
+                "settlement",
+                "Recalculate plan value",
+                context={
+                    "label": "Archived plan",
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "plan_generated_at": (
+                        start - timedelta(days=1) + timedelta(hours=10, minutes=offset * 15)
+                    ).isoformat(),
+                    "plan_strategy": "minimize cost",
+                    "plan_id": f"example-plan-{offset}",
+                },
+            )
+            await events.finish(
+                identity,
+                Outcome.FAILED,
+                "Could not update the financial estimate for this archived plan. Its last successful estimate is retained. "
+                "This does not change the active energy plan or its device commands. "
+                "Open the corresponding plan under Planning to check its cost information and review Contract settings. "
+                "If the cause is still unclear, report this activity for investigation.",
+            )
+        events.scheduled(
+            "solar",
+            "training",
+            "Update solar forecast",
+            datetime.now(UTC) + timedelta(minutes=30),
+            context={"label": "East roof, West roof"},
+        )
+        await events.flush()
+        return web.json_response({"accepted": True})
+
+    async def plan_link(request):
+        """Publish a synthetic correction referencing an independently seeded real archive."""
+        events = app[EVENTS]
+        identity = await events.start(
+            "contract-valuations",
+            "settlement",
+            "Recalculate plan value",
+            context=await request.json(),
+        )
+        await events.finish(
+            identity,
+            Outcome.FAILED,
+            "The prior estimate is retained. View the original plan to inspect its evidence.",
+        )
+        await events.flush()
+        return web.json_response({"accepted": True})
+
     app.router.add_post("/_test/activity-burst", burst)
     app.router.add_post("/_test/activity", live)
     app.router.add_post("/_test/activity-history", history_state)
     app.router.add_post("/_test/activity-health", health)
     app.router.add_post("/_test/activity-finish", finish)
+    app.router.add_post("/_test/activity-contexts", contexts)
+    app.router.add_post("/_test/activity-plan", plan_link)
 
 
 async def seed(app):
@@ -87,13 +188,19 @@ async def seed(app):
             events.clock = lambda activity_index=activity_index: (
                 seed_time - timedelta(minutes=110 - activity_index)
             )
-            identity = await events.start("prices:nord_pool", "prices", "Fetch published prices")
+            owner, title, provider = "prices:nord_pool", "Fetch published prices", "Nord Pool"
+            if activity_index == 103:
+                owner, title, provider = "prices:jeroen_nl:NL", "Fetch price forecast", "Jeroen.nl"
+            elif activity_index == 102:
+                owner, provider = "prices:epex_predictor:NL", "EpexPredictor"
+                title = "Fetch price forecast for the next planning horizon and retain previously accepted prices"
+            identity = await events.start(owner, "prices", title)
             if activity_index == 50:
                 continue
             await events.finish(
                 identity,
                 Outcome.COMPLETED,
-                "Adapter: Nord Pool. Market: NL. Delivery-day prices accepted.",
+                f"Adapter: {provider}. Market: NL. Price data accepted.",
                 usable=True,
             )
         events.clock = lambda: seed_time - timedelta(minutes=3)

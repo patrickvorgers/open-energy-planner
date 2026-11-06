@@ -1,5 +1,5 @@
 /** Read-only activity history with installation-local dates and cursor-based live updates. */
-import {when, localDate, useHomeAssistantTimezone} from "./display.js";
+import {when, localDate, useHomeAssistantTimezone, planName} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {connectEvents, observeEvents} from "./events.js";
 import {priceSourceName} from "./price-sources.js";
@@ -28,6 +28,42 @@ async function api(path) {
     }
 }
 
+/** Add an existing readable source name without parsing details or exposing unknown technical IDs. */
+function activityTitle(row) {
+    const [module, source] = row.owner.split(":");
+    const provider = module === "prices" && source ? priceSourceName(source) : "";
+    const context = row.context || {};
+    const subject = context.plan_generated_at ? `Plan ${planName({generated_at:context.plan_generated_at, strategy:context.plan_strategy})}` : context.label;
+    const parts = [subject || (provider !== source ? provider : "")].filter(Boolean);
+    if (context.start && context.end) parts.push(`${when(context.start)} to ${when(context.end)}`);
+    return parts.length ? `${row.title}: ${parts.join(", ")}` : row.title;
+}
+
+/** Offer owned read-only destinations, never a URL supplied by an event or provider. */
+function activityLink(row) {
+    const owner = row.owner.split(":")[0];
+    const destinations = {
+        prices:["overview#planning", "View planning and prices"],
+        planning:["overview#planning", "View planning"],
+        settlement:["overview#savings", "View savings"],
+        "contract-valuations":["contract", "View contract"],
+        appliances:["appliances", "View appliance profiles"],
+        demand:["quality", "View forecast quality"],
+        solar:["quality", "View forecast quality"],
+        models:["quality", "View forecast quality"],
+        "forecast-quality":["quality", "View forecast quality"],
+        "solar-weather":["quality", "View forecast quality"],
+        "temperature-weather":["quality", "View forecast quality"],
+    };
+    const destination = row.context?.plan_id ? ["overview#planning", "View this plan"] : Object.hasOwn(destinations, owner) ? destinations[owner] : null;
+    if (!destination) return null;
+    const link = document.createElement("a"), target = new URL(base + destination[0], location.href);
+    if (row.context?.plan_id) target.searchParams.set("plan", row.context.plan_id);
+    if (new URL(location.href).searchParams.get("embedded") === "1") target.searchParams.set("embedded", "1");
+    link.href = target.href; link.textContent = destination[1];
+    return link;
+}
+
 /** Use inert text and native disclosure so every outcome remains keyboard accessible. */
 function activityRow(row) {
     const item = document.createElement("details"), summary = document.createElement("summary"), time = document.createElement("time"), title = document.createElement("strong"), type = document.createElement("span"), state = document.createElement("span");
@@ -35,14 +71,20 @@ function activityRow(row) {
     item.dataset.activityId = row.id;
     time.dateTime = row.started_at;
     time.textContent = clock(row.started_at);
-    title.textContent = row.title;
+    title.textContent = activityTitle(row);
+    title.title = title.textContent;
     type.className = "activity-type"; type.textContent = label(row.kind);
     state.className = "activity-state"; state.dataset.state = row.state;
     state.textContent = row.recovered ? "Recovered" : label(row.state);
     summary.append(time, title, type, state); item.append(summary);
-    for (const text of [row.detail, `Module: ${moduleName(row.owner)}`, row.finished_at ? `Finished: ${when(row.finished_at)}` : "In progress"]) {
+    for (const text of [title.textContent, row.detail, `Module: ${moduleName(row.owner)}`, row.finished_at ? `Finished: ${when(row.finished_at)}` : "In progress"]) {
         const paragraph = document.createElement("p"); paragraph.textContent = text; item.append(paragraph);
     }
+    if (row.context?.waiting_start && row.context.waiting_end) {
+        const paragraph = document.createElement("p"); paragraph.textContent = `Processing stopped at: ${when(row.context.waiting_start)} to ${when(row.context.waiting_end)}`; item.append(paragraph);
+    }
+    const link = activityLink(row);
+    if (link) { const paragraph = document.createElement("p"); paragraph.append(link); item.append(paragraph); }
     return item;
 }
 
@@ -114,7 +156,7 @@ function render() {
     }
     const upcoming = scheduled.filter(row => Date.parse(row.due_at) >= Date.now() && Date.parse(row.due_at) <= Date.now() + 6*60*60*1000 && (!kind || row.kind === kind)).sort((left,right) => left.due_at.localeCompare(right.due_at));
     find("activity-upcoming").replaceChildren(...upcoming.map(row => {
-        const item = document.createElement("p"); item.className = "activity-row"; item.textContent = `${clock(row.due_at)}: ${row.title}`; return item;
+        const item = document.createElement("p"); item.className = "activity-row"; item.textContent = `${clock(row.due_at)}: ${activityTitle(row)}`; return item;
     }));
     if (!upcoming.length) find("activity-upcoming").textContent = "No known scheduled work in this window.";
     const modules = new Map();

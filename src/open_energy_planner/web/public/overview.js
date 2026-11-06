@@ -1,7 +1,7 @@
 // Read-only views never activate an archived plan or reset the reference scenario.
 import "./chart_theme.js";
 import {calendarDays, calendarTime} from "./chart_days.js";
-import {money, when, localDate, localInstant, nextDate, percentage, optionLabel, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
+import {money, when, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {energyBalances, quarterBalanceSeries, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
@@ -10,6 +10,8 @@ const CONNECTED_MESSAGE = "Connected: Historical views never change active comma
 const PLAN_REFRESH_MILLISECONDS = 15000;
 const PLAN_READ_TIMEOUT_MILLISECONDS = 5000;
 const base = document.querySelector('meta[name="oep-api-base"]').content;
+let requestedPlan = new URL(location.href).searchParams.get("plan");
+let selectedLinkedPlan = false;
 let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, periodRequest = 0;
 let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
 let planReadPending = false;
@@ -19,7 +21,6 @@ const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
 /** Share numeric precision across evidence cards, tooltip columns and chart axes. Units remain separate. */
 const valueText = (value, unit) => unit === "%" ? percentage(value, false) : unit === "W" ? Math.round(value).toLocaleString() : (isMoneyUnit(unit) ? money : number)(value);
-const strategies = {"minimize cost": "Minimize cost", "minimize consumption": "Minimize consumption"};
 const statuses = {optimal: "Optimal", feasible: "Feasible"};
 /** Read authenticated JSON with owned recovery messages. Never expose transport or parser details. */
 async function api(path, signal) {
@@ -240,7 +241,7 @@ function applyRange() {
     const first = inspectSteps[0]?.start, end = inspectSteps.at(-1)?.end;
     const now = Date.now();
     const currentQuarter = Math.floor(now / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
-    const currentPlan = $("plan-version").selectedIndex === 0 && first <= now;
+    const currentPlan = !selectedLinkedPlan && $("plan-version").selectedIndex === 0 && first <= now;
     const start = first == null ? undefined : currentPlan ? currentQuarter : Math.floor(first / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
     for (const [id, instance] of charts) {
         if (["savings-chart", "realization-chart"].includes(id)) continue;
@@ -376,6 +377,8 @@ async function showPlan(signal, background = false) {
         const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison`, signal);
         if (request !== selectionRequest) return false;
         const plan = data.plan;
+        const selectedOption = [...$("plan-version").options].find(option => option.value === id);
+        if (selectedOption) selectedOption.textContent = planName(plan);
         const comparison = data.comparison, valuation = data.valuation;
         const withoutBattery = data.scenarios?.without_battery;
         const selfConsumption = data.scenarios?.self_consumption;
@@ -391,7 +394,7 @@ async function showPlan(signal, background = false) {
         $("plan-evidence-status").textContent = planEvidence?.issue || "";
         evidenceCards($("plan-evidence"), planEvidence?.summary || []);
         const currency = plan.currency || "";
-        $("plan-description").textContent = `Generated: ${when(plan.generated_at)}: Strategy: ${strategies[plan.strategy] || "Unknown"}: Status: ${statuses[plan.solution_status] || "Unknown"}: Advice does not prove execution`;
+        $("plan-description").textContent = `Generated: ${when(plan.generated_at)}: Strategy: ${planStrategy(plan.strategy)}: Status: ${statuses[plan.solution_status] || "Unknown"}: Advice does not prove execution`;
         if (plan.consumption_objective) {
             const objective = plan.consumption_objective;
             $("plan-description").textContent += `: Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
@@ -563,10 +566,16 @@ async function plans(older = false, signal) {
     const data = await api(`v1/plans?limit=20${older && cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`, signal);
     if (!older) $("plan-version").replaceChildren();
     for (const plan of data.plans) {
-        const option = document.createElement("option"); option.value = plan.plan_id; option.textContent = `${when(plan.generated_at)}: ${strategies[plan.strategy] || "Unknown"}`; $("plan-version").append(option);
+        const option = document.createElement("option"); option.value = plan.plan_id; option.textContent = planName(plan); $("plan-version").append(option);
     }
     cursor = data.next_before; $("older-plans").hidden = !cursor;
-    if (!older) return showPlan(signal);
+    if (!older && requestedPlan) {
+        const loaded = await selectOriginal(requestedPlan, signal);
+        if (loaded) requestedPlan = null;
+        else $("overview-status").textContent = "The linked plan could not be loaded. Check the connection and choose Refresh to retry. No other plan has been selected.";
+        return loaded;
+    }
+    if (!older) { selectedLinkedPlan = false; return showPlan(signal); }
 }
 /** Follow completed publications while preserving a deliberately selected historical plan. */
 async function refreshLatestPlan() {
@@ -577,13 +586,13 @@ async function refreshLatestPlan() {
     try {
         const data = await api("v1/plans?limit=1", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), latest = data.plans[0];
         if (!latest || overviewLoads || previousLatest !== (selector.options[0]?.value || "")) return;
-        const selected = selector.value, followingLatest = selected === previousLatest;
+        const selected = selector.value, followingLatest = !selectedLinkedPlan && selected === previousLatest;
         if (latest.plan_id !== previousLatest) {
             priceRead ??= currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
             [...selector.options].find(option => option.value === latest.plan_id)?.remove();
             const option = document.createElement("option");
             option.value = latest.plan_id;
-            option.textContent = `${when(latest.generated_at)}: ${strategies[latest.strategy] || "Unknown"}`;
+            option.textContent = planName(latest);
             selector.prepend(option);
             selector.value = followingLatest ? latest.plan_id : selected;
         }
@@ -672,11 +681,14 @@ function renderVersions(selected) {
     $("evaluation-version").value = selected;
 }
 /** Open original advice only. Do not issue a control or planning request. */
-function selectOriginal(id) {
+function selectOriginal(id, signal) {
     if (![...$("plan-version").options].some((o) => o.value === id)) {
-        const option = document.createElement("option"); option.value = id; option.textContent = `Original plan ${id}`; $("plan-version").append(option);
+        const option = document.createElement("option"); option.value = id; option.textContent = "Selected archived plan"; $("plan-version").append(option);
     }
-    location.hash = "planning"; view(); $("plan-version").value = id; showPlan(); $("plan-heading").scrollIntoView({behavior: "smooth"});
+    selectedLinkedPlan = true;
+    location.hash = "planning"; view(); $("plan-version").value = id;
+    const loaded = showPlan(signal); $("plan-heading").scrollIntoView({behavior: "smooth"});
+    return loaded;
 }
 /**
  * Read current saved tariffs only without a selected plan. Late preview reads never replace plan prices.
@@ -750,7 +762,7 @@ window.addEventListener("pageshow", event => {
     startPlanRefresh(); applyRange(); refreshLatestPlan();
 });
 $("overview-connect").addEventListener("submit", (event) => { event.preventDefault(); token = $("overview-token").value; $("overview-token").value = ""; load(); });
-$("plan-version").addEventListener("change", () => showPlan());
+$("plan-version").addEventListener("change", () => { selectedLinkedPlan = false; showPlan(); });
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
 $("period").addEventListener("submit", (event) => { event.preventDefault(); savings(); });
 $("evaluation-version").addEventListener("change", () => savings());

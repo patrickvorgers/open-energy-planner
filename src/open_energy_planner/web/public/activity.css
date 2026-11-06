@@ -13,7 +13,7 @@
 .activity-row > summary:focus-visible { outline:2px solid var(--oep-teal,#21836d); outline-offset:-2px; }
 .activity-row > summary:hover { background:#e5f0f5; }
 .activity-row[open] > summary { background:#e5f0f5; }
-.activity-row summary strong { font-weight:550; }
+.activity-row summary strong { font-weight:550; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .activity-row time { font-variant-numeric:tabular-nums; color:var(--oep-muted); font-size:12px; white-space:nowrap; }
 .activity-type { color:var(--oep-muted); font-size:12px; }
 .activity-state { display:inline-flex; align-items:center; gap:6px; color:var(--oep-muted); font-size:12px; white-space:nowrap; }

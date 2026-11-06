@@ -118,6 +118,10 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(
             ]
             assert terminal[-1]["state"] == ("skipped" if location_changed else "completed")
             assert terminal[-1]["recovered"] is not location_changed
+            assert all(row["context"] == {"label": "Household consumption"} for row in terminal)
+            assert events.schedules["temperature-weather:weather"]["context"] == {
+                "label": "Household consumption"
+            }
             configuration = runtimes[0].configuration
             runtimes[0].configuration = None
             resume.put_nowait(None)
