@@ -89,7 +89,7 @@ class RadiationArchive:
         """Borrow solar documents and require an explicitly opened satellite adapter."""
         self.documents, self.source = documents, None
         self.lock = asyncio.Lock()
-        self.failed_key, self.retry_after = None, None
+        self.retry_after = {}
         self.status = BackgroundLog(logging.getLogger(__name__), "Satellite irradiance refresh")
 
     def save(self, key, receipt):
@@ -117,16 +117,19 @@ class RadiationArchive:
         async with self.lock:
             exists = await asyncio.to_thread(self.documents.exists, key)
             cached = await asyncio.to_thread(self.documents.read, key) if exists else {}
-            if cached and now < datetime.fromisoformat(cached["received_at"]) + timedelta(
-                minutes=SATELLITE_REFRESH_MINUTES
-            ):
-                return cached, None
+            try:
+                if cached and now < datetime.fromisoformat(cached["received_at"]) + timedelta(
+                    minutes=SATELLITE_REFRESH_MINUTES
+                ):
+                    return cached, None
+            except (KeyError, TypeError, ValueError, OverflowError):
+                cached = {}
             if self.source is None:
                 return (
                     cached,
                     "Satellite observations are unavailable. Refresh after the weather connection is restored.",
                 )
-            if key == self.failed_key and self.retry_after and now < self.retry_after:
+            if key in self.retry_after and now < self.retry_after[key]:
                 return (
                     cached,
                     "Satellite refresh failed. Retained observations are shown. Retry after ten minutes.",
@@ -145,10 +148,7 @@ class RadiationArchive:
                 if cancellation:
                     raise cancellation
             except (ClientError, OSError, TypeError, ValueError, TimeoutError):
-                self.failed_key, self.retry_after = (
-                    key,
-                    now + timedelta(minutes=SATELLITE_REFRESH_MINUTES),
-                )
+                self.retry_after[key] = now + timedelta(minutes=SATELLITE_REFRESH_MINUTES)
                 self.status.exception(
                     "Forecast quality retains earlier satellite evidence. Energy evaluation and planning continue. Refresh again after ten minutes.",
                     expected=True,
@@ -157,5 +157,6 @@ class RadiationArchive:
                     cached,
                     "Satellite refresh failed. Retained observations are shown. Retry after ten minutes.",
                 )
+            self.retry_after.pop(key, None)
             self.status.success("Satellite observations are available for forecast quality.")
             return receipt, None
