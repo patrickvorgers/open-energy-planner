@@ -2,6 +2,7 @@
 import {when, localDate, useHomeAssistantTimezone} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {connectEvents, observeEvents} from "./events.js";
+import {priceSourceName} from "./price-sources.js";
 bindSettingsActions();
 const find = id => document.getElementById(id);
 const base = document.querySelector('meta[name="oep-api-base"]').content;
@@ -44,6 +45,34 @@ function activityRow(row) {
     return item;
 }
 
+/** Keep each source's own state and safe explanation available inside its group. */
+function moduleStatus(row, name) {
+    const item = document.createElement("details"), title = document.createElement("summary"), detail = document.createElement("p");
+    item.className = "activity-row"; title.textContent = `${name}: ${label(row.state)}`; detail.textContent = row.detail; item.append(title, detail); return item;
+}
+
+/** Keep existing weather owner identifiers stable while showing their shared responsibility. */
+function modulePath(owner) {
+    if (owner === "solar-weather") return ["weather", "solar"];
+    if (owner === "temperature-weather") return ["weather", "temperature"];
+    return owner.split(":");
+}
+
+/** Nest producer namespaces without inventing an aggregate health state. */
+function moduleBranch(node, path) {
+    const part = path.at(-1), name = label(path.length === 2 && path[0] === "prices" ? priceSourceName(part) : part);
+    if (!node.children.size) return moduleStatus(node.row, name);
+    const group = document.createElement("section"), heading = document.createElement(`h${Math.min(path.length + 2, 6)}`), children = document.createElement("ul");
+    group.className = "activity-health-group"; group.setAttribute("aria-label", name); heading.textContent = name; children.className = "activity-list";
+    if (node.row) {
+        const overview = document.createElement("li"); overview.append(moduleStatus(node.row, "Overview")); children.append(overview);
+    }
+    for (const [key, child] of [...node.children].sort(([left], [right]) => left.localeCompare(right))) {
+        const item = document.createElement("li"); item.append(moduleBranch(child, [...path, key])); children.append(item);
+    }
+    group.append(heading, children); return group;
+}
+
 /** Show current work only on its actual local start day. */
 function render() {
     find("activity-status").textContent = loadProblem || liveProblem || historyProblem || (loading ? "Loading activity history." : "");
@@ -81,10 +110,16 @@ function render() {
         const item = document.createElement("p"); item.className = "activity-row"; item.textContent = `${clock(row.due_at)}: ${row.title}`; return item;
     }));
     if (!upcoming.length) find("activity-upcoming").textContent = "No known scheduled work in this window.";
-    find("activity-health").replaceChildren(...health.map(row => {
-        const item = document.createElement("details"), title = document.createElement("summary"), detail = document.createElement("p");
-        item.className = "activity-row"; title.textContent = `${moduleName(row.owner)}: ${label(row.state)}`; detail.textContent = row.detail; item.append(title, detail); return item;
-    }));
+    const modules = new Map();
+    for (const row of health) {
+        let children = modules, node;
+        for (const part of modulePath(row.owner)) {
+            if (!children.has(part)) children.set(part, {children: new Map()});
+            node = children.get(part); children = node.children;
+        }
+        node.row = row;
+    }
+    find("activity-health").replaceChildren(...[...modules].sort(([left], [right]) => left.localeCompare(right)).map(([key, node]) => moduleBranch(node, [key])));
 }
 
 /** A late page response must not replace newer live outcomes for the same execution. */

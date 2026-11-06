@@ -44,6 +44,13 @@ Configuration or missing inputs can change those times. **Module status**
 shows the module's current assessment. An earlier completed activity does not
 prove that its data is still usable.
 
+Modules with related parts appear as a hierarchy. **Prices** groups adapters,
+with market areas beneath each adapter. **Weather** groups solar and temperature
+weather. Each part retains its own status and explanation. An **Overview** row
+shows a producer's own status when it also has child modules. It is not a combined
+assessment of those children. One unavailable adapter does not mean that other
+price sources are unavailable. Empty groups disappear automatically.
+
 Activity outcomes and actionable notifications are separate. A failed activity
 does not automatically mean equipment needs attention. Follow a notification's
 own explanation and action. Activity is not proof that physical equipment ran.

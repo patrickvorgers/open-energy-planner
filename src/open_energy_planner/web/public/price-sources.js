@@ -2,6 +2,7 @@ import {money, when} from "./display.js";
 
 const names = {energy_price_forecast_eu: "EnergyPriceForecast EU", epex_predictor: "EpexPredictor", jeroen_nl: "Jeroen.nl", nord_pool: "Nord Pool"};
 const name = source => names[source] || source;
+export {name as priceSourceName};
 const reasons = {
     insufficient_evidence: "Collecting comparable forecast history",
     retained_within_threshold: "Preference retained: Improvement threshold not met",
