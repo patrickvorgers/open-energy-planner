@@ -38,7 +38,7 @@ Use **Next 6 hours**, **Next 24 hours** or **Full horizon**. Day bands and date 
 
 Every scenario starts with **Expected economic cost**. Both battery scenarios then show **Expected benefit versus without battery** against the same baseline. A negative benefit means the scenario costs more than the baseline. An unavailable comparison stays unavailable.
 
-Open **Cost breakdown** for net grid cash cost, battery wear and stored-energy value change. Economic cost includes wear and subtracts the value change. Stored-energy value is not cash received.
+Open **Cost breakdown** to see **Import cost**, **Export income** and **Bonus income** separately for each scenario. Net electricity cost is import cost minus export income minus bonus income. A negative income increases net costs. Missing amounts remain unavailable rather than becoming zero. The same breakdown shows battery wear and stored-energy value change. Economic cost includes wear and subtracts the value change. Stored-energy value is not cash received.
 
 These amounts cover the complete original plan even when you zoom into fewer hours. They are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
 

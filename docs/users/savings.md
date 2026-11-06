@@ -16,10 +16,14 @@ These amounts cover the whole selected original plan, including remaining stored
 
 ## Read the cost breakdown
 
+In each Planning scenario, **Cost breakdown** lists **Import cost**, **Export income** and **Bonus income** separately. Use them to check the net amount:
+
 ```text
-net grid cash cost = import cost - export income - bonuses
-economic cost = net grid cash cost + battery wear - battery value change
+net electricity cost = import cost - export income - bonus income
+economic cost = net electricity cost + battery wear - battery value change
 ```
+
+For example, 20.00 EUR import cost minus 4.50 EUR export income minus 0.50 EUR bonus income gives 15.00 EUR net electricity cost. Negative income increases costs. An unavailable amount stays unavailable. Displayed amounts have two decimal places, while totals use full precision. Small rounding differences are possible when subtracting the displayed amounts. These figures cover the complete selected plan, even when the chart is zoomed into fewer hours.
 
 Battery value change is the estimated end value minus the starting value of stored energy. A positive value change reduces economic cost. It is not money paid into your account. The planner does not treat the battery's remaining usable energy as worthless merely because the horizon ends.
 

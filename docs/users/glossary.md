@@ -15,7 +15,7 @@ Use this reference when a screen or guide uses an unfamiliar energy term. Intern
 | Original plan | The accepted record of inputs, assumptions, proposed actions and expected costs for one calculation. Later measurements do not rewrite it. |
 | Baseline without battery | The future comparison retaining the household and solar forecasts without battery storage. |
 | Self-consumption | Battery operation that stores solar surplus and attempts to cover household demand within battery and converter limits, without price optimization. It is a modeled reference. |
-| Economic cost | Grid cash cost plus wear minus the change in stored-energy value. |
+| Economic cost | Net electricity cost plus wear minus the change in stored-energy value. |
 | Battery value change | Change in estimated stored-energy value, not cash received. |
 | Published price / forecast price | A retained market publication versus a prediction of a future market price. |
 | Curtailment / clipping | Deliberately reducing production versus production being physically limited by conversion capacity. They are not interchangeable permissions. |

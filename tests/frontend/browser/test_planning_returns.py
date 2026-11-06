@@ -1,5 +1,7 @@
 """Show original scenario costs and benefits against one no-battery baseline."""
 
+from pathlib import Path
+
 import pytest
 from playwright.sync_api import expect
 
@@ -7,14 +9,14 @@ from tests.frontend.browser.helpers import SAVINGS_BROWSER_TIME_ZONE, TOKEN
 
 
 @pytest.fixture
-def financial_page(app_page):
-    """Use explicit Dutch number formatting on both CI and Windows for the same actual app."""
+def financial_page(app_page, request):
+    """Use Dutch formatting by default and an explicit alternative locale when requested."""
     original, url = app_page
     with original.context.browser.new_context(
         viewport=original.viewport_size,
         has_touch=original.viewport_size["width"] < 500,
         timezone_id=SAVINGS_BROWSER_TIME_ZONE,
-        locale="nl-NL",
+        locale=getattr(request, "param", "nl-NL"),
     ) as context:
         yield context.new_page(), url
 
@@ -187,15 +189,191 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
     disclosure.focus()
     page.keyboard.press("Enter")
     expect(page.locator("#ems-costs details")).to_have_attribute("open", "")
-    expect(page.locator("#ems-costs details dd")).to_have_text(["9,25 EUR", "0,00 EUR", "0,00 EUR"])
+
+    expect(page.locator("#ems-costs details dt")).to_have_text(
+        [
+            "Import cost",
+            "Export income",
+            "Bonus income",
+            "Net electricity cost",
+            "Wear",
+            "Battery value change (not cash)",
+        ]
+    )
+    expect(page.locator("#ems-costs details dd")).to_have_text(
+        ["9,25 EUR", "0,00 EUR", "0,00 EUR", "9,25 EUR", "0,00 EUR", "0,00 EUR"]
+    )
     expect(page.locator("#ems-costs details")).to_contain_text("Battery value change (not cash)")
     expect(page.locator("#ems-costs details p")).to_have_text(
-        "Economic cost = net grid cash cost + wear - battery value change. "
-        "A positive value change reduces economic cost. "
-        "Battery value change is not cash."
+        [
+            "Net electricity cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.",
+            (
+                "Economic cost = net electricity cost + wear - battery value change. "
+                "A positive value change reduces economic cost. "
+                "Battery value change is not cash."
+            ),
+        ]
     )
     with page.expect_response("**/v1/plans/*/comparison"):
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#ems-costs > dl dd")).to_have_text(["9,25 EUR", "4,96 EUR"])
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#ems-costs details")).to_have_attribute("open", "")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("financial_page", ["nl-NL", "en-US"], indirect=True)
+@pytest.mark.parametrize("direction", [1, -1])
+def test_cost_breakdown_shows_each_scenario_income_with_original_sign(financial_page, direction):
+    """Distinct scenario inputs expose income deductions and negative income without changing saved plans."""
+    page, url = financial_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    original = page.request.get(url + "/v1/plans/browser-original-plan", headers=headers).json()
+    economics = [12.90, 15.20, 15.00] if direction == 1 else [18.90, 20.20, 25.00]
+    expected = (
+        [
+            ["16,00 EUR", "2,75 EUR", "0,25 EUR", "13,00 EUR", "0,20 EUR", "0,30 EUR"],
+            ["18,00 EUR", "2,25 EUR", "0,25 EUR", "15,50 EUR", "0,10 EUR", "0,40 EUR"],
+            ["20,00 EUR", "4,50 EUR", "0,50 EUR", "15,00 EUR", "0,00 EUR", "0,00 EUR"],
+        ]
+        if direction == 1
+        else [
+            ["16,00 EUR", "-2,75 EUR", "-0,25 EUR", "19,00 EUR", "0,20 EUR", "0,30 EUR"],
+            ["18,00 EUR", "-2,25 EUR", "-0,25 EUR", "20,50 EUR", "0,10 EUR", "0,40 EUR"],
+            ["20,00 EUR", "-4,50 EUR", "-0,50 EUR", "25,00 EUR", "0,00 EUR", "0,00 EUR"],
+        ]
+    )
+
+    def respond(route):
+        """Supply independent, internally consistent financial inputs through the real presentation route."""
+        body = route.fetch().json()
+        costs = [
+            {
+                "purchase": purchase,
+                "sale": sale * direction,
+                "bonus": bonus * direction,
+                "wear": wear,
+                "inventory_change": inventory,
+                "economic_cost": economic,
+            }
+            for (purchase, sale, bonus, wear, inventory), economic in zip(
+                [
+                    (16, 2.75, 0.25, 0.20, 0.30),
+                    (18, 2.25, 0.25, 0.10, 0.40),
+                    (20, 4.50, 0.50, 0, 0),
+                ],
+                economics,
+                strict=True,
+            )
+        ]
+        baseline = body["scenarios"]["without_battery"]["comparison"]
+        baseline.update(ems_costs=costs[0], reference_costs=costs[2])
+        body["scenarios"]["self_consumption"]["comparison"]["reference_costs"] = costs[1]
+        route.fulfill(json=body)
+
+    page.route("**/v1/plans/*/comparison", respond)
+    connect(page, url)
+    english = page.evaluate("navigator.language") == "en-US"
+    for cost_id, amounts in zip(
+        ("ems-costs", "self-consumption-costs", "reference-costs"), expected, strict=True
+    ):
+        host = page.locator("#" + cost_id)
+        host.locator("summary").click()
+        expect(host.locator("details dt")).to_have_text(
+            [
+                "Import cost",
+                "Export income",
+                "Bonus income",
+                "Net electricity cost",
+                "Wear",
+                "Battery value change (not cash)",
+            ]
+        )
+        expect(host.locator("details dd")).to_have_text(
+            [amount.replace(",", ".") for amount in amounts] if english else amounts
+        )
+    expect(page.locator("#plan-version")).to_have_value("browser-original-plan")
+    assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+    assert (
+        page.request.get(url + "/v1/plans/browser-original-plan", headers=headers).json()
+        == original
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize(
+    "costs,amounts,economic",
+    [
+        (
+            {
+                "purchase": 20,
+                "sale": 0,
+                "bonus": None,
+                "wear": 0.20,
+                "inventory_change": 0.30,
+                "economic_cost": None,
+            },
+            ["20,00 EUR", "0,00 EUR", "- EUR", "- EUR", "0,20 EUR", "0,30 EUR"],
+            "- EUR",
+        ),
+        (
+            {
+                "purchase": 11.375,
+                "sale": 3.064,
+                "bonus": 0,
+                "wear": 0,
+                "inventory_change": 0,
+                "economic_cost": 8.311,
+            },
+            ["11,38 EUR", "3,06 EUR", "0,00 EUR", "8,31 EUR", "0,00 EUR", "0,00 EUR"],
+            "8,31 EUR",
+        ),
+    ],
+)
+def test_cost_breakdown_preserves_unknown_values_and_full_precision(
+    financial_page, costs, amounts, economic
+):
+    """Missing amounts stay unavailable and 11.375 minus 3.064 retains its 8.311 total before display rounding."""
+    page, url = financial_page
+
+    def respond(route):
+        """Project original financial inputs without changing the saved plan or their precision."""
+        body = route.fetch().json()
+        baseline = body["scenarios"]["without_battery"]["comparison"]
+        baseline.update(ems_costs=costs, reference_costs=costs)
+        body["scenarios"]["self_consumption"]["comparison"]["reference_costs"] = costs
+        route.fulfill(json=body)
+
+    page.route("**/v1/plans/*/comparison", respond)
+    connect(page, url)
+    for cost_id in ("ems-costs", "self-consumption-costs", "reference-costs"):
+        host = page.locator("#" + cost_id)
+        host.locator("summary").click()
+        expect(host.locator("details dd")).to_have_text(amounts)
+        expect(host.locator(":scope > dl dd").first).to_have_text(economic)
+        expect(host.locator("details")).to_contain_text("Totals use full precision")
+
+
+@pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
+def test_cost_breakdown_on_real_two_day_plan_remains_readable(app_page):
+    """Capture each actual solved scenario over the full 48-hour horizon with no horizontal overflow."""
+    from tests.frontend.browser.documentation_fixture import START
+
+    page, url = app_page
+    page.clock.install(time=START)
+    connect(page, url)
+    page.get_by_role("button", name="Full horizon", exact=True).click()
+    # A tall mobile capture retains the complete two-day card below the sticky menu.
+    if page.viewport_size["width"] < 500:
+        page.set_viewport_size({"width": page.viewport_size["width"], "height": 1600})
+    directory = Path("results/ci/cost-breakdown")
+    directory.mkdir(parents=True, exist_ok=True)
+    for cost_id in ("ems-costs", "self-consumption-costs", "reference-costs"):
+        host = page.locator("#" + cost_id)
+        host.locator("summary").click()
+        expect(host.get_by_text("Import cost", exact=True)).to_be_visible()
+        expect(host.get_by_text("Export income", exact=True)).to_be_visible()
+        assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+        page.locator(f"figure:has(#{cost_id})").screenshot(
+            path=str(directory / f"{cost_id}-{page.viewport_size['width']}.png")
+        )
