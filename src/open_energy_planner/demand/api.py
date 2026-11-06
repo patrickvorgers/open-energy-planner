@@ -1,6 +1,7 @@
 """Register demand configuration and normalized history admission under the shared app lock."""
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 
 from aiohttp import web
@@ -8,6 +9,15 @@ from aiohttp import web
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.demand.wire import parse_configuration as parse_demand_configuration
 from open_energy_planner.history.wire import parse_history
+from open_energy_planner.runtime.diagnostics.logging import request_error_message
+
+PUBLIC_VALIDATION_MESSAGES = (
+    "Complete the Home Assistant Energy dashboard first",
+    "Timezone is managed in the Home Assistant installation settings",
+    "Device membership is managed in the Home Assistant Energy dashboard",
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def register(
@@ -49,7 +59,15 @@ def register(
             try:
                 setup_catalogue.validate_membership("demand", candidate)
             except ValueError as error:
-                raise web.HTTPBadRequest(text=str(error)) from None
+                raise web.HTTPBadRequest(
+                    text=request_error_message(
+                        error,
+                        logger=_LOGGER,
+                        operation="Demand configuration validation",
+                        safe_messages=PUBLIC_VALIDATION_MESSAGES,
+                        fallback="Cannot validate household demand settings. Reload the Home Assistant Energy configuration before saving again.",
+                    )
+                ) from None
             current = demand.configuration.version if demand.configuration else None
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Demand configuration changed. Reload before saving")
