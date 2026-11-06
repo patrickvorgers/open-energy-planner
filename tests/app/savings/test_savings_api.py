@@ -353,6 +353,17 @@ def test_historical_statistics_ingress_preserves_live_counters(tmp_path, monkeyp
                 assert response.status == 401
             async with session.post(path, json={**body, "request_version": "stale"}) as response:
                 assert response.status == 409
+            for timestamp in (1e300, -1e300):
+                invalid_timestamp = {
+                    **body,
+                    "statistics": [
+                        {**channel, "hours": [[timestamp, 1, 1]]} for channel in body["statistics"]
+                    ],
+                }
+                async with session.post(path, json=invalid_timestamp) as response:
+                    assert response.status == 400
+                    assert "inspect application diagnostics" in await response.text()
+                    assert services[0].archive.current is None
             invalid = {
                 **body,
                 "statistics": [

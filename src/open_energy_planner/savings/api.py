@@ -207,7 +207,7 @@ def register(
                     )
                 if cancelled:
                     raise cancelled
-            except (ValueError, TypeError, KeyError) as error:
+            except (ValueError, TypeError, KeyError, OverflowError) as error:
                 runtime.bonus.issue = "Historical bonus history is incomplete or invalid"
                 raise web.HTTPBadRequest(
                     text=request_error_message(
