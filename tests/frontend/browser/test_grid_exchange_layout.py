@@ -29,3 +29,25 @@ def test_grid_exchange_uses_full_planning_width(app_page):
     )
     page.evaluate("document.fonts.ready")
     comparison.screenshot(path=f"results/ci/grid-exchange-{page.viewport_size['width']}.png")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_loading_grid_canvas_stays_inside_its_chart_space(app_page):
+    """An uninitialized chart cannot cover the evidence control while plan loading waits."""
+    page, url = app_page
+    held = []
+    page.route("**/v1/plans/*/comparison", lambda route: held.append(route))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    with page.expect_request("**/v1/plans/*/comparison"):
+        page.get_by_role("button", name="Connect", exact=True).click()
+    canvas = page.locator("#energy-chart")
+    assert canvas.evaluate("canvas => !Chart.getChart(canvas)")
+    bounds = canvas.bounding_box()
+    wrapper = canvas.locator("..").bounding_box()
+    assert bounds["y"] >= wrapper["y"]
+    assert bounds["y"] + bounds["height"] <= wrapper["y"] + wrapper["height"] + 1
+    page.get_by_text("Understand this plan", exact=True).click()
+    expect(page.locator("#plan-evidence-panel")).to_have_attribute("open", "")
+    for route in held:
+        route.fulfill(status=503, body="Temporary archive read failure")
