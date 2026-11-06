@@ -1,12 +1,58 @@
 """Activity is readable and live on desktop and mobile without changing energy configuration."""
 
 from datetime import datetime
+from itertools import pairwise
+from math import isfinite
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
+
+
+def assert_serial_requests(requests):
+    """Check completed browser intervals without relying on callback delivery order."""
+    intervals = []
+    for request in requests:
+        response = request.response()
+        assert response is not None and response.finished() is None
+        timing = request.timing
+        start, duration = timing["startTime"], timing["responseEnd"]
+        assert isfinite(start) and start > 0
+        assert isfinite(duration) and duration >= 0
+        intervals.append((start, start + duration))
+    intervals.sort()
+    for previous, following in pairwise(intervals):
+        assert previous[1] <= following[0], "Browser history requests overlapped"
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_serial_request_oracle_rejects_real_overlap(app_page):
+    """Two deliberately overlapping browser reads must fail the transport assertion."""
+    page, url = app_page
+    page.goto(url + "/activity")
+    held = []
+
+    def hold(route):
+        """Keep both reads pending until their real browser intervals overlap."""
+        held.append(route)
+        page.evaluate("count => window.overlapReads = count", len(held))
+
+    page.route("**/_test/transport-oracle?*", hold)
+    for sequence in (1, 2):
+        with page.expect_request(f"**/_test/transport-oracle?read={sequence}"):
+            page.evaluate(
+                "sequence => { fetch(`_test/transport-oracle?read=${sequence}`); }", sequence
+            )
+        # The first response remains held while the second request starts.
+        page.wait_for_function("count => window.overlapReads === count", arg=sequence)
+        assert len(held) == sequence
+    requests = [route.request for route in held]
+    for route in reversed(held):
+        route.fulfill(json={"ok": True})
+    with pytest.raises(AssertionError, match="Browser history requests overlapped"):
+        assert_serial_requests(requests)
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
@@ -706,13 +752,12 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
     page.get_by_role("button", name="Next", exact=True).click()
     expect(page.locator("#activity-page")).to_have_text("Page 2")
     wait_for_product_reads(page)
-    held, active, peak = [], set(), [0]
+    held, requests = [], []
 
     def started(request):
         """Measure only browser history requests, excluding the independent fixture API client."""
         if "/v1/activities?" in request.url:
-            active.add(request)
-            peak[0] = max(peak[0], len(active))
+            requests.append(request)
 
     def hold(route):
         """Keep each actual history response pending until the test explicitly completes it."""
@@ -720,8 +765,6 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
         page.evaluate("count => window.resetHistoryReads = count", len(held))
 
     page.on("request", started)
-    page.on("requestfinished", lambda request: active.discard(request))
-    page.on("requestfailed", lambda request: active.discard(request))
     page.route("**/v1/activities?**", hold)
     next_page = page.get_by_role("button", name="Next", exact=True)
     next_page.focus()
@@ -735,7 +778,7 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
             data={"detail": marker},
         ).ok
         expect(page.locator("#activity-health")).to_contain_text(marker)
-    assert len(held) == 1 and peak[0] == 1
+    assert len(held) == 1 and len(requests) == 1
     expect(next_page).to_be_disabled()
     next_page.dispatch_event("click")
     assert len(held) == 1
@@ -777,7 +820,8 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
     expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "false")
     expect(next_page).to_be_enabled()
     expect(page.get_by_label("Day", exact=True) if move_focus else next_page).to_be_focused()
-    assert len(held) == 2 and peak[0] == 1 and not active
+    assert len(held) == 2 and len(requests) == 2
+    assert_serial_requests(requests)
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
