@@ -87,6 +87,39 @@ towards duration. Synthetic profiles are explicitly labelled. Missing profiles d
 not acquire an assumed duration or zero energy. Reload is in More appliance actions
 and closes that menu. It still refuses to discard unsaved edits.
 
+### EV charging sources
+
+Add vehicle or charge point opens a separate typed draft. Choose the Home Assistant
+integration that manages the vehicle, then select its measured state of charge.
+The sensor must report a percentage. HA's optional battery device class may be
+absent, but an incompatible class such as humidity is rejected. The configured
+integration title supplies the vehicle name. Sources without a config entry,
+including unregistered templates, remain available under Other Home Assistant
+sources when integration grouping is available.
+
+For a charge point, choose the integration that supplies measured power and
+physical connection status. Select its consumption meter separately from the
+Home Assistant Energy dashboard. A utility-meter integration may own this meter
+while a charging integration owns the live sensors. Search the connection list
+by device name, sensor name or entity ID. Select a binary sensor that is On while
+the cable is connected, including when charging is paused. Charging activity,
+door and fault sensors do not prove a connection. No connection source or vehicle
+identity is selected automatically.
+
+Choosing a different nonblank vehicle integration clears its incompatible SoC
+choice. Clearing the optional integration filter retains the explicit SoC choice
+and does not block saving valid source settings. Actual source fields remain
+required. For a charge
+point, the integration filters available sources without clearing explicitly
+selected power or connection sources. Choices outside the filter remain visible
+and can be combined with sources from another integration. Cancel restores
+confirmed settings. A source list without compatible
+metadata explains what to check instead of showing an unexplained empty dropdown.
+HA catalogue collection prioritizes the registered devices of Energy sources,
+including their connection sensors, within the existing entity and byte budgets.
+Only config-entry identity and title are forwarded, never provider credentials
+or arbitrary config-entry data.
+
 ## Contract
 
 The rule selector shows newest starts first and identifies active, scheduled and

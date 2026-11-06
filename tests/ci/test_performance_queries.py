@@ -26,7 +26,7 @@ def test_full_composition_adds_performance_only_for_an_identified_query_change(
     monkeypatch, query_changed
 ):
     """A full composition change stays functional unless the same diff also changes a query owner."""
-    paths = ["src/open_energy_planner/planning.py"]
+    paths = ["src/open_energy_planner/pairing.py"]
     if query_changed:
         paths.append("src/open_energy_planner/prices/storage/adapters/future_query.py")
     records = "".join(

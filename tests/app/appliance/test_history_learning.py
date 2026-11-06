@@ -363,7 +363,13 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
 
     async def scenario():
         """Exercise real HTTP parsing and SQL commits, without replacing the owning service with a mock."""
+        from open_energy_planner.activities.api import EVENTS
+        from open_energy_planner.activities.events import Events, Outcome
+        from open_energy_planner.storage.adapters.activities import ActivityStore
+
         app, refreshes = web.Application(), []
+        events = Events(ActivityStore(service.documents.engine))
+        app[EVENTS] = events
         service.configure(ENTITY, False)
         register(
             app,
@@ -414,7 +420,20 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
                 "learning_status"
             ] == "provisional"
             assert len(refreshes) == 1
+            failed = await events.start("appliances", "history", "Earlier history request")
+            await events.finish(failed, Outcome.FAILED, "Synthetic failed request.")
+            cursor = events.cursor
             response = await client.post("/v1/appliances/hourly_history", json=data)
             assert response.status == 200 and len(refreshes) == 1
+            terminal = [
+                row["value"]
+                for row in events.changes(cursor)["events"]
+                if row["topic"] == "activity" and row["value"]["state"] != "running"
+            ]
+            assert len(terminal) == 1
+            assert terminal[0]["state"] == "skipped"
+            assert not terminal[0]["usable"] and not terminal[0]["recovered"]
+            assert ("appliances", "history") in events.failed
+        await events.close()
 
     asyncio.run(scenario())

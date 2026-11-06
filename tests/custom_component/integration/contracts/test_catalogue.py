@@ -1001,6 +1001,90 @@ def test_setup_catalogue_keeps_ordinary_sensors_before_large_binary_population()
     asyncio.run(scenario())
 
 
+def test_energy_device_connection_survives_a_large_unrelated_sensor_catalogue():
+    """A charger's registered connection and integration title survive more than 1024 unrelated sensors."""
+    import json
+
+    from homeassistant.auth import auth_manager_from_config
+    from homeassistant.components.energy.data import async_get_manager
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.open_energy_planner.catalogue import setup_catalogue
+    from open_energy_planner.home_assistant.catalogue import HACatalogue
+
+    async def scenario():
+        """Exercise genuine HA registry links, active states, Energy ownership and bounded serialization."""
+        async with running_chain(live=True, recorder=True) as (hass, entry, _url, _root):
+            hass.auth = await auth_manager_from_config(hass, [], [])
+            assert await setup_energy(hass)
+            hass.config_entries.async_update_entry(entry, title="Garage charger")
+            device = dr.async_get(hass).async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={("fixture", "garage-charger")},
+                name="Garage charger",
+            )
+            registry = er.async_get(hass)
+            meter = registry.async_get_or_create(
+                "sensor",
+                "fixture",
+                "charging-meter",
+                config_entry=entry,
+                device_id=device.id,
+                suggested_object_id="charging_meter",
+            )
+            connected = registry.async_get_or_create(
+                "binary_sensor",
+                "fixture",
+                "charging-plug",
+                config_entry=entry,
+                device_id=device.id,
+                suggested_object_id="zzzz_charging_plug",
+            )
+            hass.states.async_set(
+                meter.entity_id,
+                "1",
+                {
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                },
+            )
+            hass.states.async_set(connected.entity_id, "on", {"device_class": "plug"})
+            hass.states.async_set(
+                "sensor.grid_import",
+                "1",
+                {
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                },
+            )
+            for index in range(1100):
+                hass.states.async_set(f"sensor.unrelated_{index:04}", "0")
+            manager = await async_get_manager(hass)
+            await manager.async_update(
+                {
+                    "energy_sources": [{"type": "grid", "stat_energy_from": "sensor.grid_import"}],
+                    "device_consumption": [{"stat_consumption": meter.entity_id}],
+                }
+            )
+            body = await setup_catalogue(hass)
+            rows = {row["entity_id"]: row for row in body["entities"]}
+            assert not ({meter.entity_id, connected.entity_id} - rows.keys())
+            order = list(rows)
+            assert order.index(meter.entity_id) < order.index(connected.entity_id)
+            assert order.index(connected.entity_id) < order.index("sensor.unrelated_0000")
+            assert rows[connected.entity_id]["integration_id"] == entry.entry_id
+            assert rows[connected.entity_id]["integration_name"] == "Garage charger"
+            assert "state" not in rows[connected.entity_id]
+            assert len(rows) <= 1024
+            assert len(json.dumps(body["entities"]).encode()) <= 192 * 1024
+            HACatalogue().receive(body, dt_util.utcnow())
+
+    asyncio.run(scenario())
+
+
 def test_unconfigured_live_installation_creates_no_fictitious_battery():
     """A production app before setup exposes only EMS/grid devices. Missing battery configuration must not invent battery entities."""
     from homeassistant.helpers import device_registry as dr

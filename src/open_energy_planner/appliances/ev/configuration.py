@@ -62,7 +62,7 @@ def configuration(body, catalogue, consumers, appliances):
             raise ValueError("Invalid vehicle fields")
         identity(row["id"])
         source = metadata.get(entity(row["soc_entity"], "sensor"), {})
-        if source.get("unit") != "%" or source.get("device_class") != "battery":
+        if source.get("unit") != "%" or source.get("device_class") not in {"battery", ""}:
             raise ValueError("Select the vehicle's battery percentage sensor")
         number(row["capacity_kwh"], 0.1, MAX_EV_CAPACITY_KWH)
         number(row["maximum_w"], 1, MAX_EV_POWER_W)

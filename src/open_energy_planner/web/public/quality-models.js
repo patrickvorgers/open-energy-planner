@@ -3,19 +3,19 @@ import {money, when, optionLabel} from "./display.js";
 /** Associate current readiness and selection with stable forecast IDs, never historical names. */
 export function currentModelRows(current = {}, selection = {}) {
     const rows = new Map();
-    if (current.household) rows.set("household", {id: "household", label: "Household consumption", active: current.household.model, readiness: current.household.status, issue: current.household.issue});
+    if (current.household) rows.set("household", {id: "household", scope: "household", label: "Household consumption", active: current.household.model, readiness: current.household.status, issue: current.household.issue});
     const solar = current.solar || {}, consumers = current.consumers || {};
     for (const [index, source] of (solar.configuration?.sources || []).entries()) {
         const choice = solar.source_selection?.[source.source_id];
         const readiness = choice ? choice.issue ? "comparison_unavailable" : choice.requested === "automatic" && choice.complete_days < choice.required_days ? "collecting_accuracy_evidence" : "active" : solar.calibration_status?.[source.source_id];
-        rows.set(source.source_id, {id: source.source_id, label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], issue: solar.history_issues?.[source.entity_id] || solar.issue});
+        rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], issue: solar.history_issues?.[source.entity_id] || solar.issue});
     }
-    for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used});
-    for (const selected of consumers.selected || []) if (!rows.has(selected.entity_id)) rows.set(selected.entity_id, {id: selected.entity_id, label: consumers.options?.find(row => row.entity_id === selected.entity_id)?.name || selected.entity_id, readiness: consumers.result?.status || "waiting_for_history", issue: consumers.history_issues?.[selected.entity_id] || consumers.result?.detail || consumers.issue || "Waiting for usable historical evidence"});
+    for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used});
+    for (const selected of consumers.selected || []) if (!rows.has(selected.entity_id)) rows.set(selected.entity_id, {id: selected.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === selected.entity_id)?.name || selected.entity_id, readiness: consumers.result?.status || "waiting_for_history", issue: consumers.history_issues?.[selected.entity_id] || consumers.result?.detail || consumers.issue || "Waiting for usable historical evidence"});
     for (const model of selection.models || []) {
         const id = model.scope === "demand" ? "household" : model.scope?.startsWith("solar:") ? model.scope.slice("solar:".length) : null;
         if (!id) continue;
-        rows.set(id, {...rows.get(id), id, label: model.scope?.startsWith("solar:") ? rows.get(id)?.label || model.label : model.label, active: model.active_model_label || model.active_model, selection: model});
+        rows.set(id, {...rows.get(id), id, scope: model.scope === "demand" ? "household" : "solar", label: model.scope?.startsWith("solar:") ? rows.get(id)?.label || model.label : model.label, active: model.active_model_label || model.active_model, selection: model});
     }
     return rows;
 }

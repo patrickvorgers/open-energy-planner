@@ -42,6 +42,9 @@ def register(
         contracts,
         counters,
     )
+    from ..activities.api import EVENTS
+
+    runtime.events = app.get(EVENTS)
 
     def current_choices():
         """Scope preferences to the current physical, contract, strategy and model-feature definitions."""

@@ -31,6 +31,23 @@ The planned start is information. Physical execution needs the supported claim-a
 
 Configure the vehicle's usable battery capacity, SoC source and charging limit separately from the charge point. The point needs its own consumption/power source, connection evidence, allowed vehicles and declared control capability.
 
+When adding a vehicle, first choose the Home Assistant integration that manages
+the car. Then choose its state-of-charge sensor. It must report `%`. Its battery
+device class may be absent, but a humidity sensor is not a car SoC source. The
+integration's configured title supplies the vehicle name.
+
+For a charge point, choose the integration that supplies power and connection
+status. Its consumption meter is selected separately from Home Assistant Energy,
+so a utility-meter integration can own it. Use **Find connection sensor** to
+search by device name, sensor name or entity ID. Changing the integration keeps
+your selected power and connection sources visible, so you can explicitly pair
+a charger's power sensor with a connection helper from another integration.
+**Vehicle connected** must be On
+while physically plugged in, including when charging is paused. Charging-active,
+door and fault sensors do not prove a connection. No source is chosen for you.
+Save settings only after checking the sources and limits. Cancel restores the
+confirmed configuration.
+
 A connected plug proves presence, not vehicle identity. Explicitly identify the connected vehicle through the supported Home Assistant control or an automation that genuinely knows it. A previous session's assignment does not authorize a later connection.
 
 Set the desired SoC and departure under **Energy > EV charging**. A one-off departure overrides the daily departure until that instant. Home Assistant's timezone applies. The planner recalculates required energy from the current SoC and reports a shortfall when the target cannot be reached under the admitted limits. V2G is not supported by this charging model.

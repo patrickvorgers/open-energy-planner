@@ -145,11 +145,10 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             await coordinator.sync()
             await hass.async_block_till_done()
             assert hass.states.get(car_select).state == "Unknown"
-            car_b = next(
-                option
-                for option in hass.states.get(car_select).attributes["options"]
-                if option.startswith("Test car B")
-            )
+            car_a = f"{entry.title} ({fixture['cars'][0]['soc']})"
+            car_b = f"{entry.title} ({fixture['cars'][1]['soc']})"
+            assert car_a != car_b
+            assert hass.states.get(car_select).attributes["options"] == ["Unknown", car_a, car_b]
             await hass.services.async_call(
                 "select", "select_option", {"entity_id": car_select, "option": car_b}, blocking=True
             )

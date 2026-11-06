@@ -55,6 +55,7 @@ def main():
         prices = price_factory(args.market_area.upper())
     from ..demand.weather import weather_factory
     from ..pairing import administration_token
+    from ..solar.satellite import satellite_factory
     from ..solar.weather import solar_weather_factory
 
     web.run_app(
@@ -66,6 +67,7 @@ def main():
             price_factory=prices,
             weather_factory=weather_factory if args.live else None,
             solar_weather_factory=solar_weather_factory if args.live else None,
+            satellite_factory=satellite_factory if args.live else None,
             discovery_options={"http_port": args.port, "ui_url": args.ui_url}
             if args.live
             else None,

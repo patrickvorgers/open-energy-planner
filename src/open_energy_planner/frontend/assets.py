@@ -138,6 +138,7 @@ def register(app, installation, demand, solar):
                 .replace('href="/thermal"', 'href="' + base + '/thermal"')
                 .replace('href="/quality"', 'href="' + base + '/quality"')
                 .replace('href="/planning-performance"', 'href="' + base + '/planning-performance"')
+                .replace('href="/activity"', 'href="' + base + '/activity"')
             )
             if request.query.get("embedded") == "1" and filename != "workspace.html":
                 for route in page_routes:

@@ -391,6 +391,33 @@ class SolarRuntime:
                         for source in configuration.sources
                     },
                 )
+        alternatives = [baseline]
+        if candidate is not None:
+            alternatives.append(candidate)
+        if ha:
+            ha_forecast = replace(
+                baseline,
+                energies=tuple(row for rows in ha.values() for row in rows),
+                model="ha-production-v1",
+                quality="provider_estimate",
+            )
+            self.store.archive(
+                "forecast",
+                ha_forecast.version,
+                {
+                    "forecast": forecast_document(ha_forecast),
+                    "ha_references": {
+                        entity: [row.version for row in providers]
+                        for entity, providers in ha_predictions.items()
+                    },
+                },
+            )
+            alternatives.append(ha_forecast)
+        self.store.archive(
+            "quality-candidates",
+            forecast.version,
+            {"forecasts": [row.version for row in alternatives]},
+        )
         return key, forecast, calibrations, candidate, baseline, selection_status, ha_issues
 
     def install(self, result, now):

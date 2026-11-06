@@ -33,8 +33,11 @@ local value. Applying an unchanged local value retains the exact saved instant,
 including the second occurrence of a daylight-saving clock fold. Only Use daily
 departure clears the stored override.
 The bounded first implementation supports sixteen vehicle records and four points. Multiple cars
-may use one point. Stable opaque IDs identify records. HA device names identify
-them visually. Each vehicle links its own percentage SoC sensor, usable capacity
+may use one point. Stable opaque IDs identify records. The selected HA integration
+title names a vehicle, with its source name retained when no config entry exists.
+Charge points retain their Energy source names. The source picker groups choices
+by config-entry identity without forwarding provider configuration or credentials.
+Each vehicle links its own percentage SoC sensor, usable capacity
 in kWh and maximum AC power in W. Capacity is usable energy, not gross pack size.
 It also has a desired SoC and daily departure clock.
 

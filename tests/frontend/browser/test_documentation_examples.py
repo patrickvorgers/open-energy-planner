@@ -151,7 +151,7 @@ def test_documentation_quality_shows_complete_nonconstant_hourly_comparison(app_
         "canvas => Chart.getChart(canvas).data.datasets.slice(0,2).map(series => series.data.map(point => point.y))"
     )
     assert len(data[0]) == len(data[1]) == 24
-    assert max(data[1]) == 1.7 and data[0][17] != data[1][17]
+    assert max(data[0]) == 1.7 and data[0][17] != data[1][17]
     capture(page, "forecast-quality", "#quality-charts")
 
 

@@ -7,6 +7,90 @@ import pytest
 from script.ci.ci_scope import path_profile, select_profile, selected_suites
 
 
+def changed_profile(monkeypatch, changes):
+    """Supply a complete independent add/modify/delete tree diff without running candidate code."""
+    records = []
+    for path, status in changes:
+        old_mode, old_blob = ("000000", "0" * 40) if status == "A" else ("100644", "3" * 40)
+        new_mode, new_blob = ("000000", "0" * 40) if status == "D" else ("100644", "4" * 40)
+        records.append(f":{old_mode} {new_mode} {old_blob} {new_blob} {status}\0{path}\0".encode())
+    monkeypatch.setattr(
+        "script.ci.proof_git.subprocess.check_output", lambda *args, **kwargs: b"".join(records)
+    )
+    monkeypatch.setattr("script.ci.ci_scope.immutable_test_sources", lambda *args: {})
+    return select_profile("1" * 40, "2" * 40)
+
+
+@pytest.mark.parametrize("module", ["__init__.py", "api.py", "events.py", "views/future.py"])
+@pytest.mark.parametrize("status", ["A", "M", "D"])
+def test_activity_owner_growth_retains_consumers_without_unrelated_platforms(
+    monkeypatch, module, status
+):
+    """The shared read model keeps app/UI and restart contracts without implying installation or Recorder work."""
+    profile = changed_profile(
+        monkeypatch, [(f"src/open_energy_planner/activities/{module}", status)]
+    )
+    assert selected_suites(profile) == {
+        "ci",
+        "unit-app",
+        "unit-frontend",
+        "browser",
+        "database-contracts",
+    }
+
+
+@pytest.mark.parametrize("status", ["A", "D"])
+def test_planning_root_creation_and_removal_remain_full(monkeypatch, status):
+    """Reviewed modifications cannot grant a narrow route to a changed central module boundary."""
+    assert changed_profile(monkeypatch, [("src/open_energy_planner/planning.py", status)]) == "full"
+
+
+@pytest.mark.parametrize(
+    "module", ["storage/adapters/activities.py", "storage/adapters/lifecycle/schema.py"]
+)
+def test_activity_mixed_storage_changes_preserve_backend_and_volume_proof(monkeypatch, module):
+    """A generic event owner never masks the real SQL or schema owner's independent contracts."""
+    profile = changed_profile(
+        monkeypatch,
+        [
+            ("src/open_energy_planner/activities/events.py", "M"),
+            ("src/open_energy_planner/" + module, "M"),
+        ],
+    )
+    suites = selected_suites(profile)
+    assert {"unit-app", "unit-frontend", "browser", "databases", "performance-queries"} <= suites
+    assert "ha-test-environment" not in suites
+    if "/lifecycle/" in module:
+        assert {
+            "ha-contracts",
+            "ha-connection",
+            "unit-supervisor",
+            "provisioning",
+            "supervisor",
+        } <= suites
+
+
+def test_activity_move_to_process_lifecycle_retains_both_owners(monkeypatch):
+    """Both sides of a move matter, including the destination's actual Supervisor contracts."""
+    profile = changed_profile(
+        monkeypatch,
+        [
+            ("src/open_energy_planner/activities/api.py", "D"),
+            ("src/open_energy_planner/runtime/activity_host.py", "A"),
+        ],
+    )
+    assert {
+        "unit-app",
+        "unit-frontend",
+        "browser",
+        "database-contracts",
+        "unit-supervisor",
+        "ha-connection",
+        "provisioning",
+        "supervisor",
+    } <= selected_suites(profile)
+
+
 @pytest.mark.parametrize(
     "domain",
     [
@@ -59,6 +143,26 @@ def test_execution_domains_select_exactly_their_reviewed_groups(domain, ha_suite
             "live_inputs.py",
             {"unit-app", "unit-ha-contract", "ha-contracts", "ha-controls"},
             {"databases", "ha-history", "supervisor"},
+        ),
+        (
+            "planning.py",
+            {
+                "unit-app",
+                "unit-ha-contract",
+                "browser",
+                "databases",
+                "ha-contracts",
+                "ha-controls",
+                "ha-history",
+                "ha-thermal",
+            },
+            {
+                "supervisor",
+                "provisioning",
+                "ha-connection",
+                "ha-test-environment",
+                "performance-queries",
+            },
         ),
         (
             "discovery.py",

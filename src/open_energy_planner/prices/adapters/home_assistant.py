@@ -19,6 +19,8 @@ class AutomaticPublishedPrices:
     retains its retry boundary during publication delays and service failures.
     """
 
+    SOURCE_ID = "nord_pool"
+
     def __init__(self, market_area, direct):
         """Bind one contract area and its existing direct published-price adapter."""
         self.market_area = market_area
@@ -29,6 +31,7 @@ class AutomaticPublishedPrices:
         self.pending = {}
         self.responses = {}
         self.started_at = None
+        self.last_transport = None
 
     def selected(self, now):
         """Return HA eligibility only while its authenticated discovery report is fresh."""
@@ -42,6 +45,7 @@ class AutomaticPublishedPrices:
         """Delegate absent HA configurations, otherwise request a day through the HA bridge."""
         selected = self.selected(now)
         if day in self.responses:
+            self.last_transport = "Home Assistant"
             return self.responses.pop(day)
         if self.started_at is None:
             self.started_at = now
@@ -52,6 +56,7 @@ class AutomaticPublishedPrices:
             or self.reported_at is None
             and now - self.started_at >= DISCOVERY_MAX_AGE
         ):
+            self.last_transport = "Direct"
             candidate = await self.direct.fetch_day(day, now)
             self.pending.pop(day, None)
             self.responses.pop(day, None)
