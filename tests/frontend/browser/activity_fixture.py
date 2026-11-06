@@ -1,6 +1,7 @@
 """Synthetic activity evidence through the same publishers used by real background work."""
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiohttp import web
@@ -34,6 +35,13 @@ def register(app):
         await app[EVENTS].finish(
             identity, Outcome.COMPLETED, "Older activity completed successfully.", usable=True
         )
+        return web.json_response({"accepted": True})
+
+    async def reset(request):
+        """Invalidate the real replay cursor and wake subscriptions with an authoritative snapshot."""
+        events = app[EVENTS]
+        events.epoch = uuid4().hex
+        events.availability("weather", Health.AVAILABLE, (await request.json())["detail"])
         return web.json_response({"accepted": True})
 
     async def burst(_request):
@@ -160,6 +168,7 @@ def register(app):
     app.router.add_post("/_test/activity-history", history_state)
     app.router.add_post("/_test/activity-health", health)
     app.router.add_post("/_test/activity-finish", finish)
+    app.router.add_post("/_test/activity-reset", reset)
     app.router.add_post("/_test/activity-contexts", contexts)
     app.router.add_post("/_test/activity-plan", plan_link)
 

@@ -615,7 +615,7 @@ def test_pagination_restores_keyboard_focus_after_held_and_failed_reads(app_page
     navigate("Next", 1, "Next", failed=True)
     page.get_by_role("button", name="Next", exact=True).focus()
     page.get_by_role("button", name="Next", exact=True).press("Enter")
-    page.wait_for_function("window.paginationFocusRequestCount === 10")
+    page.wait_for_function("() => window.paginationFocusRequestCount === 10")
     day = page.get_by_label("Day", exact=True)
     day.focus()
     response = page.request.get(
@@ -624,6 +624,99 @@ def test_pagination_restores_keyboard_focus_after_held_and_failed_reads(app_page
     held[-1].fulfill(json=response)
     wait_for_product_reads(page)
     expect(day).to_be_focused()
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+@pytest.mark.parametrize(
+    ("first_failure", "move_focus"), [(False, False), (True, False), (False, True)]
+)
+def test_live_resets_queue_one_read_without_releasing_pagination_focus(
+    app_page, first_failure, move_focus
+):
+    """Real replay resets coalesce behind a held keyboard read, including failure recovery."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    wait_for_product_reads(page)
+    held, active, peak = [], set(), [0]
+
+    def started(request):
+        """Measure only browser history requests, excluding the independent fixture API client."""
+        if "/v1/activities?" in request.url:
+            active.add(request)
+            peak[0] = max(peak[0], len(active))
+
+    def hold(route):
+        """Keep each actual history response pending until the test explicitly completes it."""
+        held.append(route)
+        page.evaluate("count => window.resetHistoryReads = count", len(held))
+
+    page.on("request", started)
+    page.on("requestfinished", lambda request: active.discard(request))
+    page.on("requestfailed", lambda request: active.discard(request))
+    page.route("**/v1/activities?**", hold)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.focus()
+    next_page.press("Enter")
+    page.wait_for_function("() => window.resetHistoryReads === 1")
+    for reset_number in (1, 2):
+        marker = f"Synthetic subscription reset {reset_number}."
+        assert page.request.post(
+            url + "/_test/activity-reset",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            data={"detail": marker},
+        ).ok
+        expect(page.locator("#activity-health")).to_contain_text(marker)
+    assert len(held) == 1 and peak[0] == 1
+    expect(next_page).to_be_disabled()
+    next_page.dispatch_event("click")
+    assert len(held) == 1
+    if move_focus:
+        page.get_by_label("Day", exact=True).focus()
+    if first_failure:
+        held[0].fulfill(status=503)
+    else:
+        response = page.request.get(
+            held[0].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+        ).json()
+        held[0].fulfill(json=response)
+    page.wait_for_function("() => window.resetHistoryReads === 2")
+    expect(next_page).to_be_disabled()
+    expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "true")
+    next_page.dispatch_event("click")
+    response = page.request.get(
+        held[1].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    identity = next(row["id"] for row in response["activities"] if row["state"] == "running")
+    assert page.request.post(
+        url + "/_test/activity-finish",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"activity_id": identity},
+    ).ok
+    assert page.request.post(
+        url + "/_test/activity-health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"owner": "weather", "state": "available", "detail": "Post-reset outcome received."},
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Post-reset outcome received.")
+    held[1].fulfill(json=response)
+    wait_for_product_reads(page)
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+    expect(page.locator(f'[data-activity-id="{identity}"] .activity-state')).to_have_text(
+        "Completed"
+    )
+    expect(page.locator("#activity-status")).to_have_text("")
+    expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "false")
+    expect(next_page).to_be_enabled()
+    expect(page.get_by_label("Day", exact=True) if move_focus else next_page).to_be_focused()
+    assert len(held) == 2 and peak[0] == 1 and not active
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)

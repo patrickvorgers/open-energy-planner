@@ -8,7 +8,7 @@ const find = id => document.getElementById(id);
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", rows = new Map(), running = [], scheduled = [], health = [], next, generation = 0, loading = false;
 const pageSize = 25;
-let historyProblem = "", loadProblem = "", liveProblem = "", pageIndex = 0, requestedPage = 0, pageCursors = [undefined], pendingUpdates = new Map();
+let historyProblem = "", loadProblem = "", liveProblem = "", pageIndex = 0, requestedPage = 0, pageCursors = [undefined], pendingUpdates = new Map(), resetPending = false;
 const historyWarning = (available, lost) => lost ? "Some activity updates could not be recorded. History may be incomplete. Energy planning continues independently." : available === false ? "Activity history cannot currently be saved. Energy planning continues independently." : "";
 const label = value => value.charAt(0).toUpperCase() + value.slice(1).replaceAll(/[_-]/g, " ");
 const moduleName = value => value.split(":").map(label).join(": ");
@@ -186,20 +186,25 @@ async function load(page = 0) {
     render();
     find("activity-status").textContent = "Loading activity history.";
     try {
-        const day = find("activity-day").value, before = pageCursors[page] ? `&before=${encodeURIComponent(pageCursors[page])}` : "";
-        const kind = find("activity-type").value;
-        const result = await api(`v1/activities?day=${encodeURIComponent(day)}&limit=${pageSize}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}${before}`);
-        if (version !== generation) return;
-        useHomeAssistantTimezone(result.timezone);
-        rows = new Map(result.activities.map(row => [row.id, pendingUpdates.get(row.id) || row]));
-        if (page === 0) for (const [identity, row] of pendingUpdates) if (matches(row)) rows.set(identity, row);
-        pageIndex = page;
-        pageCursors = pageCursors.slice(0, page + 1);
-        next = result.next;
-        if (next) pageCursors[page + 1] = next;
-        loadProblem = "";
-    } catch (error) {if (version === generation) loadProblem = error.message;}
-    finally {
+        // Coalesce replay resets within this read so loading and focus keep one owner.
+        do {
+            resetPending = false;
+            try {
+                const day = find("activity-day").value, before = pageCursors[page] ? `&before=${encodeURIComponent(pageCursors[page])}` : "";
+                const kind = find("activity-type").value;
+                const result = await api(`v1/activities?day=${encodeURIComponent(day)}&limit=${pageSize}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}${before}`);
+                if (version !== generation) return;
+                useHomeAssistantTimezone(result.timezone);
+                rows = new Map(result.activities.map(row => [row.id, pendingUpdates.get(row.id) || row]));
+                if (page === 0) for (const [identity, row] of pendingUpdates) if (matches(row)) rows.set(identity, row);
+                pageIndex = page;
+                pageCursors = pageCursors.slice(0, page + 1);
+                next = result.next;
+                if (next) pageCursors[page + 1] = next;
+                loadProblem = "";
+            } catch (error) {if (version === generation) loadProblem = error.message;}
+        } while (version === generation && resetPending);
+    } finally {
         if (version === generation) {
             loading = false; requestedPage = pageIndex; render();
             if (focusedPageControl && document.activeElement === document.body) {
@@ -221,7 +226,8 @@ observeEvents(message => {
     if (message.reset) {
         running = message.snapshot.running; scheduled = message.snapshot.scheduled; health = message.snapshot.health;
         historyProblem = historyWarning(message.snapshot.history_available, message.snapshot.lost_updates);
-        load(requestedPage);
+        if (loading) resetPending = true;
+        else load(requestedPage);
     }
     for (const event of message.events || []) {
         const row = event.value;
