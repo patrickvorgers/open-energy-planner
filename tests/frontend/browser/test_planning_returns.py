@@ -195,7 +195,7 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
             "Import cost",
             "Export income",
             "Bonus income",
-            "Net grid cash cost",
+            "Net electricity cost",
             "Wear",
             "Battery value change (not cash)",
         ]
@@ -206,9 +206,9 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
     expect(page.locator("#ems-costs details")).to_contain_text("Battery value change (not cash)")
     expect(page.locator("#ems-costs details p")).to_have_text(
         [
-            "Net grid cash cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.",
+            "Net electricity cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.",
             (
-                "Economic cost = net grid cash cost + wear - battery value change. "
+                "Economic cost = net electricity cost + wear - battery value change. "
                 "A positive value change reduces economic cost. "
                 "Battery value change is not cash."
             ),
@@ -284,7 +284,7 @@ def test_cost_breakdown_shows_each_scenario_income_with_original_sign(financial_
                 "Import cost",
                 "Export income",
                 "Bonus income",
-                "Net grid cash cost",
+                "Net electricity cost",
                 "Wear",
                 "Battery value change (not cash)",
             ]

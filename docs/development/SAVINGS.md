@@ -120,8 +120,8 @@ tested contract primitives, including the HA location for daylight windows.
 
 For each nonoverlapping evaluated interval:
 
-* Grid cash cost = import cost − export income − bonuses.
-* Economic cost = grid cash cost + wear − change in battery inventory value.
+* Net electricity cost = import cost − export income − bonuses.
+* Economic cost = net electricity cost + wear − change in battery inventory value.
 * Financial benefit = reference economic cost − actual EMS economic cost.
 * Avoided gross import = reference import kWh − actual EMS import kWh.
 

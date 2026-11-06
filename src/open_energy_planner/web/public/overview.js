@@ -314,12 +314,12 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
     metric(breakdown, "Import cost", costs?.purchase);
     metric(breakdown, "Export income", costs?.sale);
     metric(breakdown, "Bonus income", costs?.bonus);
-    metric(breakdown, "Net grid cash cost", cash);
+    metric(breakdown, "Net electricity cost", cash);
     metric(breakdown, "Wear", costs?.wear);
     metric(breakdown, "Battery value change (not cash)", costs?.inventory_change);
     const cashExplanation = document.createElement("p"), explanation = document.createElement("p");
-    cashExplanation.textContent = "Net grid cash cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.";
-    explanation.textContent = "Economic cost = net grid cash cost + wear - battery value change. A positive value change reduces economic cost. Battery value change is not cash.";
+    cashExplanation.textContent = "Net electricity cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.";
+    explanation.textContent = "Economic cost = net electricity cost + wear - battery value change. A positive value change reduces economic cost. Battery value change is not cash.";
     details.append(summary, breakdown, cashExplanation, explanation);
     host.replaceChildren(totals, details);
     if (!showBenefit) {
@@ -632,7 +632,7 @@ async function savings(signal) {
         const currency = data.intervals[0]?.currency || "";
         $("savings-total").textContent = coverage.evaluated ? `Evaluated benefit: ${money(data.savings)} ${currency}: Avoided gross import: ${number(data.avoided_import_kwh)} kWh: Negative results are retained.` : "No evaluated savings yet. Comparison starts when a published plan, completed metering and published prices are available.";
         $("cost-rows").replaceChildren();
-        for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["grid_cash", "Net grid cash cost"], ["wear", "Battery wear"], ["inventory_change", "Battery value change (estimated, not cash)"], ["economic_cost", "Economic cost"], ["import_kwh", "Gross import (kWh)"]]) row($("cost-rows"), [label, coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.actual[key]) : "-", coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.reference[key]) : "-"]);
+        for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["grid_cash", "Net electricity cost"], ["wear", "Battery wear"], ["inventory_change", "Battery value change (estimated, not cash)"], ["economic_cost", "Economic cost"], ["import_kwh", "Gross import (kWh)"]]) row($("cost-rows"), [label, coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.actual[key]) : "-", coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.reference[key]) : "-"]);
         $("evaluation-rows").replaceChildren();
         $("realized-battery-rows").replaceChildren();
         $("inventory-rows").replaceChildren();
