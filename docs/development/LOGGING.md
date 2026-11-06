@@ -59,6 +59,11 @@ messages or the route's own recovery explanation. Broad catches may include
 database and provider defects, even when the exception is a `ValueError`.
 `request_error_message` returns the canonical owned message on an exact match.
 Do not admit prefixes, substrings, regex matches or arbitrary exception strings.
+An application-owned exception class does not make its arguments public. Never
+copy `str(error)` or its arguments into an HTTP response. Route-level regressions
+must inject synthetic private values and lookalike validation text, then verify
+both the actual HTTP response and captured diagnostics without importing the
+production message catalogue as their oracle.
 Keep each admitted catalogue with its route owner and review additions against
 the actual validation source. Malformed JSON and known rejected input are DEBUG.
 Unknown failures are ERROR with the exception type and complete stack locations,
