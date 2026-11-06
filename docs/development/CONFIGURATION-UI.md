@@ -106,7 +106,8 @@ the cable is connected, including when charging is paused. Charging activity,
 door and fault sensors do not prove a connection. No connection source or vehicle
 identity is selected automatically.
 
-Changing the vehicle integration clears its incompatible SoC choice. For a charge
+Choosing a different nonblank vehicle integration clears its incompatible SoC
+choice. Clearing the integration filter retains the explicit SoC choice. For a charge
 point, the integration filters available sources without clearing explicitly
 selected power or connection sources. Choices outside the filter remain visible
 and can be combined with sources from another integration. Cancel restores

@@ -15,9 +15,10 @@ from tests.frontend.browser.test_appliance_settings import add_ev_appliance
     [{"width": 1440, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
     indirect=True,
 )
-def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_page):
+def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_page, request):
     """Desktop/tablet/mobile filter real sources, align controls and preserve independent Energy ownership."""
     page, url = app_page
+    site = request.node.callspec.params["app_site"] or "standalone"
     body = discover(page, url)
     for entity_id, name, unit, kind, integration_id, integration_name in (
         ("sensor.car_charge", "Battery level", "%", "", "car", "Family car"),
@@ -55,7 +56,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     response = page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body)
     assert response.ok, "Home Assistant catalogue request failed"
     page.goto(url + "/appliance-settings/ev")
-    if "hassio_ingress" not in url:
+    if site == "standalone":
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
         page.get_by_role("button", name="Connect", exact=True).click()
     add_ev_appliance(page, "vehicle")
@@ -64,6 +65,10 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     expect(soc.locator("option")).to_have_count(2)
     expect(soc).to_have_value("")
     soc.select_option("sensor.car_charge")
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
+    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
+        "sensor.car_charge"
+    )
     page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
         "car2"
     )
@@ -78,6 +83,28 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     saved = page.request.get(url + "/v1/ev", headers=headers).json()
     assert saved["vehicles"][0]["name"] == "Family car"
     assert saved["vehicles"][0]["soc_entity"] == "sensor.car_charge"
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
+    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
+        "sensor.car_charge"
+    )
+    assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
+        "car2"
+    )
+    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value("")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("car")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("61")
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved_vehicle = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert saved_vehicle["soc_entity"] == "sensor.car_charge"
+    assert saved_vehicle["capacity_kwh"] == 61
     add_ev_appliance(page, "point")
     page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
         "empty"
@@ -117,7 +144,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     directory.mkdir(parents=True, exist_ok=True)
     page.evaluate("scrollTo(0, 0)")
     page.screenshot(
-        path=str(directory / f"ev-source-selection-{page.viewport_size['width']}.png"),
+        path=str(directory / f"ev-source-selection-{page.viewport_size['width']}-{site}.png"),
         full_page=True,
     )
     page.get_by_role("button", name="Save settings", exact=True).click()
