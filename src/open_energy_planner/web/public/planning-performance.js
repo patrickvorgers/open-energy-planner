@@ -15,7 +15,8 @@ const clock = value => when(value,{hour:"2-digit",minute:"2-digit"}) + occurrenc
 const bottomLegend = {id:"performanceBottomLegend",beforeLayout(chart){chart.options.plugins.legend.position="bottom";}};
 const QUARTER_MILLISECONDS = 15 * MINUTE_MILLISECONDS;
 const MAX_TIME_LABELS = 8;
-let token = "", chart = null, detailChart = null, rows = [], requestVersion = 0, detailVersion = 0;
+const CALCULATIONS_PER_PAGE = 25;
+let token = "", chart = null, detailChart = null, rows = [], requestVersion = 0, detailVersion = 0, listPage = 0, loading = false;
 /** Keep credentials in memory and never display raw server errors. */
 async function api(path) {
  const response = await fetch(base + path,{headers:token ? {Authorization:`Bearer ${token}`} : {},redirect:"error",cache:"no-store"});
@@ -58,7 +59,33 @@ async function detail(row) {
  const table = find("calculation-samples"); table.replaceChildren();
  for (const sample of samples) {const item = document.createElement("tr"); for (const value of [seconds(sample.elapsed_seconds),money(sample.objective),money(sample.best_bound)]) {const cell = document.createElement("td"); cell.textContent = value; item.append(cell);} table.append(item);}
 }
-/** Render the same values as an accessible list and a time-scaled duration chart. */
+/** Page the accessible history without changing the chart's complete daily evidence. */
+function renderList(calculations = rows) {
+ const pages = Math.max(1, Math.ceil(calculations.length / CALCULATIONS_PER_PAGE));
+ listPage = Math.max(0, Math.min(listPage, pages - 1));
+ find("performance-page").textContent = `Page ${listPage + 1} of ${pages}`;
+ find("performance-previous").disabled = loading || listPage === 0;
+ find("performance-next").disabled = loading || listPage + 1 === pages;
+ const list = find("performance-list"); list.replaceChildren();
+ for (const row of calculations.slice(listPage * CALCULATIONS_PER_PAGE, (listPage + 1) * CALCULATIONS_PER_PAGE)) {
+  const item = document.createElement("li"), action = document.createElement("button"), time = document.createElement("time"), result = document.createElement("span"), duration = document.createElement("span");
+  item.className = "performance-row"; item.dataset.calculationId = row.id;
+  time.dateTime = row.started_at; time.textContent = clock(row.started_at);
+  result.className = "performance-result"; result.textContent = outcome(row); result.title = result.textContent;
+  duration.className = "performance-duration"; duration.textContent = seconds(row.duration_seconds);
+  action.type = "button"; action.setAttribute("aria-label", `View calculation at ${clock(row.started_at)}: ${outcome(row)}: ${seconds(row.duration_seconds)}`);
+  action.addEventListener("click", () => detail(row)); action.append(time, result, duration); item.append(action); list.append(item);
+ }
+ if (!calculations.length) {const empty = document.createElement("li"); empty.className = "performance-empty"; empty.textContent = "No completed calculations for this day."; list.append(empty);}
+}
+/** Keep navigation focus usable when the activated page control becomes disabled. */
+function changePage(offset) {
+ if (loading) return;
+ const control = document.activeElement;
+ listPage += offset; renderList();
+ if (control?.disabled) find(offset > 0 ? "performance-previous" : "performance-next").focus();
+}
+/** Render the same values as an accessible paged list and a full-day duration chart. */
 function render() {
  chart?.destroy();
  clockOccurrences = new Map();
@@ -72,7 +99,7 @@ function render() {
  const minimum = calendarDayStart(day), maximum = calendarDayStart(nextDate(day));
  if (maximum <= minimum) {
   chart=null;
-  find("performance-list").replaceChildren(); find("performance-legend").replaceChildren();
+  renderList([]); find("performance-legend").replaceChildren();
   find("performance-summary").textContent="The selected calendar day does not exist in the Home Assistant installation timezone.";
   return;
  }
@@ -95,16 +122,17 @@ function render() {
   swatch.className="series-swatch"; swatch.style.backgroundColor=dataset.backgroundColor || dataset.borderColor; swatch.setAttribute("aria-hidden","true");
   label.append(input,swatch,document.createTextNode(dataset.label));legend.append(label);
  });
- const list = find("performance-list"); list.replaceChildren();
- for (const row of rows) {const item = document.createElement("div"), identity = document.createElement("p"), duration = document.createElement("p"), action = document.createElement("button"); item.className="performance-row"; duration.className="performance-duration"; identity.textContent=`${clock(row.started_at)}: ${outcome(row)}`; duration.textContent=seconds(row.duration_seconds); action.type="button"; action.className="secondary"; action.textContent="View calculation"; action.setAttribute("aria-label",`View calculation at ${clock(row.started_at)}`); action.addEventListener("click",()=>detail(row)); item.append(identity,duration,action); list.append(item);}
+ renderList();
 }
 /** Ignore late responses after a day change. Failed reads clear stale data rather than misdate it. */
 async function load() {
- const version = ++requestVersion; find("performance-status").textContent="Loading calculation history.";
- try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone); find("performance-day").value=data.day; rows=data.calculations; render(); find("performance-status").textContent="";
+ const version = ++requestVersion; loading = true; find("performance-previous").disabled = true; find("performance-next").disabled = true; find("performance-status").textContent="Loading calculation history.";
+ try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone); find("performance-day").value=data.day; rows=data.calculations; listPage = 0; loading = false; render(); find("performance-status").textContent="";
  const address=new URL(location.href), selectedId=address.searchParams.get("calculation"); if(selectedId){address.searchParams.delete("calculation");history.replaceState(null,"",address);const selectedRow=rows.find(row=>row.id===selectedId);if(selectedRow&&!find("calculation-detail").open)detail(selectedRow);}
- } catch(error){if(version!==requestVersion)return; rows=[]; render(); find("performance-summary").textContent="Calculation history is unavailable for the selected day."; find("performance-status").textContent=error.message;}
+ } catch(error){if(version!==requestVersion)return; rows=[]; listPage = 0; loading = false; render(); find("performance-summary").textContent="Calculation history is unavailable for the selected day."; find("performance-status").textContent=error.message;}
 }
+find("performance-previous").addEventListener("click", () => changePage(-1));
+find("performance-next").addEventListener("click", () => changePage(1));
 find("calculation-detail").addEventListener("close",()=>{detailVersion++;detailChart?.destroy();detailChart=null;});
 find("calculation-close").addEventListener("click",()=>find("calculation-detail").close());
 find("performance-extra").addEventListener("change",render);

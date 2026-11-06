@@ -7,7 +7,16 @@ Open **Insights > Planning performance** when you want to understand how long ca
 1. Choose the **Day** in the Home Assistant timezone, or use **Today**.
 2. Read **Calculation time** together with the **Calculations** list.
 3. Enable **Show additional calculations between quarter hours** when you need to include intermediate rounds.
-4. Choose **View calculation** for the relevant start time. The list provides the same detail access as the chart and works with the keyboard.
+4. Open the calculation row for the relevant start time. The list provides the same detail access as the chart and works with the keyboard.
+
+The list uses compact columns for time, result and duration. It shows up to 25
+calculations per page in chronological order. Use **Next** and **Previous** to
+move through the selected day. The page number shows your position. The chart
+continues to show the whole day while you page through the list. Changing the
+day, choosing **Today** or using **Refresh** opens the first page. Closing a
+calculation returns to the same row and page. On phones, each row places its
+result below the time and duration. Long results remain available in the detail
+dialog.
 
 The stacked bars separate the first observed financial candidate from further calculation time when both were recorded. An unknown first-candidate time produces a total-only bar. Missing historical progress cannot be reconstructed from the total duration.
 

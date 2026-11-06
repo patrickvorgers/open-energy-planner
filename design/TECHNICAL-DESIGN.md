@@ -1647,6 +1647,16 @@ issues physical commands or resolves unknown execution.
 
 ## Planning performance insight
 
+The calculation list follows the compact Activity history presentation described
+under [large read-only lists](../docs/development/CONFIGURATION-UI.md#large-read-only-lists).
+The existing complete daily summary response remains authoritative. The browser
+renders 25 rows per page without additional reads or changing chart evidence.
+Rows retain chronological order and open the existing calculation dialog by
+record ID. Paging does not rebuild the chart or change the selected day. Day
+changes and explicit refresh reset to page one. Pending reads disable page
+navigation, obsolete responses retain their existing generation guard, and
+failed reads clear the list rather than leaving another day's rows visible.
+
 The HiGHS adapter observes only the final financial search, after all service and optional consumption priorities. Solver-neutral `SolveSample` values carry elapsed seconds, financial incumbent objective and finite lower bound through the existing bounded worker. At most 256 samples preserve the first and latest while compacting intermediate observations. Final extraction adds an observation without inventing a first-candidate time when callbacks are absent. The actual solver start instant aligns observations with the whole calculation, including worker startup.
 
 The planning service retains the result alongside validation outcome. The serial coordinator invokes its optional observer after publication disposition, including failed and discarded attempts. Callback and persistence faults remain contained and cannot change priorities, the shared solver budget, independent validation or commands. Existing process deadlines remain authoritative.
