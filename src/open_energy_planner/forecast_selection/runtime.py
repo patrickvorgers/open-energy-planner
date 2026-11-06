@@ -321,11 +321,19 @@ class ModelSelection:
             return
         from ..activities.events import Health, Outcome
 
+        subject = payload.get("variant") or payload.get("capture") or {}
+        names = payload["original"].get("comparison_names", {})
+        label = (
+            "Household consumption"
+            if subject.get("kind") == "demand"
+            else names.get(subject.get("source_id"), "Solar production")
+        )
         with self.events.thread_attempt(
             "models",
             "training",
             "Compare forecast models",
             failure="Model comparison failed. Baseline models remain active.",
+            context={"label": label},
         ) as identity:
             try:
                 result = self._execute(payload)

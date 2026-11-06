@@ -84,7 +84,7 @@ no foreign keys. Shared backend transfer copies and verifies this table.
 | `owner` | String(128), binary collation | Business producer identity. Price owners include adapter and bidding area. |
 | `kind` | String(128) | Activity type used by the history filter. |
 | `state` | String(128) | `running`, `completed`, `failed`, `interrupted`, `cancelled` or `skipped`. Restart marks running records interrupted. |
-| `payload` | Text / LONGTEXT | Detached finite JSON with ID, owner, kind, title, state, aware UTC start, nullable finish, safe detail, recovery flag, terminal usability and optional process-local terminal sequence. No credentials or raw provider payloads. |
+| `payload` | Text / LONGTEXT | Detached finite JSON with ID, owner, kind, title, state, aware UTC start, nullable finish, safe detail, recovery flag, terminal usability, optional process-local terminal sequence and optional display `context`. Context allows a single-line label (160 characters maximum), paired aware UTC `start`/`end` and `waiting_start`/`waiting_end` ranges with end after start, an aware UTC `plan_generated_at`, and `plan_strategy` limited to `minimize cost` or `minimize consumption` when creation time is valid. Optional `plan_id` is one to 128 ASCII letters, digits, underscores or hyphens identifying an existing immutable plan. A referenced archive can subsequently be unavailable. Terminal enrichment preserves the captured work horizon. Invalid fields are omitted independently. No credentials, navigation URLs or raw provider payloads. |
 
 `finished_sequence` orders outcomes sharing a finish timestamp. Startup resumes
 above its retained maximum while creating a new live-subscription epoch.

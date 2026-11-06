@@ -51,6 +51,14 @@ export function inputNumber(input) {
     if (precise !== undefined && (precise === "" || !input.validity.valid)) return null;
     return Number(precise ?? input.value);
 }
+/** Show the supported plan strategy without exposing unknown archived values. */
+export function planStrategy(value) {
+    return value === "minimize cost" ? "Minimize cost" : value === "minimize consumption" ? "Minimize consumption" : "Unknown";
+}
+/** Name a captured plan consistently with the Planning selector, using the installation timezone. */
+export function planName(plan) {
+    return `${when(plan.generated_at)}: ${planStrategy(plan.strategy)}`;
+}
 /** Show minute precision in HA time or an explicit source zone, overriding options.timeZone without changing stored instants. */
 export function when(value, options = {}, zone = timeZone) {
     const hasStyle = options.dateStyle !== undefined || options.timeStyle !== undefined;

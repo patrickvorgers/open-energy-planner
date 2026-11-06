@@ -516,6 +516,7 @@ def create_app(
                             "training",
                             "Update consumption forecast",
                             failure="The forecast update failed. Retained forecasts keep their original validity. Check Forecast quality before relying on learned models.",
+                            context={"label": "Household consumption"},
                         ) as activity:
                             result = await build_demand(job)
                             async with lock:
@@ -584,6 +585,7 @@ def create_app(
                     next_update(current, demand.retry_after)
                     if demand.configuration and not demand.store.issue
                     else None,
+                    context={"label": "Household consumption"},
                 )
                 await asyncio.sleep(FORECAST_WORKER_POLL_SECONDS)
 
@@ -618,7 +620,10 @@ def create_app(
                                 last_location = location
                         if configured and location is not None:
                             activity = await events.start(
-                                "temperature-weather", "weather", "Fetch temperature forecast"
+                                "temperature-weather",
+                                "weather",
+                                "Fetch temperature forecast",
+                                context={"label": "Household consumption"},
                             )
                             try:
                                 temperatures = await weather_source.read(
@@ -699,6 +704,7 @@ def create_app(
                                 "weather",
                                 "Fetch temperature forecast",
                                 datetime.now(UTC) + timedelta(seconds=delay),
+                                context={"label": "Household consumption"},
                             )
                         else:
                             events.withdraw("temperature-weather")
