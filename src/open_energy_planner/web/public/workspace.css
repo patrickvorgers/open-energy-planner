@@ -189,10 +189,21 @@
     --oep-line:#d4e0e7;
     --oep-blue:#006da6;
     --oep-navy:#1a3060;
+    --oep-danger:#a92d38;
     background:var(--oep-paper);
     color:var(--oep-ink);
     font-family:Outfit,ui-sans-serif,system-ui,sans-serif;
 }
+.workspace dialog.confirmation-dialog { position:fixed; inset:0; margin:auto; box-sizing:border-box; width:min(500px,calc(100vw - 32px)); max-width:calc(100vw - 32px); max-height:calc(100dvh - 32px); padding:28px; overflow:auto; border:1px solid var(--oep-line); border-radius:16px; background:var(--oep-paper); color:var(--oep-ink); font-family:inherit; box-shadow:0 20px 64px #19263f33; }
+.workspace dialog.confirmation-dialog::backdrop { background:#19263f80; }
+.confirmation-dialog form { margin:0; }
+.workspace .confirmation-dialog h2 { margin:0 0 14px; font-size:24px; line-height:1.25; overflow-wrap:anywhere; }
+.confirmation-dialog p { margin:0; color:var(--oep-muted); line-height:1.6; white-space:pre-line; overflow-wrap:anywhere; }
+.confirmation-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-top:24px; }
+.workspace .confirmation-actions button { min-height:44px; margin:0; font-size:14px; }
+.workspace .confirmation-actions .confirmation-accept { background:var(--oep-danger); color:white; border:1px solid var(--oep-danger); }
+.workspace .confirmation-actions button:focus-visible { outline:2px solid var(--oep-blue); outline-offset:3px; }
+@media(max-width:400px) { .workspace dialog.confirmation-dialog { padding:22px; }.confirmation-actions { flex-direction:column; }.confirmation-actions button { width:100%; } }
 .workspace .sidebar { background:var(--oep-sky); color:var(--oep-navy); }
 .workspace .brand { color:var(--oep-navy); }
 .workspace .brand-mark { background:transparent; border-radius:0; }

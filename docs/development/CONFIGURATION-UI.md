@@ -28,6 +28,33 @@ of internal identifiers, protocol fields, configuration keys or stored evidence.
 Preserve names supplied by users and external services. Edit owned text at its
 source rather than filtering arbitrary rendered content.
 
+## Action confirmations
+
+Use `confirmation.js` and the shared Courtyard dialog styling for app-owned
+confirmations. Use native `<dialog>` modality rather than browser `confirm`,
+`alert` or `prompt`. Browser-owned security and `beforeunload` prompts retain
+their native behavior.
+
+Confirm removal of configured devices and saved price rules, cancellation of
+an active appliance planning request, and database replacement or recovery.
+Name the concrete item, explain what changes and what is retained, and say
+whether confirmation applies immediately or only stages a change for Save.
+Use a specific action label rather than Yes or OK. Ordinary saves, navigation,
+routine refresh and removing an unsaved draft item do not need another prompt.
+Database migration keeps its existing preflight and explicit overwrite consent.
+
+Cancel receives initial focus. Cancel, Escape, Enter on Cancel and backdrop
+clicks must leave drafts and persisted data unchanged. Keep keyboard focus
+inside the modal and restore it to a visible initiating control on dismissal.
+Only one confirmation may be pending. Insert names and descriptions as literal
+text. After asynchronous consent, recheck the selected identity, draft or
+maintenance state before applying the action. Existing dependency checks,
+version checks, write locks, failure advice and retained edits remain required.
+
+Verify desktop, mobile and HA ingress behavior, dismissal without writes,
+single accepted execution, stale-state rejection and failed-write recovery.
+Retain synthetic screenshots of representative actual confirmation flows.
+
 ## Panel spacing
 
 The shared workspace owns separation between independent panels through

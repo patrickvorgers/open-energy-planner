@@ -1,4 +1,5 @@
 import "./chart_theme.js";
+import {confirmAction} from "./confirmation.js";
 import {money, percentage, when, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
 import {PROFILE_MINUTES, WATT_PHASES_PER_KWH, profileMetrics} from "./appliance-profile.js";
 import {bindSettingsActions} from "./settings-actions.js";
@@ -147,7 +148,18 @@ async function load() {
             const form = node("form"), deadline = node("input"), deadlineLabel = node("label", "Finish before (Home Assistant time)"); deadline.type = "datetime-local"; deadline.required = true; deadlineLabel.append(deadline); form.append(deadlineLabel);
             const submit = node("button", "Appliance is ready"); submit.disabled = !device?.shiftable || !device?.profile || Boolean(task && !["completed", "cancelled"].includes(task.status)); form.append(submit); card.append(form);
             form.onsubmit = async (event) => { event.preventDefault(); submit.disabled = true; try { await api("v1/appliances/tasks", {entity_id: option.entity_id, request_id: identity(), ready_at: new Date().toISOString(), deadline: localInstant(deadline.value)}); await load(); } catch (error) { find("status").textContent = error.message; submit.disabled = false; } };
-            if (task && !["completed", "cancelled"].includes(task.status)) { const cancel = node("button", "Cancel planning"); cancel.type = "button"; cancel.className = "secondary"; cancel.onclick = async () => { try { await api("v1/appliances/cancel", {entity_id: option.entity_id, task_id: task.id}); await load(); } catch (error) { find("status").textContent = error.message; } }; card.append(cancel); }
+            if (task && !["completed", "cancelled"].includes(task.status)) {
+                const cancel = node("button", "Cancel planning"); cancel.type = "button"; cancel.className = "secondary";
+                cancel.onclick = async () => {
+                    if (cancel.disabled || !await confirmAction({title: "Cancel appliance planning?", message: `${option.name || option.entity_id} will no longer be scheduled for this request.\n\nThis does not stop the physical appliance or report that its cycle has completed. Home Assistant and the appliance remain responsible for physical control.`, confirmLabel: "Cancel planning"})) return;
+                    if (!cancel.isConnected || cancel.disabled) return;
+                    cancel.disabled = true;
+                    try { await api("v1/appliances/cancel", {entity_id: option.entity_id, task_id: task.id}); await load(); }
+                    catch (error) { find("status").textContent = error.message; }
+                    finally { if (cancel.isConnected) cancel.disabled = false; }
+                };
+                card.append(cancel);
+            }
             if (task?.events?.length) { const details = node("details"), list = node("ol"); details.append(node("summary", "Execution evidence")); for (const event of task.events) list.append(node("li", `${when(event.at)}: ${optionLabel(event.event)}: Attempt: ${event.attempt_id}`)); details.append(list); card.append(details); }
             find("appliance-list").append(card);
         }
