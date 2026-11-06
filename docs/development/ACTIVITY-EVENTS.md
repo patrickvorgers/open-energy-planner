@@ -103,7 +103,7 @@ remain unchanged. Storage uses the existing payload JSON, without extra columns.
 | Planning | The actual captured problem horizon. A published plan shows `Plan <start> to <end>: <strategy>` without repeating its creation time. Running attempts retain the horizon without a plan caption. No guessed upcoming ad-hoc horizon. |
 | Forecast quality archive | The pending archive's captured start/end. Scheduled work uses its installation-local day, including DST. |
 | Measured savings | The captured measurement batch range being investigated, including when settlement remains pending. |
-| Archived plan valuation | The same creation-time and strategy caption as Planning, plus the original problem horizon. Missing creation evidence falls back to Archived plan. Malformed horizon evidence omits the range without preventing failure recording. |
+| Archived plan valuation | The captured plan creation time and strategy, followed by the original problem horizon. Missing creation evidence falls back to Archived plan. Malformed horizon evidence omits the range without preventing failure recording. |
 
 The browser uses inert text and the shared minute-precision installation-timezone
 formatter. Names stay on one line with visual truncation. Native disclosure and
