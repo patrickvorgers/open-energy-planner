@@ -7,11 +7,15 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
+from open_energy_planner.activities.api import EVENTS
+from open_energy_planner.activities.events import Health, Outcome
 from open_energy_planner.core.units import BYTES_PER_KIB, MINUTES_PER_HOUR, SECONDS_PER_MINUTE
 from open_energy_planner.history.wire import parse_history
+from open_energy_planner.installation.forecast_policy import next_update
 from open_energy_planner.notifications.api import NOTIFICATIONS
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
+from .basis import forecast_usable
 from .ha_forecasts import parse_ha_predictions
 from .notifications import explain_solar_problem, solar_forecast_notifications
 from .wire import parse_configuration
@@ -152,23 +156,63 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
     async def lifecycle(_app):
         """Keep network waits and numerical work outside the shared app state lock."""
         forecast_logger = BackgroundLog(_LOGGER, "Solar forecast update")
+        events = app.get(EVENTS)
 
         async def update():
             """Install only results matching current immutable inputs, with bounded retry on failure."""
             while True:
                 job = None
+                activity = None
                 try:
                     async with lock:
                         job = runtime.job(datetime.now(UTC))
                     if job:
+                        activity = (
+                            await events.start("solar", "training", "Update solar forecast")
+                            if events
+                            else None
+                        )
                         result = await worker(runtime, job)
                         async with lock:
-                            if runtime.install(result, datetime.now(UTC)):
+                            installed = runtime.install(result, datetime.now(UTC))
+                            if installed:
                                 if runtime.forecast is not None:
                                     forecast_logger.success("A new solar forecast is available.")
                                 if live:
                                     live.refresh()
+                        if activity:
+                            usable = installed and forecast_usable(
+                                runtime.configuration,
+                                runtime.forecast,
+                                runtime.location,
+                                datetime.now(UTC),
+                            )
+                            await events.finish(
+                                activity,
+                                Outcome.COMPLETED
+                                if usable
+                                else Outcome.FAILED
+                                if installed
+                                else Outcome.SKIPPED,
+                                "A new solar forecast is available."
+                                if usable
+                                else "No new usable solar forecast was installed. Existing forecasts retain their original expiry.",
+                                usable=usable,
+                            )
+                            events.availability(
+                                "solar",
+                                Health.AVAILABLE if usable else Health.DEGRADED,
+                                "Solar forecast available."
+                                if usable
+                                else "Check solar forecast validity.",
+                            )
                 except Exception:
+                    if events and job and activity in events.running:
+                        await events.finish(
+                            activity,
+                            Outcome.FAILED,
+                            "Solar forecast update failed. Retaining only valid forecasts. Planning still requires usable solar data.",
+                        )
                     async with lock:
                         failure_recorded = runtime.failed(job, datetime.now(UTC)) if job else False
                         retry_seconds = (
@@ -181,6 +225,48 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                     forecast_logger.exception(
                         "Retaining only valid forecasts. Planning still requires usable solar data.",
                         retry_seconds=max(SOLAR_WORKER_POLL_SECONDS, round(retry_seconds)),
+                    )
+                if events:
+                    current = datetime.now(UTC)
+                    usable = bool(
+                        runtime.configuration
+                        and runtime.configuration.sources
+                        and not runtime.store.issue
+                        and forecast_usable(
+                            runtime.configuration, runtime.forecast, runtime.location, current
+                        )
+                    )
+                    no_sources = bool(
+                        runtime.configuration
+                        and not runtime.configuration.sources
+                        and not runtime.store.issue
+                    )
+                    events.availability(
+                        "solar",
+                        Health.AVAILABLE
+                        if usable or no_sources
+                        else Health.UNAVAILABLE
+                        if runtime.configuration
+                        else Health.UNKNOWN,
+                        "No solar forecast is required for this installation."
+                        if no_sources
+                        else "A current solar forecast is available."
+                        if usable
+                        else "Waiting for a usable solar forecast.",
+                    )
+                    retry = (
+                        runtime.retry_after
+                        if not no_sources
+                        and runtime.retry_after
+                        and runtime.retry_after > current
+                        and runtime.failed_key == runtime.key(current)
+                        else None
+                    )
+                    events.scheduled(
+                        "solar",
+                        "training",
+                        "Update solar forecast",
+                        next_update(current, retry) if usable or retry else None,
                     )
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
@@ -199,6 +285,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
             """Refresh common solar weather hourly. Retry failures after 30 minutes and detect site changes."""
             async with weather_factory() as source:
                 weather_logger = BackgroundLog(_LOGGER, "Solar weather refresh")
+                events = app.get(EVENTS)
 
                 async def update_weather():
                     """Fetch only for configured PV and the latest HA location, independent of solver cadence."""
@@ -215,11 +302,25 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                 last_location, due = location, now
                         if configured and location and now >= due:
                             due = now + timedelta(minutes=WEATHER_RETRY_MINUTES)
+                            activity = (
+                                await events.start(
+                                    "solar-weather", "weather", "Fetch solar weather"
+                                )
+                                if events
+                                else None
+                            )
                             try:
                                 weather = await source.read(location, now)
+                                installed = False
                                 async with lock:
-                                    if live.report and live.report.location == location:
+                                    if (
+                                        live.report
+                                        and live.report.location == location
+                                        and runtime.configuration
+                                        and runtime.configuration.sources
+                                    ):
                                         runtime.set_weather(location, weather)
+                                        installed = True
                                         if weather:
                                             weather_logger.success(
                                                 f"Received {len(weather)} weather hours. Next refresh in {WEATHER_REFRESH_HOURS * MINUTES_PER_HOUR:g} minutes."
@@ -233,6 +334,29 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                                 * SECONDS_PER_MINUTE,
                                             )
                                 due = now + timedelta(hours=WEATHER_REFRESH_HOURS)
+                                if activity:
+                                    await events.finish(
+                                        activity,
+                                        Outcome.SKIPPED
+                                        if not installed
+                                        else Outcome.COMPLETED
+                                        if weather
+                                        else Outcome.FAILED,
+                                        "Solar weather was discarded because the installation changed."
+                                        if not installed
+                                        else "Solar weather received."
+                                        if weather
+                                        else "No usable solar weather returned. Retaining only valid forecasts. Planning still requires usable solar data.",
+                                        usable=installed and bool(weather),
+                                    )
+                                    if installed:
+                                        events.availability(
+                                            "solar-weather",
+                                            Health.AVAILABLE if weather else Health.DEGRADED,
+                                            "Solar weather available."
+                                            if weather
+                                            else "No new usable solar weather. Check forecast validity.",
+                                        )
                             except Exception as error:
                                 weather_logger.exception(
                                     "Retaining only valid forecasts. Planning still requires usable solar data.",
@@ -242,6 +366,24 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                     if isinstance(error, ValueError)
                                     else None,
                                 )
+                                if activity and activity in events.running:
+                                    await events.finish(
+                                        activity,
+                                        Outcome.FAILED,
+                                        "Solar weather refresh failed. Retaining only valid forecasts. Planning still requires usable solar data.",
+                                    )
+                                    events.availability(
+                                        "solar-weather",
+                                        Health.DEGRADED,
+                                        "Solar weather refresh failed. Check solar forecast validity.",
+                                    )
+                        if events:
+                            if configured and location:
+                                events.scheduled(
+                                    "solar-weather", "weather", "Fetch solar weather", due
+                                )
+                            else:
+                                events.withdraw("solar-weather")
                         await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
                 task = asyncio.create_task(update_weather())

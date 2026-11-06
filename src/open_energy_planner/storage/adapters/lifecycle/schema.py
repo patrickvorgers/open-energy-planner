@@ -44,6 +44,18 @@ def text_key(length):
     return String(length).with_variant(VARCHAR(length, collation="utf8mb4_bin"), "mysql", "mariadb")
 
 
+ACTIVITIES = archive_table(
+    "oep_activities",
+    Column("id", text_key(IDENTITY_LENGTH), primary_key=True),
+    Column("started_at", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("owner", text_key(IDENTITY_LENGTH), nullable=False),
+    Column("kind", String(FIELD_LENGTH), nullable=False),
+    Column("state", String(FIELD_LENGTH), nullable=False),
+    Column("payload", Text().with_variant(LONGTEXT(), "mysql", "mariadb"), nullable=False),
+)
+Index("oep_activity_chronology", ACTIVITIES.c.started_at, ACTIVITIES.c.id)
+
+
 META = archive_table(
     "oep_archive_meta",
     Column("id", Integer, primary_key=True),

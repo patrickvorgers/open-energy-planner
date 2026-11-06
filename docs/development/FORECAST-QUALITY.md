@@ -2,13 +2,12 @@
 
 The Forecast quality page compares one fixed midnight prediction with the actual energy of the same Home Assistant calendar day. Select a day rather than a planning round. Household consumption, individual consumer components and each PV source retain their original forecast identities. Interactive hourly graphs expose timing errors that can cancel in a daily total. The expandable table retains gaps, eligibility and provenance.
 
-Each graph shows predicted and measured hourly kWh as bars with matching straight
-lines drawn over them. Each line point sits on its own bar's top centre, including
-after resizing or hiding another series. Lines connect the same original hourly values and stop at
-missing measurements. A measured zero remains zero. No smoothing or missing-value
-interpolation changes the evidence. The accessible legend reuses Planning's
-layout, to the right on desktop and below the graph on mobile. Its two controls
-toggle the bars and line for each series together. Tooltips list each series once.
+Each graph shows measured hourly kWh as fill-only bars and original model forecasts
+as lines. The model selected at the frozen cutoff uses a solid line. Retained
+alternatives use dashed or dotted lines. The comparison table uses the same
+original values and whole-day eligibility rules. Hiding a series changes only
+its visibility. Lines stop at missing hours. A measured zero remains zero.
+The accessible legend sits beside the graph on desktop and below it on mobile.
 
 Refresh evidence updates measurements and current model readiness for the selected day. It never switches to a newer day or replaces the original prediction with an intraday plan. Load older days pages the retained day index. Forecast creation, automatic model selection and ordinary operational replanning remain unchanged.
 
@@ -74,9 +73,13 @@ the Forecast quality navigation item active. Device selection and weather
 sensitivity remain under Settings > Appliances. The consumer API and forecasting
 models do not change.
 
-Choose a day and optionally one device. Each chart keeps that day's frozen
-midnight prediction beside the hourly measurements received so far. The default
-shows the latest retained day and all devices. A running day shows its measurement
+Choose a day above the Household, Solar and Devices section navigation. The date
+applies to every section. Each section displays one selected source at a time.
+Household has no redundant source selector. Solar and Devices each have a flat
+source selector. The last section and source choices are stored locally without
+credentials. Each chart keeps that day's frozen midnight prediction beside the
+hourly measurements received so far. The default shows Household and the latest
+retained day. A running day shows its measurement
 coverage without claiming a complete-day score. A missing midnight prediction is
 not replaced by a current forecast. Device filtering does not fetch or recalculate
 a forecast and stays selected across days when that device exists on both.
@@ -85,3 +88,52 @@ Daily forecast, measured total and difference lead each chart. Model details,
 metrics, hourly provenance and automatic selection remain available on demand
 below the comparison. The page uses the existing responsive theme, keyboard
 controls and Home Assistant timezone on standalone and ingress routes.
+
+## Irradiance reference
+
+Solar graphs offer two optional lines on a separately labelled W/m² right axis.
+Forecast irradiance is the original Open-Meteo global horizontal irradiance from
+the exact weather manifest referenced by the frozen solar forecast. Only values
+received by forecast issuance are admitted. Later model history never replaces
+this expectation. A Home Assistant production forecast built without weather
+has no inferred irradiance forecast.
+
+Satellite estimate comes from the Open-Meteo Satellite Radiation API, explicitly
+selecting DWD / EUMETSAT MTG (`dwd_sis_europe_africa_v4`). It is an estimate for a
+satellite grid cell, not a measurement by a local ground sensor or KNMI station.
+The provider describes approximately 20 minutes of latency and an archive from
+February 2026. Actual availability is checked in the response. Older days,
+provider outages and gaps remain unavailable. No weather-model or other satellite
+dataset silently replaces this named reference. See the
+[provider documentation](https://open-meteo.com/en/docs/satellite-radiation-api).
+
+Both lines use preceding-hour mean global horizontal irradiance. End-labelled
+provider hours become UTC start/end intervals. The installation timezone controls
+display and 23/25-hour calendar boundaries. No incomplete edge hour is invented.
+The legend distinguishes orange dashed forecast irradiance from the red solid
+satellite estimate. Irradiance stays hidden until explicitly selected.
+
+Satellite data complete through reports the end of the last contiguous observed
+hour from the selected day's start. It stops at the first missing hour even when
+later observations exist. Coverage also reports available hours independently.
+Last fetched is the receipt time and does not claim observation completeness.
+Future and incomplete hours never contribute. The reference cannot establish a
+complete-day marker for a fractional UTC-hour day boundary.
+
+Satellite reads happen only for displayed archived solar evidence, outside the
+planning state lock. One site/day cache is refreshed at most once per ten minutes
+in a running instance. Concurrent readers of the same site/day share the refresh.
+Other cached days remain readable while a provider request is pending. Empty
+results retain the cache interval but report unavailable evidence until accepted
+observations arrive. They never announce readiness or recovery. Immutable receipts
+and the latest pointer use the active database and survive restart and backend
+transfer. A failed refresh retains earlier evidence with an explicit warning and
+a ten-minute retry delay. Neither satellite gaps nor outages change production
+scores, automatic source selection or planning inputs.
+
+New model builds retain same-issue household and solar candidate references.
+Each alternative uses the same configuration, issue time and measurement boundary
+as its original selected forecast. Missing historical candidate references are
+not reconstructed. An absent alternative means no retained comparison is
+available, not zero production. Whole-day scoring, control exclusions and clipping
+eligibility apply independently to every displayed candidate.

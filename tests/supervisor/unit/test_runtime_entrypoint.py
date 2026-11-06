@@ -53,6 +53,7 @@ def test_public_demo_entrypoint_preserves_startup_and_ingress(monkeypatch, tmp_p
         "price_factory": None,
         "weather_factory": None,
         "solar_weather_factory": None,
+        "satellite_factory": None,
         "discovery_options": None,
         "ingress_peer": "172.30.32.2" if supervised else None,
     }

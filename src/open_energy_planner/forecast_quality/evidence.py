@@ -6,11 +6,76 @@ from math import fsum
 from open_energy_planner.core.units import WATTS_PER_KW
 from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.forecast_quality.calculation.metrics import series
+from open_energy_planner.forecast_quality.radiation import original_radiation, radiation_view
 
 from ..solar.learning import INVERTER_CLIPPING_THRESHOLD
 
 ENERGY_TOLERANCE_KWH = 1e-7
 MAX_VIEW_HOURS = 168
+
+
+def alternatives(
+    documents,
+    original,
+    identity,
+    title,
+    actual,
+    start,
+    end,
+    now,
+    *,
+    receipt=None,
+    issue=None,
+    field=None,
+    maximum=None,
+):
+    """Resolve same-issue archived candidates on the original measurement boundary."""
+    path = "quality-candidates-" + original["version"] + ".json"
+    if not documents.exists(path):
+        return []
+    result = []
+    for reference in documents.read(path)["forecasts"]:
+        candidate_version = reference if isinstance(reference, str) else reference["version"]
+        candidate = documents.read("forecast-" + candidate_version + ".json")["forecast"]
+        models_path = "quality-source-models-" + candidate_version + ".json"
+        if field and documents.exists(models_path):
+            candidate = {
+                **candidate,
+                "model": documents.read(models_path).get(identity, candidate["model"]),
+            }
+        if (
+            candidate["configuration_version"] != original["configuration_version"]
+            or candidate["issued_at"] != original["issued_at"]
+            or candidate["model"] == original["model"]
+        ):
+            continue
+        steps = (
+            [
+                {"start": item["start"], "duration_h": item["duration_h"], "kwh": item[field]}
+                for item in candidate["energies"]
+                if item["source_id"] == identity
+            ]
+            if field
+            else candidate["steps"]
+        )
+        if not steps:
+            continue
+        result.append(
+            series(
+                identity,
+                title,
+                candidate,
+                steps,
+                actual,
+                start,
+                end,
+                now,
+                receipt=receipt,
+                issue=issue,
+                maximum_comparable_kwh=maximum,
+            )
+        )
+    return result
 
 
 def measured(archive, sources, terms, start, end):
@@ -119,12 +184,25 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                 if controlled
                 else None
             )
-            result["series"].append(
-                series(
+            household = series(
+                "household",
+                title,
+                forecast,
+                forecast["steps"],
+                actual,
+                start,
+                end,
+                now,
+                receipt=receipt,
+                issue=issue,
+            )
+            household["scope"] = "household"
+            try:
+                household["alternatives"] = alternatives(
+                    demand_documents,
+                    forecast,
                     "household",
                     title,
-                    forecast,
-                    forecast["steps"],
                     actual,
                     start,
                     end,
@@ -132,7 +210,9 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                     receipt=receipt,
                     issue=issue,
                 )
-            )
+            except (FileNotFoundError, OSError, KeyError, TypeError, ValueError):
+                household["alternatives"] = []
+            result["series"].append(household)
             component_path = "quality-components-" + version + ".json"
             if demand_documents.exists(component_path):
                 reference = demand_documents.read(component_path)
@@ -169,6 +249,7 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                         issue=issue,
                     )
                     row.update(
+                        scope="devices",
                         weather_sensitive=device["weather_sensitive"],
                         weather_features_used=device["weather_features_used"],
                         composition_selected=reference["selected"],
@@ -244,6 +325,34 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                     maximum_comparable_kwh=maximum,
                 )
                 row["measurement_boundary"] = boundary.upper()
+
+                try:
+                    row["alternatives"] = alternatives(
+                        solar_documents,
+                        {**forecast, "model": row["model"]},
+                        identity,
+                        row["title"],
+                        actual,
+                        start,
+                        end,
+                        now,
+                        receipt=receipt,
+                        issue=issue,
+                        field=field,
+                        maximum=maximum,
+                    )
+                except (FileNotFoundError, OSError, KeyError, TypeError, ValueError):
+                    row["alternatives"] = []
+                row["scope"] = "solar"
+                row["weather_location"] = forecast.get("location")
+                try:
+                    radiation = original_radiation(solar_documents, forecast, start, end)
+                    radiation_issue = None
+                except (FileNotFoundError, OSError, KeyError, TypeError, ValueError):
+                    radiation, radiation_issue = {}, "Original irradiance forecast unavailable"
+                row["radiation"] = radiation_view(
+                    radiation, {}, start, end, now, issue=radiation_issue
+                )
                 result["series"].append(row)
         except (FileNotFoundError, KeyError, TypeError, ValueError):
             result["issues"].append("Original solar forecast evidence unavailable")

@@ -1,8 +1,12 @@
 """Responsive app-owned setup against real authenticated API/storage, without physical devices."""
 
+import json
 import re
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Event, Thread
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -676,8 +680,18 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     )
     page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
 
+    task_requests, failed_writes = [], []
+    page.on(
+        "requestfailed",
+        lambda request: (
+            failed_writes.append(request.failure)
+            if request.method == "POST" and request.url.endswith("/v1/appliances/tasks")
+            else None
+        ),
+    )
+
     def submit(route):
-        """Return the same task identity to the UI while asserting a helper-free request contract."""
+        """Hold the committed task acknowledgement while asserting a helper-free request contract."""
         body = route.request.post_data_json
         assert set(body) == {"entity_id", "request_id", "ready_at", "deadline"}
         assert re.fullmatch(
@@ -693,7 +707,8 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
             "attempt": None,
             "events": [],
         }
-        route.fulfill(json={"appliances": state})
+        task_requests.append(route)
+        page.evaluate("window.applianceTaskRequestHeld = true")
 
     page.route("**/v1/appliances/tasks", submit)
     page.goto(url + "/appliances")
@@ -738,6 +753,14 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
         "2026-10-26T18:00"
     )
     page.get_by_role("button", name="Appliance is ready", exact=True).click()
+    page.wait_for_function("window.applianceTaskRequestHeld === true")
+    try:
+        page.clock.run_for(31000)
+        assert failed_writes == []
+        assert len(task_requests) == 1
+    finally:
+        for route in task_requests:
+            route.fulfill(json={"appliances": state})
     expect(page.locator("#appliance-list")).to_contain_text("Task: scheduled")
     state["devices"][0]["task"].update(
         status="start_not_confirmed",
@@ -1347,6 +1370,234 @@ def test_appliance_learning_manual_save_failure_and_retained_evidence(app_page):
     expect(page.locator("#profile-history")).to_contain_text("45 minutes: 0.33 kWh: Simulated")
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_have_count(0)
     page.screenshot(path=str(directory / f"appliance-cycle-evidence-{width}.png"), full_page=True)
+
+
+@pytest.mark.parametrize("failure", ["parse", "fetch", "http"])
+@pytest.mark.parametrize("entry", ["startup", "connect"])
+def test_appliance_session_failures_show_only_owned_messages(app_page, failure, entry):
+    """Metadata parse, fetch and HTTP failures never expose private values in the page or console."""
+    page, url = app_page
+    page.clock.install()
+    marker = "synthetic-private-session-value"
+    diagnostics = []
+    page.on("pageerror", lambda error: diagnostics.append(str(error)))
+    page.on("console", lambda message: diagnostics.append(message.text))
+    page.add_init_script(
+        f"""(() => {{
+            window.failApplianceSession = {str(entry == "startup").lower()};
+            const original = window.fetch;
+            window.fetch = function(input, options) {{
+                if ({str(failure == "fetch").lower()} && window.failApplianceSession && new URL(input, location.href).pathname.endsWith('/setup/session')) return Promise.reject(new TypeError('{marker}'));
+                return original.call(this, input, options);
+            }};
+        }})();"""
+    )
+
+    def session(route):
+        """Return healthy initial metadata or one controlled untrusted failure payload."""
+        if not page.evaluate("window.failApplianceSession"):
+            route.fulfill(json={"ingress": False, "timezone": "UTC"})
+        elif failure == "http":
+            route.fulfill(status=503, body=marker)
+        else:
+            route.fulfill(body=marker + "{broken")
+
+    page.route("**/setup/session", session)
+    page.route("**/v1/appliances", lambda route: route.fulfill(json={"devices": [], "issue": None}))
+    page.route(
+        "**/v1/consumers",
+        lambda route: route.fulfill(
+            json={"charging_meters": [], "thermal_meters": [], "selected": [], "options": []}
+        ),
+    )
+    page.goto(url + "/appliances")
+    if entry == "connect":
+        page.evaluate("window.failApplianceSession = true")
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#status")).to_have_text(
+        "Session information could not be loaded. Refresh this page and try again."
+        if entry == "startup"
+        else "Appliance information could not be loaded. Check the connection and try Refresh."
+    )
+    expect(page.locator("body")).not_to_contain_text(marker)
+    assert all(marker not in message for message in diagnostics)
+
+
+def test_appliance_evidence_waits_for_all_reads_before_next_poll(app_page):
+    """An early failed read retains drafts and holds the poll guard until all companion reads settle."""
+    page, url = app_page
+    page.clock.install()
+    device = {
+        "entity_id": "sensor.washer_energy",
+        "name": "Washer",
+        "shiftable": True,
+        "task": None,
+        "profile": {"power_w": [400], "samples": 1, "evidence": "manual"},
+        "profile_kind": "Manual",
+        "recent_cycles": [],
+    }
+    data = {"devices": [device], "issue": None}
+    sources = {
+        "charging_meters": [],
+        "thermal_meters": [],
+        "selected": [{"entity_id": device["entity_id"]}],
+        "options": [{"entity_id": device["entity_id"], "name": "Washer"}],
+    }
+    failing = [False]
+    reads, held = [], []
+    page.route(
+        "**/setup/session", lambda route: route.fulfill(json={"ingress": False, "timezone": "UTC"})
+    )
+
+    def appliances(route):
+        """Fail only the evidence poll while retaining a real initialized UI."""
+        reads.append(route.request.url)
+        if failing[0]:
+            route.fulfill(status=503, body="synthetic-private-read-failure")
+        else:
+            route.fulfill(json=data)
+
+    def consumers(route):
+        """Keep the companion request active until explicitly released by the test."""
+        if failing[0]:
+            held.append(route)
+            page.evaluate("window.applianceCompanionReadHeld = true")
+        else:
+            route.fulfill(json=sources)
+
+    page.route("**/v1/appliances", appliances)
+    page.route("**/v1/consumers", consumers)
+    page.goto(url + "/appliances")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#profile-device")).to_have_value(device["entity_id"])
+    draft = page.get_by_label("Finish before (Home Assistant time)")
+    draft.fill("2026-11-07T12:00")
+    draft.focus()
+    failing[0] = True
+    initial_reads = len(reads)
+    try:
+        page.clock.fast_forward(10000)
+        page.wait_for_function("window.applianceCompanionReadHeld === true")
+        page.clock.fast_forward(10000)
+        page.evaluate("async () => (await fetch('/setup/session')).json()")
+        assert len(reads) == initial_reads + 1
+        assert len(held) == 1
+        expect(draft).to_have_value("2026-11-07T12:00")
+        expect(draft).to_be_focused()
+    finally:
+        for route in held:
+            route.fulfill(json=sources)
+    expect(page.locator("#status")).to_have_text(
+        "Learning evidence refresh unavailable. Retained evidence is shown."
+    )
+    failing[0] = False
+    page.clock.fast_forward(10000)
+    expect(page.locator("#status")).to_have_text(
+        "Connected: A schedule never proves physical execution."
+    )
+    assert len(reads) == initial_reads + 2
+    expect(draft).to_have_value("2026-11-07T12:00")
+    expect(draft).to_be_focused()
+
+
+@pytest.mark.parametrize("phase", ["headers", "body"])
+def test_appliance_read_deadline_cancels_stalled_network_and_recovers(app_page, phase):
+    """Real stalled headers and response bodies time out without blocking subsequent evidence polls."""
+    page, url = app_page
+    page.clock.install()
+    entered, release = Event(), Event()
+    payload = json.dumps({"devices": [], "issue": None}).encode()
+
+    class StalledResponse(BaseHTTPRequestHandler):
+        """Hold an actual socket at the selected response boundary without exposing diagnostics."""
+
+        def do_GET(self):
+            """Send headers or a partial body and retain the connection until the test releases it."""
+            if phase == "headers":
+                entered.set()
+                release.wait(60)
+            with suppress(BrokenPipeError, ConnectionResetError):
+                self.send_response(200)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                if phase == "body":
+                    self.wfile.write(payload[:1])
+                    self.wfile.flush()
+                    entered.set()
+                    release.wait(60)
+                    self.wfile.write(payload[1:])
+                else:
+                    self.wfile.write(payload)
+
+        def log_message(self, _format, *_arguments):
+            """Keep synthetic HTTP request logging out of browser error assertions."""
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), StalledResponse)
+    server.daemon_threads = True
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    stalled = [False]
+    failures = []
+
+    def appliances(route):
+        """Use the real browser fetch and AbortSignal against a deliberately stalled HTTP response."""
+        if stalled[0]:
+            route.continue_(url=f"http://127.0.0.1:{server.server_port}/v1/appliances")
+        else:
+            route.fulfill(json={"devices": [], "issue": None})
+
+    page.route("**/v1/appliances", appliances)
+    page.route(
+        "**/v1/consumers",
+        lambda route: route.fulfill(
+            json={"charging_meters": [], "thermal_meters": [], "selected": [], "options": []}
+        ),
+    )
+    page.route(
+        "**/setup/session", lambda route: route.fulfill(json={"ingress": False, "timezone": "UTC"})
+    )
+    page.on(
+        "requestfailed",
+        lambda request: (
+            failures.append(request.failure) if request.url.endswith("/v1/appliances") else None
+        ),
+    )
+    try:
+        page.goto(url + "/appliances")
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+        expect(page.locator("#status")).to_have_text(
+            "Connected: A schedule never proves physical execution."
+        )
+        stalled[0] = True
+        page.clock.run_for(10000)
+        page.evaluate("async () => (await fetch('/setup/session')).json()")
+        assert entered.wait(2)
+        page.clock.run_for(29000)
+        assert failures == []
+        expect(page.locator("#status")).to_have_text(
+            "Connected: A schedule never proves physical execution."
+        )
+        page.clock.run_for(1001)
+        expect(page.locator("#status")).to_have_text(
+            "Learning evidence refresh unavailable. Retained evidence is shown."
+        )
+        assert len(failures) == 1
+        stalled[0] = False
+        release.set()
+        page.clock.run_for(10000)
+        expect(page.locator("#status")).to_have_text(
+            "Connected: A schedule never proves physical execution."
+        )
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page):

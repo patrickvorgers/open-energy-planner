@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
@@ -23,6 +23,7 @@ from .daily import (
     forecast_context,
 )
 from .evidence import evidence
+from .radiation import RadiationArchive, radiation_view
 
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
@@ -94,10 +95,29 @@ def capture_sources(plan, demand, solar, catalogue, ev, thermal=None):
         )
 
 
-def register(app, plans, demand, solar, catalogue, lock):
+def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None):
     """Reuse the active engine and paired integration, without opening another HA connection."""
     archive = HistoryArchive(SqlDocuments(plans.engine, "demand"))
     daily = DailyForecastArchive(archive.documents)
+    radiation = RadiationArchive(SqlDocuments(plans.engine, "solar"))
+
+    if satellite_factory is not None:
+
+        async def satellite_lifecycle(_app):
+            """Keep optional satellite fetching independent of planning weather and its state lock."""
+            async with satellite_factory() as source:
+                radiation.source = source
+                try:
+                    yield
+                finally:
+                    radiation.source = None
+
+        app.cleanup_ctx.append(satellite_lifecycle)
+
+    from ..activities.api import EVENTS
+
+    events = app.get(EVENTS)
+    daily.events = events
 
     def timezone():
         """Use only the discovered Home Assistant timezone, never the server or browser timezone."""
@@ -122,6 +142,19 @@ def register(app, plans, demand, solar, catalogue, lock):
                                 demand, solar, catalogue.value, plans.state.get("plan")
                             )
                     if zone:
+                        if events:
+                            from zoneinfo import ZoneInfo
+
+                            local_day = now.astimezone(ZoneInfo(zone)).date()
+                            next_midnight = datetime.combine(
+                                local_day + timedelta(days=1), datetime.min.time(), ZoneInfo(zone)
+                            )
+                            events.scheduled(
+                                "forecast-quality",
+                                "quality",
+                                "Archive daily forecast",
+                                next_midnight,
+                            )
                         cancellation = await complete_write(daily.observe, now, zone, context)
                         if cancellation:
                             raise cancellation
@@ -196,6 +229,8 @@ def register(app, plans, demand, solar, catalogue, lock):
             )
         except (OSError, KeyError, TypeError, ValueError):
             raise web.HTTPServiceUnavailable(text="Forecast-quality evidence unavailable") from None
+        for source in result["series"]:
+            source.pop("weather_location", None)
         return await response_with_models(result)
 
     async def response_with_models(result):
@@ -274,6 +309,32 @@ def register(app, plans, demand, solar, catalogue, lock):
             )
         except (OSError, KeyError, TypeError, ValueError):
             raise web.HTTPServiceUnavailable(text="Daily forecast evidence unavailable") from None
+        start, end = (datetime.fromisoformat(record[key]) for key in ("start", "end"))
+        now = datetime.now(UTC)
+        for source in result["series"]:
+            location = source.pop("weather_location", None)
+            if source.get("scope") != "solar" or not location:
+                continue
+            original = source["radiation"]
+            forecast = {
+                datetime.fromisoformat(row["start"]): row["forecast_w_m2"]
+                for row in original["rows"]
+            }
+            try:
+                satellite, issue = await radiation.read(location, start, end, now)
+                source["radiation"] = radiation_view(
+                    forecast,
+                    satellite,
+                    start,
+                    end,
+                    now,
+                    issue=": ".join(filter(None, (original["issue"], issue))) or None,
+                )
+            except (OSError, KeyError, TypeError, ValueError):
+                source["radiation"] = {
+                    **original,
+                    "issue": "Satellite archive unavailable. Check application storage and refresh.",
+                }
         return await response_with_models(result)
 
     app.router.add_post("/v1/forecast-quality/history", receive)

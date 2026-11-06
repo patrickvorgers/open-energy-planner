@@ -1,5 +1,31 @@
 # Open Energy Planner: technical design
 
+## Activity and module event ownership
+
+`activities/` owns retained execution evidence, a current-state projection and
+authenticated cursor subscriptions. Producers publish source-owned outcomes,
+availability and known schedules. The collector does not infer business validity
+from diagnostic logs or execution status and never retries domain operations.
+`notifications/` retains cause, severity and recovery semantics independently.
+The composition root connects these existing source readers to change signals.
+
+History uses `oep_activities` on the shared active SQLAlchemy engine. One bounded
+background writer prevents optional evidence from delaying planning. Normal
+shutdown drains producers and that writer before engine closure. Seven-day
+retention does not prune original plans, measurements or financial archives.
+Read-only APIs reuse existing authentication. Live state uses a process-epoch
+cursor and 512-event replay. An atomic snapshot/subscription boundary prevents
+missed changes. Restart or expired replay causes an explicit snapshot reset.
+
+The [activity guide](../docs/development/ACTIVITY-EVENTS.md) defines outcomes,
+producer coverage, six-hour schedules, interrupted work, transport recovery,
+notification separation and limits when storage is unavailable. The
+[database dictionary](../docs/development/DATABASE-SCHEMA.md#oep_activities)
+defines the transferable row contract. The app composition change is necessary
+to connect the shared engine, existing notification owners and lifecycle ordering.
+Domain calculations stay with their existing owners. Validation includes app,
+browser, four-backend storage/transfer and affected platform lifecycle contracts.
+
 The [plan evidence read model](../docs/development/PLAN-EVIDENCE.md) projects
 original archived domain inputs and planned outcomes inside the app. The existing
 authenticated plan-comparison response carries factual cards and interval identity.

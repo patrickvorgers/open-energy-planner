@@ -3,7 +3,7 @@
 This guide describes the implemented app database, not Home Assistant Recorder.
 The authoritative SQLAlchemy Core registry is
 [`storage/adapters/lifecycle/schema.py`](../../src/open_energy_planner/storage/adapters/lifecycle/schema.py).
-All 18 tables use the same app-owned engine: SQLite by default, or PostgreSQL,
+All 19 tables use the same app-owned engine: SQLite by default, or PostgreSQL,
 MariaDB or MySQL. The HA integration exchanges API messages and never reads SQL.
 See [the plan archive guide](PLAN-ARCHIVE.md) for deployment, backup and cross-backend transfer.
 
@@ -70,7 +70,33 @@ capacity cannot be measured, or `ok`. This is an on-demand warning in the storag
 page, not background monitoring or an HA notification. Refresh retries failures
 and removes stale evidence. No data is deleted or automatically compacted.
 
-## Relationships
+## Activity history table
+
+### `oep_activities`
+
+Owned by `storage/adapters/activities.py`. Retains seven days of execution evidence with
+no foreign keys. Shared backend transfer copies and verifies this table.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `id` | String(128), PK, binary collation | Opaque execution identity. Intermediate and terminal updates retain one row. |
+| `started_at` | String(40) | Aware UTC ISO start timestamp. Indexed with `id` by `oep_activity_chronology` for day paging and retention. |
+| `owner` | String(128), binary collation | Business producer identity. Price owners include adapter and bidding area. |
+| `kind` | String(128) | Activity type used by the history filter. |
+| `state` | String(128) | `running`, `completed`, `failed`, `interrupted`, `cancelled` or `skipped`. Restart marks running records interrupted. |
+| `payload` | Text / LONGTEXT | Detached finite JSON with ID, owner, kind, title, state, aware UTC start, nullable finish, safe detail, recovery flag, terminal usability and optional process-local terminal sequence. No credentials or raw provider payloads. |
+
+`finished_sequence` orders outcomes sharing a finish timestamp. Startup resumes
+above its retained maximum while creating a new live-subscription epoch.
+`recovered` marks the first usable completion after a producer/type failure.
+Completed requires `usable` to be true. Writes and startup prune records whose
+start is over seven days old. Hourly housekeeping also prunes idle installations.
+Reads enforce the rolling boundary. Upsert
+and pruning share a transaction. Live replay, availability, schedules and
+notification projections remain process-local. See [activity events](ACTIVITY-EVENTS.md)
+for asynchronous-write limits and subscription recovery.
+
+## Relationships with plans
 
 Solid relationships below are SQL foreign keys. Other references, such as a
 contract version inside JSON or an evaluation revision in a document, are
@@ -1097,3 +1123,23 @@ Retention is explicit: completed calculation evidence remains in the active data
 
 
 Optional calculation recording uses one serialized background writer. The coordinator only captures a detached summary and at most 256 samples, then enqueues without waiting for SQL. Up to 32 pending observations bound memory. Queue saturation logs an unrecorded observation rather than delaying planning or fabricating a history row. Individual write failures are contained and later writes continue. Normal shutdown stops planning, drains queued observations and only then closes the shared archive engine. Forced termination or storage failure cannot guarantee retained diagnostics. This changes no device command, solver budget or existing history.
+
+### Forecast comparison and satellite irradiance documents
+
+The existing `demand` and `solar` document namespaces retain
+`quality-candidates-<selected-forecast-version>.json`. Demand entries contain
+`forecasts`, an array of `{version, model}` references. Solar entries contain
+`forecasts`, an array of immutable forecast-version references. They identify
+same-issue alternatives to the original selected forecast. Original configuration,
+issue time and per-source predictor maps remain authoritative. These documents
+add no model-selection policy or solver input.
+
+The `solar` namespace owns `quality-satellite-<sha256>.json` latest pointers and
+immutable `quality-satellite-receipt-<sha256>.json` observations. Both payloads
+contain `location` from the archived forecast, aware UTC `start`/`end`, named
+`dataset`, actual UTC `received_at`, and `hours` entries with UTC interval `start`
+and mean `ghi` in W/m². The pointer hash binds location, window and dataset.
+Receipts retain their original values when a pointer advances. Null or absent
+provider hours remain absent. The existing `(namespace, name)` key supports
+bounded reads. Both writes commit in one transaction. These documents transfer
+with the shared document table on SQLite, PostgreSQL, MariaDB and MySQL.

@@ -42,6 +42,7 @@ nav:
       - Understand savings: docs/users/savings.md
       - Calculation time: docs/users/planning-performance.md
       - Data storage: docs/users/data-storage.md
+      - Activity: docs/users/activity.md
       - Troubleshooting: docs/users/troubleshooting.md
       - Energy glossary: docs/users/glossary.md
   - Develop OEP:
