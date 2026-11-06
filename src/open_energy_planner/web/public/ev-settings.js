@@ -3,6 +3,7 @@ import {percentage, percentageInput, inputNumber, optionLabel, useHomeAssistantT
 import {settingsSummary} from "./appliance-settings-detail.js";
 import {identity} from "./identity.js";
 import {SaveBar} from "./save-bar.js";
+import {confirmAction} from "./confirmation.js";
 import {bindApplianceSettingsNavigation} from "./appliance-settings-navigation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
@@ -109,7 +110,7 @@ function connectedSource(card, row, integration) {
     };
 }
 /** Stage a confirmed removal through versioned Save, keeping Cancel and archived history intact. */
-function removeSelected() {
+async function removeSelected() {
     find("ev-more").open = false;
     const row = selected();
     if (saveState.busy || saveState.dirty || !row) return;
@@ -118,7 +119,10 @@ function removeSelected() {
         saveState.update(`This vehicle is the only allowed vehicle for: ${dependent.map(point => displayName(point, false)).join(", ")}. Edit or remove the listed charge points first.`);
         return;
     }
-    if (!confirm("Remove this appliance? Home Assistant sources and historical evidence are retained. Save settings to apply the removal.")) return;
+    const openingDraft = draft, openingId = selectedId;
+    const kind = draft.vehicles.includes(row) ? "vehicle" : "charge point";
+    if (!await confirmAction({title: `Remove ${kind}?`, message: `${displayName(row, kind === "vehicle")} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Choose Save settings to apply the removal. Cancel in the editor restores the saved settings.`, confirmLabel: `Remove ${kind}`, returnFocus: find("ev-more").querySelector("summary")})) return;
+    if (saveState.busy || saveState.dirty || draft !== openingDraft || selectedId !== openingId || selected() !== row) return;
     editOriginId = selectedId;
     const rows = draft.vehicles.includes(row) ? draft.vehicles : draft.points;
     rows.splice(rows.indexOf(row), 1);

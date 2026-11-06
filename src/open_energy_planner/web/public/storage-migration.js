@@ -1,5 +1,6 @@
 /** Keep database maintenance visible independently of the runtime that is being restarted. */
 import {percentage} from "./display.js";
+import {confirmAction} from "./confirmation.js";
 const PHASES = {idle: "Ready to change database", preparing: "Preparing: Waiting for application tasks to stop", copying: "Copying application data", verifying: "Verifying copied data", checking: "Checking the new database and application", restarting: "Restarting the app", completed: "Migration complete: The app is using the new database", restored: "Previous database restored", interrupted: "Migration interrupted: Review recovery options", failed: "Migration needs attention"};
 const POLL_MILLISECONDS = 2000, STATUS_TIMEOUT_MILLISECONDS = 5000, ACTION_TIMEOUT_MILLISECONDS = 35000;
 
@@ -126,16 +127,32 @@ export function bindStorageMigration(getToken, onReady) {
         } catch (error) {if (generation === checkGeneration) find("destination-result").textContent = error.message;}
         finally {requestPending = false; find("check-destination").disabled = false; find("destination-kind").disabled = false; find("destination-url").disabled = false;}
     };
-    find("start-migration").onclick = () => {
-        if (!checkId || !find("overwrite-destination").checked) return;
+    find("start-migration").onclick = async () => {
+        if (requestPending || !checkId || !find("overwrite-destination").checked) return;
+        const openingCheck = checkId, generation = checkGeneration;
+        if (!await confirmAction({title: "Change database?", message: `${find("migration-route").textContent}\n\nExisting tables belonging to this app in the destination will be replaced. Other applications' tables are kept. Planning pauses while data is copied and verified. The original database is retained.`, confirmLabel: "Change database"})) return;
+        if (requestPending || checkId !== openingCheck || checkGeneration !== generation || !latest.running || !find("overwrite-destination").checked) return;
         find("migration-recovery").open = true;
-        action("start", {check_id: checkId, overwrite: true});
+        return action("start", {check_id: checkId, overwrite: true});
     };
-    find("retry-migration").onclick = () => {
-        if (!latest.released && !window.confirm("Retry migration? Existing tables belonging to this app in the destination will be replaced again. The original database is retained.")) return;
-        action("retry", {overwrite: !latest.released});
+    find("retry-migration").onclick = async () => {
+        if (requestPending || !latest?.can_retry) return;
+        const openingState = recoveryState();
+        if (!latest.released && !await confirmAction({title: "Retry database migration?", message: `${latest.source} → ${latest.destination}\n\nExisting tables belonging to this app in the destination will be replaced again. Other applications' tables are kept. The original database is retained.`, confirmLabel: "Retry migration"})) return;
+        if (requestPending || recoveryState() !== openingState) return;
+        return action("retry", {overwrite: !latest.released});
     };
-    find("restore-database").onclick = () => action("restore", {});
+    find("restore-database").onclick = async () => {
+        if (requestPending || !latest?.can_restore) return;
+        const openingState = recoveryState();
+        if (!await confirmAction({title: "Restore previous database?", message: `The app will restart using the retained source: ${latest.source || latest.backend}.\n\nThe unfinished destination copy will not be used. Restoration is only available before a migration releases the destination.`, confirmLabel: "Restore database"})) return;
+        if (requestPending || recoveryState() !== openingState) return;
+        return action("restore", {});
+    };
+    /** Ignore changing progress counters while keeping consent tied to the same recovery operation. */
+    function recoveryState() {
+        return JSON.stringify([latest?.phase, latest?.released, latest?.can_retry, latest?.can_restore, latest?.source, latest?.destination]);
+    }
     find("retry-connection").onclick = () => {enabled = true; refresh();};
     return () => {enabled = true; refresh();};
 }

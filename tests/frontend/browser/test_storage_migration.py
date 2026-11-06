@@ -95,11 +95,17 @@ def test_interrupted_status_survives_reload_and_restores_retained_source(app_pag
         ),
     )
     page.get_by_role("button", name="Restore previous database", exact=True).click()
+    page.get_by_role("alertdialog").get_by_role(
+        "button", name="Restore database", exact=True
+    ).click()
     expect(page.locator("#migration-error")).to_contain_text("Check free space")
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#migration-error")).to_contain_text("Check free space")
     page.unroute("**/v1/storage/migration/restore")
     page.get_by_role("button", name="Restore previous database", exact=True).click()
+    page.get_by_role("alertdialog").get_by_role(
+        "button", name="Restore database", exact=True
+    ).click()
     expect(page.locator("#migration-phase")).to_have_text(
         "Previous database restored", timeout=15000
     )
@@ -154,6 +160,14 @@ def test_destination_edits_invalidate_checked_overwrite_consent(app_page):
         ),
     )
     page.get_by_role("button", name="Migrate database", exact=True).click()
+    confirmation = page.get_by_role("alertdialog", name="Change database?", exact=True)
+    expect(confirmation).to_contain_text("PostgreSQL: fixture-db / oep")
+    confirmation.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#destination-result")).to_contain_text("Connection verified")
+    page.get_by_role("button", name="Migrate database", exact=True).click()
+    page.get_by_role("alertdialog").get_by_role(
+        "button", name="Change database", exact=True
+    ).click()
     expect(page.locator("#destination-result")).to_contain_text("Check free space")
     expect(page.get_by_label("Connection URL", exact=True)).to_have_value(
         "postgresql+psycopg://fixture:fixture@fixture-db/oep"
@@ -195,3 +209,40 @@ def test_cancelled_preflight_cannot_restore_confirmation_after_reopening(app_pag
     expect(page.locator("#migration-confirmation")).to_be_hidden()
     expect(page.locator("#start-migration")).to_be_disabled()
     expect(page.get_by_label("Connection URL", exact=True)).to_have_value("")
+
+
+@pytest.mark.parametrize("app_site", ["maintenance_interrupted"], indirect=True)
+def test_retry_confirmation_preserves_cancel_and_rejects_newer_recovery_state(app_page):
+    """Cancellation and stale consent never restart copying, while an accepted retry retains real failure advice."""
+    page, url = app_page
+    connect_storage(page, url)
+    attempts = []
+
+    def reject_retry(route):
+        """Record an actual admitted request without starting a database copy in a browser testcase."""
+        attempts.append(route.request.post_data_json)
+        route.fulfill(status=503, body="Cannot save database maintenance state. Check free space.")
+
+    page.route("**/v1/storage/migration/retry", reject_retry)
+    page.get_by_role("button", name="Retry migration", exact=True).click()
+    confirmation = page.get_by_role("alertdialog", name="Retry database migration?", exact=True)
+    expect(confirmation).to_contain_text("original database is retained")
+    confirmation.get_by_role("button", name="Cancel", exact=True).click()
+    assert attempts == []
+    page.get_by_role("button", name="Retry migration", exact=True).click()
+    confirmation.get_by_role("button", name="Retry migration", exact=True).click()
+    expect(page.locator("#migration-error")).to_contain_text("Check free space")
+    assert attempts == [{"overwrite": True}]
+
+    page.get_by_role("button", name="Retry migration", exact=True).click()
+    newer = page.request.get(
+        url + "/v1/storage/migration", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    newer.update(phase="completed", released=True, can_retry=False, can_restore=False)
+    page.route("**/v1/storage/migration", lambda route: route.fulfill(json=newer))
+    expect(page.locator("#migration-phase")).to_have_text(
+        "Migration complete: The app is using the new database"
+    )
+    confirmation.get_by_role("button", name="Retry migration", exact=True).click()
+    expect(confirmation).to_have_count(0)
+    assert attempts == [{"overwrite": True}]
