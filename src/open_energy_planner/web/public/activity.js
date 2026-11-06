@@ -8,6 +8,7 @@ const find = id => document.getElementById(id);
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", rows = new Map(), running = [], scheduled = [], health = [], next, generation = 0, loading = false;
 const pageSize = 25;
+const historyFailure = "Activity history could not be loaded. Check the connection and try Refresh.";
 let historyProblem = "", loadProblem = "", liveProblem = "", pageIndex = 0, requestedPage = 0, pageCursors = [undefined], pendingUpdates = new Map(), resetPending = false;
 const historyWarning = (available, lost) => lost ? "Some activity updates could not be recorded. History may be incomplete. Energy planning continues independently." : available === false ? "Activity history cannot currently be saved. Energy planning continues independently." : "";
 const label = value => value.charAt(0).toUpperCase() + value.slice(1).replaceAll(/[_-]/g, " ");
@@ -24,7 +25,7 @@ async function api(path) {
         if (!response.ok) throw new Error();
         return await response.json();
     } catch {
-        throw new Error("Activity history could not be loaded. Check the connection and try Refresh.");
+        throw new Error(historyFailure);
     }
 }
 
@@ -182,13 +183,13 @@ async function load(page = 0) {
     requestedPage = page;
     loading = true;
     loadProblem = "";
-    pendingUpdates = new Map();
     render();
     find("activity-status").textContent = "Loading activity history.";
     try {
         // Coalesce replay resets within this read so loading and focus keep one owner.
         do {
             resetPending = false;
+            pendingUpdates = new Map();
             try {
                 const day = find("activity-day").value, before = pageCursors[page] ? `&before=${encodeURIComponent(pageCursors[page])}` : "";
                 const kind = find("activity-type").value;
@@ -202,7 +203,7 @@ async function load(page = 0) {
                 next = result.next;
                 if (next) pageCursors[page + 1] = next;
                 loadProblem = "";
-            } catch (error) {if (version === generation) loadProblem = error.message;}
+            } catch {if (version === generation) loadProblem = historyFailure;}
         } while (version === generation && resetPending);
     } finally {
         if (version === generation) {
@@ -252,5 +253,5 @@ find("activity-refresh").addEventListener("click", () => {if (!loading) resetHis
 find("activity-previous").addEventListener("click", () => {if (!loading && pageIndex > 0) load(pageIndex - 1);});
 find("activity-next").addEventListener("click", () => {if (!loading && next) load(pageIndex + 1);});
 find("connect").addEventListener("submit", event => {event.preventDefault(); token = find("token").value; find("token").value = ""; find("connect").hidden = true; connectEvents(base, token); load();});
-api("setup/session").then(session => {useHomeAssistantTimezone(session.timezone); find("activity-day").value = localDate(); find("connect").hidden = Boolean(session.ingress); if (session.ingress) {connectEvents(base); load();} else {loadProblem = "Connect to read activity history."; render();}}).catch(error => {loadProblem = error.message; render();});
+api("setup/session").then(session => {useHomeAssistantTimezone(session.timezone); find("activity-day").value = localDate(); find("connect").hidden = Boolean(session.ingress); if (session.ingress) {connectEvents(base); load();} else {loadProblem = "Connect to read activity history."; render();}}).catch(() => {loadProblem = historyFailure; render();});
 setInterval(render, 60000);

@@ -31,10 +31,22 @@ def register(app):
 
     async def finish(request):
         """Complete an older synthetic execution through the real live publisher."""
-        identity = (await request.json())["activity_id"]
+        body = await request.json()
+        identity = body["activity_id"]
         await app[EVENTS].finish(
             identity, Outcome.COMPLETED, "Older activity completed successfully.", usable=True
         )
+        if body.get("reset"):
+            app[EVENTS].epoch = uuid4().hex
+            app[EVENTS].availability("weather", Health.AVAILABLE, "Missed completion recovered.")
+        return web.json_response({"accepted": True})
+
+    async def progress(request):
+        """Publish a running update before a deliberately missed terminal event."""
+        await app[EVENTS].update(
+            (await request.json())["activity_id"], "Still running before reset."
+        )
+        app[EVENTS].availability("weather", Health.AVAILABLE, "Pre-reset progress received.")
         return web.json_response({"accepted": True})
 
     async def reset(request):
@@ -168,6 +180,7 @@ def register(app):
     app.router.add_post("/_test/activity-history", history_state)
     app.router.add_post("/_test/activity-health", health)
     app.router.add_post("/_test/activity-finish", finish)
+    app.router.add_post("/_test/activity-progress", progress)
     app.router.add_post("/_test/activity-reset", reset)
     app.router.add_post("/_test/activity-contexts", contexts)
     app.router.add_post("/_test/activity-plan", plan_link)

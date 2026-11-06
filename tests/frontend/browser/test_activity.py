@@ -720,6 +720,103 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_history_processing_errors_use_safe_public_message(app_page):
+    """Valid JSON with malformed history cannot display technical errors or private payload values."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    original = page.locator("#activity-list").inner_text()
+    private_value = "PRIVATE_ACTIVITY_PROCESSING_VALUE"
+    page.route(
+        "**/v1/activities?**",
+        lambda route: route.fulfill(
+            json={"timezone": "Europe/Amsterdam", "activities": {"private": private_value}}
+        ),
+    )
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-status")).to_have_text(
+        "Activity history could not be loaded. Check the connection and try Refresh."
+    )
+    assert private_value not in page.locator("body").inner_text()
+    assert page.locator("#activity-list").inner_text() == original
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    page.unroute("**/v1/activities?**")
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-status")).to_have_text("")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_completed_history_wins_over_pre_reset_running_update(app_page):
+    """A completion missed in a replay gap wins over a cached running event from the prior read."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    wait_for_product_reads(page)
+    held = []
+
+    def hold(route):
+        """Hold both actual attempts while preserving the real event subscription."""
+        held.append(route)
+        page.evaluate("count => window.attemptHistoryReads = count", len(held))
+
+    page.route("**/v1/activities?**", hold)
+    next_page.focus()
+    next_page.press("Enter")
+    page.wait_for_function("() => window.attemptHistoryReads === 1")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    old_response = page.request.get(held[0].request.url, headers=headers).json()
+    identity = next(row["id"] for row in old_response["activities"] if row["state"] == "running")
+    assert page.request.post(
+        url + "/_test/activity-progress", headers=headers, data={"activity_id": identity}
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Pre-reset progress received.")
+    with page.expect_response(
+        lambda response: (
+            "/v1/events" in response.url
+            and response.status == 200
+            and response.json().get("reset") is True
+        )
+    ) as reset_reply:
+        assert page.request.post(
+            url + "/_test/activity-finish",
+            headers=headers,
+            data={"activity_id": identity, "reset": True},
+        ).ok
+    snapshot = reset_reply.value.json()
+    assert snapshot["events"] == []
+    assert all(row["id"] != identity for row in snapshot["snapshot"]["running"])
+    expect(page.locator("#activity-health")).to_contain_text("Missed completion recovered.")
+    held[0].fulfill(json=old_response)
+    page.wait_for_function("() => window.attemptHistoryReads === 2")
+    fresh_response = page.request.get(held[1].request.url, headers=headers).json()
+    assert next(row["state"] for row in fresh_response["activities"] if row["id"] == identity) == (
+        "completed"
+    )
+    held[1].fulfill(json=fresh_response)
+    wait_for_product_reads(page)
+    expect(page.locator(f'[data-activity-id="{identity}"] .activity-state')).to_have_text(
+        "Completed"
+    )
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+    expect(next_page).to_be_focused()
+    assert len(held) == 2
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     """Live and storage recovery clear stale warnings but preserve a failed explicit history read."""
     page, url = app_page
