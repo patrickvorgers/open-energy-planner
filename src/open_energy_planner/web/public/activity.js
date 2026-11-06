@@ -2,6 +2,7 @@
 import {when, localDate, useHomeAssistantTimezone} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {connectEvents, observeEvents} from "./events.js";
+import {priceSourceName} from "./price-sources.js";
 bindSettingsActions();
 const find = id => document.getElementById(id);
 const base = document.querySelector('meta[name="oep-api-base"]').content;
@@ -26,6 +27,13 @@ async function api(path) {
     }
 }
 
+/** Add an existing readable source name without parsing details or exposing unknown technical IDs. */
+function activityTitle(row) {
+    const [module, source] = row.owner.split(":");
+    const context = module === "prices" && source ? priceSourceName(source) : "";
+    return context && context !== source ? `${row.title}: ${context}` : row.title;
+}
+
 /** Use inert text and native disclosure so every outcome remains keyboard accessible. */
 function activityRow(row) {
     const item = document.createElement("details"), summary = document.createElement("summary"), time = document.createElement("time"), title = document.createElement("strong"), type = document.createElement("span"), state = document.createElement("span");
@@ -33,12 +41,13 @@ function activityRow(row) {
     item.dataset.activityId = row.id;
     time.dateTime = row.started_at;
     time.textContent = clock(row.started_at);
-    title.textContent = row.title;
+    title.textContent = activityTitle(row);
+    title.title = title.textContent;
     type.className = "activity-type"; type.textContent = label(row.kind);
     state.className = "activity-state"; state.dataset.state = row.state;
     state.textContent = row.recovered ? "Recovered" : label(row.state);
     summary.append(time, title, type, state); item.append(summary);
-    for (const text of [row.detail, `Module: ${moduleName(row.owner)}`, row.finished_at ? `Finished: ${when(row.finished_at)}` : "In progress"]) {
+    for (const text of [title.textContent, row.detail, `Module: ${moduleName(row.owner)}`, row.finished_at ? `Finished: ${when(row.finished_at)}` : "In progress"]) {
         const paragraph = document.createElement("p"); paragraph.textContent = text; item.append(paragraph);
     }
     return item;

@@ -9,6 +9,40 @@ from tests.frontend.browser.helpers import TOKEN, discover
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_activity_titles_show_source_context_without_wrapping(app_page):
+    """Recognize price sources on one line and read the complete title through keyboard disclosure."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list summary strong").filter(has_text="Jeroen.nl")).to_have_text(
+        "Fetch price forecast: Jeroen.nl"
+    )
+    expect(
+        page.locator("#activity-list summary strong").filter(has_text="Nord Pool").first
+    ).to_have_text("Fetch published prices: Nord Pool")
+    full_title = "Fetch price forecast for the next planning horizon and retain previously accepted prices: EpexPredictor"
+    long_title = page.locator("#activity-list summary strong").filter(has_text="EpexPredictor")
+    expect(long_title).to_have_text(full_title)
+    expect(long_title).to_have_attribute("title", full_title)
+    assert long_title.bounding_box()["height"] < 30
+    assert long_title.evaluate("element => element.scrollWidth > element.clientWidth")
+    expect(
+        page.locator("#activity-list summary strong").filter(has_text="Fetch weather").first
+    ).to_have_text("Fetch weather")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    directory = Path("results/ci/activity-context")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(directory / f"history-{page.viewport_size['width']}.png"))
+    details = long_title.locator("xpath=../..")
+    details.locator("summary").focus()
+    page.keyboard.press("Enter")
+    expect(details.locator("p").first).to_have_text(full_title)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     """Exercise real authenticated history, filters, cursor updates and accessible disclosure."""
     page, url = app_page

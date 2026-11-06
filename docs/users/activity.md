@@ -13,6 +13,10 @@ type. **Today** returns to the current day.
 New activities appear automatically while the page is connected. Running work
 updates in the same row. Open a row for its explanation, responsible module and
 finish time. Keyboard focus and open details remain in place during live updates.
+Price activity names include their source, such as **Fetch price forecast: Jeroen.nl**.
+History names stay on one line. Long names are shortened visually to fit the screen.
+Open the activity to read the full name. Activities without a known source retain
+their general name.
 **Refresh** retries a failed history read without restarting background work.
 Refresh and earlier-page actions become available again when the current read
 finishes. Live updates retain the loaded amount of history. Older records remain

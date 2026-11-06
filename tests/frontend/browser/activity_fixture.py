@@ -58,11 +58,17 @@ async def seed(app):
             events.clock = lambda activity_index=activity_index: (
                 seed_time - timedelta(minutes=110 - activity_index)
             )
-            identity = await events.start("prices:nord_pool", "prices", "Fetch published prices")
+            owner, title, provider = "prices:nord_pool", "Fetch published prices", "Nord Pool"
+            if activity_index == 103:
+                owner, title, provider = "prices:jeroen_nl:NL", "Fetch price forecast", "Jeroen.nl"
+            elif activity_index == 102:
+                owner, provider = "prices:epex_predictor:NL", "EpexPredictor"
+                title = "Fetch price forecast for the next planning horizon and retain previously accepted prices"
+            identity = await events.start(owner, "prices", title)
             await events.finish(
                 identity,
                 Outcome.COMPLETED,
-                "Adapter: Nord Pool. Market: NL. Delivery-day prices accepted.",
+                f"Adapter: {provider}. Market: NL. Price data accepted.",
                 usable=True,
             )
         events.clock = lambda: seed_time - timedelta(minutes=3)
