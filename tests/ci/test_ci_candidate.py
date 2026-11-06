@@ -450,7 +450,14 @@ def test_every_reviewer_requires_base_inclusion(candidate, kody_candidate, provi
 
 
 @pytest.mark.parametrize("action", ["ready_for_review", "labeled"])
-def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, action):
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No New Commits (No changes detected since last review)",
+        "No changed files in this pull request.",
+    ],
+)
+def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, action, summary):
     """Ready metadata does not invalidate substantive Kody evidence for the unchanged head."""
     event, current, checks = kody_candidate
     event["action"] = action
@@ -461,7 +468,7 @@ def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, act
             "conclusion": "skipped",
             "output": {
                 "title": "Code Review Skipped",
-                "summary": "No New Commits (No changes detected since last review)",
+                "summary": summary,
             },
         }
     )
@@ -469,7 +476,14 @@ def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, act
 
 
 @pytest.mark.parametrize("earlier", ["missing", "failure", "in_progress", "skipped"])
-def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate, earlier):
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "No New Commits (No changes detected since last review)",
+        "No changed files in this pull request.",
+    ],
+)
+def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate, earlier, summary):
     """A no-change skip needs real success and cannot hide an actual later failed or pending attempt."""
     event, current, checks = kody_candidate
     metadata = {
@@ -478,7 +492,7 @@ def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate
         "conclusion": "skipped",
         "output": {
             "title": "Code Review Skipped",
-            "summary": "No New Commits (No changes detected since last review)",
+            "summary": summary,
         },
     }
     if earlier == "missing":

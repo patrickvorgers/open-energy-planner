@@ -6,18 +6,20 @@ from playwright.sync_api import expect
 
 @pytest.fixture(params=[1280, 768, 390])
 def documentation_page(documentation_url, browser, request):
-    """Open the real artifact in isolated desktop, tablet and phone browser contexts."""
+    """Follow the root redirect before yielding an isolated desktop, tablet or phone page."""
     with browser.new_context(
         viewport={"width": request.param, "height": 900}, has_touch=request.param < 1000
     ) as context:
         page = context.new_page()
         page.goto(documentation_url)
+        expect(page.get_by_role("heading", name="Your energy, understood.")).to_be_visible()
         yield page
 
 
 def test_root_article_search_and_provisioning(documentation_page, documentation_url):
     """Keep redirects, search, nested articles and the existing provisioning entry functional."""
     page = documentation_page
+    assert page.url == documentation_url + "docs/"
     expect(page.get_by_role("heading", name="Your energy, understood.")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     assert page.evaluate("document.fonts.check('16px Outfit')")
@@ -67,6 +69,40 @@ def test_articles_remain_readable_without_javascript(documentation_url, browser)
             "link", name="Before you start", exact=True
         ).click()
         expect(page.get_by_role("heading", name="Before you start")).to_be_visible()
+
+
+def test_user_journey_and_developer_entry_have_readable_figures(
+    documentation_page, documentation_url
+):
+    """Follow audience routes and load informative figures without overflow at all three sizes."""
+    page = documentation_page
+    navigation = page.get_by_role("navigation", name="Documentation", exact=True)
+    if page.viewport_size["width"] < 801:
+        page.get_by_role("button", name="Menu", exact=True).click()
+    navigation.get_by_role("link", name="How OEP works", exact=True).click()
+    expect(page.get_by_role("heading", name="How OEP works")).to_be_visible()
+    for route in (
+        "installation",
+        "contract",
+        "forecasts",
+        "appliances",
+        "read-your-plan",
+        "data-storage",
+    ):
+        page.goto(documentation_url + f"docs/users/{route}/")
+        expect(page.locator("main h1")).to_be_visible()
+        figures = page.locator("main img")
+        assert figures.count() > 0
+        for figure in figures.all():
+            expect(figure).to_have_js_property("complete", True)
+            assert figure.evaluate("image => image.naturalWidth > 0 && image.naturalHeight > 0")
+            assert figure.get_attribute("alt")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.goto(documentation_url + "docs/development/")
+    page.get_by_role("link", name="reference library", exact=True).first.click()
+    expect(page.get_by_role("heading", name="Developer reference library")).to_be_visible()
+    page.get_by_role("link", name="Architecture overview", exact=True).last.click()
+    expect(page.get_by_role("heading", name="Architecture overview")).to_be_visible()
 
 
 def test_wiki_and_provisioning_share_the_oep_identity(documentation_page, documentation_url):

@@ -1,7 +1,9 @@
 # Local solar forecasting
 
-Solar forecasting implements FORE-11–14 and FORE-16 on the existing app/integration
-chain. It does not constitute the complete installation compiler or product UI.
+This reference defines the solar forecasting contracts for FORE-11–14 and FORE-16
+in the app/integration chain. For setup and interpretation, start with the
+[user forecast guide](../users/forecasts.md). Installation compilation and UI
+ownership are described in [installation planning](INSTALLATION-PLANNING.md).
 
 ## Setup and source identity
 

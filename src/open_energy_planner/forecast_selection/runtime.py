@@ -1,6 +1,7 @@
 """App-owned automatic model preferences backed by nonoverlapping shadow decisions."""
 
 import logging
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -117,6 +118,7 @@ class ModelSelection:
         self.rows = []
         self.preferences = {}
         self.issue = store.issue
+        self.events = None
 
     def process(self, original, choices, now):
         """Advance at most one expensive capture/evaluation per poll and refresh all current statuses."""
@@ -219,7 +221,7 @@ class ModelSelection:
             seeds = (
                 self.counters.load(next(iter(counter_versions))).seeds if counter_versions else ()
             )
-            result = self._calculate(
+            with self._comparison(
                 {
                     "operation": "evaluate",
                     "capture": capture,
@@ -233,33 +235,36 @@ class ModelSelection:
                     "contract": self.contracts.load(capture["contract_version"]),
                     "seeds": seeds,
                 }
-            )
-            if result["status"] == "pending" and now < end + timedelta(hours=EVIDENCE_WAIT_HOURS):
-                family["issue"] = result["issue"]
-                family["retry_after"] = (
-                    now + timedelta(minutes=FAILED_CAPTURE_RETRY_MINUTES)
-                ).isoformat()
-                self.store.commit(identity, family)
+            ) as result:
+                if result["status"] == "pending" and now < end + timedelta(
+                    hours=EVIDENCE_WAIT_HOURS
+                ):
+                    family["issue"] = result["issue"]
+                    family["retry_after"] = (
+                        now + timedelta(minutes=FAILED_CAPTURE_RETRY_MINUTES)
+                    ).isoformat()
+                    self.store.commit(identity, family)
+                    return True
+                evaluation = {
+                    "capture": pending,
+                    "evaluated_at": now.isoformat(),
+                    "family_id": identity,
+                }
+                if result["status"] == "ok":
+                    evaluation.update(result["value"])
+                    family["windows"] = (family["windows"] + [version(evaluation)])[
+                        -MIN_DECISION_EVALUATION_WINDOWS:
+                    ]
+                    family["issue"] = None
+                else:
+                    result["status"] = "failed"
+                    evaluation["issue"] = result["issue"]
+                    family["issue"] = result["issue"]
+                    family["last_failure"] = version(evaluation)
+                family["pending"] = None
+                family["retry_after"] = None
+                self.store.commit(identity, family, evaluation=evaluation)
                 return True
-            evaluation = {
-                "capture": pending,
-                "evaluated_at": now.isoformat(),
-                "family_id": identity,
-            }
-            if result["status"] == "ok":
-                evaluation.update(result["value"])
-                family["windows"] = (family["windows"] + [version(evaluation)])[
-                    -MIN_DECISION_EVALUATION_WINDOWS:
-                ]
-                family["issue"] = None
-            else:
-                evaluation["issue"] = result["issue"]
-                family["issue"] = result["issue"]
-                family["last_failure"] = version(evaluation)
-            family["pending"] = None
-            family["retry_after"] = None
-            self.store.commit(identity, family, evaluation=evaluation)
-            return True
         if family.get("retry_after") and now < datetime.fromisoformat(family["retry_after"]):
             return False
         controlled = original.get("input_snapshot", {}).get("problem", {})
@@ -286,22 +291,86 @@ class ModelSelection:
             ).isoformat()
             self.store.commit(identity, family)
             return True
-        result = self._calculate(
+        with self._comparison(
             {"operation": "capture", "original": original, "variant": choice, "now": now}
-        )
-        if result["status"] != "ok":
-            family["issue"] = result["issue"]
-            family["retry_after"] = (
-                now + timedelta(minutes=FAILED_CAPTURE_RETRY_MINUTES)
-            ).isoformat()
-            self.store.commit(identity, family)
+        ) as result:
+            if result["status"] != "ok":
+                family["issue"] = result["issue"]
+                family["retry_after"] = (
+                    now + timedelta(minutes=FAILED_CAPTURE_RETRY_MINUTES)
+                ).isoformat()
+                self.store.commit(identity, family)
+                return True
+            capture = result["value"]
+            family.update(pending=version(capture), issue=None, retry_after=None)
+            self.store.commit(identity, family, capture=capture)
             return True
-        capture = result["value"]
-        family.update(pending=version(capture), issue=None, retry_after=None)
-        self.store.commit(identity, family, capture=capture)
-        return True
 
-    def _calculate(self, payload):
+    @contextmanager
+    def _comparison(self, payload):
+        """Publish real comparisons only after their owning store accepts the result.
+
+        The caller commits capture/evaluation evidence inside this context.
+        Evidence still awaiting retry is skipped, not a failure or recovery.
+        The caller marks an abandoned evaluation failed at its evidence deadline.
+        Calculation or commit exceptions retain the failure episode and baseline
+        availability.
+        """
+        if self.events is None:
+            yield self._execute(payload)
+            return
+        from ..activities.events import Health, Outcome
+
+        with self.events.thread_attempt(
+            "models",
+            "training",
+            "Compare forecast models",
+            failure="Model comparison failed. Baseline models remain active.",
+        ) as identity:
+            try:
+                result = self._execute(payload)
+                yield result
+            except Exception:
+                self.events.availability_thread(
+                    "models",
+                    Health.DEGRADED,
+                    "Comparison evidence could not be accepted. Baseline models remain active.",
+                )
+                raise
+            interrupted = self.stop.is_set()
+            usable = result["status"] == "ok" and not interrupted
+            pending = result["status"] == "pending" and not interrupted
+            self.events.finish_thread(
+                identity,
+                Outcome.INTERRUPTED
+                if interrupted
+                else Outcome.COMPLETED
+                if usable
+                else Outcome.SKIPPED
+                if pending
+                else Outcome.FAILED,
+                "Forecast comparison evidence is available."
+                if usable
+                else "Comparison evidence is pending. Baseline models remain active."
+                if pending
+                else "No new usable comparison evidence. Baseline models remain active.",
+                usable=usable,
+            )
+            self.events.availability_thread(
+                "models",
+                Health.AVAILABLE
+                if usable
+                else Health.UNKNOWN
+                if pending or interrupted
+                else Health.DEGRADED,
+                "Comparison evidence is available."
+                if usable
+                else "Waiting for comparison evidence. Baseline models remain active."
+                if pending or interrupted
+                else "Baseline models remain active without new comparison evidence.",
+            )
+
+    def _execute(self, payload):
         """Translate bounded process failure into explicit absent selection evidence, never a fabricated score."""
         try:
             timeout = (

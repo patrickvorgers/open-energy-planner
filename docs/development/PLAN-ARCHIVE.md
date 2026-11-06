@@ -180,7 +180,7 @@ recovery; they do not establish complete HAOS backup/restore behavior.
 `tests/database/contracts/test_plan_archive_backends.py` runs the same reconstruction, block-reuse,
 restart, immutable-ID, transaction-rollback, revocation, pagination, large-input,
 corruption and unsupported-schema contracts on SQLite, PostgreSQL, MariaDB and MySQL.
-`tests/database/contracts/test_archive_migration.py` checks every ordered pair of different backends,
+`tests/database/migrations/test_archive_migration.py` checks every ordered pair of different backends,
 plus SQLite-to-SQLite, with exact reconstruction and injected copy failure. Startup
 checks additionally exercise SQLite-to-each-server and back while preserving the
 same app directory. Both these tests and the existing forecast-selection storage

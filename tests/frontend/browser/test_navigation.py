@@ -477,7 +477,7 @@ def test_grouped_navigation_is_consistent_accessible_with_courtyard_theme(app_pa
     page, url = app_page
     groups = {
         "Energy": ["Planning", "Appliances", "EV charging", "Thermal storage", "Savings"],
-        "Insights": ["Forecast quality", "Planning performance"],
+        "Insights": ["Forecast quality", "Planning performance", "Activity"],
         "Settings": ["Installation", "Appliances", "Contract", "Data storage"],
     }
     destinations = (
@@ -489,6 +489,7 @@ def test_grouped_navigation_is_consistent_accessible_with_courtyard_theme(app_pa
         ("/thermal", "Thermal storage"),
         ("/quality", "Forecast quality"),
         ("/planning-performance", "Planning performance"),
+        ("/activity", "Activity"),
         ("/contract", "Contract"),
         ("/setup", "Installation"),
         ("/data-storage", "Data storage"),

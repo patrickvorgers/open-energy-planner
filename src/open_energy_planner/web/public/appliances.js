@@ -10,11 +10,18 @@ const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = (id) => document.getElementById(id);
 let token = "", chart, energyChart, current, consumers, renderedProfile;
 let evidenceRefreshing = false;
-/** Send authenticated JSON with the supplied HTTP method. Failures retain their HTTP status for callers. */
+const READ_TIMEOUT_MILLISECONDS = 30000;
+/** Bound authenticated GETs through response decoding. Preserve write acknowledgement and HTTP status handling. */
 async function api(path, body, method = body ? "POST" : "GET") {
-    const response = await fetch(base + path, {method, headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store"});
+    const response = await fetch(base + path, {method, headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal: method === "GET" ? AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS) : undefined});
     if (!response.ok) { const error = new Error(await response.text()); error.status = response.status; throw error; }
     return response.json();
+}
+/** Settle every related read before callers release their refresh guard or report a failure. */
+async function readEvidence() {
+    const results = await Promise.allSettled([api("v1/appliances"), api("v1/consumers"), api("setup/session")]);
+    if (results.some(result => result.status === "rejected")) throw new Error();
+    return results.map(result => result.value);
 }
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
 /** Replace both learned-cycle charts. Each bar integrates one PROFILE_MINUTES phase in kWh.
@@ -93,14 +100,15 @@ function showProfiles() {
     }
     profile();
 }
-/** Refresh only learning evidence. Keep task/deadline drafts and unchanged charts, and retain previous evidence on failure. */
+/** Refresh learning evidence and its HA timezone. Keep drafts and unchanged charts, and retain previous evidence on failure. */
 async function refreshEvidence() {
     if (!current || evidenceRefreshing || document.hidden) return;
     evidenceRefreshing = true;
     const previous = current;
     try {
-        const [data, sources] = await Promise.all([api("v1/appliances"), api("v1/consumers")]);
+        const [data, sources, session] = await readEvidence();
         if (current !== previous) return;
+        useHomeAssistantTimezone(session.timezone);
         consumers = sources;
         current = {...data, devices: followedDevices(data)};
         for (const card of document.querySelectorAll("[data-appliance-entity]")) {
@@ -119,8 +127,9 @@ pollApplianceEvidence(refreshEvidence);
  */
 async function load() {
     try {
-        const [data, sources] = await Promise.all([api("v1/appliances"), api("v1/consumers")]);
+        const [data, sources, session] = await readEvidence();
         if (!Array.isArray(sources.charging_meters) || !Array.isArray(sources.thermal_meters)) throw new Error("Specialized-meter membership unavailable. Refresh before inspecting appliances.");
+        useHomeAssistantTimezone(session.timezone);
         consumers = sources;
         current = {...data, devices: followedDevices(data)};
         find("connect").hidden = true; find("status").textContent = data.issue || "Connected: A schedule never proves physical execution."; find("appliance-list").replaceChildren();
@@ -143,9 +152,9 @@ async function load() {
             find("appliance-list").append(card);
         }
         showProfiles();
-    } catch (error) { find("status").textContent = error.message; }
+    } catch { find("status").textContent = "Appliance information could not be loaded. Check the connection and try Refresh."; }
 }
 find("profile-device").onchange = profile;
 find("refresh").onclick = load;
 find("connect").onsubmit = (event) => { event.preventDefault(); token = find("token").value; load(); };
-fetch(base + "setup/session", {redirect: "error"}).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); if (session.ingress) load(); }).catch((error) => { find("status").textContent = error.message; });
+api("setup/session").then(session => { if (session.ingress) load(); }).catch(() => { find("status").textContent = "Session information could not be loaded. Refresh this page and try again."; });

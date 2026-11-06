@@ -9,6 +9,7 @@ from open_energy_planner.installation.forecast_policy import FORECAST_MAX_AGE_MI
 from open_energy_planner.solar.calculation.model import horizon, version
 
 from ..demand.basis import DemandEvidence
+from ..demand.basis import forecast_usable as demand_forecast_usable
 from ..optimization.domain import Interval
 from ..solar.basis import SolarEvidence, forecast_usable
 from .model import BatteryState, InstallationProblem, PVUnit
@@ -73,12 +74,7 @@ class InstallationBasisSource:
         if demand.store.issue or demand.configuration is None or demand.forecast is None:
             raise InputsUnavailable("demand_forecast_pending")
         load = demand.forecast
-        if (
-            load.configuration_version != demand.configuration.version
-            or not load.issued_at
-            <= now
-            < load.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
-        ):
+        if not demand_forecast_usable(demand.configuration, load, now):
             raise InputsUnavailable("demand_forecast_expired")
         if load.scope != "residual_household" or load.excluded_devices:
             raise InputsUnavailable("separate_load_planning_not_configured")

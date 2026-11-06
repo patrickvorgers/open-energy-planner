@@ -24,6 +24,7 @@ class ConfiguredPrices:
         self.resources = AsyncExitStack()
         self.lock = asyncio.Lock()
         self._persistence_lock = asyncio.Lock()
+        self.events = None
 
     @property
     def persistence_lock(self):
@@ -72,6 +73,7 @@ class ConfiguredPrices:
             return False
         if area is None:
             previous = self.resources
+            await self.withdraw_events()
             self.service, self.market_area, self.resources = None, None, AsyncExitStack()
             await previous.aclose()
             return True
@@ -80,6 +82,8 @@ class ConfiguredPrices:
         try:
             service = await replacement.enter_async_context(self.open_service(area))
             service.persistence_lock = self.persistence_lock
+            service.events = self.events
+            await self.withdraw_events()
         except BaseException:
             self.configuration_issue = "market_area_reload_failed"
             await replacement.aclose()
@@ -90,12 +94,42 @@ class ConfiguredPrices:
         await old.aclose()
         return True
 
+    async def withdraw_events(self):
+        """Cancel the previous market's upcoming work when its service is replaced."""
+        if self.events and self.service:
+            from ..activities.events import Outcome
+
+            for identity in self.service.activity_requests.values():
+                if identity in self.events.running:
+                    await self.events.finish(
+                        identity,
+                        Outcome.CANCELLED,
+                        "The price source configuration changed before delivery completed.",
+                    )
+            for source in (
+                self.service.published,
+                self.service.forecast,
+                self.service.alternative,
+                *self.service.extra_forecasts,
+            ):
+                if source is not None:
+                    self.events.withdraw(self.service.activity_owner(source))
+
     async def refresh(self, now):
         """Apply the current saved area and run its existing independent fetch schedule."""
         async with self.lock:
             changed = await self.configure()
             if self.service is None or self.configuration_issue:
+                if self.events:
+                    from ..activities.events import Health
+
+                    self.events.availability(
+                        "prices",
+                        Health.UNAVAILABLE if self.configuration_issue else Health.UNKNOWN,
+                        "Configure current price sources in Contract settings.",
+                    )
                 return changed
+            self.service.events = self.events
             return await self.service.refresh(now) or changed
 
     def timeline(self, now, **options):

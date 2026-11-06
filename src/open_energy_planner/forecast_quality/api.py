@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
@@ -114,6 +114,11 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
 
         app.cleanup_ctx.append(satellite_lifecycle)
 
+    from ..activities.api import EVENTS
+
+    events = app.get(EVENTS)
+    daily.events = events
+
     def timezone():
         """Use only the discovered Home Assistant timezone, never the server or browser timezone."""
         value = (catalogue.value or {}).get("timezone")
@@ -137,6 +142,19 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                                 demand, solar, catalogue.value, plans.state.get("plan")
                             )
                     if zone:
+                        if events:
+                            from zoneinfo import ZoneInfo
+
+                            local_day = now.astimezone(ZoneInfo(zone)).date()
+                            next_midnight = datetime.combine(
+                                local_day + timedelta(days=1), datetime.min.time(), ZoneInfo(zone)
+                            )
+                            events.scheduled(
+                                "forecast-quality",
+                                "quality",
+                                "Archive daily forecast",
+                                next_midnight,
+                            )
                         cancellation = await complete_write(daily.observe, now, zone, context)
                         if cancellation:
                             raise cancellation

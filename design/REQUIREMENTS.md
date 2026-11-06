@@ -1,8 +1,8 @@
 # Requirements: Open Energy Planner
 
-Version: 0.146
+Version: 0.147
 
-Updated: 28 October 2026
+Updated: 5 November 2026
 
 Status: the functional first-release scope is agreed. Technical implementation and release acceptance remain incomplete. The solver experiment, minimal app/HA chain and first validated synthetic planning round exist. Development experiments do not control production hardware.
 
@@ -518,7 +518,7 @@ DAO research, 17 October: its inspected Dev Container runs `script/setup` → `s
 
 References: [HA developer environment](https://contributors.home-assistant.io/core/development/environment/), [app testing](https://contributors.home-assistant.io/apps/guides/testing/), [DAO Dev Container](https://github.com/corneel27/day-ahead/blob/main/.devcontainer/devcontainer.json), [setup](https://github.com/corneel27/day-ahead/blob/main/script/setup), [provisioning](https://github.com/corneel27/day-ahead/blob/main/scripts/setup_environment.py).
 
-- UI-19: Use a responsive workspace with clear Planning, Savings and Installation settings navigation. Interactive locally served time charts show energy, prices, battery state and expected commands, with keyboard-accessible inspection, toggles and shared time windows. Keep forecast, original advice, recorded results and simulated reference explicit. See [chart research and design](../docs/development/EMS-VISUALIZATION.md). The current Price inputs view reads cached market prices and saved dated contract/bonus rules independently of any plan or measured bonus-volume baseline. Show potential total export rates before the volume cap, with exact price/time eligibility and explicit unknown coverage. Preserve original plan prices separately. Daylight bonus eligibility uses whole minutes, rounding sunrise up and sunset down. Preserve old plan evidence and prevent false chart gaps at its precise boundaries.
+- UI-19: Use a responsive workspace with clear Planning, Savings and Installation settings navigation. Interactive locally served time charts show energy, prices, battery state and expected commands, with keyboard-accessible inspection, toggles and shared time windows. Keep forecast, original advice, recorded results and simulated reference explicit. See [chart research and design](../docs/development/EMS-VISUALIZATION.md). One Price inputs graph shows the original prices saved with the selected plan, including historical plans. Only when no plan is available, show an explicitly labelled preview from cached market prices and saved dated contract/bonus rules, independently of measured bonus-volume history. Show potential total export rates before the volume cap, with exact price/time eligibility and explicit unknown coverage. New prices and contract changes never overwrite the selected plan's archived prices. Preserve plan prices and their source classification. Daylight bonus eligibility uses whole minutes, rounding sunrise up and sunset down. Preserve old plan evidence and prevent false chart gaps at its precise boundaries.
 
 ### Reference and input visualization clarification
 
@@ -839,3 +839,31 @@ defines their additional physics and control obligations.
 
 See [thermal storage implementation](../docs/development/THERMAL-STORAGE.md) for
 the current bounds, equations, virtual entities and acceptance evidence.
+
+## Activity, availability and notification events
+
+- ACT-01: Modules publish actual activities and their outcomes to one central
+  activity collector. Retain seven days of history across restarts. Default to
+  today in the HA timezone and allow filtering by activity type.
+- ACT-02: Modules publish known work for the next six hours, including changes
+  and cancellations. Do not predict ad-hoc replans. Record them when executed.
+- ACT-03: Keep one ID per attempt. Distinguish completed usable results, failures,
+  interruptions without definitive outcomes, deliberate cancellation and skipped
+  work. Show the first usable success after failure as recovered. Empty or invalid
+  results cannot establish recovery. Record actual requests, not idle polls.
+- ACT-04: Price activities identify the actual adapter and market. Failure details
+  explain whether retained prices, weather, forecasts or models remain usable and
+  the actual impact. Domain owners retain the existing validity policy.
+- ACT-05: Modules publish current availability independently of activity results.
+  Business logic owns notifications. The UI subscribes to them. Neither the
+  collector nor the UI manufactures a notification from an activity failure.
+- ACT-06: New and reconnecting subscribers receive an authoritative snapshot and
+  subsequent changes without a subscription gap. Replay missed events when
+  retained, otherwise reset to a fresh snapshot. Other modules can subscribe.
+- ACT-07: Restart retains history and marks unfinished executions interrupted.
+  Current health begins unknown and producers rebuild actual state and schedules.
+  The collector never independently retries work. Preserve the separate database
+  maintenance recovery mechanism while the app is unavailable.
+
+See [activity and module events](../docs/development/ACTIVITY-EVENTS.md) for the
+implemented producer inventory, storage limits, API and UI behavior.

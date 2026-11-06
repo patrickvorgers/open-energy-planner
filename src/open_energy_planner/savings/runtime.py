@@ -3,6 +3,7 @@
 import json
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
 
@@ -60,6 +61,14 @@ SETTLEMENT_VALIDATION_MESSAGES = (
 )
 
 
+class EvaluationState(StrEnum):
+    """Distinguish accepted publication, expected waiting and rejected evidence."""
+
+    COMPLETE = "complete"
+    PENDING = "pending"
+    FAILED = "failed"
+
+
 def settlement_issue(error):
     """Project safe evidence guidance without copying retained values or arbitrary exception text."""
     messages = (
@@ -104,6 +113,7 @@ class SavingsRuntime:
         self.bonus = HistoricalBonuses(store)
         self.issue = None
         self.attention = False
+        self.events = None
         self.physical_issue = None
         self._bindings_plan, self._bindings = None, None
 
@@ -342,13 +352,75 @@ class SavingsRuntime:
             self.documents.write("working.json", head)
         state = self.store.state(head["revision"])
         rows = self.store.frames(datetime.fromisoformat(state["end"]) if state else None)
+        if self.events and rows:
+            from ..activities.events import Health, Outcome
+
+            with self.events.thread_attempt(
+                "settlement",
+                "settlement",
+                "Evaluate measured savings",
+                failure="Settlement processing failed. Last successful financial results remain available.",
+            ) as identity:
+                evaluation = self._evaluate_rows(
+                    contract, now, book, head, published_state, price_cursor, state, rows
+                )
+                usable = evaluation == EvaluationState.COMPLETE
+                pending = evaluation == EvaluationState.PENDING
+                self.events.finish_thread(
+                    identity,
+                    Outcome.COMPLETED if usable else Outcome.SKIPPED if pending else Outcome.FAILED,
+                    "Measured savings were evaluated."
+                    if usable
+                    else "Savings evaluation awaits complete evidence or the next correction batch. Previous financial results remain available."
+                    if pending
+                    else "No complete new savings result. Previous financial results remain available. Check Savings for missing evidence.",
+                    usable=usable,
+                )
+                self.events.availability_thread(
+                    "settlement",
+                    Health.AVAILABLE if usable else Health.UNKNOWN if pending else Health.DEGRADED,
+                    "Measured savings are current."
+                    if usable
+                    else "Waiting for complete savings evidence. Previous financial results remain available."
+                    if pending
+                    else "Previous financial results are retained. Check Savings for missing evidence.",
+                )
+        else:
+            self._evaluate_rows(
+                contract, now, book, head, published_state, price_cursor, state, rows
+            )
+
+    def _evaluate_rows(self, contract, now, book, head, published_state, price_cursor, state, rows):
+        """Evaluate captured intervals before publishing a successful head.
+
+        Args:
+            contract: Current terms whose currency and market are recorded per result.
+            now: Aware evaluation time used for financial evidence and metadata.
+            book: Optional counter book used to prepare bonus evidence.
+            head: Working evaluation metadata, including its revision.
+            published_state: Previously published continuation state, if available.
+            price_cursor: Price cursor retained after the complete batch.
+            state: Continuation state for the next captured interval.
+            rows: Captured measurements and contexts in chronological order.
+
+        Returns:
+            COMPLETE after accepted publication, PENDING while evidence or further
+            correction batches are needed, or FAILED for rejected evidence or a
+            missing original plan. These states do not depend on display text.
+
+        Each successful interval is committed immediately. An early return records
+        self.issue and, for handled evaluation errors, self.attention. Earlier
+        interval commits remain stored. Only a complete batch writes the new head
+        or working state, preserving the previous successful publication.
+        """
+        counter_version = book.version if book else None
         for row in rows:
             frame = parse_frame(row["frame"])
             context = row["context"]
             plan_id = self.store.context_plan(frame.start)
             if plan_id is None:
                 self.issue = "No original installation plan covers this interval"
-                return
+                return EvaluationState.FAILED
             plan = self.plans.get_plan(plan_id)
             try:
                 problem = physical_context(plan)
@@ -406,7 +478,11 @@ class SavingsRuntime:
             except (ValueError, KeyError, TypeError) as error:
                 self.issue = settlement_issue(error)
                 self.attention = not isinstance(error, PendingSettlement)
-                return
+                return (
+                    EvaluationState.PENDING
+                    if isinstance(error, PendingSettlement)
+                    else EvaluationState.FAILED
+                )
         head["price_cursor"] = price_cursor
         with self.documents.transaction():
             if state and (published_state is None or state["end"] >= published_state["end"]):
@@ -415,12 +491,16 @@ class SavingsRuntime:
                 self.documents.write("working.json", None)
             else:
                 self.documents.write("working.json", head)
+        pending = published_state is not None and (
+            state is None or state["end"] < published_state["end"]
+        )
         self.issue = (
             "Correction is still being evaluated. The previous successful version remains visible"
-            if published_state and (state is None or state["end"] < published_state["end"])
+            if pending
             else None
         )
         self.attention = False
+        return EvaluationState.PENDING if pending else EvaluationState.COMPLETE
 
     def overview(self, start, end, revision=None):
         """Filter stored nonoverlapping results. Never reset either scenario or run a historical optimizer."""

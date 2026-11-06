@@ -1,5 +1,31 @@
 # Open Energy Planner: technical design
 
+## Activity and module event ownership
+
+`activities/` owns retained execution evidence, a current-state projection and
+authenticated cursor subscriptions. Producers publish source-owned outcomes,
+availability and known schedules. The collector does not infer business validity
+from diagnostic logs or execution status and never retries domain operations.
+`notifications/` retains cause, severity and recovery semantics independently.
+The composition root connects these existing source readers to change signals.
+
+History uses `oep_activities` on the shared active SQLAlchemy engine. One bounded
+background writer prevents optional evidence from delaying planning. Normal
+shutdown drains producers and that writer before engine closure. Seven-day
+retention does not prune original plans, measurements or financial archives.
+Read-only APIs reuse existing authentication. Live state uses a process-epoch
+cursor and 512-event replay. An atomic snapshot/subscription boundary prevents
+missed changes. Restart or expired replay causes an explicit snapshot reset.
+
+The [activity guide](../docs/development/ACTIVITY-EVENTS.md) defines outcomes,
+producer coverage, six-hour schedules, interrupted work, transport recovery,
+notification separation and limits when storage is unavailable. The
+[database dictionary](../docs/development/DATABASE-SCHEMA.md#oep_activities)
+defines the transferable row contract. The app composition change is necessary
+to connect the shared engine, existing notification owners and lifecycle ordering.
+Domain calculations stay with their existing owners. Validation includes app,
+browser, four-backend storage/transfer and affected platform lifecycle contracts.
+
 The [plan evidence read model](../docs/development/PLAN-EVIDENCE.md) projects
 original archived domain inputs and planned outcomes inside the app. The existing
 authenticated plan-comparison response carries factual cards and interval identity.
@@ -10,7 +36,7 @@ alternatives against frozen original inputs and preserve solver proof status.
 
 *Local energy optimization for Home Assistant.*
 
-The [release scope](FIRST-RELEASE-SCOPE.md) and [requirements](REQUIREMENTS.md) are authoritative. Milestones are implementation steps within that scope, not smaller product promises. Labelled proposals are not automatically confirmed requirements. Implement technical details within the agreed boundary. Changes to behaviour/user obligations need an explicit product decision. Solver/synthetic app/HA experiments exist. The full product does not. Experiments do not control production hardware. See [development foundation](DEVELOPMENT-FOUNDATION.md) for the private repository, provisioning, CI and review limits. All project artifacts and names use English.
+The [release scope](FIRST-RELEASE-SCOPE.md) and [requirements](REQUIREMENTS.md) are authoritative. Milestones are implementation steps within that scope, not smaller product promises. Labelled proposals are not automatically confirmed requirements. Implement technical details within the agreed boundary. Changes to behaviour/user obligations need an explicit product decision. Solver/synthetic app/HA experiments exist. The full product does not. Experiments do not control production hardware. See [development foundation](DEVELOPMENT-FOUNDATION.md) for repository ownership, provisioning, CI and review limits. All project artifacts and names use English.
 
 ## 1. Structure
 
@@ -994,7 +1020,7 @@ writes reuse stable identities and saved cycle evidence. No task is submitted.
 
 ### Installable artifacts and multi-device control projection
 
-The [HA OS acceptance route](../docs/development/HAOS-ACCEPTANCE.md) packages matching app/integration versions from one clean Git revision, hashes both archives and retains the repository as private. HACS metadata prepares future public installation. HACS does not support private repositories, so private native acceptance uses an administrator-installed ZIP and local app build. The app never installs integration files.
+The [HA OS acceptance route](../docs/development/HAOS-ACCEPTANCE.md) uses matching app/integration artifacts from one verified source tree. Preserve their original numbered manifests and hashes. The repository is public, but public HACS installation remains a separate release gate. Development-preview acceptance uses the matched integration ZIP and packaged app. The app never installs integration files.
 
 The [virtual-device contract](../docs/development/VIRTUAL-DEVICES.md) adds per-battery enum modes, an explicit grid mode and retained non-applicable power sensors. Optional `can_follow_grid` defaults false. Canonical omission of false preserves existing immutable configuration hashes/files. Only validated zero-import/export intervals can select this permission-gated execution mode. Nominal flows/costs remain unchanged. HA rejects follower commands without the configured capability or an active grid goal. Physical execution remains user-owned.
 
@@ -1270,9 +1296,18 @@ caps. Missing location/window evidence produces an explicit unknown bonus while
 known base tariffs remain available. Missing price coverage is never filled with
 zero. No request fetches provider data or writes configuration/history.
 
-The UI independently loads Price inputs and original plan evidence. Current rates
-use the current containing quarter and selected 6/24/full-hour range. Archived
-plan prices retain their original contract and prepared rates. The browser uses
+The UI has one Price inputs chart. A selected plan supplies its frozen tariff
+evidence, original contract and prepared bonus rates. It shares that plan's time
+range. Only without a selected plan, read the current tariff preview independently
+of plan or bonus-volume availability. Label this fallback explicitly and use the
+current containing quarter and selected 6/24/full-hour range. Late preview reads
+cannot replace a plan chart. A deferred preview starts with its own bounded
+read timeout, so a timed-out archive listing cannot cancel a healthy preview.
+The overview JSON reader replaces network and parser exceptions with owned
+recovery messages while preserving fixed authentication and HTTP-status advice.
+An empty preview is unavailable evidence, never a normal saved-rate result.
+Failed plan updates retain the complete previous
+comparison and its original price inputs until a usable replacement is loaded. The browser uses
 recorded end timestamps instead of reconstructing them from floating duration
 hours when checking coverage. This prevents microsecond daylight boundaries from
 becoming false gaps after conversion to JavaScript millisecond precision.
@@ -1389,7 +1424,7 @@ acquire thermal command permission automatically.
 
 ### Domain and physical equations
 
-`thermal/model.py` defines immutable `ThermalWork` and detached `ThermalFlow`.
+`appliances/thermal/model.py` defines immutable `ThermalWork` and detached `ThermalFlow`.
 `InstallationProblem.thermal_work` retains each device independently, and
 `InstallationFlow.thermal` retains AC intake, final temperature, physical comfort
 deficit and commanded watts. No native optimizer expressions cross this boundary.
@@ -1502,7 +1537,7 @@ proof produces no candidate. A feasible zero deficit proves the nonnegative
 objective's lower bound within tolerance. Every stage restores native solver
 options and the financial objective before returning.
 
-`thermal/validation.py` independently recomputes the thermal equations from plain
+`appliances/thermal/validation.py` independently recomputes the thermal equations from plain
 problem/plan values. It verifies exact device membership, finite quantities,
 zero-or-rated heater commands, UTC-quarter consistency, readiness, AC integration,
 temperature bounds, bounded unserved draw and actual comfort shortfall. Extraction computes comfort shortfall from the

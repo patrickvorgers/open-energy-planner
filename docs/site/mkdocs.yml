@@ -29,27 +29,29 @@ validation:
 nav:
   - Start here: docs/index.md
   - Use OEP:
+      - How OEP works: docs/users/how-oep-works.md
       - Before you start: docs/users/before-you-start.md
       - Try your first plan: docs/users/first-plan.md
       - Connect Home Assistant: docs/users/home-assistant.md
+      - Configure OEP: docs/users/configuration.md
+      - Installation settings: docs/users/installation.md
+      - Contract and prices: docs/users/contract.md
+      - Understand forecasts: docs/users/forecasts.md
+      - Appliances and requests: docs/users/appliances.md
       - Read your plan: docs/users/read-your-plan.md
+      - Understand savings: docs/users/savings.md
+      - Calculation time: docs/users/planning-performance.md
+      - Data storage: docs/users/data-storage.md
+      - Activity: docs/users/activity.md
       - Troubleshooting: docs/users/troubleshooting.md
-  - Explore the details:
-      - Installation: docs/development/INSTALLATION-PLANNING.md
-      - Contract prices: docs/development/CONTRACT-PRICES.md
-      - Solar forecasts: docs/development/SOLAR-FORECASTING.md
-      - Household demand: docs/development/DEMAND-FORECASTING.md
-      - Appliances: docs/development/SHIFTABLE-APPLIANCES.md
-      - EV charging: docs/development/EV-CHARGING.md
-      - Thermal storage: docs/development/THERMAL-STORAGE.md
-      - Savings: docs/development/SAVINGS.md
-      - Forecast quality: docs/development/FORECAST-QUALITY.md
-  - Develop with OEP:
+      - Energy glossary: docs/users/glossary.md
+  - Develop OEP:
+      - Start developing: docs/development/README.md
+      - Architecture overview: docs/development/ARCHITECTURE-OVERVIEW.md
       - Dev Container provisioning: provisioning/index.html
-      - Development guide: docs/development/README.md
-      - Architecture: design/TECHNICAL-DESIGN.md
-      - Release boundaries: design/FIRST-RELEASE-SCOPE.md
       - Supervisor environment: docs/development/DEVELOPER-ENVIRONMENT.md
-      - Tests and CI: docs/development/CI-STAGES.md
+      - Interactive scenarios: docs/development/USER-TEST-ENVIRONMENT.md
       - Contributing: CONTRIBUTING.md
-      - Documentation site: docs/development/DOCUMENTATION-SITE.md
+      - Tests and CI: docs/development/CI-STAGES.md
+      - Reference library: docs/development/REFERENCE-INDEX.md
+      - Documentation maintenance: docs/development/DOCUMENTATION-SITE.md

@@ -934,12 +934,116 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     start = datetime(2026, 10, 25, 23, tzinfo=UTC)
+    predicted = (
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.04,
+        0.18,
+        0.42,
+        0.68,
+        0.82,
+        0.90,
+        0.80,
+        0.62,
+        0.38,
+        0.15,
+        0.02,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    measured = (
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.03,
+        0.17,
+        0.36,
+        0.61,
+        0.77,
+        None,
+        0.66,
+        0.53,
+        0.31,
+        0.11,
+        0.01,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    forecast_ghi = (
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        20,
+        85,
+        180,
+        295,
+        370,
+        405,
+        360,
+        270,
+        165,
+        65,
+        8,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    satellite_ghi = (
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        15,
+        80,
+        150,
+        260,
+        345,
+        None,
+        285,
+        235,
+        135,
+        45,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
     rows = [
         {
             "start": (start + timedelta(hours=index)).isoformat(),
             "end": (start + timedelta(hours=index + 1)).isoformat(),
-            "predicted_kwh": 0.25,
-            "measured_kwh": 0 if index == 0 else None if index == 2 else 0.2,
+            "predicted_kwh": predicted[index],
+            "measured_kwh": measured[index],
             "error_kwh": None,
             "evaluation_issue": "Incomplete measurements",
         }
@@ -960,7 +1064,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
         "metrics": metrics,
         "coverage": {"hours": 24, "measured_hours": 23, "paired_hours": 23},
         "daily": {
-            "predicted_kwh": 6,
+            "predicted_kwh": 5.01,
             "measured_kwh": None,
             "error_kwh": None,
             "evaluation_issue": "Incomplete measurements",
@@ -971,13 +1075,16 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
         "model": "pvwatts-v2",
         "model_label": "PVWatts",
         "forecast_version": "physical",
-        "rows": [{**row, "predicted_kwh": 0.3} for row in rows],
-        "daily": {**original["daily"], "predicted_kwh": 7.2},
+        "rows": [
+            {**row, "predicted_kwh": round(predicted[index] * 1.18, 4)}
+            for index, row in enumerate(rows)
+        ],
+        "daily": {**original["daily"], "predicted_kwh": 5.9118},
     }
     original["alternatives"] = [alternative]
     original["radiation"] = {
         "source": "Open-Meteo: DWD / EUMETSAT MTG",
-        "complete_until": (start + timedelta(hours=2)).isoformat(),
+        "complete_until": (start + timedelta(hours=12)).isoformat(),
         "received_at": (start + timedelta(hours=24, minutes=20)).isoformat(),
         "observed_hours": 23,
         "hours": 24,
@@ -986,8 +1093,8 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
             {
                 "start": row["start"],
                 "end": row["end"],
-                "forecast_w_m2": 100,
-                "satellite_w_m2": None if index == 2 else 0 if index == 0 else 200,
+                "forecast_w_m2": forecast_ghi[index],
+                "satellite_w_m2": satellite_ghi[index],
             }
             for index, row in enumerate(rows)
         ],
@@ -1059,7 +1166,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     page.get_by_role("checkbox", name="Forecast irradiance", exact=True).check()
     page.get_by_role("checkbox", name="Satellite estimate", exact=True).check()
     assert page.locator("#quality-chart-0").evaluate(
-        """canvas => {const chart=Chart.getChart(canvas);return chart.options.scales.radiation.display && chart.options.scales.radiation.title.text.includes('W/m²') && chart.data.datasets[3].borderColor !== chart.data.datasets[4].borderColor && chart.data.datasets[4].data[0].y === 0 && chart.data.datasets[4].data[2].y === null && chart.data.datasets[4].spanGaps === false;}"""
+        """canvas => {const chart=Chart.getChart(canvas);return chart.options.scales.radiation.display && chart.options.scales.radiation.title.text.includes('W/m²') && chart.data.datasets[3].borderColor !== chart.data.datasets[4].borderColor && chart.data.datasets[4].data[0].y === 0 && chart.data.datasets[4].data[12].y === null && chart.data.datasets[4].spanGaps === false;}"""
     )
     assert page.locator(".quality-comparison").inner_text() == before
     width = page.viewport_size["width"]
