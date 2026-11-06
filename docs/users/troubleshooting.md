@@ -42,6 +42,22 @@ An unsuccessful new round does not overwrite the original accepted plan or prolo
 
 **Success looks like:** a coherent new plan is published and, separately, accepted by HA where applicable. Physical behavior still needs its own evidence.
 
+## No vehicle or connection sensor appears
+
+In Settings > Appliances > EV charging, choose the Home Assistant integration
+before choosing its sensors. The car's state-of-charge sensor must report `%`.
+A sensor with an unrelated device class, such as humidity, is not a vehicle SoC
+source.
+
+For a charge point, search its integration's binary sensors by name or entity ID.
+Use a sensor that stays On while plugged in, including when charging is paused.
+A charging-active sensor is not equivalent. Check the sensor in Home Assistant
+if its purpose is unclear. Choose the charge point's Energy consumption meter
+separately. After correcting HA configuration, save or cancel pending edits and
+use Check saved settings to reload available metadata. The app's catalogue is
+bounded. Related sensors on Energy devices receive priority, while unrelated
+sensors may not all fit.
+
 ## Cost or benefit is unavailable
 
 Check whether the relevant scenario comparison exists and covers the same original horizon. Do not substitute the self-consumption comparison for the without-battery baseline. Missing costs are not zero savings.

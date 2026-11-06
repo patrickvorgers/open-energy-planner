@@ -12,6 +12,7 @@ const VEHICLE_FIELDS = ["id", "soc_entity", "soc_timestamp_attribute", "capacity
 const POINT_FIELDS = ["id", "energy_entity", "power_entity", "connected_entity", "minimum_w", "maximum_w", "control", "vehicle_ids"];
 const WATTS_PER_KW = 1000;
 let token = "", current, draft, editing = false, selectedId = null, editOriginId = null;
+const integrationSelections = new Map();
 const saveState = new SaveBar({form: "settings", bar: "ev-save-bar", save: "save", discard: "refresh", status: "dirty", read: () => draft, canSave: () => editing});
 bindApplianceSettingsNavigation(saveState);
 find("refresh").textContent = "Cancel";
@@ -28,7 +29,7 @@ function selected() { return draft?.vehicles.find(row => row.id === selectedId) 
 /** Show precise display kW while physical configuration retains whole watts. */
 function power(value) { return Number.isFinite(value) ? (value / WATTS_PER_KW).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 3}) + " kW" : "Unavailable"; }
 /** Keep source-derived names separate from immutable OEP identities. */
-function displayName(row, vehicle) { return (vehicle ? current.vehicles : current.points).find(saved => saved.id === row.id)?.name || (vehicle ? "New vehicle" : "New charge point"); }
+function displayName(row, vehicle) { return (vehicle ? current.vehicles : current.points).find(saved => saved.id === row.id)?.name || (vehicle ? current.catalogue.entities.find(entity => entity.entity_id === row.soc_entity)?.integration_name || "New vehicle" : "New charge point"); }
 /** Use the same read-only, Edit and Cancel boundary as the other Appliances editors. */
 function syncEditor() {
     const locked = saveState.busy || !saveState.ready;
@@ -43,20 +44,70 @@ function syncEditor() {
 }
 /** Retain precise numeric drafts while target SoC shows one decimal when idle and exact values during editing. */
 function input(card, row, key, label, help, type = "number", limits = {}) {
-    const wrapper = node("label", label), control = node("input"); control.type = type; control.required = true;
+    const wrapper = node("label"), control = node("input"); wrapper.className = "ev-field"; wrapper.append(node("span", label)); control.type = type; control.required = true;
+    control.setAttribute("aria-label", label);
     const watts = key === "maximum_w" || key === "minimum_w";
     Object.assign(control, limits); if (key === "target_soc") percentageInput(control, row[key]); else control.value = row[key] === null || row[key] === undefined || row[key] === "" ? "" : watts ? row[key] / WATTS_PER_KW : row[key]; control.dataset.field = key;
     control.oninput = () => { const value = type === "number" ? inputNumber(control) : control.value; row[key] = watts && value !== null ? Math.round(value * WATTS_PER_KW) : value; changed(); };
     wrapper.append(control, node("small", help)); card.append(wrapper); return control;
 }
-function select(card, row, key, label, help, options) {
-    const wrapper = node("label", label), control = node("select"); control.required = true; control.dataset.field = key;
+function select(card, row, key, label, help, options, emptyMessage = "No matching Home Assistant sources were discovered. Check that the integration exposes this sensor, then refresh the saved settings.") {
+    const wrapper = node("label"), control = node("select"); wrapper.className = "ev-field"; wrapper.append(node("span", label)); control.required = true; control.dataset.field = key;
+    control.setAttribute("aria-label", label);
     const blank = node("option", "Select a source"); blank.value = ""; control.append(blank);
     for (const [value, text] of options) { const option = node("option", text); option.value = value; control.append(option); }
+    if (row[key] && !options.some(([value]) => value === row[key]) && ["soc_entity", "power_entity", "connected_entity"].includes(key)) {
+        const source = current.catalogue.entities.find(entity => entity.entity_id === row[key]);
+        const option = node("option", `${source?.name || row[key]}: Current selection outside this list`); option.value = row[key]; control.append(option);
+    }
     control.value = row[key] || ""; control.onchange = () => { row[key] = control.value; changed(); };
     wrapper.append(control, node("small", help)); card.append(wrapper);
+    if (!options.length) wrapper.append(node("p", emptyMessage));
+    return control;
 }
-function metadata(predicate) { return current.catalogue.entities.filter(predicate).map((row) => [row.entity_id, `${sourceName(row, "Sensor")}: ${row.name} (${row.entity_id})`]); }
+function metadata(predicate, integration) { return current.catalogue.entities.filter(row => predicate(row) && (integration === undefined || (row.integration_id || "other") === integration)).map((row) => { const name = sourceName(row, "Sensor"); return [row.entity_id, `${name}${row.name === name ? "" : ": " + row.name} (${row.entity_id})`]; }); }
+/** Ask for an actual HA config entry before narrowing source roles, retaining unregistered templates. */
+function integrationPicker(card, row, vehicle) {
+    const candidates = current.catalogue.entities.filter(entity => vehicle ? isVehicleSoc(entity) : entity.entity_id.startsWith("binary_sensor.") || entity.device_class === "power" && ["W", "kW"].includes(entity.unit));
+    if (!candidates.some(entity => entity.integration_id)) return undefined;
+    const groups = new Map(candidates.map(entity => [entity.integration_id || "other", entity.integration_name || "Other Home Assistant sources"]));
+    const source = current.catalogue.entities.find(entity => entity.entity_id === (vehicle ? row.soc_entity : row.power_entity || row.connected_entity || row.energy_entity));
+    const selectedIntegration = integrationSelections.get(row.id) ?? (source ? source.integration_id || "other" : "");
+    const selection = {integration: selectedIntegration};
+    const control = select(card, selection, "integration", "Home Assistant integration", vehicle ? "Choose the integration that manages this car. Its title supplies the vehicle name." : "Choose the integration that reports the charge point's power and physical connection. Its Energy meter is selected separately.", [...groups].sort((left, right) => left[1].localeCompare(right[1])));
+    control.required = false;
+    control.parentElement.style.gridColumn = "1 / -1";
+    control.onchange = () => {
+        integrationSelections.set(row.id, control.value);
+        if (vehicle && control.value) {
+            const entity = current.catalogue.entities.find(source => source.entity_id === row.soc_entity);
+            if ((entity?.integration_id || "other") !== control.value) row.soc_entity = "";
+        }
+        render(); changed();
+    };
+    return selectedIntegration;
+}
+/** Percentage SoC may omit HA's optional battery class, but incompatible classes remain excluded. */
+function isVehicleSoc(entity) { return entity.entity_id.startsWith("sensor.") && entity.unit === "%" && ["battery", ""].includes(entity.device_class); }
+/** Filter connection candidates by visible names without guessing that any binary sensor means plugged in. */
+function connectedSource(card, row, integration) {
+    const group = node("fieldset"); group.className = "settings-fields"; group.append(node("legend", "Physical connection")); card.append(group);
+    const candidates = metadata(entity => entity.entity_id.startsWith("binary_sensor."), integration);
+    const searchLabel = node("label"), search = node("input"); searchLabel.className = "ev-field"; searchLabel.append(node("span", "Find connection sensor")); search.type = "search";
+    search.setAttribute("aria-label", "Find connection sensor");
+    searchLabel.append(search, node("small", "Search the device, sensor name or entity ID.")); group.append(searchLabel);
+    const control = select(group, row, "connected_entity", "Vehicle connected", "Choose a sensor that stays On while plugged in, even when charging is paused. Charging, door and fault sensors do not establish a connection.", candidates, integration === "" ? "Choose the Home Assistant integration first." : undefined);
+    const searchable = [...control.options].filter(option => option.value).map(option => [option.value, option.textContent]);
+    const result = node("small"); result.setAttribute("role", "status"); result.style.gridColumn = "1 / -1"; group.append(result);
+    search.oninput = () => {
+        const query = search.value.trim().toLocaleLowerCase();
+        control.replaceChildren(); const blank = node("option", "Select a source"); blank.value = ""; control.append(blank);
+        let matches = 0;
+        for (const [value, text] of searchable) { const matched = text.toLocaleLowerCase().includes(query); if (matched) matches++; if (value === row.connected_entity || matched) { const option = node("option", text); option.value = value; control.append(option); } }
+        control.value = row.connected_entity || "";
+        result.textContent = matches ? `${matches} matching connection sensor${matches === 1 ? "" : "s"}.` : "No sensors match this search.";
+    };
+}
 /** Stage a confirmed removal through versioned Save, keeping Cancel and archived history intact. */
 function removeSelected() {
     find("ev-more").open = false;
@@ -89,7 +140,8 @@ function render() {
     find("vehicles").replaceChildren(); find("points").replaceChildren();
     for (const row of draft.vehicles) {
         const card = node("section"); card.className = "settings-fields"; card.hidden = row.id !== selectedId; card.append(node("h3", "Home Assistant sources"));
-        select(card, row, "soc_entity", "Vehicle state of charge", "Select this car's measured battery percentage, not the stationary home battery.", metadata((entity) => entity.entity_id.startsWith("sensor.") && entity.unit === "%" && entity.device_class === "battery"));
+        const integration = integrationPicker(card, row, true);
+        select(card, row, "soc_entity", "Vehicle state of charge", "Select this car's measured battery percentage, not the stationary home battery.", metadata(isVehicleSoc, integration), integration === "" ? "Choose the Home Assistant integration first." : undefined);
         const advanced = node("details"); advanced.append(node("summary", "Optional original sample timestamp"));
         const stamp = input(advanced, row, "soc_timestamp_attribute", "SoC timestamp attribute", "If the SoC entity exposes its original sample time as an ISO timestamp attribute, enter that exact attribute name. Otherwise freshness uses HA report time and is labelled accordingly.", "text"); stamp.required = false; stamp.oninput = () => { row.soc_timestamp_attribute = stamp.value || null; changed(); }; card.append(advanced);
         card.append(node("h3", "Vehicle limits"));
@@ -102,11 +154,13 @@ function render() {
     }
     for (const row of draft.points) {
         const card = node("section"); card.className = "settings-fields"; card.hidden = row.id !== selectedId; card.append(node("h3", "Home Assistant sources"));
+        const integration = integrationPicker(card, row, false);
         select(card, row, "energy_entity", "Charging consumption meter", "Configured in Home Assistant Energy. Separate from instantaneous power.", current.energy_consumers.map((entity) => [entity.entity_id, entity.name]));
-        select(card, row, "power_entity", "Measured AC charging power", "Positive W or kW consumed by this charge point.", metadata((entity) => entity.device_class === "power" && ["W", "kW"].includes(entity.unit)));
-        select(card, row, "connected_entity", "Vehicle connected", "A binary sensor that is On only while a vehicle is physically connected.", metadata((entity) => entity.entity_id.startsWith("binary_sensor.")));
-        select(card, row, "control", "Control capability", "Physical actions remain in your HA automation. Measurement only never produces a charging request.", [["read_only", "Measurement only"], ["on_off", "On/off at fixed power"], ["variable", "Variable power"]]);
+        select(card, row, "power_entity", "Measured AC charging power", "Positive W or kW consumed by this charge point.", metadata((entity) => entity.device_class === "power" && ["W", "kW"].includes(entity.unit), integration), integration === "" ? "Choose the Home Assistant integration first." : undefined);
+        connectedSource(card, row, integration);
         card.append(node("h3", "Charging limits"));
+        const control = select(card, row, "control", "Control capability", "Physical actions remain in your HA automation. Measurement only never produces a charging request.", [["read_only", "Measurement only"], ["on_off", "On/off at fixed power"], ["variable", "Variable power"]]);
+        control.parentElement.style.gridColumn = "1 / -1";
         input(card, row, "minimum_w", "Minimum active charging power (kW)", "The lowest supported charging power. Off remains available.", "number", {min: 0, max: 100, step: 0.001});
         input(card, row, "maximum_w", "Maximum charging power (kW)", "Point/cable limit. On/off charging uses this fixed level, capped by the vehicle.", "number", {min: 0.001, max: 100, step: 0.001});
         const group = node("fieldset"); group.append(node("legend", "Allowed vehicles"));
@@ -134,6 +188,7 @@ function renderSummary() {
 async function load(selection = selectedId) {
     try {
         current = await api("v1/ev"); useHomeAssistantTimezone(current.timezone);
+        integrationSelections.clear();
         draft = {vehicles: current.vehicles.map((row) => Object.fromEntries(VEHICLE_FIELDS.map((key) => [key, row[key]]))), points: current.points.map((row) => Object.fromEntries(POINT_FIELDS.map((key) => [key, row[key]])))};
         selectedId = selection; editing = false; find("connect").hidden = true; find("settings").hidden = false; find("status").textContent = current.issue || ""; render(); saveState.loaded(); syncEditor();
     } catch (error) { find("status").textContent = error.message; saveState.update(error.message); }
