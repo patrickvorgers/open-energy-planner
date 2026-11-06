@@ -99,7 +99,6 @@ async def seed(app):
         Health.UNAVAILABLE,
         "NL forecast unavailable. Published prices remain usable.",
     )
-    events.availability("prices:epex_predictor:BE", Health.AVAILABLE, "BE forecast is usable.")
     events.availability("prices:jeroen_nl:NL", Health.AVAILABLE, "NL forecast is usable.")
     events.scheduled("weather", "weather", "Fetch weather", now + timedelta(minutes=55))
     events.scheduled("models", "training", "Later model training", now + timedelta(hours=7))

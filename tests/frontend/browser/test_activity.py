@@ -9,8 +9,8 @@ from tests.frontend.browser.helpers import TOKEN, discover
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
-def test_module_status_hierarchy_preserves_sources_markets_and_live_states(app_page):
-    """Prices and Weather retain independent child and overview states through live recovery and removal."""
+def test_module_status_hierarchy_preserves_collapsed_groups_and_live_states(app_page):
+    """Prices hide the single market, and keyboard groups retain collapse and focus through live recovery."""
     page, url = app_page
     discover(page, url)
     page.goto(url + "/activity")
@@ -18,26 +18,30 @@ def test_module_status_hierarchy_preserves_sources_markets_and_live_states(app_p
     page.get_by_role("button", name="Connect", exact=True).click()
     prices = page.get_by_role("region", name="Prices", exact=True)
     expect(prices).to_be_visible()
-    expect(prices.locator("details")).to_have_count(5)
-    for name in ("Nord Pool", "EpexPredictor", "Jeroen.nl"):
-        expect(prices.get_by_role("region", name=name, exact=True)).to_be_visible()
-    nord_pool = prices.get_by_role("region", name="Nord Pool", exact=True)
-    expect(nord_pool.get_by_text("Overview: Unknown", exact=True)).to_be_visible()
-    expect(nord_pool.get_by_text("NL: Available", exact=True)).to_be_visible()
-    predictor = prices.get_by_role("region", name="EpexPredictor", exact=True)
-    expect(predictor.get_by_text("BE: Available", exact=True)).to_be_visible()
+    expect(prices.locator("details[data-owner]")).to_have_count(3)
+    for name in ("Nord Pool: Available", "EpexPredictor: Unavailable", "Jeroen.nl: Available"):
+        expect(prices.get_by_text(name, exact=True)).to_be_visible()
+    for summary in prices.locator("summary").all_text_contents():
+        assert ": NL" not in summary and ": BE" not in summary
     weather = page.get_by_role("region", name="Weather", exact=True)
     for name in ("Overview: Available", "Solar: Degraded", "Temperature: Available"):
         expect(weather.get_by_text(name, exact=True)).to_be_visible()
+    weather_heading = weather.locator(":scope > details[data-module-group] > summary")
+    weather_heading.click()
+    expect(weather.get_by_text("Solar: Degraded", exact=True)).not_to_be_visible()
+    weather_heading.click()
     expect(page.get_by_role("heading", name="Demand", exact=True)).to_have_count(0)
-    source = predictor.get_by_text("NL: Unavailable", exact=True)
+    source = prices.get_by_text("EpexPredictor: Unavailable", exact=True)
     source.focus()
     source.press("Enter")
     expect(
-        predictor.get_by_text(
-            "NL forecast unavailable. Published prices remain usable.", exact=True
-        )
+        prices.get_by_text("NL forecast unavailable. Published prices remain usable.", exact=True)
     ).to_be_visible()
+    price_group = prices.locator(":scope > details[data-module-group]")
+    price_heading = price_group.locator(":scope > summary")
+    price_heading.focus()
+    price_heading.press("Enter")
+    expect(source).not_to_be_visible()
     assert page.request.post(
         url + "/_test/activity-health",
         headers={"Authorization": f"Bearer {TOKEN}"},
@@ -47,27 +51,63 @@ def test_module_status_hierarchy_preserves_sources_markets_and_live_states(app_p
             "detail": "NL forecast recovered.",
         },
     ).ok
-    expect(predictor.get_by_text("NL: Available", exact=True)).to_be_visible()
-    predictor.get_by_text("NL: Available", exact=True).click()
-    expect(predictor.get_by_text("NL forecast recovered.", exact=True)).to_be_visible()
+    expect(prices.get_by_text("EpexPredictor: Available", exact=True)).to_have_count(1)
+    expect(price_group).not_to_have_attribute("open", "")
+    expect(price_heading).to_be_focused()
+    price_heading.press("Enter")
+    prices.get_by_text("EpexPredictor: Available", exact=True).click()
+    expect(prices.get_by_text("NL forecast recovered.", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.get_by_label("Activity type").select_option("training")
     expect(page.locator("#activity-list .activity-row")).to_have_count(1)
     expect(page.locator("#activity-status")).to_have_text("")
-    predictor.get_by_text("NL: Available", exact=True).click()
-    expect(predictor.get_by_text("NL forecast recovered.", exact=True)).to_be_visible()
+    prices.get_by_text("EpexPredictor: Available", exact=True).click()
+    expect(prices.get_by_text("NL forecast recovered.", exact=True)).to_be_visible()
+    # Switch the one configured market only after withdrawing all previous-area producers.
+    for adapter in ("nord_pool", "epex_predictor", "jeroen_nl"):
+        assert page.request.post(
+            url + "/_test/activity-health",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            data={"owner": f"prices:{adapter}:NL"},
+        ).ok
+    for adapter in ("nord_pool", "epex_predictor", "jeroen_nl"):
+        assert page.request.post(
+            url + "/_test/activity-health",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            data={
+                "owner": f"prices:{adapter}:BE",
+                "state": "available",
+                "detail": "Current market prices are usable.",
+            },
+        ).ok
+    expect(prices.locator("details[data-owner]")).to_have_count(3)
+    for name in ("Nord Pool: Available", "EpexPredictor: Available", "Jeroen.nl: Available"):
+        expect(prices.get_by_text(name, exact=True)).to_be_visible()
+    expect(prices).not_to_contain_text("NL forecast recovered.")
+    for summary in prices.locator("summary").all_text_contents():
+        assert ": NL" not in summary and ": BE" not in summary
     capture = Path("results/ci/activity-module-groups")
     capture.mkdir(parents=True, exist_ok=True)
     page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(
         path=str(capture / f"hierarchy-{page.viewport_size['width']}.png"), full_page=True
     )
+    price_heading.focus()
+    price_heading.press("Enter")
+    expect(prices.get_by_text("Jeroen.nl: Available", exact=True)).not_to_be_visible()
+    page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+    page.screenshot(
+        path=str(capture / f"collapsed-{page.viewport_size['width']}.png"), full_page=True
+    )
+    price_heading.press("Enter")
     for owner in (
         "prices:nord_pool",
         "prices:nord_pool:NL",
+        "prices:nord_pool:BE",
         "prices:epex_predictor:NL",
         "prices:epex_predictor:BE",
         "prices:jeroen_nl:NL",
+        "prices:jeroen_nl:BE",
     ):
         assert page.request.post(
             url + "/_test/activity-health",

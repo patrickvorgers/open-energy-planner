@@ -48,18 +48,19 @@ function activityRow(row) {
 /** Keep each source's own state and safe explanation available inside its group. */
 function moduleStatus(row, name) {
     const item = document.createElement("details"), title = document.createElement("summary"), detail = document.createElement("p");
-    item.className = "activity-row"; title.textContent = `${name}: ${label(row.state)}`; detail.textContent = row.detail; item.append(title, detail); return item;
+    item.className = "activity-row"; item.dataset.owner = row.owner; title.textContent = `${name}: ${label(row.state)}`; detail.textContent = row.detail; item.append(title, detail); return item;
 }
 
 /** Keep existing weather owner identifiers stable while showing their shared responsibility. */
 function modulePath(owner) {
     if (owner === "solar-weather") return ["weather", "solar"];
     if (owner === "temperature-weather") return ["weather", "temperature"];
-    return owner.split(":");
+    const parts = owner.split(":");
+    return parts[0] === "prices" ? parts.slice(0, 2) : parts;
 }
 
 /** Nest producer namespaces without inventing an aggregate health state. */
-function moduleBranch(node, path) {
+function moduleBranch(node, path, expanded) {
     const part = path.at(-1), name = label(path.length === 2 && path[0] === "prices" ? priceSourceName(part) : part);
     if (!node.children.size) return moduleStatus(node.row, name);
     const group = document.createElement("section"), heading = document.createElement(`h${Math.min(path.length + 2, 6)}`), children = document.createElement("ul");
@@ -68,7 +69,12 @@ function moduleBranch(node, path) {
         const overview = document.createElement("li"); overview.append(moduleStatus(node.row, "Overview")); children.append(overview);
     }
     for (const [key, child] of [...node.children].sort(([left], [right]) => left.localeCompare(right))) {
-        const item = document.createElement("li"); item.append(moduleBranch(child, [...path, key])); children.append(item);
+        const item = document.createElement("li"); item.append(moduleBranch(child, [...path, key], expanded)); children.append(item);
+    }
+    if (path.length === 1) {
+        const disclosure = document.createElement("details"), summary = document.createElement("summary");
+        disclosure.className = "activity-row activity-group-toggle"; disclosure.dataset.moduleGroup = part; disclosure.open = expanded.get(part) ?? true;
+        summary.append(heading); disclosure.append(summary, children); group.append(disclosure); return group;
     }
     group.append(heading, children); return group;
 }
@@ -111,15 +117,19 @@ function render() {
     }));
     if (!upcoming.length) find("activity-upcoming").textContent = "No known scheduled work in this window.";
     const modules = new Map();
+    const focusedGroup = document.activeElement?.parentElement?.dataset.moduleGroup;
+    const expanded = new Map([...find("activity-health").querySelectorAll("details[data-module-group]")].map(item => [item.dataset.moduleGroup, item.open]));
     for (const row of health) {
         let children = modules, node;
         for (const part of modulePath(row.owner)) {
             if (!children.has(part)) children.set(part, {children: new Map()});
             node = children.get(part); children = node.children;
         }
-        node.row = row;
+        // An area-qualified price producer supersedes its unconfigured adapter placeholder.
+        if (!node.row || row.owner.split(":").length >= node.row.owner.split(":").length) node.row = row;
     }
-    find("activity-health").replaceChildren(...[...modules].sort(([left], [right]) => left.localeCompare(right)).map(([key, node]) => moduleBranch(node, [key])));
+    find("activity-health").replaceChildren(...[...modules].sort(([left], [right]) => left.localeCompare(right)).map(([key, node]) => moduleBranch(node, [key], expanded)));
+    if (focusedGroup) [...find("activity-health").querySelectorAll("details[data-module-group]")].find(item => item.dataset.moduleGroup === focusedGroup)?.querySelector("summary").focus({preventScroll:true});
 }
 
 /** A late page response must not replace newer live outcomes for the same execution. */
