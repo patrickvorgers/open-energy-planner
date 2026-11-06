@@ -152,7 +152,11 @@ async function load() {
                 const cancel = node("button", "Cancel planning"); cancel.type = "button"; cancel.className = "secondary";
                 cancel.onclick = async () => {
                     if (cancel.disabled || !await confirmAction({title: "Cancel appliance planning?", message: `${option.name || option.entity_id} will no longer be scheduled for this request.\n\nThis does not stop the physical appliance or report that its cycle has completed. Home Assistant and the appliance remain responsible for physical control.`, confirmLabel: "Cancel planning"})) return;
-                    if (!cancel.isConnected || cancel.disabled) return;
+                    if (!cancel.isConnected) {
+                        find("status").textContent = `${option.name || option.entity_id}: Information was refreshed while confirmation was open. Review the current task, then choose Cancel planning again if needed.`;
+                        return;
+                    }
+                    if (cancel.disabled) return;
                     cancel.disabled = true;
                     try { await api("v1/appliances/cancel", {entity_id: option.entity_id, task_id: task.id}); await load(); }
                     catch (error) { find("status").textContent = error.message; }
