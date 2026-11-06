@@ -148,8 +148,10 @@ selected power or connection sources. Choices outside the filter remain visible
 and can be combined with sources from another integration. Cancel restores
 confirmed settings. A source list without compatible
 metadata explains what to check instead of showing an unexplained empty dropdown.
-HA catalogue collection prioritizes the registered devices of Energy sources,
-including their connection sensors, within the existing entity and byte budgets.
+HA catalogue collection includes the complete sensor, binary-sensor and
+water-heater metadata set. Energy devices retain deterministic priority in the
+transfer order, without dropping later sources. Large discoveries use the
+[complete snapshot protocol](ENERGY-DASHBOARD.md#complete-discovery-transfers).
 Only config-entry identity and title are forwarded, never provider credentials
 or arbitrary config-entry data.
 

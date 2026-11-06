@@ -7,7 +7,6 @@ from math import isfinite
 from open_energy_planner.core.units import SECONDS_PER_HOUR, SECONDS_PER_MINUTE
 from open_energy_planner.optimization.domain import DEFAULT_SOLVER_TIME_LIMIT_SECONDS
 
-MAX_THERMAL_STORES = 4
 MAX_THERMAL_STORE_ID_LENGTH = 64
 MAX_THERMAL_ENTITY_ID_LENGTH = 127
 MAX_THERMAL_CLOCK_SKEW_SECONDS = 5

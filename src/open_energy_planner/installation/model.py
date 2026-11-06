@@ -4,10 +4,9 @@ import re
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 
-from open_energy_planner.appliances.cycles.model import MAX_APPLIANCES, ApplianceWork
-from open_energy_planner.appliances.ev.model import MAX_CHARGE_POINTS, EVFlow, EVWork
+from open_energy_planner.appliances.cycles.model import ApplianceWork
+from open_energy_planner.appliances.ev.model import EVFlow, EVWork
 from open_energy_planner.appliances.thermal.model import (
-    MAX_THERMAL_STORES,
     ThermalFlow,
     ThermalWork,
 )
@@ -23,7 +22,6 @@ DEFAULT_CELL_EFFICIENCY = 0.95
 MIN_POSITIVE_BATTERY_SETTING = 1e-06
 MAX_BATTERY_NUMERIC_SETTING = 1000000.0
 MAX_DEVICE_POWER_W = 10000000.0
-MAX_DEVICES_PER_TYPE = 16
 MAX_EXPORT_BONUSES = 8
 
 
@@ -132,30 +130,21 @@ class Installation:
             raise TypeError("Grid inversion must be boolean")
         if not isinstance(self.inverters, tuple) or not isinstance(self.batteries, tuple):
             raise TypeError("Installation collections must be immutable")
-        if len(self.inverters) > MAX_DEVICES_PER_TYPE or len(self.batteries) > MAX_DEVICES_PER_TYPE:
-            raise ValueError("Installation supports up to 16 converters and batteries")
         ids = {inverter_item.inverter_id: inverter_item for inverter_item in self.inverters}
         if len(ids) != len(self.inverters) or len(
             {battery_item.device_id for battery_item in self.batteries}
         ) != len(self.batteries):
             raise ValueError("Duplicate installation identity")
-        if (
-            not isinstance(self.additional_grid_power_entities, tuple)
-            or len(self.additional_grid_power_entities) >= MAX_DEVICES_PER_TYPE
-        ):
-            raise ValueError("Invalid additional grid power sensors")
+        if not isinstance(self.additional_grid_power_entities, tuple):
+            raise TypeError("Invalid additional grid power sensors")
         if any(
             not isinstance(entity, str) or not re.fullmatch(r"sensor\.[a-z0-9_]+", entity)
             for entity in self.additional_grid_power_entities
         ):
             raise ValueError("Grid measurements require sensors")
-        if (
-            not isinstance(self.additional_grid_export_entities, tuple)
-            or len(self.additional_grid_export_entities) >= MAX_DEVICES_PER_TYPE
-            or any(
-                not isinstance(entity, str) or not re.fullmatch(r"sensor\.[a-z0-9_]+", entity)
-                for entity in self.additional_grid_export_entities
-            )
+        if not isinstance(self.additional_grid_export_entities, tuple) or any(
+            not isinstance(entity, str) or not re.fullmatch(r"sensor\.[a-z0-9_]+", entity)
+            for entity in self.additional_grid_export_entities
         ):
             raise ValueError("Invalid additional grid export sensors")
         if self.additional_grid_export_entities and self.grid_export_entity is None:
@@ -306,7 +295,6 @@ class InstallationProblem:
         ends = {step.start + timedelta(hours=step.duration_h) for step in self.intervals}
         if (
             not isinstance(self.thermal_work, tuple)
-            or len(self.thermal_work) > MAX_THERMAL_STORES
             or any(not isinstance(work, ThermalWork) for work in self.thermal_work)
             or len({work.device_id for work in self.thermal_work}) != len(self.thermal_work)
             or any(len(work.demand_kwh) != len(self.intervals) for work in self.thermal_work)
@@ -323,7 +311,6 @@ class InstallationProblem:
             raise ValueError("Invalid original reserve checkpoints")
         if (
             not isinstance(self.ev_work, tuple)
-            or len(self.ev_work) > MAX_CHARGE_POINTS
             or any(not isinstance(work, EVWork) for work in self.ev_work)
             or any(
                 len({getattr(work, identity) for work in self.ev_work}) != len(self.ev_work)
@@ -333,7 +320,6 @@ class InstallationProblem:
             raise ValueError("Invalid or multiply connected EV work")
         if (
             not isinstance(self.appliances, tuple)
-            or len(self.appliances) > MAX_APPLIANCES
             or any(not isinstance(work, ApplianceWork) for work in self.appliances)
             or len({work.task_id for work in self.appliances}) != len(self.appliances)
             or len({work.entity_id for work in self.appliances}) != len(self.appliances)

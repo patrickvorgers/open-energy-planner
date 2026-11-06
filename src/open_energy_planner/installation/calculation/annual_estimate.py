@@ -6,7 +6,6 @@ from math import isfinite
 from open_energy_planner.core.units import SECONDS_PER_DAY
 
 MIN_ANNUAL_ESTIMATE_DAYS = 7
-MAX_ENERGY_CHANNELS = 16
 ANNUALIZATION_DAYS = 365
 ESTIMATE_LOOKBACK_DAYS = ANNUALIZATION_DAYS
 SUM_ENDPOINTS = 2
@@ -21,8 +20,8 @@ def annual_estimate(terms, history, *, now=None):
     are included in each end-minus-start difference. Negative period deltas are
     unusable. Detailed hourly forecasting remains a separate post-save workflow.
     """
-    if not isinstance(history, list) or len(history) > MAX_ENERGY_CHANNELS:
-        raise ValueError("Invalid setup history")
+    if not isinstance(history, list):
+        raise TypeError("Invalid setup history")
     series = {}
     for item in history:
         if not isinstance(item, dict) or set(item) != {"entity_id", "points"}:

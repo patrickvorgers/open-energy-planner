@@ -12,12 +12,13 @@ from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
 from homeassistant.util import dt as dt_util
 
+from .recorder_batches import channel_batches
+
 QUARTER_SECONDS = 900
 STATISTIC_SECONDS = 300
 HOUR_SECONDS = 3600
 MAX_CAPTURE_DAYS = 1
 MAX_CAPTURE_INTERVALS = 96
-MAX_STATISTICS_CHANNELS = 64
 MAX_SETTLEMENT_REPORT_BYTES = 192 * 1024
 CAPTURE_TIMEOUT_SECONDS = 30
 RETRY_MINUTES = 15
@@ -83,13 +84,15 @@ class SettlementBridge:
                 )
                 return None
         entities.update(battery_item["energy_entity"] for battery_item in bindings["batteries"])
-        if len(entities) > MAX_STATISTICS_CHANNELS or "recorder" not in self.hass.config.components:
+        if "recorder" not in self.hass.config.components:
             return None
         batteries = bindings["batteries"]
 
         def read():
             """Use Recorder-owned execution, units, sum-reset handling and historical SoC state."""
-            metadata = get_metadata(self.hass, statistic_ids=entities)
+            metadata = {}
+            for batch in channel_batches(entities):
+                metadata.update(get_metadata(self.hass, statistic_ids=set(batch)))
             for entity_item in sorted(entities):
                 if (
                     entity_item not in metadata
@@ -104,15 +107,19 @@ class SettlementBridge:
                     return None
             datasets = []
             for period, seconds in (("5minute", STATISTIC_SECONDS), ("hour", HOUR_SECONDS)):
-                rows = statistics_during_period(
-                    self.hass,
-                    start - timedelta(hours=1),
-                    end,
-                    entities,
-                    period,
-                    {"energy": "kWh"},
-                    {"sum", "state"},
-                )
+                rows = {}
+                for batch in channel_batches(entities):
+                    rows.update(
+                        statistics_during_period(
+                            self.hass,
+                            start - timedelta(hours=1),
+                            end,
+                            set(batch),
+                            period,
+                            {"energy": "kWh"},
+                            {"sum", "state"},
+                        )
+                    )
                 datasets.append(
                     (
                         {
@@ -126,18 +133,18 @@ class SettlementBridge:
                         seconds,
                     )
                 )
-            soc = (
-                get_significant_states(
-                    self.hass,
-                    start - MAX_IDLE_SOC_GAP,
-                    end + timedelta(seconds=1),
-                    [battery_item["soc_entity"] for battery_item in batteries],
-                    include_start_time_state=True,
-                    significant_changes_only=False,
+            soc = {}
+            for batch in channel_batches(battery_item["soc_entity"] for battery_item in batteries):
+                soc.update(
+                    get_significant_states(
+                        self.hass,
+                        start - MAX_IDLE_SOC_GAP,
+                        end + timedelta(seconds=1),
+                        batch,
+                        include_start_time_state=True,
+                        significant_changes_only=False,
+                    )
                 )
-                if batteries
-                else {}
-            )
 
             def endpoint(entity, instant, interpolate=False):
                 """Use true sum endpoints first. Hourly fallback retains its estimated classification."""

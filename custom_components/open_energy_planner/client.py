@@ -6,9 +6,8 @@ from http import HTTPStatus
 from aiohttp import ClientSession, ClientTimeout, Fingerprint
 
 from .const import BUILD_INFO
+from .wire_limits import MAX_API_RESPONSE_BYTES, MAX_SNAPSHOT_RESPONSE_BYTES
 
-MAX_SNAPSHOT_RESPONSE_BYTES = 4 * 1024 * 1024
-MAX_API_RESPONSE_BYTES = 256 * 1024
 RESPONSE_READ_CHUNK_BYTES = 16384
 
 HTTP_TIMEOUT_SECONDS = 5
