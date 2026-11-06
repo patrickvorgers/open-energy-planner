@@ -100,7 +100,7 @@ remain unchanged. Storage uses the existing payload JSON, without extra columns.
 | Solar weather | Solar production. The weather request serves the whole installation. |
 | Appliance learning | The selected appliance's admitted display name, otherwise Appliance. |
 | Model comparison | Household consumption or the solar display name captured with the original plan, otherwise Solar production. |
-| Planning | The actual captured problem horizon. No guessed upcoming ad-hoc horizon. |
+| Planning | The actual captured problem horizon. A published plan shows `Plan <start> to <end>: <strategy>` without repeating its creation time. Running attempts retain the horizon without a plan caption. No guessed upcoming ad-hoc horizon. |
 | Forecast quality archive | The pending archive's captured start/end. Scheduled work uses its installation-local day, including DST. |
 | Measured savings | The captured measurement batch range being investigated, including when settlement remains pending. |
 | Archived plan valuation | The same creation-time and strategy caption as Planning, plus the original problem horizon. Missing creation evidence falls back to Archived plan. Malformed horizon evidence omits the range without preventing failure recording. |

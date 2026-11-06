@@ -10,6 +10,67 @@ from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_rea
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_calculated_plan_title_shows_one_period_before_strategy(app_page):
+    """Completed calculations show the horizon once, while running attempts retain their period."""
+    page, url = app_page
+    discover(page, url)
+
+    def history(route):
+        """Use independent captured plan contexts without altering stored plans or live publishers."""
+        body = route.fetch().json()
+        original = body["activities"][0]
+        period = {"start": "2026-10-25T00:00:17+00:00", "end": "2026-10-25T02:00:17+00:00"}
+        body["activities"] = [
+            {
+                **original,
+                "id": f"{index:032x}",
+                "owner": "planning",
+                "kind": "planning",
+                "title": "Calculate energy plan",
+                "state": "running" if strategy is None else "completed",
+                "finished_at": None if strategy is None else original["started_at"],
+                "detail": "Synthetic energy planning example.",
+                "context": period
+                if strategy is None
+                else {
+                    **period,
+                    "plan_generated_at": "2026-10-24T23:45:59+00:00",
+                    "plan_strategy": strategy,
+                    "plan_id": f"synthetic-plan-{index}",
+                },
+            }
+            for index, strategy in enumerate(("minimize cost", "minimize consumption", None), 1)
+        ]
+        body["next"] = None
+        route.fulfill(json=body)
+
+    page.route("**/v1/activities?**", history)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expected = [
+        "Calculate energy plan: Plan 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM: Minimize cost",
+        "Calculate energy plan: Plan 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM: Minimize consumption",
+        "Calculate energy plan: 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM",
+    ]
+    for index, title in enumerate(expected, 1):
+        heading = page.locator(f'#activity-list [data-activity-id="{index:032x}"] summary strong')
+        expect(heading).to_have_text(title)
+        expect(heading).to_have_attribute("title", title)
+    completed = page.locator('#activity-list [data-activity-id="00000000000000000000000000000001"]')
+    completed.locator("summary").click()
+    expect(completed.get_by_role("link", name="View this plan")).to_have_attribute(
+        "href", f"{url}/overview?plan=synthetic-plan-1#planning"
+    )
+    assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+    directory = Path("results/ci/activity-plan-title")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.locator("#activity-list").screenshot(
+        path=str(directory / f"title-{page.viewport_size['width']}.png")
+    )
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_activity_titles_show_source_context_without_wrapping(app_page):
     """Recognize price sources on one line and read the complete title through keyboard disclosure."""
     page, url = app_page
