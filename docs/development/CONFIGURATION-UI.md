@@ -46,10 +46,16 @@ Database migration keeps its existing preflight and explicit overwrite consent.
 Cancel receives initial focus. Cancel, Escape, Enter on Cancel and backdrop
 clicks must leave drafts and persisted data unchanged. Keep keyboard focus
 inside the modal and restore it to a visible initiating control on dismissal.
+If a refresh replaced that control, focus the page heading. Preserve focus
+deliberately moved to another visible control after the dialog closes.
 Only one confirmation may be pending. Insert names and descriptions as literal
 text. After asynchronous consent, recheck the selected identity, draft or
 maintenance state before applying the action. Existing dependency checks,
 version checks, write locks, failure advice and retained edits remain required.
+Failed operational commands show owned recovery advice rather than raw server
+responses. If cancellation cannot be confirmed, ask the user to refresh task
+evidence before retrying. Do not imply the request was rejected or the physical
+appliance stopped.
 
 Verify desktop, mobile and HA ingress behavior, dismissal without writes,
 single accepted execution, stale-state rejection and failed-write recovery.

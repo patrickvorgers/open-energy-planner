@@ -1,6 +1,11 @@
 /** Show one app-owned confirmation using native modal focus and keyboard behavior. */
 let pending = false;
 
+/** Exclude detached, hidden and disabled controls from focus restoration. */
+function visibleFocusTarget(element) {
+    return element && element !== document.body && element.isConnected && !element.disabled && element.getClientRects().length > 0;
+}
+
 /** Return explicit consent only. Concurrent requests and every dismissal cancel safely. */
 export async function confirmAction({title, message, confirmLabel, returnFocus = document.activeElement}) {
     if (pending) return false;
@@ -32,8 +37,17 @@ export async function confirmAction({title, message, confirmLabel, returnFocus =
             dialog.showModal();
         });
     } finally {
+        const focused = document.activeElement;
+        const preserveFocus = focused !== opener && !dialog.contains(focused) && visibleFocusTarget(focused);
         dialog.remove();
         pending = false;
-        if (opener?.isConnected && !opener.disabled) opener.focus({preventScroll: true});
+        if (!preserveFocus) {
+            const heading = document.querySelector("main h1");
+            const target = visibleFocusTarget(opener) ? opener : heading;
+            if (visibleFocusTarget(target)) {
+                if (target === heading) heading.setAttribute("tabindex", "-1");
+                target.focus({preventScroll: true});
+            }
+        }
     }
 }

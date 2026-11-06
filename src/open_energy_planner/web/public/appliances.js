@@ -159,7 +159,7 @@ async function load() {
                     if (cancel.disabled) return;
                     cancel.disabled = true;
                     try { await api("v1/appliances/cancel", {entity_id: option.entity_id, task_id: task.id}); await load(); }
-                    catch (error) { find("status").textContent = error.message; }
+                    catch { find("status").textContent = `${option.name || option.entity_id}: Cancellation could not be confirmed. Choose Refresh task evidence to check the current task before trying again. Physical control remains with Home Assistant.`; }
                     finally { if (cancel.isConnected) cancel.disabled = false; }
                 };
                 card.append(cancel);
