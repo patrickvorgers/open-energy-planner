@@ -27,6 +27,9 @@
 .activity-next details.activity-row { padding:0; }
 .activity-next .activity-row > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:40px; padding:6px 0; box-sizing:border-box; font-weight:400; }
 .activity-next h2:not(:first-child) { margin-top:1.5rem; }
+.activity-health-group > :is(h3,h4,h5,h6) { margin:12px 0 4px; font-size:14px; font-weight:600; }
+.activity-group-toggle > summary > h3 { margin:0; font-size:14px; font-weight:600; }
+.activity-health-group > ul,.activity-group-toggle > ul { padding-left:12px; border-left:1px solid var(--oep-line); }
 .activity-empty { padding:16px 10px; color:var(--oep-muted); }
 #activity-more { margin-top:1rem; }
 @media(max-width:1100px) and (min-width:851px) {
