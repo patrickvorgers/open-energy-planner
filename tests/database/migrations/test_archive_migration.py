@@ -52,6 +52,28 @@ def test_transfer_progress_reports_real_copy_and_verification_counts(route):
     assert restored.state == original.state
 
 
+def test_weather_learning_transfers_and_finishes_without_source(route):
+    """Every backend transfer retains native model JSON and forward evidence after the source closes."""
+    from tests.app.appliance.test_weather_learning import forecast_day
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    SqlPlanRepository(root / "target", engine=target)
+    documents = SqlDocuments(source, "demand")
+    forecast_day(documents, 42)
+    forecast_day(documents, 43)
+    preserved = list(documents.iter_prefix("consumer-weather-"))
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = SqlDocuments(target, "demand")
+    assert list(restored.iter_prefix("consumer-weather-")) == preserved
+    for day in (44, 45):
+        model, _, evidence = forecast_day(restored, day)
+    assert model.model_id == "xgboost-weather-v1"
+    assert evidence["completed_windows"] == 3
+
+
 def test_data_storage_migration_restarts_real_app_on_verified_target(route):
     """Real managed HTTP migration preserves history across every backend route and rejects local self-copy."""
     import asyncio

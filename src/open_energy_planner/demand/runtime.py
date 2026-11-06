@@ -144,6 +144,7 @@ class DemandRuntime:
             now,
             self.learned_preferred,
             self.consumers.inputs(),
+            self.candidate_features,
         )
 
     def failed(self, key, now):
@@ -167,7 +168,16 @@ class DemandRuntime:
             baseline_forecast, feature family, consumer_result and history quality. A validated
             composite reports active. Missing evidence retains a readiness status.
         """
-        key, configuration, histories, temperatures, now, learned_preferred, consumers = job
+        (
+            key,
+            configuration,
+            histories,
+            temperatures,
+            now,
+            learned_preferred,
+            consumers,
+            previous_features,
+        ) = job
         issue, comparison = None, None
         reconstruction = DemandReconstructor().analyze(configuration, histories, before=now)
         samples = reconstruction.samples
@@ -207,8 +217,21 @@ class DemandRuntime:
         from open_energy_planner.appliances.forecasting import build_components
 
         composite, consumer_result = build_components(
-            configuration, histories, known_weather, now, consumers
+            configuration, histories, known_weather, now, consumers, documents=self.store.documents
         )
+        consumer_features = "consumers:" + consumers[0]
+        weather_models = tuple(
+            (record["entity_id"], record["forecast"]["model"])
+            for record in (consumer_result or {}).get("devices", ())
+            if record.get("weather_sensitive")
+        )
+        if any(model_id == "xgboost-weather-v1" for _, model_id in weather_models):
+            consumer_features += ":weather:" + digest(weather_models)
+        if consumer_features != previous_features and (
+            ":weather:" in consumer_features or ":weather:" in previous_features
+        ):
+            # Another algorithm family needs its own financial shadow evidence.
+            learned_preferred = False
         if consumers[1]:
             candidate = composite
             # Selection validates the complete composition against the incumbent,
@@ -259,7 +282,7 @@ class DemandRuntime:
             issue,
             comparison,
             baseline_forecast,
-            "consumers:" + consumers[0]
+            consumer_features
             if consumers[1]
             else "temperature"
             if ridge and ridge.temperature_enabled
@@ -289,6 +312,10 @@ class DemandRuntime:
         self.model_status, self.issue = status, issue
         self.comparison = comparison
         self.baseline = baseline_forecast
+        if features != self.candidate_features and (
+            ":weather:" in features or ":weather:" in self.candidate_features
+        ):
+            self.learned_preferred = False
         self.candidate_features = features
         self.consumers.result = consumer_result
         quality_changed = self.history_quality != history_quality
