@@ -339,6 +339,7 @@
 
 /* Shared section navigation keeps selection distinct from keyboard focus. */
 .section-tabs { display:flex; flex-wrap:wrap; gap:0 24px; margin:0 0 24px; padding:0; border:0; background:transparent; font-size:14px; line-height:1.5; }
+.workspace .view-filters { margin-bottom:24px; padding-bottom:24px; border-bottom:1px solid var(--oep-line); }
 .workspace .section-tabs > a,.workspace .section-tabs > button { display:inline-flex; align-items:center; min-height:44px; margin:0; padding:8px 0 12px; border:0; border-bottom:3px solid transparent; border-radius:0; background:transparent; box-shadow:none; color:var(--oep-muted); font:inherit; text-decoration:none; }
 .workspace .section-tabs > [aria-current="page"],.workspace .section-tabs > [aria-selected="true"],.workspace .section-tabs > [aria-pressed="true"] { color:var(--oep-action-blue, #006da6); background:transparent; border-color:var(--oep-action-blue, #006da6); font-weight:600; }
 .workspace .section-tabs > :focus-visible { outline:2px solid var(--oep-action-blue, #006da6); outline-offset:4px; }
