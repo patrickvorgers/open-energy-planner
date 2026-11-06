@@ -7,7 +7,8 @@ bindSettingsActions();
 const find = id => document.getElementById(id);
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", rows = new Map(), running = [], scheduled = [], health = [], next, generation = 0, loading = false;
-let historyProblem = "", loadProblem = "", liveProblem = "", historyLimit = 100;
+const pageSize = 25;
+let historyProblem = "", loadProblem = "", liveProblem = "", pageIndex = 0, requestedPage = 0, pageCursors = [undefined], pendingUpdates = new Map();
 const historyWarning = (available, lost) => lost ? "Some activity updates could not be recorded. History may be incomplete. Energy planning continues independently." : available === false ? "Activity history cannot currently be saved. Energy planning continues independently." : "";
 const label = value => value.charAt(0).toUpperCase() + value.slice(1).replaceAll(/[_-]/g, " ");
 const moduleName = value => value.split(":").map(label).join(": ");
@@ -83,20 +84,21 @@ function moduleBranch(node, path, expanded) {
 function render() {
     find("activity-status").textContent = loadProblem || liveProblem || historyProblem || (loading ? "Loading activity history." : "");
     const kind = find("activity-type").value;
-    if (!loading) {
-        const history = [...rows.values()].filter(matches).sort(newestFirst);
-        if (history.length > historyLimit) {
-            const retained = history.slice(0, historyLimit), oldest = retained.at(-1);
-            rows = new Map(retained.map(row => [row.id, row]));
-            next = `${oldest.started_at}|${oldest.id}`;
-        }
-    }
     find("activity-refresh").disabled = loading;
-    find("activity-more").disabled = loading;
     const opened = new Set([...find("activity-list").querySelectorAll("details[open]")].map(item => item.dataset.activityId));
     const focused = document.activeElement?.tagName === "SUMMARY" ? document.activeElement.parentElement.dataset.activityId : undefined;
-    const merged = new Map([...rows, ...running.map(row => [row.id, row])]);
-    const visible = [...merged.values()].filter(matches).sort(newestFirst);
+    const merged = new Map([...rows, ...running.filter(row => pageIndex === 0 || rows.has(row.id)).map(row => [row.id, row])]);
+    const ordered = [...merged.values()].filter(matches).sort(newestFirst), visible = ordered.slice(0, pageSize);
+    if (!loading && ordered.length > pageSize) {
+        const oldest = visible.at(-1);
+        next = `${oldest.started_at}|${oldest.id}`;
+        pageCursors[pageIndex + 1] = next;
+        rows = new Map(visible.map(row => [row.id, row]));
+    }
+    find("activity-previous").disabled = loading || pageIndex === 0;
+    find("activity-next").disabled = loading || !next;
+    find("activity-page").textContent = `Page ${pageIndex + 1}`;
+    find("activity-list").setAttribute("aria-busy", String(loading));
     let restoreFocus;
     find("activity-list").replaceChildren(...visible.map(row => {
         const entry = document.createElement("li"), details = activityRow(row);
@@ -110,7 +112,6 @@ function render() {
         empty.textContent = loading ? "Loading activities." : "No activities recorded for this selection.";
         find("activity-list").append(empty);
     }
-    find("activity-more").hidden = !next;
     const upcoming = scheduled.filter(row => Date.parse(row.due_at) >= Date.now() && Date.parse(row.due_at) <= Date.now() + 6*60*60*1000 && (!kind || row.kind === kind)).sort((left,right) => left.due_at.localeCompare(right.due_at));
     find("activity-upcoming").replaceChildren(...upcoming.map(row => {
         const item = document.createElement("p"); item.className = "activity-row"; item.textContent = `${clock(row.due_at)}: ${row.title}`; return item;
@@ -133,25 +134,34 @@ function render() {
 }
 
 /** A late page response must not replace newer live outcomes for the same execution. */
-async function load(append = false) {
+async function load(page = 0) {
     const version = ++generation;
+    requestedPage = page;
     loading = true;
     loadProblem = "";
-    if (!append) {rows.clear(); next = undefined; historyLimit = 100;}
+    pendingUpdates = new Map();
     render();
     find("activity-status").textContent = "Loading activity history.";
     try {
-        const day = find("activity-day").value, before = append && next ? `&before=${encodeURIComponent(next)}` : "";
+        const day = find("activity-day").value, before = pageCursors[page] ? `&before=${encodeURIComponent(pageCursors[page])}` : "";
         const kind = find("activity-type").value;
-        const result = await api(`v1/activities?day=${encodeURIComponent(day)}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}${before}`);
+        const result = await api(`v1/activities?day=${encodeURIComponent(day)}&limit=${pageSize}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}${before}`);
         if (version !== generation) return;
         useHomeAssistantTimezone(result.timezone);
-        for (const row of result.activities) if (!rows.has(row.id)) rows.set(row.id, row);
+        rows = new Map(result.activities.map(row => [row.id, pendingUpdates.get(row.id) || row]));
+        if (page === 0) for (const [identity, row] of pendingUpdates) if (matches(row)) rows.set(identity, row);
+        pageIndex = page;
+        pageCursors = pageCursors.slice(0, page + 1);
         next = result.next;
-        if (append) historyLimit += 100;
+        if (next) pageCursors[page + 1] = next;
         loadProblem = "";
     } catch (error) {if (version === generation) loadProblem = error.message;}
-    finally {if (version === generation) {loading = false; render();}}
+    finally {if (version === generation) {loading = false; requestedPage = pageIndex; render();}}
+}
+
+/** Start at the newest matching activity without changing the selected day or type. */
+function resetHistory() {
+    rows.clear(); next = undefined; pageIndex = 0; pageCursors = [undefined]; load();
 }
 
 observeEvents(message => {
@@ -160,22 +170,30 @@ observeEvents(message => {
     if (message.reset) {
         running = message.snapshot.running; scheduled = message.snapshot.scheduled; health = message.snapshot.health;
         historyProblem = historyWarning(message.snapshot.history_available, message.snapshot.lost_updates);
-        load();
+        load(requestedPage);
     }
     for (const event of message.events || []) {
         const row = event.value;
-        if (event.topic === "activity") {running = running.filter(item => item.id !== row.id); if (row.state === "running") running.push(row); else if (matches(row)) rows.set(row.id,row);}
+        if (event.topic === "activity") {
+            running = running.filter(item => item.id !== row.id);
+            if (row.state === "running") running.push(row);
+            if (matches(row)) {
+                if (loading) pendingUpdates.set(row.id, row);
+                if (pageIndex === 0 || rows.has(row.id)) rows.set(row.id, row);
+            }
+        }
         if (event.topic === "schedule") scheduled = [...scheduled.filter(item => item.id !== row.id), ...(row.activity ? [row.activity] : [])];
         if (event.topic === "health") health = [...health.filter(item => item.owner !== row.owner), ...(row.removed ? [] : [row])];
         if (event.topic === "history") historyProblem = historyWarning(row.available, row.lost_updates);
     }
     render();
 });
-find("activity-type").addEventListener("change", () => load());
-find("activity-day").addEventListener("change", () => load());
-find("activity-today").addEventListener("click", () => {find("activity-day").value = localDate(); load();});
-find("activity-refresh").addEventListener("click", () => {if (!loading) load();});
-find("activity-more").addEventListener("click", () => {if (!loading) load(true);});
+find("activity-type").addEventListener("change", resetHistory);
+find("activity-day").addEventListener("change", resetHistory);
+find("activity-today").addEventListener("click", () => {find("activity-day").value = localDate(); resetHistory();});
+find("activity-refresh").addEventListener("click", () => {if (!loading) resetHistory();});
+find("activity-previous").addEventListener("click", () => {if (!loading && pageIndex > 0) load(pageIndex - 1);});
+find("activity-next").addEventListener("click", () => {if (!loading && next) load(pageIndex + 1);});
 find("connect").addEventListener("submit", event => {event.preventDefault(); token = find("token").value; find("token").value = ""; find("connect").hidden = true; connectEvents(base, token); load();});
 api("setup/session").then(session => {useHomeAssistantTimezone(session.timezone); find("activity-day").value = localDate(); find("connect").hidden = Boolean(session.ingress); if (session.ingress) {connectEvents(base); load();} else {loadProblem = "Connect to read activity history."; render();}}).catch(error => {loadProblem = error.message; render();});
 setInterval(render, 60000);

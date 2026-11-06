@@ -152,6 +152,52 @@ def test_api_authentication_day_validation_and_live_cursor(tmp_path):
     asyncio.run(scenario())
 
 
+def test_history_page_limits_tied_cursors_and_exact_last_page(tmp_path):
+    """Bound filtered pages and avoid an empty extra page, including equal start times."""
+    from types import SimpleNamespace
+
+    from aiohttp import web
+
+    from open_energy_planner.activities.api import register
+
+    async def scenario():
+        """Read real stored executions through the isolated public history route."""
+        repository = SqlPlanRepository(tmp_path)
+        app = web.Application()
+        events = register(app, repository.engine, SimpleNamespace(document=dict), lambda: "UTC")
+        events.clock = lambda: NOW
+        try:
+            async with TestClient(TestServer(app)) as client:
+                expected = set()
+                for activity_index in range(57):
+                    kind = "weather" if activity_index < 50 else "prices"
+                    identity = await events.start(kind, kind, "Synthetic activity")
+                    await events.finish(
+                        identity, Outcome.COMPLETED, "Accepted synthetic data.", usable=True
+                    )
+                    if kind == "weather":
+                        expected.add(identity)
+                params = {"day": "2026-10-25", "kind": "weather", "limit": "25"}
+                first = await (await client.get("/v1/activities", params=params)).json()
+                second = await (
+                    await client.get("/v1/activities", params={**params, "before": first["next"]})
+                ).json()
+                assert len(first["activities"]) == len(second["activities"]) == 25
+                assert second["next"] is None
+                identities = [row["id"] for row in first["activities"] + second["activities"]]
+                assert len(set(identities)) == 50 and set(identities) == expected
+                default = await (await client.get("/v1/activities")).json()
+                assert len(default["activities"]) == 57 and default["next"] is None
+                for invalid in ("0", "-1", "101", "1.5", "invalid"):
+                    assert (
+                        await client.get("/v1/activities", params={"limit": invalid})
+                    ).status == 400
+        finally:
+            repository.close()
+
+    asyncio.run(scenario())
+
+
 def test_optional_writer_is_nonblocking_and_discloses_lost_updates(tmp_path):
     """A full queue cannot delay or reject domain work, and a new subscriber sees incomplete evidence."""
 

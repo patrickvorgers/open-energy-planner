@@ -28,6 +28,14 @@ def register(app):
         events.publish("history", {"available": events.history_available, "lost_updates": 0})
         return web.json_response({"accepted": True})
 
+    async def finish(request):
+        """Complete an older synthetic execution through the real live publisher."""
+        identity = (await request.json())["activity_id"]
+        await app[EVENTS].finish(
+            identity, Outcome.COMPLETED, "Older activity completed successfully.", usable=True
+        )
+        return web.json_response({"accepted": True})
+
     async def burst(_request):
         """Produce enough real terminal updates to exercise bounded browser retention and paging."""
         events = app[EVENTS]
@@ -52,6 +60,7 @@ def register(app):
     app.router.add_post("/_test/activity", live)
     app.router.add_post("/_test/activity-history", history_state)
     app.router.add_post("/_test/activity-health", health)
+    app.router.add_post("/_test/activity-finish", finish)
 
 
 async def seed(app):
@@ -64,11 +73,23 @@ async def seed(app):
         .astimezone(UTC)
     )
     try:
+        for activity_index in range(32):
+            events.clock = lambda activity_index=activity_index: (
+                seed_time - timedelta(days=1, minutes=32 - activity_index)
+            )
+            identity = await events.start(
+                "prices:nord_pool", "prices", f"Earlier-day prices {activity_index}"
+            )
+            await events.finish(
+                identity, Outcome.COMPLETED, "Synthetic prices accepted.", usable=True
+            )
         for activity_index in range(104):
             events.clock = lambda activity_index=activity_index: (
                 seed_time - timedelta(minutes=110 - activity_index)
             )
             identity = await events.start("prices:nord_pool", "prices", "Fetch published prices")
+            if activity_index == 50:
+                continue
             await events.finish(
                 identity,
                 Outcome.COMPLETED,

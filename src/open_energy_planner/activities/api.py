@@ -83,6 +83,9 @@ def register(app, engine, notifications, timezone):
             selected = date.fromisoformat(
                 request.query.get("day", now.astimezone(zone).date().isoformat())
             )
+            limit = int(request.query.get("limit", "100"))
+            if not 1 <= limit <= 100:
+                raise ValueError("Invalid page size")
             start = datetime.combine(selected, time(), zone).astimezone(UTC)
             end = datetime.combine(selected + timedelta(days=1), time(), zone).astimezone(UTC)
             before = request.query.get("before")
@@ -97,22 +100,26 @@ def register(app, engine, notifications, timezone):
                     raise ValueError("Invalid cursor")
                 before = (parsed.astimezone(UTC).isoformat(), identity)
         except (ValueError, OverflowError):
-            raise web.HTTPBadRequest(text="Choose a valid day and activity cursor") from None
+            raise web.HTTPBadRequest(
+                text="Choose a valid day, page size and activity cursor"
+            ) from None
         start = max(start, now - timedelta(days=7))
         kind = request.query.get("kind")
         if kind is not None and not 1 <= len(kind) <= 128:
             raise web.HTTPBadRequest(text="Invalid activity type")
         try:
             await events.flush()
-            rows = await asyncio.to_thread(store.read, start, end, before, 100, kind)
+            rows = await asyncio.to_thread(store.read, start, end, before, limit + 1, kind)
         except (OSError, ValueError):
             raise web.HTTPServiceUnavailable(text="Activity history is unavailable") from None
         return web.json_response(
             {
                 "day": selected.isoformat(),
                 "timezone": zone_name,
-                "activities": rows,
-                "next": f"{rows[-1]['started_at']}|{rows[-1]['id']}" if len(rows) == 100 else None,
+                "activities": rows[:limit],
+                "next": f"{rows[limit - 1]['started_at']}|{rows[limit - 1]['id']}"
+                if len(rows) > limit
+                else None,
             },
             headers={"Cache-Control": "no-store"},
         )

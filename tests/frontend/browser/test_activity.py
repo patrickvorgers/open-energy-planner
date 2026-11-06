@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
@@ -138,24 +138,41 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     if page.viewport_size["width"] < 500:
         day = page.get_by_label("Day", exact=True).bounding_box()
         kind = page.get_by_label("Activity type").bounding_box()
         assert abs(day["y"] - kind["y"]) < 4
     expect(page.locator("#activity-list")).to_contain_text("Recovered")
     expect(page.locator("#activity-list")).to_contain_text("Running")
-    page.get_by_role("button", name="Load earlier activities").click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(107)
-    expect(
-        page.get_by_role("list", name="Recorded activities").get_by_role("listitem")
-    ).to_have_count(107)
+    history = page.locator("#activity-list .activity-row")
+    capture = Path("results/ci/activity")
+    capture.mkdir(parents=True, exist_ok=True)
+    first_page = history.evaluate_all("rows => rows.map(row => row.dataset.activityId)")
+    identities = set(first_page)
+    for page_number, count in ((2, 25), (3, 25), (4, 25), (5, 7)):
+        page.get_by_role("button", name="Next", exact=True).click()
+        expect(page.locator("#activity-page")).to_have_text(f"Page {page_number}")
+        expect(history).to_have_count(count)
+        current = history.evaluate_all("rows => rows.map(row => row.dataset.activityId)")
+        assert identities.isdisjoint(current)
+        identities.update(current)
+        if page_number in (2, 5):
+            page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+            page.screenshot(
+                path=str(capture / f"page-{page_number}-{page.viewport_size['width']}.png")
+            )
+    assert len(identities) == 107
+    expect(page.get_by_role("button", name="Next", exact=True)).to_be_disabled()
+    for page_number in (4, 3, 2, 1):
+        page.get_by_role("button", name="Previous", exact=True).click()
+        expect(page.locator("#activity-page")).to_have_text(f"Page {page_number}")
+    assert history.evaluate_all("rows => rows.map(row => row.dataset.activityId)") == first_page
+    expect(page.get_by_role("button", name="Previous", exact=True)).to_be_disabled()
     row_span = page.locator("#activity-list summary").evaluate_all(
         "rows => {const first = rows.slice(0,8).map(row => row.getBoundingClientRect()); return first.at(-1).bottom - first[0].top;}"
     )
     assert row_span <= (576 if page.viewport_size["width"] < 500 else 400)
-    capture = Path("results/ci/activity")
-    capture.mkdir(parents=True, exist_ok=True)
     page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(path=str(capture / f"dense-{page.viewport_size['width']}.png"), full_page=False)
     page.get_by_label("Activity type").select_option("weather")
@@ -188,6 +205,118 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_day_changes_keep_type_filter_and_open_newest_page(app_page):
+    """Day changes start at page one of the same type, with the newest records first."""
+    from datetime import date, timedelta
+
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_label("Activity type").select_option("prices")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    day = page.get_by_label("Day", exact=True)
+    today = day.input_value()
+    day.fill((date.fromisoformat(today) - timedelta(days=1)).isoformat())
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(page.get_by_label("Activity type")).to_have_value("prices")
+    expect(page.locator("#activity-list strong").first).to_have_text("Earlier-day prices 31")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(7)
+    page.get_by_role("button", name="Today", exact=True).click()
+    expect(day).to_have_value(today)
+    expect(page.get_by_label("Activity type")).to_have_value("prices")
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(page.locator("#activity-list strong").first).to_have_text("Fetch published prices")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_older_page_receives_its_live_outcome_without_changing_position(app_page):
+    """An older execution finishes in place while its open details and focus survive."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_label("Activity type").select_option("prices")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    document = page.request.get(
+        url + "/v1/activities",
+        params={"day": page.get_by_label("Day", exact=True).input_value(), "kind": "prices"},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    ).json()
+    identity = next(row["id"] for row in document["activities"] if row["state"] == "running")
+    for page_number in (2, 3):
+        page.get_by_role("button", name="Next", exact=True).click()
+        expect(page.locator("#activity-page")).to_have_text(f"Page {page_number}")
+    details = page.locator(f'#activity-list [data-activity-id="{identity}"]')
+    details.locator("summary").focus()
+    details.locator("summary").press("Enter")
+    expect(details.locator(".activity-state")).to_have_text("Running")
+    assert page.request.post(
+        url + "/_test/activity-finish",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"activity_id": identity},
+    ).ok
+    expect(details.locator(".activity-state")).to_have_text("Completed")
+    expect(details.get_by_text("Older activity completed successfully.")).to_be_visible()
+    expect(details.locator("summary")).to_be_focused()
+    expect(page.locator("#activity-page")).to_have_text("Page 3")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_failed_navigation_and_late_old_day_response_preserve_selection(app_page):
+    """A failed Next retains its page, and an obsolete reply cannot replace another day's page."""
+    from datetime import date, timedelta
+
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_label("Activity type").select_option("prices")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    original = page.locator("#activity-list").inner_text()
+    page.route("**/v1/activities?**", lambda route: route.fulfill(status=503))
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-status")).to_contain_text("could not be loaded")
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    assert page.locator("#activity-list").inner_text() == original
+    page.unroute("**/v1/activities?**")
+    held = []
+
+    def hold_older_page(route):
+        """Delay only cursor navigation, allowing a new day to load normally."""
+        if "before=" in route.request.url:
+            held.append(route)
+            page.evaluate("window.olderActivityPageHeld = true")
+        else:
+            route.continue_()
+
+    page.route("**/v1/activities?**", hold_older_page)
+    page.get_by_role("button", name="Next", exact=True).click()
+    page.wait_for_function("window.olderActivityPageHeld === true")
+    expect(page.get_by_role("button", name="Next", exact=True)).to_be_disabled()
+    expect(page.get_by_role("button", name="Previous", exact=True)).to_be_disabled()
+    response = page.request.get(
+        held[0].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+    ).json()
+    day = page.get_by_label("Day", exact=True)
+    day.fill((date.fromisoformat(day.input_value()) - timedelta(days=1)).isoformat())
+    expect(page.locator("#activity-list strong").first).to_have_text("Earlier-day prices 31")
+    held[0].fulfill(json=response)
+    wait_for_product_reads(page)
+    expect(page.locator("#activity-list strong").first).to_have_text("Earlier-day prices 31")
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(page.get_by_label("Activity type")).to_have_value("prices")
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     """Live and storage recovery clear stale warnings but preserve a failed explicit history read."""
     page, url = app_page
@@ -195,7 +324,7 @@ def test_activity_status_recovers_without_hiding_history_load_errors(app_page):
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     status = page.locator("#activity-status")
     headers = {"Authorization": f"Bearer {TOKEN}"}
     response = page.request.post(
@@ -243,7 +372,7 @@ def test_activity_keeps_live_history_bounded_and_later_schedules_visible(app_pag
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     expect(page.locator("#activity-upcoming")).not_to_contain_text("Later model training")
     page.clock.install()
     page.clock.fast_forward(2 * 60 * 60 * 1000)
@@ -254,9 +383,29 @@ def test_activity_keeps_live_history_bounded_and_later_schedules_visible(app_pag
         url + "/_test/activity-burst", headers={"Authorization": f"Bearer {TOKEN}"}
     ).ok
     expect(page.locator("#activity-list")).to_contain_text("Weather burst 149")
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
-    page.get_by_role("button", name="Load earlier activities").click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(152)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    older_ids = page.locator("#activity-list .activity-row").evaluate_all(
+        "rows => rows.map(row => row.dataset.activityId)"
+    )
+    assert page.request.post(
+        url + "/_test/activity", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    assert page.request.post(
+        url + "/_test/activity-health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"owner": "weather", "state": "available", "detail": "Paging live update received."},
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Paging live update received.")
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    assert (
+        page.locator("#activity-list .activity-row").evaluate_all(
+            "rows => rows.map(row => row.dataset.activityId)"
+        )
+        == older_ids
+    )
     page.get_by_label("Activity type").select_option("training")
     expect(page.locator("#activity-list .activity-row")).to_have_count(1)
     assert page.request.post(
@@ -273,7 +422,7 @@ def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
     page.goto(url + "/activity")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     requests = []
 
     def intercept(route):
@@ -296,4 +445,4 @@ def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
     expect(refresh).to_be_enabled()
     page.unroute("**/v1/activities?**")
     refresh.click()
-    expect(page.locator("#activity-list .activity-row")).to_have_count(100)
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
