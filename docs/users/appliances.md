@@ -25,7 +25,11 @@ Home Assistant Energy owns consumer meters and their relationships. Do not selec
 
 *Cycle energy and duration explain the work being scheduled. The readiness action declares that this loaded appliance may be planned. The pictured values and device are synthetic.*
 
-The planned start is information. Physical execution needs the supported claim-and-feedback automation flow. Missing start confirmation remains uncertain execution rather than permission to retry. **Cancel planning** removes future planning authorization, but does not prove that the appliance stopped physically. See the [execution contract and blueprint](../development/SHIFTABLE-APPLIANCES.md#from-dashboard-intent-to-physical-execution) before wiring equipment.
+The planned start is information. Physical execution needs the supported claim-and-feedback automation flow. Missing start confirmation remains uncertain execution rather than permission to retry. **Cancel planning** opens a confirmation before removing future planning authorization. It does not prove that the appliance stopped physically. See the [execution contract and blueprint](../development/SHIFTABLE-APPLIANCES.md#from-dashboard-intent-to-physical-execution) before wiring equipment.
+
+Removing a consumption appliance asks for confirmation and applies the removal
+immediately. Its Home Assistant source and history remain available. An open
+cycle must be resolved before removal is permitted.
 
 ## Prepare EV charging
 
@@ -48,6 +52,11 @@ door and fault sensors do not prove a connection. No source is chosen for you.
 Save settings only after checking the sources and limits. Cancel restores the
 confirmed configuration.
 
+Removing a vehicle or charge point opens a confirmation naming that device and
+explaining the retained history. **Cancel** or Escape keeps the configuration
+unchanged. Confirming removal stages it in the editor. Choose **Save settings**
+to apply it, or **Cancel** in the editor to restore the saved configuration.
+
 A connected plug proves presence, not vehicle identity. Explicitly identify the connected vehicle through the supported Home Assistant control or an automation that genuinely knows it. A previous session's assignment does not authorize a later connection.
 
 Set the desired SoC and departure under **Energy > EV charging**. A one-off departure overrides the daily departure until that instant. Home Assistant's timezone applies. The planner recalculates required energy from the current SoC and reports a shortfall when the target cannot be reached under the admitted limits. V2G is not supported by this charging model.
@@ -57,6 +66,9 @@ See [EV charging contracts](../development/EV-CHARGING.md) for supported capabil
 ## Prepare thermal storage
 
 The supported thermal model is a fixed-power resistive electric water heater. Configure it under **Settings > Appliances > Electric boilers** using its electricity source, temperature/power measurements, volume, temperatures, standing losses and expected hourly heat draw.
+
+Removing a boiler requires confirmation and then **Save settings**. Cancel in
+the dialog keeps it unchanged. Cancel in the editor restores the saved model.
 
 The hourly draw values are assumptions, not measured hot-water use. This model does not implement heat-pump or room-temperature control. A heat pump can still be an individually forecast consumer without becoming an electric boiler.
 

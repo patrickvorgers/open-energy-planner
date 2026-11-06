@@ -24,7 +24,7 @@ Use this operation only with backups and authority over the destination database
 2. Supply the intended destination and choose **Test connection**.
 3. Review the destination identity and the existing-data warning.
 4. Save the offered recovery instructions before starting.
-5. Confirm replacement only for the intended destination, then choose **Migrate database**.
+5. Confirm replacement only for the intended destination, choose **Migrate database**, then review and confirm **Change database** in the dialog. Cancel or Escape leaves the migration unstarted.
 6. Wait for copy, verification and application restart. Confirm the active database and retained history afterward.
 
 Normal app work pauses while the runtime drains and the archive is copied. Closing a browser tab does not cancel the server-side operation. A temporary loss of HTTP does not prove migration failed.

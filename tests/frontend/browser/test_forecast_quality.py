@@ -708,9 +708,11 @@ def test_energy_consumer_forecast_choices_use_visual_inputs_without_helpers(app_
     ]
     expect(weather).to_be_checked()
     expect(weather).to_be_disabled()
-    page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#appliance-more summary").click()
     page.get_by_role("button", name="Remove appliance…", exact=True).click()
+    page.get_by_role("alertdialog", name="Remove appliance?", exact=True).get_by_role(
+        "button", name="Remove appliance", exact=True
+    ).click()
     expect(page.locator("#appliance-empty")).to_be_visible()
     assert state["selected"] == [
         {"entity_id": "sensor.boiler", "weather_sensitive": False},

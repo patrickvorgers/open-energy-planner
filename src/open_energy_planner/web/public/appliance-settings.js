@@ -1,4 +1,5 @@
 import {bindApplianceSettingsNavigation} from "./appliance-settings-navigation.js";
+import {confirmAction} from "./confirmation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {SaveBar} from "./save-bar.js";
 import {money, optionLabel} from "./display.js";
@@ -203,12 +204,14 @@ find("add-appliance").onclick = () => {
     find("source-search").oninput = filterSources; find("source-filter").onchange = filterSources; find("close-sources").onclick = () => sourceDialog.close();
     filterSources(); sourceDialog.showModal(); find("source-search").focus();
 };
-find("remove-appliance").onclick = () => {
+find("remove-appliance").onclick = async () => {
     find("appliance-more").open = false;
     if (saveState.busy || saveState.dirty || !selectedId) return;
     const inputs = consumerChoices.get(selectedId);
     if (inputs.openCycle) { saveState.update("Resolve this appliance's open cycle on Energy: Appliances before removing it."); return; }
-    if (!confirm(`Remove ${inputs.device.name}? Its Home Assistant source and history are retained. You can add the same source again later.`)) return;
+    const openingId = selectedId;
+    if (!await confirmAction({title: "Remove appliance?", message: `${inputs.device.name} will be removed when you confirm.\n\nIts Home Assistant source and history are retained. You can add the same source again later.`, confirmLabel: "Remove appliance", returnFocus: find("appliance-more").querySelector("summary")})) return;
+    if (saveState.busy || saveState.dirty || selectedId !== openingId || consumerChoices.get(openingId) !== inputs || inputs.openCycle) return;
     inputs.enabled.checked = false; inputs.enabled.onchange(); editing = true; syncEditor(); saveState.update(); find("appliance-settings").requestSubmit();
 };
 

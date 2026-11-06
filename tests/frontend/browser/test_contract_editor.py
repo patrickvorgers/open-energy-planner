@@ -283,9 +283,11 @@ def test_price_rules_replace_at_next_start_without_editable_end_dates(app_page):
     )
     assert body["periods"][1]["effective_until"] is None
     page.locator("#price-rule-select").select_option("1")
-    page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#contract-more summary").click()
     page.get_by_role("button", name="Delete selected price rule…", exact=True).click()
+    page.get_by_role("alertdialog").get_by_role(
+        "button", name="Delete price rule", exact=True
+    ).click()
     page.get_by_role("button", name="Preview rates", exact=True).click()
     page.get_by_role("button", name="Save contract", exact=True).click()
     expect(page.locator("#contract-status")).to_contain_text("Contract saved")

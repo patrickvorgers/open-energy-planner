@@ -265,10 +265,43 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
         page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == before["vehicles"]
     )
     page.locator("#ev-device-select").select_option(second["id"])
-    for save_removal in (False, True):
-        page.once("dialog", lambda dialog: dialog.accept())
+    for dismissal in ("Cancel", "Escape"):
         page.locator("#ev-more summary").click()
         page.get_by_role("button", name="Remove appliance…", exact=True).click()
+        confirmation = page.get_by_role("alertdialog", name="Remove vehicle?", exact=True)
+        expect(confirmation).to_contain_text(
+            "Home Assistant sources and historical evidence are retained"
+        )
+        expect(confirmation.get_by_role("button", name="Cancel", exact=True)).to_be_focused()
+        Path("results/ci").mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=f"results/ci/confirmation-ev-{page.viewport_size['width']}.png")
+        if dismissal == "Cancel":
+            confirmation.get_by_role("button", name="Cancel", exact=True).click()
+        else:
+            page.keyboard.press("Escape")
+        expect(confirmation).to_have_count(0)
+        expect(page.locator("#ev-more summary")).to_be_focused()
+        expect(page.locator("#dirty")).to_have_text("All changes saved.")
+        assert (
+            page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"]
+            == before["vehicles"]
+        )
+    page.locator("#ev-more summary").click()
+    page.get_by_role("button", name="Remove appliance…", exact=True).click()
+    with page.expect_response(url + "/v1/ev"):
+        page.evaluate("document.getElementById('reload-ev').click()")
+    expect(page.locator("#ev-device-select")).to_be_enabled()
+    page.get_by_role("alertdialog").get_by_role("button", name="Remove vehicle", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    assert (
+        page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == before["vehicles"]
+    )
+    for save_removal in (False, True):
+        page.locator("#ev-more summary").click()
+        page.get_by_role("button", name="Remove appliance…", exact=True).click()
+        page.get_by_role("alertdialog").get_by_role(
+            "button", name="Remove vehicle", exact=True
+        ).click()
         expect(page.locator("#dirty")).to_contain_text("Unsaved changes")
         assert len(page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"]) == 2
         page.get_by_role(
@@ -330,12 +363,16 @@ def test_ev_removal_preserves_charge_point_vehicle_dependencies(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     selector = page.get_by_role("combobox", name="Appliance", exact=True)
     expect(selector).to_have_value(vehicles[0]["id"])
-    page.on("dialog", lambda dialog: dialog.accept())
 
     def remove_selected():
         """Use the actual dependency-aware More action rather than bypassing UI validation."""
         page.locator("#ev-more summary").click()
         page.get_by_role("button", name="Remove appliance…", exact=True).click()
+        confirmation = page.get_by_role("alertdialog")
+        if confirmation.count():
+            confirmation.get_by_role(
+                "button", name=re.compile("^Remove (vehicle|charge point)$")
+            ).click()
 
     remove_selected()
     expect(page.locator("#dirty")).to_contain_text("only allowed vehicle")
@@ -781,6 +818,9 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
 
     page.route("**/v1/appliances/cancel", cancel)
     page.get_by_role("button", name="Cancel planning", exact=True).click()
+    page.get_by_role("alertdialog").get_by_role(
+        "button", name="Cancel planning", exact=True
+    ).click()
     expect(page.locator("#appliance-list")).to_contain_text("Task: cancelled")
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_be_enabled()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
@@ -1024,9 +1064,11 @@ def test_removing_appliance_revokes_shifting_before_source_removal(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     permission = page.get_by_label("Allow shifting complete cycles", exact=True)
     expect(permission).to_be_checked()
-    page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#appliance-more summary").click()
     page.get_by_role("button", name="Remove appliance…", exact=True).click()
+    page.get_by_role("alertdialog").get_by_role(
+        "button", name="Remove appliance", exact=True
+    ).click()
     expect(page.locator("#appliance-empty")).to_be_visible()
     expect(page.locator("#save-state")).to_contain_text("All changes saved")
     assert writes == ["permission", "selection"]
@@ -1624,3 +1666,16 @@ def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page
     expect(page.get_by_role("button", name="Cancel", exact=True)).to_be_enabled()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.screenshot(path=str(directory / f"boiler-editing-{width}.png"), full_page=True)
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    for accept in (False, True):
+        page.locator("#thermal-more summary").click()
+        page.locator("#remove-thermal").click()
+        confirmation = page.get_by_role("alertdialog", name="Remove electric boiler?", exact=True)
+        expect(confirmation).to_contain_text("Utility boiler")
+        confirmation.get_by_role(
+            "button", name="Remove boiler" if accept else "Cancel", exact=True
+        ).click()
+        if not accept:
+            expect(page.get_by_role("heading", name="Utility boiler", exact=True)).to_be_visible()
+        else:
+            expect(page.locator("#thermal-save-state")).to_contain_text("Unsaved changes")
