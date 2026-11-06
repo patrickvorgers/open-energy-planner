@@ -195,8 +195,11 @@ async function load(page = 0) {
                 const kind = find("activity-type").value;
                 const result = await api(`v1/activities?day=${encodeURIComponent(day)}&limit=${pageSize}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}${before}`);
                 if (version !== generation) return;
-                useHomeAssistantTimezone(result.timezone);
-                rows = new Map(result.activities.map(row => [row.id, pendingUpdates.get(row.id) || row]));
+                const loadedRows = new Map(result.activities.map(row => [row.id, pendingUpdates.get(row.id) || row]));
+                const loadedTimezone = result.timezone || "UTC";
+                new Intl.DateTimeFormat("en", {timeZone:loadedTimezone});
+                useHomeAssistantTimezone(loadedTimezone);
+                rows = loadedRows;
                 if (page === 0) for (const [identity, row] of pendingUpdates) if (matches(row)) rows.set(identity, row);
                 pageIndex = page;
                 pageCursors = pageCursors.slice(0, page + 1);

@@ -752,6 +752,70 @@ def test_history_processing_errors_use_safe_public_message(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+@pytest.mark.parametrize(
+    ("rejected_zone", "malformed_rows", "recovery_zone"),
+    [("America/New_York", True, None), ("PRIVATE_INVALID_IANA_ZONE", False, "America/New_York")],
+)
+def test_history_zone_is_committed_only_with_valid_rows(
+    app_page, rejected_zone, malformed_rows, recovery_zone
+):
+    """Reject invalid successful replies atomically, retaining clocks, details and a usable retry."""
+    from zoneinfo import ZoneInfo
+
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+    expect(page.locator("#activity-health")).to_contain_text("Jeroen.nl")
+    wait_for_product_reads(page)
+    details = page.locator("#activity-list details").first
+    details.locator("summary").click()
+    original = page.locator("#activity-list").inner_text()
+    errors, reject = [], [True]
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def history_reply(route):
+        """Vary only the synthetic history reply while retaining real row data and cursors."""
+        body = page.request.get(
+            route.request.url, headers={"Authorization": f"Bearer {TOKEN}"}
+        ).json()
+        body["timezone"] = rejected_zone if reject[0] else recovery_zone
+        if reject[0] and malformed_rows:
+            body["activities"] = {"private": "PRIVATE_ACTIVITY_ZONE_PAYLOAD"}
+        route.fulfill(json=body)
+
+    page.route("**/v1/activities?**", history_reply)
+    next_page = page.get_by_role("button", name="Next", exact=True)
+    next_page.focus()
+    next_page.press("Enter")
+    expect(page.locator("#activity-status")).to_have_text(
+        "Activity history could not be loaded. Check the connection and try Refresh."
+    )
+    wait_for_product_reads(page)
+    assert page.locator("#activity-list").inner_text() == original
+    expect(details).to_have_attribute("open", "")
+    expect(page.locator("#activity-page")).to_have_text("Page 1")
+    expect(next_page).to_be_enabled()
+    expect(next_page).to_be_focused()
+    assert errors == []
+    assert "PRIVATE_" not in page.locator("body").inner_text()
+    reject[0] = False
+    next_page.press("Enter")
+    expect(page.locator("#activity-page")).to_have_text("Page 2")
+    expect(page.locator("#activity-status")).to_have_text("")
+    first_time = page.locator("#activity-list time").first
+    expected = (
+        datetime.fromisoformat(first_time.get_attribute("datetime"))
+        .astimezone(ZoneInfo(recovery_zone or "UTC"))
+        .strftime("%I:%M %p")
+    )
+    expect(first_time).to_have_text(expected)
+    assert errors == []
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 def test_completed_history_wins_over_pre_reset_running_update(app_page):
     """A completion missed in a replay gap wins over a cached running event from the prior read."""
     page, url = app_page
