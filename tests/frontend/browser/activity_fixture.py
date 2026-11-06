@@ -39,9 +39,19 @@ def register(app):
         await events.flush()
         return web.json_response({"accepted": True})
 
+    async def health(request):
+        """Change or withdraw one synthetic source through the real live publisher."""
+        body = await request.json()
+        if body.get("state") is None:
+            app[EVENTS].withdraw(body["owner"])
+        else:
+            app[EVENTS].availability(body["owner"], Health(body["state"]), body["detail"])
+        return web.json_response({"accepted": True})
+
     app.router.add_post("/_test/activity-burst", burst)
     app.router.add_post("/_test/activity", live)
     app.router.add_post("/_test/activity-history", history_state)
+    app.router.add_post("/_test/activity-health", health)
 
 
 async def seed(app):
@@ -86,6 +96,15 @@ async def seed(app):
     finally:
         events.clock = lambda: datetime.now(UTC)
     events.availability("weather", Health.AVAILABLE, "Current weather is usable.")
+    events.availability("solar-weather", Health.DEGRADED, "Retaining valid solar weather.")
+    events.availability("temperature-weather", Health.AVAILABLE, "Current temperature is usable.")
     events.availability("models", Health.UNKNOWN, "Waiting for the current training outcome.")
+    events.availability("prices:nord_pool:NL", Health.AVAILABLE, "Published NL prices are usable.")
+    events.availability(
+        "prices:epex_predictor:NL",
+        Health.UNAVAILABLE,
+        "NL forecast unavailable. Published prices remain usable.",
+    )
+    events.availability("prices:jeroen_nl:NL", Health.AVAILABLE, "NL forecast is usable.")
     events.scheduled("weather", "weather", "Fetch weather", now + timedelta(minutes=55))
     events.scheduled("models", "training", "Later model training", now + timedelta(hours=7))
