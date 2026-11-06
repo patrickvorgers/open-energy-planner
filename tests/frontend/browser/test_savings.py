@@ -91,6 +91,7 @@ def test_savings_overview_compares_realized_costs_and_original_plan(app_page):
     expect(page.locator("#coverage")).to_contain_text("2 of ")
     expect(page.locator("#savings-total")).to_contain_text("-0.20 EUR")
     expect(page.locator("#evaluation-rows tr")).to_have_count(2)
+    expect(page.locator("#cost-rows tr").filter(has_text="Net electricity cost")).to_have_count(1)
     assert (
         page.evaluate(
             "Chart.getChart(document.getElementById('energy-chart')).data.datasets.length"
