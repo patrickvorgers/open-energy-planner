@@ -34,6 +34,17 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
         "required_relative_benefit_percent": 5,
         "required_absolute_benefit_kwh": 0.001,
         "status": status,
+        "training_quality": {
+            "source_hours": 840,
+            "used_hours": 816,
+            "excluded_periods": [
+                {
+                    "start": (start - timedelta(days=35)).isoformat(),
+                    "end": (start - timedelta(days=34)).isoformat(),
+                    "reason": "previous_day_incomplete",
+                }
+            ],
+        },
         "candidate": "xgboost-weather-v1",
         "completed_windows": 2 if status == "collecting_forward_accuracy" else 3,
         "required_windows": 3,
@@ -138,6 +149,8 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
     expect(details).to_contain_text("Excluded comparison")
     expect(details).to_contain_text("5.0%")
     expect(details).to_contain_text("0.001 kWh per hour")
+    expect(details).to_contain_text("816 of 840 measured hours")
+    expect(details).to_contain_text("A complete preceding day of measurements is unavailable")
     if status == "collecting_forward_accuracy":
         expect(details).to_contain_text("2 of 3 complete forward days")
         expect(details).to_contain_text("Collecting later measurements")

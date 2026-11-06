@@ -26,7 +26,9 @@ its existing independent decision comparison before activation.
 
 Under **Insights > Forecast quality > Devices**, expand **Current model and
 learning** to see the component's model, pending day, comparison errors and why
-the candidate is waiting or rejected. Missing measurements, missing weather,
+the candidate is waiting or rejected. Training coverage lists omitted periods
+and explains missing temperature or incomplete preceding-day measurements.
+Missing measurements, missing weather,
 temperatures outside the observed training range or unusable model evidence
 keep the simpler forecast. Real cold spells and defrost peaks are not removed
 as statistical outliers. Weather-sensitive prediction does not introduce

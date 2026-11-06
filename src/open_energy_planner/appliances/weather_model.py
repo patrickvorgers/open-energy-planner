@@ -3,6 +3,7 @@
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from functools import lru_cache
 from itertools import pairwise
 from math import isfinite
@@ -43,6 +44,13 @@ FEATURE_NAMES = (
     "heating_degrees_scaled",
     "cooling_degrees_scaled",
 )
+
+
+class TrainingExclusionReason(StrEnum):
+    """Explain unavailable inputs without classifying valid high consumption as an outlier."""
+
+    PREVIOUS_DAY_INCOMPLETE = "previous_day_incomplete"
+    TEMPERATURE_UNAVAILABLE = "temperature_unavailable"
 
 
 @lru_cache(maxsize=16)
@@ -93,6 +101,9 @@ class WeatherDemandModel:
     maximum_temperature: float
     model_json: str
     model_digest: str
+    source_hours: int
+    training_hours: int
+    excluded_periods: tuple[tuple[str, str, str], ...]
     feature_names: tuple[str, ...] = FEATURE_NAMES
     schema: str = MODEL_SCHEMA
     model_id = "xgboost-weather-v1"
@@ -120,13 +131,26 @@ class WeatherDemandModel:
             if item.known_at <= (known_at or cutoff)
         }
         measurements = {item.start: item.residual_kwh for item in samples}
-        rows, targets, used_temperatures = [], [], []
+        rows, targets, used_temperatures, excluded_periods = [], [], [], []
         for sample in samples:
             prior = [
                 measurements.get(sample.start - timedelta(hours=offset))
                 for offset in range(1, RECENT_HISTORY_HOURS + 1)
             ]
             if sample.start not in weather or any(value is None for value in prior):
+                reason = (
+                    TrainingExclusionReason.TEMPERATURE_UNAVAILABLE
+                    if sample.start not in weather
+                    else TrainingExclusionReason.PREVIOUS_DAY_INCOMPLETE
+                )
+                start, end = (
+                    sample.start.isoformat(),
+                    (sample.start + timedelta(hours=1)).isoformat(),
+                )
+                if excluded_periods and excluded_periods[-1][1:] == (start, reason):
+                    excluded_periods[-1] = (excluded_periods[-1][0], end, reason)
+                else:
+                    excluded_periods.append((start, end, reason))
                 continue
             rows.append(
                 features(
@@ -174,6 +198,9 @@ class WeatherDemandModel:
             max(used_temperatures),
             model_json,
             digest(model_json),
+            len(samples),
+            len(rows),
+            tuple(excluded_periods),
         )
 
     @classmethod
@@ -185,6 +212,9 @@ class WeatherDemandModel:
                     **document,
                     "trained_until": aware(datetime.fromisoformat(document["trained_until"])),
                     "feature_names": tuple(document["feature_names"]),
+                    "excluded_periods": tuple(
+                        tuple(period) for period in document["excluded_periods"]
+                    ),
                 }
             )
             ZoneInfo(model.timezone)
@@ -195,6 +225,29 @@ class WeatherDemandModel:
             ):
                 raise ValueError("Incompatible weather model archive")
             quantity(model.recent_kwh)
+            if (
+                type(model.source_hours) is not int
+                or type(model.training_hours) is not int
+                or not MIN_CONTIGUOUS_RIDGE_DAYS * HOURS_PER_DAY
+                <= model.training_hours
+                <= model.source_hours
+            ):
+                raise ValueError("Invalid weather model training counts")
+            excluded_hours = 0
+            for start, end, reason in model.excluded_periods:
+                start, end = (
+                    aware(datetime.fromisoformat(start)),
+                    aware(datetime.fromisoformat(end)),
+                )
+                if (
+                    reason not in TrainingExclusionReason
+                    or start >= end
+                    or end > model.trained_until
+                ):
+                    raise ValueError("Invalid weather model training exclusion")
+                excluded_hours += (end - start) / timedelta(hours=1)
+            if excluded_hours != model.source_hours - model.training_hours:
+                raise ValueError("Weather model training counts differ")
             if (
                 not all(
                     type(value) in (int, float) and isfinite(value)

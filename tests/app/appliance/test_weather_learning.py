@@ -88,12 +88,19 @@ def test_nonlinear_model_generalizes_and_replays_portable_json():
         learned.predict(cutoff, temperature=2)
     )
     assert replay.training_version == learned.training_version
+    assert learned.training_hours == 41 * 24
+    assert learned.source_hours == 42 * 24
+    assert learned.excluded_periods == (
+        (START.isoformat(), (START + timedelta(days=1)).isoformat(), "previous_day_incomplete"),
+    )
     with pytest.raises(ValueError):
         WeatherDemandModel.restore({**stored, "feature_names": ["unknown"]}, CONFIGURATION.version)
     with pytest.raises(ValueError):
         WeatherDemandModel.restore({**stored, "model_json": "{}"}, CONFIGURATION.version)
     with pytest.raises(ValueError):
         WeatherDemandModel.restore(stored, "another-device")
+    with pytest.raises(ValueError):
+        WeatherDemandModel.restore({**stored, "training_hours": 42 * 24}, CONFIGURATION.version)
 
 
 def test_training_rejects_future_or_missing_weather_and_prediction_extrapolation():
@@ -117,6 +124,27 @@ def test_training_rejects_future_or_missing_weather_and_prediction_extrapolation
         model.predict(cutoff, temperature=-40)
     with pytest.raises(ValueError):
         model.predict(cutoff)
+
+
+def test_training_explains_missing_temperature_without_trimming_measured_peaks():
+    """Only the absent feature hour and initial preceding-day warmup are omitted from 35 measured days."""
+    samples, weather = history(35 * 24)
+    missing = START + timedelta(days=30, hours=12)
+    model = WeatherDemandModel.fit(
+        CONFIGURATION,
+        samples,
+        temperatures=tuple(item for item in weather if item.start != missing),
+    )
+    assert model.source_hours == 840
+    assert model.training_hours == 815
+    assert model.excluded_periods == (
+        (START.isoformat(), (START + timedelta(days=1)).isoformat(), "previous_day_incomplete"),
+        (
+            missing.isoformat(),
+            (missing + timedelta(hours=1)).isoformat(),
+            "temperature_unavailable",
+        ),
+    )
 
 
 @pytest.mark.parametrize("constant", [False, True])

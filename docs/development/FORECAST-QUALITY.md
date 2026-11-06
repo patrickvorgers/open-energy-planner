@@ -80,8 +80,8 @@ Independent fixtures prove midnight immutability, intraday replacement rejection
 Device forecasts live on Forecast quality. The shared navigation has one
 forecast destination. The retained `/consumers` link opens this same page with
 the Forecast quality navigation item active. Device selection and weather
-sensitivity remain under Settings > Appliances. The consumer API and forecasting
-models do not change.
+sensitivity remain under Settings > Appliances. Existing consumer configuration
+and forecasting endpoints remain available.
 
 Choose a day above the Household, Solar and Devices section navigation. The date
 applies to every section. Each section displays one selected source at a time.

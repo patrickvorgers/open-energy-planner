@@ -43,6 +43,12 @@ export function renderCurrentModel(parent, row, expanded = false) {
         const reasons = {training_history_required: "Collecting at least 28 days of complete device and temperature history.", model_runtime_unavailable: "The candidate model is unavailable. The simpler forecast remains in use.", weather_forecast_unavailable: "The candidate needs a complete temperature forecast within its observed training range. The simpler forecast remains in use.", forward_archive_required: "Waiting for saved forward comparisons.", comparison_evidence_unreadable: "Saved comparison evidence is unavailable. The simpler forecast remains in use.", collecting_forward_accuracy: "Collecting later measurements for predictions saved before the measured day.", no_consistent_accuracy_benefit: "The simpler model is retained because the candidate did not consistently improve accuracy.", accuracy_validated: "The nonlinear candidate improved all required forward comparisons. Household activation still requires the existing decision comparison."};
         paragraph(`Weather candidate: XGBoost CPU: ${learning.completed_windows} of ${learning.required_windows} complete forward days.`);
         paragraph(reasons[learning.status] || "Waiting for candidate evidence.");
+        if (learning.training_quality) {
+            const quality = learning.training_quality;
+            paragraph(`Training coverage: ${quality.used_hours} of ${quality.source_hours} measured hours have complete inputs.`);
+            const exclusions = {previous_day_incomplete: "A complete preceding day of measurements is unavailable", temperature_unavailable: "Temperature was unavailable at training time"};
+            for (const period of quality.excluded_periods || []) paragraph(`Excluded training hours: ${when(period.start)} to ${when(period.end)}: ${exclusions[period.reason] || "Required input is unavailable"}.`);
+        }
         paragraph("Each comparison uses the same measured hours for the candidate, Ridge or the current simpler model, and the weekday profile. Missing measurements remain unknown. Cold spells and defrost peaks are not trimmed.");
         paragraph(`The candidate must improve each simpler model by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour in every required day.`);
         if (learning.pending_until) paragraph(`Pending measured day ends: ${when(learning.pending_until)}`);

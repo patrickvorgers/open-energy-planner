@@ -115,6 +115,12 @@ outside the training range. No statistical trimming removes unusual but valid
 cold days or defrost cycles. Existing meter reconstruction alone determines
 usable energy samples and leaves Recorder data unchanged.
 
+Training coverage retains measured source-hour and used-row counts. Consecutive
+excluded hours retain their UTC start/exclusive end and the reason: incomplete
+preceding-day measurements or temperature unavailable at training time. The
+initial preceding-day warmup is visible under the same rule. A valid high load
+is never itself an exclusion reason.
+
 Selection archives a 24-hour prediction starting at the next complete UTC hour.
 The candidate, current simpler component and weekday profile all predict before
 that window. The next available complete measured day scores the same hours.

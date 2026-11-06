@@ -176,6 +176,14 @@ def select_weather_model(configuration, samples, temperatures, now, simpler, fal
         return simpler, fallback, {**evidence, "status": WeatherLearningStatus.RUNTIME_UNAVAILABLE}
     except ValueError:
         return simpler, fallback, evidence
+    evidence["training_quality"] = {
+        "source_hours": candidate.source_hours,
+        "used_hours": candidate.training_hours,
+        "excluded_periods": [
+            {"start": start, "end": end, "reason": reason}
+            for start, end, reason in candidate.excluded_periods
+        ],
+    }
     try:
         forecast = predict(configuration, samples, now, candidate, temperatures=temperatures)
     except ValueError:

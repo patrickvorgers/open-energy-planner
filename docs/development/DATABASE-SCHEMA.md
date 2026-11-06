@@ -778,7 +778,8 @@ not serialized. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
 Weather-sensitive component records additionally expose `weather_learning` with
 policy, candidate and selected model IDs, readiness status, completed/required
 windows, absolute/relative improvement thresholds, per-window MAE in kWh/hour,
-pending UTC end and an optional excluded comparison with its reason. Other
+pending UTC end, training coverage and excluded training periods with their
+unavailable-input reasons, and an optional excluded comparison with its reason. Other
 consumers retain null weather learning. The component's existing `status` still
 describes household-composition activation separately from accuracy admission.
 
@@ -788,7 +789,7 @@ column, index or database engine is introduced:
 
 | Name | Immutable content or pointer contract |
 |---|---|
-| `consumer-weather-model-<digest>.json` | Configuration and measurement-training versions, timezone, UTC training cutoff, preceding-day mean in kWh/hour, observed Celsius support, ordered feature names, schema, native non-executable XGBoost JSON and its digest. Native JSON is bounded to 2 MiB and checked before native parsing. |
+| `consumer-weather-model-<digest>.json` | Configuration and measurement-training versions, timezone, UTC training cutoff, preceding-day mean in kWh/hour, observed Celsius support, ordered feature names, schema, source/training hour counts, excluded UTC periods/reasons, native non-executable XGBoost JSON and its digest. Native JSON is bounded to 2 MiB and checked before native parsing. |
 | `consumer-weather-window-<digest>.json` | Family, configuration/training/model archive identities, model digest, known-at-issue weather digest, UTC issue/start/exclusive end, and 24 hourly kWh predictions from candidate, simpler model and weekday profile. Issue precedes the first forecast hour and training does not extend past issue. |
 | `consumer-weather-assessment-<digest>.json` | Original window identity and UTC bounds, original issue time, later actual kWh values and their timestamp/value digest, each model's hourly MAE and the derived improvement result. Source corrections append different assessments without replacing original predictions or earlier assessments. |
 | `consumer-weather-selection-<family>.json` | Mutable bounded pointer to at most three disjoint completed window digests and one pending digest, plus the latest excluded interval/reason. Family binds meter configuration, selection policy, feature schema and simpler algorithm. No stored promotion boolean grants activation. Reads validate referenced immutable evidence and recompute scores against available actual history. |
