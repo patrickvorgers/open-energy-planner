@@ -116,5 +116,5 @@ class SourceChoices:
             "id": request["id"] if request else None,
             "pending": request is not None,
             "failed": scope in self.failed,
-            "catalogue": self.catalogue(scope, active, now),
+            "catalogue": self.catalogue(scope, active, now) if request is None else None,
         }

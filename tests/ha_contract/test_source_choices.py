@@ -29,6 +29,7 @@ def test_candidate_acceptance_never_changes_active_sources_and_expires():
     )
     nonce = owner.choices.request("ev", now)
     assert owner.choices.request("ev", now) == nonce
+    assert owner.choices.status("ev", active, now)["catalogue"] is None
     assert owner.choices.receive({"scope": "ev", "id": nonce, "page": candidates}, now)
     assert owner.value is active
     assert owner.confirmed == now

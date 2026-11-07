@@ -63,9 +63,7 @@ def register(app, service, catalogue, repository, live, lock):
             return web.json_response(
                 {
                     **document(),
-                    "catalogue": catalogue.choices.catalogue(
-                        "thermal", catalogue.value, datetime.now(UTC)
-                    ),
+                    "catalogue": catalogue.value,
                     "energy_consumers": list(service.consumers.options),
                 }
             )

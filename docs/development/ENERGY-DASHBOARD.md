@@ -147,6 +147,9 @@ only. They never replace active membership, reconcile Energy, refresh active
 freshness or supply forecasts. After a configuration is saved, its explicit source
 bindings join the active discovery set on the next synchronization. Temporary
 candidate results expire without changing the saved configuration.
+Ordinary EV and boiler status endpoints still return only active metadata. Pending
+chooser status omits candidate bodies. A large candidate list is returned only
+through the explicit completed chooser read, rather than on each monitoring poll.
 
 ## Complete discovery transfers
 

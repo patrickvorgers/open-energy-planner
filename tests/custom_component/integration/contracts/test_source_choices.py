@@ -111,6 +111,9 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
                 assert len(pages) == completed
                 async with session.get(url + "/v1/ev") as response:
                     current = await response.json()
+                assert current["catalogue"] == before
+                async with session.get(url + "/v1/thermal") as response:
+                    assert (await response.json())["catalogue"] == before
                 vehicle = {
                     "id": str(uuid4()),
                     "soc_entity": "sensor.zzz_zeekr",
@@ -128,6 +131,10 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
                     },
                 ) as response:
                     assert response.status == 200, await response.text()
+                async with session.get(url + "/v1/ev") as response:
+                    just_saved = await response.json()
+                assert just_saved["vehicles"][0]["name"] == "Synthetic Zeekr battery"
+                assert just_saved["catalogue"] == before
                 await coordinator.sync()
                 async with session.get(url + "/v1/setup") as response:
                     active = (await response.json())["catalogue"]["data"]
