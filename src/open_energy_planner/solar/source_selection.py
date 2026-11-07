@@ -19,6 +19,7 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
+from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
 from open_energy_planner.solar.wire import document
 
 HOUR = timedelta(hours=1)
@@ -124,7 +125,7 @@ def ha_energies(configuration, baseline, predictions, now):
     return result, issues
 
 
-def family(configuration, source, location):
+def family(configuration, source, location, *, learned_policy=None):
     """Scope accuracy to metering, geometry and location, independently of prices and strategy."""
     inverter = next(row for row in configuration.inverters if row.inverter_id == source.inverter_id)
     source_definition = asdict(source)
@@ -138,6 +139,7 @@ def family(configuration, source, location):
             "source": source_definition,
             "inverter": asdict(inverter),
             "location": asdict(location),
+            **({"learned_policy": learned_policy} if learned_policy else {}),
         }
     )
 
@@ -187,6 +189,7 @@ def choose_sources(
     *,
     ha_references=None,
     ha_configuration_versions=None,
+    ml_policies=None,
 ):
     """Freeze next-day forecasts before outcomes, then rank identical completed days by hourly MAE.
 
@@ -235,7 +238,12 @@ def choose_sources(
             )
         if source_id in ha:
             models[ForecastSource.HOME_ASSISTANT] = ha[source_id]
-        identity = family(configuration, source, baseline.location)
+        identity = family(
+            configuration,
+            source,
+            baseline.location,
+            learned_policy=(ml_policies or {}).get(source_id),
+        )
         prefix = "source-day-" + identity + "-"
         provider_revisions = sorted((ha_configuration_versions or {}).get(source.entity_id, []))
         capture = {
@@ -337,6 +345,23 @@ def choose_sources(
         )
         if chosen not in models or eligibility_issue and chosen != ForecastSource.PVWATTS:
             chosen = ForecastSource.PVWATTS
+        learning_issue = None
+        if (
+            chosen in (ForecastSource.PVWATTS, ForecastSource.ML)
+            and preference in (ForecastSource.AUTOMATIC, ForecastSource.ML)
+            and source_id in (ml_policies or {})
+            and (
+                not scores
+                or scores[ForecastSource.PVWATTS] - scores[ForecastSource.ML]
+                < max(MIN_ABSOLUTE_GAIN_KWH, scores[ForecastSource.PVWATTS] * MIN_RELATIVE_GAIN)
+            )
+        ):
+            chosen = ForecastSource.PVWATTS
+            learning_issue = (
+                "ML is collecting matched forecast accuracy. PVWatts remains active."
+                if not scores
+                else "ML has not improved forecast accuracy enough. PVWatts remains active."
+            )
         selected[source_id] = (chosen, models[chosen])
         statuses[source_id] = {
             "requested": preference,
@@ -347,6 +372,7 @@ def choose_sources(
             "comparison_days": [record["day"] for record, _values in cohorts],
             "history_version": version(document(history)) if history else None,
             "issue": issue
+            or learning_issue
             or (
                 "Selected forecast unavailable. PVWatts is active"
                 if preference != ForecastSource.AUTOMATIC and chosen != preference
