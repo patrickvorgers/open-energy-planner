@@ -161,9 +161,14 @@ def save_state(state, subject, client):
             "graphql",
             {"query": UPDATE_COMMENT, "variables": {"id": state["node_id"], "body": body}},
         )
-        result = response.get("data", {}).get("updateIssueComment", {}).get("issueComment", {})
+        if response.get("errors"):
+            raise VerificationError("Review status update was not confirmed")
+        try:
+            result = response["data"]["updateIssueComment"]["issueComment"]
+        except (KeyError, TypeError):
+            raise VerificationError("Review status update was not confirmed") from None
         if (
-            response.get("errors")
+            not isinstance(result, dict)
             or result.get("id") != state["node_id"]
             or result.get("body") != body
         ):
@@ -202,15 +207,24 @@ def add_comment(subject, body, key, client):
         "graphql",
         {"query": ADD_COMMENT, "variables": {"subject": subject, "body": body, "key": key}},
     )
-    result = response.get("data", {}).get("addComment", {}).get("commentEdge", {}).get("node", {})
+    if response.get("errors"):
+        raise VerificationError("Review command publication was not confirmed")
+    try:
+        result = response["data"]["addComment"]["commentEdge"]["node"]
+    except (KeyError, TypeError):
+        raise VerificationError("Review command publication was not confirmed") from None
     if (
-        response.get("errors")
+        not isinstance(result, dict)
         or not isinstance(result.get("id"), str)
         or type(result.get("databaseId")) is not int
         or result.get("body") != body
+        or not isinstance(result.get("createdAt"), str)
     ):
         raise VerificationError("Review command publication was not confirmed")
-    instant(result["createdAt"])
+    try:
+        instant(result["createdAt"])
+    except (ValueError, TypeError):
+        raise VerificationError("Review command publication was not confirmed") from None
     return result
 
 
@@ -232,7 +246,22 @@ def quota_reply(body, created):
         if not 0 < seconds <= REQUEST_TIMEOUT.total_seconds():
             raise VerificationError("Invalid provider retry interval")
         return "limited", created + timedelta(seconds=seconds)
-    return "unknown", None
+    if (
+        available
+        or limited
+        or re.search(r"\b(?:quota|rate.limit|allowance|availability)\b", body, re.IGNORECASE)
+    ):
+        return "unknown", None
+    return "unrelated", None
+
+
+def provider_active(checks):
+    """Recognize current-head in-flight provider work before any additional command."""
+    return any(
+        row.get("app", {}).get("id") in {CODERABBIT_APP_ID, KODY_APP_ID}
+        and row.get("status") != "completed"
+        for row in checks
+    )
 
 
 def require_revision(repository, number, state, client):
@@ -266,11 +295,7 @@ def send_command(repository, number, state, target, subject, client, now):
     """Record an outbox intent, recheck identities and publish at most one command for that intent."""
     _, checks = require_revision(repository, number, state, client)
     require_resolved_threads(repository, number, client)
-    if any(
-        row.get("app", {}).get("id") in {CODERABBIT_APP_ID, KODY_APP_ID}
-        and row.get("status") != "completed"
-        for row in checks
-    ):
+    if provider_active(checks):
         raise VerificationError("A provider is still working on this revision")
     if target == "quota":
         if state["queries"] >= MAX_QUOTA_QUERIES:
@@ -304,13 +329,22 @@ def send_command(repository, number, state, target, subject, client, now):
     record_publication(state, result["databaseId"], result["createdAt"], subject, client)
 
 
-def require_requester(repository, command, client):
-    """Check live repository write authority before accepting or consuming an explicit command."""
+def requester_authorized(repository, command, client):
+    """Distinguish a live permission denial from unavailable or malformed authorization evidence."""
     user = command.get("user", {})
     if user.get("type") != "User" or not re.fullmatch(r"[A-Za-z0-9-]+", user.get("login", "")):
-        raise VerificationError("Only an authorized repository participant can request review")
+        return False
     permission = client.get(f"repos/{repository}/collaborators/{user['login']}/permission")
-    if permission.get("permission") not in {"admin", "maintain", "write"}:
+    if permission.get("permission") in {"admin", "maintain", "write"}:
+        return True
+    if permission.get("permission") in {"read", "triage", "none"}:
+        return False
+    raise VerificationError("Repository permission could not be verified")
+
+
+def require_requester(repository, command, client):
+    """Require live repository write authority for an explicitly handled review command."""
+    if not requester_authorized(repository, command, client):
         raise VerificationError("Review request requires repository write permission")
 
 
@@ -428,27 +462,28 @@ def advance(repository, number, state, comments, client, now):
             send_command(repository, number, state, "quota", subject, client, now)
         return
     if state["phase"] in {"quota", "coderabbit"}:
-        replies = [
-            row
-            for row in fresh
-            if is_bot(row, "coderabbitai[bot]")
-            and "<!-- This is an auto-generated reply by CodeRabbit -->" in row["body"]
-        ]
+        replies = []
+        for row in fresh:
+            if (
+                is_bot(row, "coderabbitai[bot]")
+                and "<!-- This is an auto-generated reply by CodeRabbit -->" in row["body"]
+            ):
+                availability, resume = quota_reply(row["body"], instant(row["created_at"]))
+                if availability != "unrelated":
+                    replies.append((row, availability, resume))
         if len(replies) > 1:
             raise VerificationError("Ambiguous CodeRabbit availability replies")
         if replies:
-            reply = replies[0]
+            reply, availability, resume = replies[0]
+            if availability == "unknown":
+                raise VerificationError("Unknown CodeRabbit availability. No provider was selected")
             if now - instant(reply["created_at"]) > REPLY_TIMEOUT:
-                raise VerificationError(
-                    "CodeRabbit availability reply is stale. Inspect before retrying"
-                )
-            availability, resume = quota_reply(reply["body"], instant(reply["created_at"]))
+                if provider_active(checks):
+                    return
+                send_command(repository, number, state, "quota", subject, client, now)
+                return
             if availability == "limited":
-                if any(
-                    row.get("app", {}).get("id") == CODERABBIT_APP_ID
-                    and row.get("status") != "completed"
-                    for row in checks
-                ):
+                if provider_active(checks):
                     return
                 state["resume"] = resume.isoformat() if resume is not None else None
                 if not state["kody_used"]:
@@ -537,8 +572,10 @@ def process_pr(repository, number, client, now, command_id=None):
             and row.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
             and row["id"] > (state["consumed"] if state else 0)
         ]
-        if pending:
-            command_id = max(row["id"] for row in pending)
+        for candidate in sorted(pending, key=lambda row: row["id"], reverse=True):
+            if requester_authorized(repository, candidate, client):
+                command_id = candidate["id"]
+                break
     if command_id is not None:
         commands = [
             row

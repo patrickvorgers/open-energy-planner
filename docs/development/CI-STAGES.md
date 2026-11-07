@@ -93,7 +93,9 @@ main checks before Ready, candidate CI or merge.
 ## Choose the reviewer before requesting a review
 
 After the current-head cheap checks pass and the coordinated review slot is
-available, a repository writer or coding agent requests review by posting:
+available, a repository writer or coding agent deliberately requests review by
+posting the following comment. A coding agent needs no additional human
+confirmation once those prerequisites and the coordinated slot are ready:
 
 ```text
 @oep review
@@ -137,13 +139,19 @@ delay scheduled runs. Fifteen minutes is the intended polling interval, not a
 guaranteed retry deadline. A manual workflow dispatch resumes the same durable
 requests and does not independently authorize a review. The PR comment is also
 the durable inbox if Actions replaces a queued trigger. Repeated commands for
-active work do not duplicate it. Each acknowledged command is durably consumed
+active work do not duplicate it. Discovery checks each candidate's current
+permission. A known authorization denial is skipped without consuming the command
+or stopping active work. An unavailable permission check and an explicitly handled
+unauthorized command still fail closed. Each acknowledged command is durably consumed
 independently of the original request identity. A later push cannot revive an
 older duplicate as a new request.
 
 Each request permits at most eight quota queries, two actual CodeRabbit requests
 and one Kody request. It expires after seven days. Missing quota replies block
-after fifteen minutes. Reviews without an unambiguous completion block after
+after fifteen minutes. A genuine but stale quota reply triggers a fresh bounded
+quota query only when no provider is active. Its old availability never authorizes
+a review. Generic review acknowledgements are not quota evidence and do not
+expire an active review. Reviews without an unambiguous completion block after
 two hours without starting an overlapping provider. Scheduled execution determines
 when these limits are observed. A head/base change, a newer main, closure or a
 Ready transition supersedes pending work. Synchronize and validate an updated
@@ -159,6 +167,8 @@ Losing the subsequent status-confirmation response also preserves that outbox.
 Global workflow serialization protects these operations. A direct manual
 provider command can still race with the controller. Do not mix both routes.
 
+Nullable or malformed GraphQL mutation payloads use the same canonical failure
+path and retain an unresolved publication intent for reconciliation.
 Public failure messages use fixed categories with an inspection action. They
 never copy exception values or provider payloads. A malformed, over-limit or
 unavailable PR does not prevent the scheduled sweep from checking other PRs.
@@ -219,7 +229,7 @@ subagent or Codex Cloud review stage. Existing findings from any reviewer still
 require evidence-based disposition.
 
 After the preceding queued merge is complete, include and test the actual current
-main before freezing the final head and base. Run **Manual CodeRabbit review preflight** from
+main before freezing the final head and base. For this deliberate direct-provider recovery route, run **Manual CodeRabbit review preflight** from
 `main` with the PR number and expected head/base. Affirm that existing findings
 are dispositioned. No Codex review SHA or independent-Codex attestation is needed.
 The preflight uses only
@@ -333,8 +343,10 @@ checks again. Follow the final-review procedure above rather than requesting
 CodeRabbit on every push. After completing corrections and current-head
 review, choose Ready again. An early Ready transition with missing evidence fails
 before image builds. Complete the missing work and make a fresh Ready transition.
-There is no polling workflow, periodic run, special disposition comment or
-automatic retry after a failed test. The ordinary matrix still selects suites.
+There is no candidate-CI polling workflow, periodic candidate run, special
+disposition comment or automatic retry after a failed test. The separate review
+resumption schedule only handles existing explicit review requests and never
+starts candidate CI. The ordinary matrix still selects suites.
 Ready does not force the full suite or add query performance tests by itself.
 
 Use `ci: run` only for a deliberate retry on an already reviewed, non-Draft

@@ -93,7 +93,7 @@ class GitHubEvidence:
         self.calls.append(("GET", path))
         if path.endswith("/permission"):
             return {"permission": self.permission}
-        if path.endswith("/pulls/12"):
+        if path.endswith(f"/pulls/{self.current['number']}"):
             return deepcopy(self.current)
         if path.endswith("/git/ref/heads/main"):
             return {"object": {"sha": self.main}}
@@ -269,18 +269,24 @@ def test_kody_technical_failure_waits_then_queries_fresh_coderabbit_capacity():
 
 
 @pytest.mark.parametrize(
-    "answer",
+    "answer,initial_phase",
     [
-        "<!-- This is an auto-generated reply by CodeRabbit -->\nService unavailable",
-        AVAILABLE + LIMITED,
+        ("<!-- This is an auto-generated reply by CodeRabbit -->\nService unavailable", "quota"),
+        (AVAILABLE + LIMITED, "blocked"),
+        (
+            "<!-- This is an auto-generated reply by CodeRabbit -->\nQuota availability unknown.",
+            "blocked",
+        ),
     ],
 )
-def test_unknown_or_contradictory_availability_never_infers_quota(answer):
+def test_unknown_or_contradictory_availability_never_infers_quota(answer, initial_phase):
     """Unrecognized and contradictory status replies block without invoking Kody or buying credits."""
     client = GitHubEvidence()
     client.run(explicit=True)
     client.reply(answer)
     client.run()
+    assert client.state()["phase"] == initial_phase
+    client.run(minutes=16)
     assert client.provider_commands() == ["@coderabbitai rate limit"]
     assert client.state()["phase"] == "blocked"
 
@@ -458,8 +464,8 @@ def test_stale_availability_does_not_authorize_another_provider():
     client.run(explicit=True)
     client.reply(AVAILABLE)
     client.run(minutes=20)
-    assert client.state()["phase"] == "blocked"
-    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    assert client.state()["phase"] == "quota"
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai rate limit"]
 
 
 def test_kody_skip_is_not_a_technical_failure():
@@ -597,7 +603,14 @@ def test_imported_failure_values_never_enter_public_status(monkeypatch, site):
 
 
 @pytest.mark.parametrize(
-    "failure", ["command-response", "confirmation-before-write", "confirmation-response"]
+    "failure",
+    [
+        "command-response",
+        "confirmation-before-write",
+        "confirmation-response",
+        "command-null-data",
+        "confirmation-null-data",
+    ],
 )
 def test_advance_publication_failure_recovers_without_blocking_or_resending(monkeypatch, failure):
     """A resumed send preserves its outbox when the command or confirmation response is lost."""
@@ -613,6 +626,10 @@ def test_advance_publication_failure_recovers_without_blocking_or_resending(monk
         if confirming and failure == "confirmation-before-write":
             raise VerificationError("PRIVATE-REVIEW-PUBLICATION-SENTINEL")
         response = original_post(path, payload)
+        if (failure == "command-null-data" and body.startswith("@coderabbitai review")) or (
+            confirming and failure == "confirmation-null-data"
+        ):
+            return {"data": None, "errors": [{"message": "PRIVATE-NULL-GRAPHQL-SENTINEL"}]}
         if (failure == "command-response" and body.startswith("@coderabbitai review")) or (
             confirming and failure == "confirmation-response"
         ):
@@ -755,3 +772,239 @@ def test_duplicate_command_consumption_requires_current_authority():
         client.run(explicit=True)
     assert client.state()["consumed"] < client.command["id"]
     assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("answer", [AVAILABLE, LIMITED])
+def test_delayed_quota_reply_requests_fresh_capacity_before_any_review(answer):
+    """A delayed scheduler rechecks old genuine quota instead of blocking or spending stale capacity."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(answer)
+    client.run(minutes=20)
+    assert client.state()["phase"] == "quota"
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai rate limit"]
+    client.reply(AVAILABLE)
+    client.run(minutes=20)
+    assert client.provider_commands()[-1] == "@coderabbitai review"
+
+
+def test_repeated_stale_quota_rechecks_keep_the_original_query_budget():
+    """Repeated scheduler delays cannot create an unlimited sequence of availability requests."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    for attempt in range(1, 9):
+        client.reply(AVAILABLE)
+        client.run(minutes=attempt * 20)
+    assert client.provider_commands() == ["@coderabbitai rate limit"] * 8
+    assert client.state()["phase"] == "blocked"
+
+
+def test_stale_quota_does_not_requery_while_a_provider_is_active():
+    """Delayed evidence cannot start another command while a genuine provider check remains active."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.checks.append(
+        {
+            "id": 20,
+            "name": "CodeRabbit",
+            "head_sha": HEAD,
+            "app": {"id": 347564},
+            "status": "in_progress",
+            "conclusion": None,
+        }
+    )
+    client.run(minutes=20)
+    assert client.state()["phase"] == "quota"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("with_actual_limit", [False, True])
+def test_review_acknowledgement_does_not_count_as_quota_evidence(with_actual_limit):
+    """A generic review acknowledgement neither expires a long review nor makes real quota ambiguous."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.run()
+    client.reply(
+        "<!-- This is an auto-generated reply by CodeRabbit -->\nReview triggered. Actions performed: Incremental review."
+    )
+    if with_actual_limit:
+        client.reply(LIMITED)
+        client.run()
+        assert client.state()["phase"] == "kody"
+        assert client.provider_commands()[-1] == "@kody start-review"
+    else:
+        client.checks.append(
+            {
+                "id": 20,
+                "name": "CodeRabbit",
+                "head_sha": HEAD,
+                "app": {"id": 347564},
+                "status": "in_progress",
+                "conclusion": None,
+            }
+        )
+        client.run(minutes=20)
+        assert client.state()["phase"] == "coderabbit"
+        assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+
+
+@pytest.mark.parametrize(
+    "mutation,path",
+    [
+        ("add", ("data",)),
+        ("add", ("data", "addComment")),
+        ("add", ("data", "addComment", "commentEdge")),
+        ("add", ("data", "addComment", "commentEdge", "node")),
+        ("update", ("data",)),
+        ("update", ("data", "updateIssueComment")),
+        ("update", ("data", "updateIssueComment", "issueComment")),
+    ],
+)
+@pytest.mark.parametrize("with_errors", [True, False])
+def test_nullable_mutation_payload_uses_canonical_verification_failure(
+    monkeypatch, mutation, path, with_errors
+):
+    """Every nullable GraphQL mutation level fails through VerificationError rather than AttributeError."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    payload = {"errors": [{"message": "PRIVATE-NULL-GRAPHQL-SENTINEL"}]} if with_errors else {}
+    parent = payload
+    for field in path[:-1]:
+        parent[field] = {}
+        parent = parent[field]
+    parent[path[-1]] = None
+    monkeypatch.setattr(client, "post", lambda *args, **kwargs: payload)
+    with pytest.raises(VerificationError) as captured:
+        if mutation == "add":
+            review.add_comment("PR_12", "Synthetic command", "synthetic-key", client)
+        else:
+            review.save_state(client.state(), "PR_12", client)
+    assert "PRIVATE-NULL-GRAPHQL-SENTINEL" not in str(captured.value)
+
+
+@pytest.mark.parametrize("pending_user", ["revoked", "developer"])
+def test_unauthorized_discovered_command_does_not_block_active_progress(monkeypatch, pending_user):
+    """Live permission denial leaves the inbox watermark unchanged while the existing request advances."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    original_consumed = client.state()["consumed"]
+    client.reply(AVAILABLE)
+    client.comment("@oep review", pending_user, "User")
+    original_get = client.get
+
+    def revoked_permission(path):
+        """Simulate permission revoked after an earlier request or from a different participant."""
+        if path.endswith(f"/collaborators/{pending_user}/permission"):
+            return {"permission": "read"}
+        return original_get(path)
+
+    monkeypatch.setattr(client, "get", revoked_permission)
+    client.run()
+    assert client.state()["consumed"] == original_consumed
+    assert client.state()["phase"] == "coderabbit"
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+
+
+def test_unauthorized_newest_command_does_not_hide_an_older_authorized_request(monkeypatch):
+    """The pending inbox selects the newest authorized command instead of starving older valid work."""
+    client = GitHubEvidence()
+    original_request = client.command["id"]
+    client.comment("@oep review", "revoked", "User")
+    original_get = client.get
+
+    def revoked_permission(path):
+        """Deny only the newer unauthorized participant while preserving the original writer."""
+        if path.endswith("/collaborators/revoked/permission"):
+            return {"permission": "read"}
+        return original_get(path)
+
+    monkeypatch.setattr(client, "get", revoked_permission)
+    client.run()
+    assert client.state()["request"] == client.state()["consumed"] == original_request
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_pending_permission_api_failure_does_not_advance_or_consume(monkeypatch):
+    """Permission transport failure is not treated as a known authorization denial."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    original_consumed = client.state()["consumed"]
+    client.reply(AVAILABLE)
+    client.comment("@oep review", "revoked", "User")
+    original_get = client.get
+
+    def unavailable_permission(path):
+        """Fail the live permission lookup without granting or denying repository authority."""
+        if path.endswith("/collaborators/revoked/permission"):
+            raise VerificationError("PRIVATE-PERMISSION-TRANSPORT-SENTINEL")
+        return original_get(path)
+
+    monkeypatch.setattr(client, "get", unavailable_permission)
+    with pytest.raises(VerificationError):
+        client.run()
+    assert client.state()["consumed"] == original_consumed
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("mutation", ["add", "update"])
+def test_null_graphql_failure_does_not_starve_the_next_pr(tmp_path, monkeypatch, capsys, mutation):
+    """A real nullable mutation on the first PR preserves failure while a second request proceeds."""
+    bad = GitHubEvidence()
+    bad.current.update(number=11, node_id="PR_11")
+    bad.current["head"]["sha"] = "4" * 40
+    for check in bad.checks:
+        check["head_sha"] = "4" * 40
+    good = GitHubEvidence()
+
+    class RoutedEvidence:
+        """Route actual controller metadata and mutations to two independent synthetic PRs."""
+
+        def get(self, path):
+            """Read the selected PR while sharing repository permission and main metadata."""
+            selected = bad if "/pulls/11" in path or "4" * 40 in path else good
+            return selected.get(path)
+
+        def get_list(self, path):
+            """Keep the broken PR first in the live inventory and preserve each comment history."""
+            if "/pulls?state=open" in path:
+                return [deepcopy(bad.current), deepcopy(good.current)]
+            return (bad if "/pulls/11/" in path or "/issues/11/" in path else good).get_list(path)
+
+        def post(self, path, payload):
+            """Return nullable data after the selected first-PR mutation has actually been stored."""
+            variables = payload["variables"]
+            selected = (
+                bad
+                if variables.get("number") == 11
+                or variables.get("subject") == "PR_11"
+                or '"head": "' + "4" * 40 + '"' in variables.get("body", "")
+                else good
+            )
+            response = selected.post(path, payload)
+            if selected is bad and (
+                (mutation == "add" and "addComment" in payload["query"])
+                or (mutation == "update" and "updateIssueComment" in payload["query"])
+            ):
+                return {"data": None, "errors": [{"message": "PRIVATE-NULL-SWEEP-SENTINEL"}]}
+            return response
+
+    event_file = tmp_path / "null-sweep.json"
+    event_file.write_text(
+        json.dumps({"repository": {"full_name": REPOSITORY, "default_branch": "main"}}),
+        encoding="utf-8",
+    )
+    for key, value in {
+        "GITHUB_EVENT_PATH": str(event_file),
+        "GITHUB_REPOSITORY": REPOSITORY,
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_TOKEN": "synthetic-not-a-token",
+        "GITHUB_EVENT_NAME": "schedule",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(review, "GitHub", lambda token: RoutedEvidence())
+    assert review.main() == 1
+    assert bad.provider_commands() == []
+    assert good.provider_commands() == ["@coderabbitai rate limit"]
+    assert "PRIVATE-NULL-SWEEP-SENTINEL" not in capsys.readouterr().out
