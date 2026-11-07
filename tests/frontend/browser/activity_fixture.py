@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -10,9 +11,13 @@ from aiohttp import web
 from open_energy_planner.activities.api import EVENTS
 from open_energy_planner.activities.events import Health, Outcome
 
+ACTIVITY_SCENARIO_TIME = datetime(2026, 11, 6, 12, tzinfo=UTC)
+
 
 def register(app):
-    """Install fixture-only triggers before freezing the router. Production has no event-write API."""
+    """Pin synthetic publishers and install test-only triggers before freezing the router."""
+    started = monotonic()
+    app[EVENTS].clock = lambda: ACTIVITY_SCENARIO_TIME + timedelta(seconds=monotonic() - started)
     error_body_release = asyncio.Event()
 
     async def streamed_error(request):
@@ -171,7 +176,7 @@ def register(app):
             "solar",
             "training",
             "Update solar forecast",
-            datetime.now(UTC) + timedelta(minutes=30),
+            events.clock() + timedelta(minutes=30),
             context={"label": "East roof, West roof"},
         )
         await events.flush()
@@ -241,9 +246,10 @@ def register(app):
 
 
 async def seed(app):
-    """Seed the Amsterdam discovery scenario's current local day, recovery and upcoming work."""
+    """Seed the Amsterdam scenario's pinned local day, recovery and upcoming work."""
     events = app[EVENTS]
-    now = datetime.now(UTC)
+    now = events.clock()
+    scenario_clock = events.clock
     seed_time = (
         now.astimezone(ZoneInfo("Europe/Amsterdam"))
         .replace(hour=12, minute=0, second=0, microsecond=0)
@@ -292,7 +298,7 @@ async def seed(app):
         events.clock = lambda: seed_time - timedelta(minutes=1)
         await events.start("models", "training", "Update forecast model")
     finally:
-        events.clock = lambda: datetime.now(UTC)
+        events.clock = scenario_clock
     events.availability("weather", Health.AVAILABLE, "Current weather is usable.")
     events.availability("solar-weather", Health.DEGRADED, "Retaining valid solar weather.")
     events.availability("temperature-weather", Health.AVAILABLE, "Current temperature is usable.")
