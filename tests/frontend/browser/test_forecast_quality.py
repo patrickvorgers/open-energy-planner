@@ -127,7 +127,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     if not urlsplit(url).path:
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
         page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
+    expect(page.locator("#quality-status")).to_contain_text("Day 10/26/2026")
     expect(page.locator("#quality-charts")).to_contain_text("Original weekday model")
     expect(page.locator("#quality-charts .quality-metrics")).to_have_text(
         "Measured hours: 23 of 24: Comparable pairs: 23: "
@@ -235,7 +235,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         ),
     )
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
-    expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
+    expect(page.locator("#quality-status")).to_contain_text("Day 10/26/2026")
     expect(page.locator("#quality-day")).to_have_value("2026-10-26")
     expect(page.locator("#quality-charts")).to_contain_text("24 of 24 hours measured.")
     expect(page.locator("#quality-charts .quality-daily")).to_contain_text(
@@ -292,9 +292,9 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     page.get_by_role("button", name="Load older days", exact=True).click()
     expect(page.locator("#quality-day option")).to_have_count(3)
     assert page.locator("#quality-day option").all_text_contents() == [
-        "2026-10-27",
-        "2026-10-26",
-        "2026-10-25",
+        "10/27/2026",
+        "10/26/2026",
+        "10/25/2026",
     ]
     expect(page.locator("#quality-day")).to_have_value("2026-10-26")
     expect(page.locator("#quality-charts details table")).to_have_count(1)
@@ -331,7 +331,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     )
     assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == expected_title
     page.locator("#quality-day").select_option("2026-10-26")
-    expect(page.locator("#quality-status")).to_contain_text("Day 2026-10-26")
+    expect(page.locator("#quality-status")).to_contain_text("Day 10/26/2026")
     page.route(
         "**/v1/forecast-quality/days/2026-10-26",
         lambda route: route.fulfill(status=503, body="Unavailable"),
