@@ -238,7 +238,9 @@ class HistoricalBonuses:
         if missing or statistics_missing:
             end = endpoint
             missing = statistics_missing or missing
-            if end <= min(period for _, period in missing):
+            # A sum reference row already proves the exact period-start endpoint.
+            # Hourly-delta history still requires a completed following hour.
+            if not statistics_missing and end <= min(period for _, period in missing):
                 end += timedelta(hours=1)
             if end > now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1):
                 raise PendingSettlement(

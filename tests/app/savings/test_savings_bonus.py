@@ -596,3 +596,91 @@ def test_statistics_replay_requests_historical_endpoint_without_latest_capture(
             latest + timedelta(hours=3),
             "bindings",
         )
+
+
+@pytest.mark.parametrize("multiple", [False, True])
+def test_statistics_period_start_checkpoint_is_reused_after_historical_ingress(evidence, multiple):
+    """At contract start the boundary row proves zero export. A returned first-hour checkpoint must not cause endless retries."""
+    from open_energy_planner.contracts.bonus_statistics import StatisticsChannel
+
+    store, baselines = evidence
+    exports = EXPORTS if multiple else EXPORTS[:1]
+    count = len(exports)
+    selected = contract(bonus=True)
+    selected = replace(
+        selected,
+        bonuses=(replace(selected.bonuses[0], effective_from=START, contract_start=START),),
+    )
+    now = START + timedelta(days=1)
+    basis = StatisticsBasis(
+        START,
+        now,
+        tuple(
+            StatisticReference(entity, index + 1, "recorder", "kWh", 1000, 1000 + 10 / count)
+            for index, entity in enumerate(exports)
+        ),
+        0,
+        None,
+        "a" * 64,
+        True,
+    )
+    current = CounterSeed(
+        "bonus",
+        START,
+        10,
+        310,
+        export_identity(exports),
+        now,
+        tuple((entity, 310 / count) for entity in exports),
+        basis,
+    )
+    book = CounterBook(now, (current,))
+    # The first hour exports .5+.5+1+1=3 kWh, but today's 10-kWh endpoint is not captured.
+    quarters = ((300, 0.5), (300.5, 0.5), (301, 1), (302, 1), (303, 0))
+    rows = tuple(
+        (
+            Frame(
+                START + timedelta(minutes=15 * index),
+                START + timedelta(minutes=15 * (index + 1)),
+                dict.fromkeys(exports, exported / count),
+                {},
+                {},
+                dict.fromkeys(exports, meter / count),
+                "recorded",
+            ),
+            {"bindings": {"exports": exports}},
+        )
+        for index, (meter, exported) in enumerate(quarters)
+    )
+    retain(store, rows)
+    original = store.frames()
+
+    def prepare():
+        """Retry the real historical selection with the exact same current counter book."""
+        return baselines.prepare(
+            selected, rows[0][0], rows[0][1]["bindings"], (), book, now, "period-start-bindings"
+        )
+
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        prepare()
+    pending = baselines.pending
+    # Supply exactly the requested endpoint. The unfixed request asks for the first hour
+    # rather than the already sufficient zero-difference period boundary.
+    channels = tuple(
+        StatisticsChannel(
+            identity,
+            ((START - timedelta(hours=1), 1000, 300 / count),)
+            + (((START, 1000 + 3 / count, 303 / count),) if pending.end > START else ()),
+        )
+        for identity in basis.series
+    )
+    baselines.receive_statistics(pending, channels, book, now)
+    recovered = prepare()
+    assert pending.end == START
+    assert recovered[0].observed_at == START
+    assert recovered[0].used_kwh == 0
+    assert recovered[0].component_meters == tuple((entity, 300 / count) for entity in exports)
+    assert recovered[0].statistics.reference_version == basis.reference_version
+    assert recovered[0].statistics.latest_at == START
+    assert baselines.pending is None
+    assert store.frames() == original and book.seeds == (current,)

@@ -144,6 +144,10 @@ A valid current statistics checkpoint can be newer than the first interval being
 re-evaluated. Settlement first uses exact retained physical measurements when
 available. If the stored sequence ends before the checkpoint, it requests the
 completed hourly endpoint at or immediately after the historical interval.
+At the exact period start, the preceding reference row proves a zero sum
+difference and the physical boundary reading. The statistics request and cache
+therefore keep that exact endpoint instead of advancing to the following hour.
+The separate hourly-delta path still requires a following completed hour.
 The existing statistics transport supplies each meter's identity, sum and
 physical endpoint. The app reuses endpoint derivation and verifies the same
 reference date, metadata identities, units and reference sums as the current
