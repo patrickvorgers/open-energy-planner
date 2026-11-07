@@ -5,15 +5,37 @@ Open **Insights > Planning performance** when you want to understand how long ca
 ## Inspect a day
 
 1. Choose the **Day** in the Home Assistant timezone, or use **Today**.
-2. Read **Calculation time** together with the **Calculations** list.
+2. Read the **Calculation time** chart.
 3. Enable **Show additional calculations between quarter hours** when you need to include intermediate rounds.
-4. Choose **View calculation** for the relevant start time. The list provides the same detail access as the chart and works with the keyboard.
+4. Click the relevant bar to open its recorded details.
+
+There is no duplicate calculation list below the chart. With a keyboard, focus
+the chart and use Left or Right to select a bar, Home or End to jump to the first
+or last bar, and Enter or Space to open its details. The selected time, result
+and duration are announced. The chart itself exposes the selected calculation
+to assistive technology. There is no separate selection or action bar. Closing
+the popup returns focus to its opener.
+Refresh retains the selected calculation when it is still present. Enable
+additional calculations to navigate those bars too. Empty or failed history
+reads cannot open an old calculation under the newly selected day.
+
+If history or details cannot be read within five seconds, the page shows recovery
+advice. Use **Refresh** to retry history, or close and reopen the calculation
+popup to retry its details. Repeated refresh clicks share the pending read.
+Choosing another day replaces that read. Reading or retrying never changes your
+plans or recorded history.
 
 The stacked bars separate the first observed financial candidate from further calculation time when both were recorded. An unknown first-candidate time produces a total-only bar. Missing historical progress cannot be reconstructed from the total duration.
 
-[![Calculation history with three synthetic durations, including a budget-limited result and an unknown first-candidate time.](../assets/planning-performance.png)](../assets/planning-performance.png)
+Hover over either section of a bar to see one tooltip for that calculation,
+including both recorded stages, the total duration and the publication result.
+Times use at most one decimal place in your browser's number format. Missing
+first-candidate times remain explicitly unrecorded. Clicking the bar still opens
+the full calculation dialog. Its progress tooltip uses the same time precision.
 
-*The first two bars separate the observed first candidate from further calculation. The third has no recorded first time. These are synthetic history records, not a solver benchmark.*
+[![One synthetic day with 96 calculation bars and direct detail access, without a duplicate list.](../assets/planning-performance.png)](../assets/planning-performance.png)
+
+*Blue and amber separate the observed first candidate from further calculation. Purple marks runs without a recorded first time. These are synthetic history records, not a solver benchmark.*
 
 ## Distinguish a candidate from a usable plan
 

@@ -48,6 +48,36 @@ of internal identifiers, protocol fields, configuration keys or stored evidence.
 Preserve names supplied by users and external services. Edit owned text at its
 source rather than filtering arbitrary rendered content.
 
+## Large read-only lists
+
+Use the Activity history presentation when a long history needs a list. Do not
+duplicate an interactive chart with a full visible list when the chart already
+provides the same details. Retain keyboard and assistive access to those details.
+For lists that are needed, show compact, aligned rows with a timestamp or identity, a readable result
+and the few values needed to compare entries. Desktop rows have column headings.
+On mobile, stack secondary values within each row without horizontal scrolling.
+Keep the full label accessible when a long value is visually shortened.
+
+Show at most 25 rows per page with **Previous**, **Next** and a visible page
+number above the list. Disable unavailable directions and navigation while a
+read is pending. Keep a stable order appropriate to the task. Activity history is
+newest first. Opening
+a row must retain its exact identity and use the existing detail view or native
+disclosure. Do not require a repeated action button in every row when the whole
+row already opens its details. Support keyboard activation, visible focus and
+focus return after closing details or reaching a page boundary.
+
+Changing the day or filters and explicitly refreshing starts at the first page.
+Paging a list must not truncate an associated chart, change its selected period
+or discard unread records. Prefer an existing bounded server cursor when the
+endpoint provides one. Explain empty and
+failed reads instead of making missing records look like a successful result.
+
+Apply this pattern when building or changing a large list. Do not replace small
+selectors, editable forms or task-specific charts with a universal list widget.
+Verify several pages, the final short page, detail identity, keyboard focus,
+day/filter changes, delayed reads and error recovery on desktop and mobile.
+
 ## Action confirmations
 
 Use `confirmation.js` and the shared Courtyard dialog styling for app-owned
