@@ -93,7 +93,7 @@ main checks before Ready, candidate CI or merge.
 ## Choose the reviewer before requesting a review
 
 After the current-head cheap checks pass and the coordinated review slot is
-available, a repository writer or coding agent deliberately requests review by
+available, the PR author or an upstream repository writer deliberately requests review by
 posting the following comment. A coding agent needs no additional human
 confirmation once those prerequisites and the coordinated slot are ready:
 
@@ -106,6 +106,27 @@ names are not aliases and cannot start requests from historical comments.
 The central status comment uses the OEP logo and an **OEP review** heading.
 If images are unavailable, its text still identifies OEP and the current status.
 
+Only PRs submitted to `patrickvorgers/open-energy-planner` against its `main`
+branch are eligible. A source branch may belong to a fork. A PR hosted within a
+fork or targeting another repository is not eligible, and a copied workflow
+cannot use the upstream credential path. The workflow job and Python entrypoint
+both enforce this repository boundary.
+
+A GitHub user may request review of their own upstream PR without repository
+write access. Ownership is determined from the positive numeric user ID in the
+live PR metadata, not a login string or comment association label. Users with
+current upstream write, maintain or admin permission may request review of any
+eligible upstream PR. Bots and unrelated non-writers cannot request reviews.
+Before every new provider command, the controller rereads the original explicit
+request and verifies its author's current authority. A removed request or revoked
+writer role cannot authorize another publication. Reconciling an existing
+publication does not authorize new work.
+
+These requester permissions do not change the publishing account's requirements.
+The separate user credential must retain upstream write access, even if that
+account also owns the PR. Shared provider quotas and the existing cheap checks,
+frozen revision, findings, candidate CI and merge gates still apply.
+
 This exact standalone comment is the manual trigger and the operator's
 attestation that existing findings have been dispositioned. It authorizes review
 of the live Draft revision accepted by the workflow. Do not push while the
@@ -114,7 +135,7 @@ do not independently request reviews. The workflow does not mark the PR Ready,
 start candidate CI, resolve findings or merge.
 
 The trusted-main **OEP review orchestration** workflow reuses the existing
-preflight, checks the requester's current write permission, and records the head,
+preflight, verifies the requester's current authority, and records the head,
 base and progress in an **OEP review** PR comment. It applies this order:
 
 1. Post `@coderabbitai rate limit` on the PR and wait for CodeRabbit's fresh reply.
@@ -144,9 +165,10 @@ delay scheduled runs. Fifteen minutes is the intended polling interval, not a
 guaranteed retry deadline. A manual workflow dispatch resumes the same durable
 requests and does not independently authorize a review. The PR comment is also
 the durable inbox if Actions replaces a queued trigger. Repeated commands for
-active work do not duplicate it. Discovery checks each candidate's current
-permission. A known authorization denial is skipped without consuming the command
-or stopping active work. An unavailable permission check and an explicitly handled
+active work do not duplicate it. Discovery checks each candidate's live PR
+authorship or repository write authority. A denied unrelated inbox command is skipped without consuming it or stopping
+other authorized work. Revocation of the original requester blocks further
+provider publications for that request. An unavailable permission check and an explicitly handled
 unauthorized command still fail closed. Each acknowledged command is durably consumed
 independently of the original request identity. A later push cannot revive an
 older duplicate as a new request.
