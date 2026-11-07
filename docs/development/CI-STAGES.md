@@ -167,7 +167,11 @@ requests and does not independently authorize a review. The PR comment is also
 the durable inbox if Actions replaces a queued trigger. Repeated commands for
 active work do not duplicate it. Discovery checks each candidate's live PR
 authorship or repository write authority. A denied unrelated inbox command is skipped without consuming it or stopping
-other authorized work. Revocation of the original requester blocks further
+other authorized work. Inbox discovery reads the live PR once per scan and
+reuses authorization results only for the same numeric user ID and login within
+that scan. The next scan reads permissions again. These discovery results never
+replace the fresh original-requester and publisher checks before publication.
+Revocation of the original requester blocks further
 provider publications for that request. An unavailable permission check and an explicitly handled
 unauthorized command still fail closed. Each acknowledged command is durably consumed
 independently of the original request identity. A later push cannot revive an

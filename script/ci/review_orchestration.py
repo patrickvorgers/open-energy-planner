@@ -411,6 +411,14 @@ def requester_authorized(repository, number, command, client):
     ):
         return False
     current = client.get(f"repos/{repository}/pulls/{number}")
+    return requester_authorized_on_pr(repository, command, current, client)
+
+
+def requester_authorized_on_pr(repository, command, current, client):
+    """Check a concrete requester against one PR snapshot and live repository permissions."""
+    user = command.get("user")
+    if repository != UPSTREAM_REPOSITORY or not github_user(user):
+        return False
     base = current.get("base")
     if (
         not isinstance(base, dict)
@@ -694,8 +702,16 @@ def process_pr(repository, number, client, now, command_id=None, publisher=None)
             and github_user(row.get("user"))
             and row["id"] > (state["consumed"] if state else 0)
         ]
+        current = client.get(f"repos/{repository}/pulls/{number}") if pending else None
+        requester_permissions = {}
         for candidate in sorted(pending, key=lambda row: row["id"], reverse=True):
-            if requester_authorized(repository, number, candidate, client):
+            user = candidate["user"]
+            identity = (user["id"], user["login"])
+            if identity not in requester_permissions:
+                requester_permissions[identity] = requester_authorized_on_pr(
+                    repository, candidate, current, client
+                )
+            if requester_permissions[identity]:
                 command_id = candidate["id"]
                 break
     if command_id is not None:

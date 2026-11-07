@@ -969,6 +969,86 @@ def test_denied_duplicate_and_original_requester_revocation_have_distinct_effect
         assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
 
 
+@pytest.mark.parametrize("own_author", [False, True])
+def test_repeated_denied_requests_have_bounded_scan_cost(monkeypatch, own_author):
+    """Denied duplicates cost one lookup per scan while eligible active work still advances."""
+    observed_counts = []
+    for duplicate_count in (1, 100):
+        client = GitHubEvidence()
+        if own_author:
+            client.current["user"] = deepcopy(client.command["user"])
+            client.permission = "read"
+        client.run(explicit=True)
+        original_consumed = client.state()["consumed"]
+        client.reply(AVAILABLE)
+        for _ in range(duplicate_count):
+            denied = client.comment("/oep-reviewer review", "denied", "User")
+            denied["user"]["id"] = 2002
+        original_get = client.get
+
+        def denied_permission(path, original_get=original_get):
+            """Record real API work while denying the unrelated repeated participant."""
+            result = original_get(path)
+            return {"permission": "read"} if "/denied/permission" in path else result
+
+        monkeypatch.setattr(client, "get", denied_permission)
+        client.calls.clear()
+        client.run()
+        denied_path = f"repos/{REPOSITORY}/collaborators/denied/permission"
+        pull_path = f"repos/{REPOSITORY}/pulls/12"
+        assert client.calls.count(("GET", denied_path)) == 1
+        observed_counts.append(client.calls.count(("GET", pull_path)))
+        assert client.state()["consumed"] == original_consumed
+        assert client.state()["phase"] == "coderabbit"
+        assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+
+        client.calls.clear()
+        client.run()
+        assert client.calls.count(("GET", denied_path)) == 1
+    assert observed_counts[0] == observed_counts[1]
+
+
+def test_next_inbox_scan_reads_changed_permissions():
+    """A denial from the previous scan cannot hide newly granted write authority."""
+    client = GitHubEvidence()
+    client.permission = "read"
+    for _ in range(100):
+        client.comment("/oep-reviewer review", "developer", "User")
+    client.calls.clear()
+    client.run()
+    assert client.state() is None
+    assert client.calls.count(("GET", f"repos/{REPOSITORY}/pulls/12")) == 1
+    assert (
+        client.calls.count(("GET", f"repos/{REPOSITORY}/collaborators/developer/permission")) == 1
+    )
+    client.permission = "write"
+    client.run()
+    assert client.state()["request"] == client.command["id"] + 100
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_discovery_permission_does_not_authorize_later_publication(monkeypatch):
+    """Revocation after inbox discovery blocks the live publication authorization check."""
+    client = GitHubEvidence()
+    original_get = client.get
+    permission_reads = 0
+
+    def revoked_after_discovery(path):
+        """Allow discovery once and deny every later requester authorization."""
+        nonlocal permission_reads
+        result = original_get(path)
+        if "/developer/permission" in path:
+            permission_reads += 1
+            return {"permission": "write" if permission_reads == 1 else "read"}
+        return result
+
+    monkeypatch.setattr(client, "get", revoked_after_discovery)
+    with pytest.raises(VerificationError):
+        client.run()
+    assert permission_reads == 2
+    assert client.provider_commands() == []
+
+
 def test_unauthorized_newest_command_does_not_hide_an_older_authorized_request(monkeypatch):
     """The pending inbox selects the newest authorized command instead of starving older valid work."""
     client = GitHubEvidence()
