@@ -98,8 +98,13 @@ posting the following comment. A coding agent needs no additional human
 confirmation once those prerequisites and the coordinated slot are ready:
 
 ```text
-@oep review
+/oep-reviewer review
 ```
+
+The slash prefix avoids mentioning an unrelated GitHub account. Former command
+names are not aliases and cannot start requests from historical comments.
+The central status comment uses the OEP logo and an **OEP review** heading.
+If images are unavailable, its text still identifies OEP and the current status.
 
 This exact standalone comment is the manual trigger and the operator's
 attestation that existing findings have been dispositioned. It authorizes review
@@ -209,7 +214,7 @@ findings from every reviewer still require evaluation, replies and resolution.
 ## Prepare one final CodeRabbit review
 
 This direct-provider route remains available for deliberate manual recovery or
-when diagnosing the orchestrator. Prefer `@oep review` for ordinary requests.
+when diagnosing the orchestrator. Prefer `/oep-reviewer review` for ordinary requests.
 Do not run this route alongside active orchestrated work.
 
 Keep every PR within **150 changed files**. All files count, including binary,

@@ -27,7 +27,7 @@ jobs:
        github.event.check_run.app.id == 347564 || github.event.check_run.app.id == 413034) &&
       (github.event_name != 'issue_comment' ||
        (github.event.issue.pull_request &&
-        (github.event.comment.body == '@oep review' ||
+        (github.event.comment.body == '/oep-reviewer review' ||
          github.event.comment.user.login == 'coderabbitai[bot]' ||
          github.event.comment.user.login == 'kody-ai[bot]')))
     runs-on: ubuntu-24.04
