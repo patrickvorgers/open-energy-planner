@@ -103,6 +103,74 @@ def test_cross_origin_host_cannot_change_date_preferences(app_page):
     expect(content.locator("#date")).to_have_text("6/1/2026")
 
 
+def test_system_date_format_keeps_home_assistant_text_language(app_page):
+    """System numeric dates follow an English browser while month and weekday names stay Dutch."""
+    page, url = app_page
+    page.goto(url + "/contract")
+    result = page.evaluate("""async () => {
+        const host = document.createElement('home-assistant');
+        host.hass = {locale:{language:'nl',date_format:'system'}};
+        host.hidden = true; document.body.append(host);
+        const {dateLabel, when, useHomeAssistantTimezone} = await import('/setup/display.js');
+        useHomeAssistantTimezone('Europe/Amsterdam');
+        const instant = '2026-05-31T22:30:59Z';
+        return {
+            numeric: dateLabel(instant), short: when(instant,{dateStyle:'short'}),
+            weekday: when(instant,{weekday:'long'}),
+            shortMonth: when(instant,{day:'numeric',month:'short'}),
+            longMonth: when(instant,{day:'numeric',month:'long',year:'numeric'}),
+            medium: when(instant,{dateStyle:'medium'}),
+            long: when(instant,{dateStyle:'long'}), full: when(instant,{dateStyle:'full'}),
+        };
+    }""")
+    assert result == {
+        "numeric": "6/1/2026",
+        "short": "6/1/26",
+        "weekday": "maandag",
+        "shortMonth": "1 jun",
+        "longMonth": "1 juni 2026",
+        "medium": "1 jun 2026",
+        "long": "1 juni 2026",
+        "full": "maandag 1 juni 2026",
+    }
+
+
+@pytest.mark.parametrize("utc", [False, True])
+def test_system_date_format_calendar_headings_keep_home_assistant_language(app_page, utc):
+    """Real local and UTC Chart.js calendar headings use Dutch names with a system numeric preference."""
+    page, url = app_page
+    page.goto(url + "/contract")
+    page.add_script_tag(url=url + "/setup/chart.umd.min.js")
+    page.evaluate(
+        """async utc => {
+            const host = document.createElement('home-assistant');
+            host.hass = {locale:{language:'nl',date_format:'system'}};
+            host.hidden = true; document.body.append(host);
+            const {useHomeAssistantTimezone} = await import('/setup/display.js');
+            const {calendarDays} = await import('/setup/chart_days.js');
+            useHomeAssistantTimezone('Europe/Amsterdam');
+            const wrap = document.createElement('div'), canvas = document.createElement('canvas');
+            wrap.className = 'chart-wrap'; wrap.style.height = '300px';
+            wrap.append(canvas); document.body.append(wrap);
+            const start = Date.parse(utc ? '2026-06-01T00:00:00Z' : '2026-05-31T22:00:00Z');
+            const end = Date.parse(utc ? '2026-06-02T00:00:00Z' : '2026-06-01T22:00:00Z');
+            new Chart(canvas, {
+                type:'line', plugins:[calendarDays],
+                data:{datasets:[{data:[{x:start,y:1},{x:end,y:2}]}]},
+                options:{responsive:true,maintainAspectRatio:false,animation:false,parsing:false,
+                    plugins:{calendarDays:{utc},legend:{display:false}},
+                    scales:{x:{type:'linear',min:start,max:end}}},
+            });
+        }""",
+        utc,
+    )
+    heading = page.get_by_role("list", name="Chart calendar days").get_by_role("listitem")
+    expect(heading).to_have_count(1)
+    expect(heading).to_have_attribute("aria-label", "maandag 1 juni 2026")
+    expect(heading.locator("strong")).to_have_text("ma")
+    expect(heading.locator("span")).to_have_text("1 jun")
+
+
 def test_contract_labels_use_home_assistant_date_format_without_saving(app_page):
     """Dutch HA dates replace ISO rule labels and summaries while the saved contract remains byte-for-byte equivalent."""
     page, url = app_page
@@ -128,7 +196,7 @@ def test_contract_labels_use_home_assistant_date_format_without_saving(app_page)
             "bonuses": [],
         },
     )
-    assert response.ok, response.text()
+    assert response.ok, "Synthetic contract setup request failed"
     before = page.request.get(url + "/v1/contracts", headers=headers).json()
     page.goto(url + "/contract")
     page.evaluate("""() => {

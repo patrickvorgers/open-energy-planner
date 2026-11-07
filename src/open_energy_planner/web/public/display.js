@@ -42,9 +42,10 @@ function homeAssistantLocale() {
     return {};
 }
 
-/** Invalid or unavailable host language falls back to the browser without changing installation time. */
-function dateLanguage(locale) {
-    if (locale.date_format === "system" || typeof locale.language !== "string") return undefined;
+/** System numeric dates use the browser. Text dates retain HA language, with invalid language falling back safely. */
+function dateLanguage(locale, format) {
+    const textual = format.weekday !== undefined || ["short", "long", "narrow"].includes(format.month) || ["medium", "long", "full"].includes(format.dateStyle);
+    if ((locale.date_format === "system" && !textual) || typeof locale.language !== "string") return undefined;
     try { return Intl.getCanonicalLocales(locale.language)[0]; }
     catch { return undefined; }
 }
@@ -87,7 +88,7 @@ export function when(value, options = {}, zone = timeZone) {
     const defaults = explicitParts || hasStyle ? {} : {year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit"};
     const format = {...defaults, ...options, second: undefined, timeZone: zone};
     if (["full", "long", "medium"].includes(format.timeStyle)) format.timeStyle = "short";
-    const locale = homeAssistantLocale(), language = dateLanguage(locale), instant = new Date(value);
+    const locale = homeAssistantLocale(), language = dateLanguage(locale, format), instant = new Date(value);
     const rendered = instant.toLocaleString(language, format);
     const order = Object.hasOwn(DATE_FIELD_ORDERS, locale.date_format) ? DATE_FIELD_ORDERS[locale.date_format] : undefined;
     if (!order || (format.month && !["numeric", "2-digit"].includes(format.month)) || (format.dateStyle && format.dateStyle !== "short")) return rendered;
