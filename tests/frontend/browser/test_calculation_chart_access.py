@@ -1,4 +1,4 @@
-"""Large daily calculation lists stay compact without losing chart evidence or detail identity."""
+"""Daily calculation charts expose exact details without a duplicate visible record list."""
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -50,7 +50,7 @@ def daily_history(app_page):
         if identity != "planning-performance":
             detail_reads.append(identity)
             selected = next(row for row in rows if row["id"] == identity)
-            route.fulfill(json={**detail, **selected})
+            route.fulfill(json={**detail, **selected, "progress": []})
             return
         selected_day = parse_qs(address.query).get("day", [evidence["day"]])[0]
         daily_reads.append(selected_day)
@@ -71,96 +71,87 @@ def daily_history(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
-def test_compact_calculation_pages_preserve_full_day_and_exact_details(daily_history):
-    """Four pages expose every identity once while keyboard details and the full-day chart remain intact."""
+def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_history):
+    """A full day stays reachable by native keyboard controls and chart keys without rendering a list."""
     page, evidence, detail_reads, daily_reads = daily_history
-    rows = page.locator(".performance-row")
-    expect(rows).to_have_count(25)
-    expect(page.locator("#performance-page")).to_have_text("Page 1 of 4")
-    previous = page.get_by_role("button", name="Previous", exact=True)
-    following = page.get_by_role("button", name="Next", exact=True)
-    expect(previous).to_be_disabled()
-    page.evaluate("document.fonts.ready")
-    assert rows.first.bounding_box()["height"] <= (56 if page.viewport_size["width"] < 500 else 48)
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    canvas = page.locator("#performance-chart")
+    selection = page.get_by_role("slider", name="Calculation", exact=True)
+    expect(selection).to_have_attribute("max", "95")
+    expect(page.get_by_role("heading", name="Calculations", exact=True)).to_have_count(0)
+    expect(page.locator("#performance-list")).to_have_count(0)
     captures = Path("results/ci/calculation-history-list")
     captures.mkdir(parents=True, exist_ok=True)
     width = page.viewport_size["width"]
-    page.screenshot(path=str(captures / f"full-day-{width}.png"), full_page=False)
-    seen = rows.evaluate_all("items => items.map(item => item.dataset.calculationId)")
-    following.click()
-    expect(page.locator("#performance-page")).to_have_text("Page 2 of 4")
-    action = rows.first.get_by_role("button")
-    action.focus()
-    page.keyboard.press("Enter")
+    page.screenshot(path=str(captures / f"chart-only-{width}.png"), full_page=True)
+    canvas.focus()
+    canvas.press("End")
+    expect(selection).to_have_value("95")
+    canvas.press("Enter")
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
-    assert detail_reads == ["synthetic-calculation-025"]
+    assert detail_reads == ["synthetic-calculation-095"]
     page.keyboard.press("Escape")
-    expect(action).to_be_focused()
-    expect(page.locator("#performance-page")).to_have_text("Page 2 of 4")
-    page.get_by_label("Show additional calculations between quarter hours").check()
-    expect(page.locator("#performance-page")).to_have_text("Page 2 of 4")
-    for page_number, expected_count in ((2, 25), (3, 25), (4, 21)):
-        expect(page.locator("#performance-page")).to_have_text(f"Page {page_number} of 4")
-        expect(rows).to_have_count(expected_count)
-        seen.extend(rows.evaluate_all("items => items.map(item => item.dataset.calculationId)"))
-        assert (
-            page.evaluate(
-                "Chart.getChart(document.getElementById('performance-chart')).data.datasets[0].data.length"
-            )
-            == 96
-        )
-        if page_number != 4:
-            following.click()
-    expect(following).to_be_disabled()
-    expect(previous).to_be_focused()
-    assert seen == [row["id"] for row in evidence["calculations"]]
+    expect(canvas).to_be_focused()
+    expect(selection).to_have_value("95")
+    canvas.press("Home")
+    canvas.press("ArrowRight")
+    canvas.press(" ")
+    expect(dialog).to_be_visible()
+    assert detail_reads[-1] == "synthetic-calculation-001"
+    page.keyboard.press("Escape")
+    selection.focus()
+    selection.press("End")
+    expect(selection).to_have_value("95")
+    page.screenshot(path=str(captures / f"keyboard-controls-{width}.png"), full_page=False)
+    page.get_by_role("button", name="View calculation at").click()
+    expect(dialog).to_be_visible()
+    assert detail_reads[-1] == "synthetic-calculation-095"
+    page.keyboard.press("Escape")
     assert daily_reads == [evidence["day"]]
-    previous.click()
-    expect(page.locator("#performance-page")).to_have_text("Page 3 of 4")
-    page.locator("#calculations-heading").evaluate(
-        "heading => heading.scrollIntoView({block: 'start'})"
-    )
-    page.screenshot(path=str(captures / f"paged-list-{width}.png"), full_page=False)
+    for resized_width in (768, 390, 1280):
+        page.set_viewport_size({"width": resized_width, "height": 900})
+        page.wait_for_function("() => document.documentElement.scrollWidth <= innerWidth")
+        assert (
+            canvas.evaluate("canvas => Chart.getChart(canvas).data.datasets[0].data.length") == 96
+        )
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.set_viewport_size({"width": width, "height": 900 if width > 500 else 844})
     page.get_by_role("button", name="Refresh", exact=True).click()
-    expect(page.locator("#performance-page")).to_have_text("Page 1 of 4")
-    following.click()
+    expect(page.locator("#performance-status")).to_have_text("")
+    expect(selection).to_have_value("95")
     previous_day = (datetime.fromisoformat(evidence["day"]) - timedelta(days=1)).date().isoformat()
     page.get_by_label("Day", exact=True).fill(previous_day)
-    expect(rows).to_have_count(1)
-    expect(page.locator("#performance-page")).to_have_text("Page 1 of 1")
-    expect(previous).to_be_disabled()
-    expect(following).to_be_disabled()
+    expect(selection).to_have_attribute("max", "0")
     page.get_by_role("button", name="Today", exact=True).click()
-    expect(rows).to_have_count(25)
-    expect(page.locator("#performance-page")).to_have_text("Page 1 of 4")
+    expect(selection).to_have_attribute("max", "95")
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
-def test_calculation_paging_waits_for_reads_and_recovers_from_failure(daily_history):
-    """Pending navigation locks and stale-response guards prevent another day's rows from leaking into a page."""
+def test_chart_access_waits_for_reads_and_recovers_without_stale_day_data(daily_history):
+    """Pending, failed and superseded reads cannot open a calculation under another selected day."""
     page, evidence, _, _ = daily_history
     pending = []
     page.route("**/v1/planning-performance?day=*", lambda route: pending.append(route))
-    following = page.get_by_role("button", name="Next", exact=True)
-    previous = page.get_by_role("button", name="Previous", exact=True)
-    following.click()
+    canvas = page.locator("#performance-chart")
+    selection = page.get_by_role("slider", name="Calculation", exact=True)
+    canvas.focus()
     page.get_by_role("button", name="Refresh", exact=True).click()
-    expect(following).to_be_disabled()
-    expect(previous).to_be_disabled()
+    expect(selection).to_be_disabled()
+    expect(page.locator("#performance-open")).to_be_disabled()
     expect(page.locator("#performance-status")).to_contain_text("Loading")
+    canvas.focus()
+    canvas.press("Enter")
+    expect(page.get_by_role("dialog")).not_to_be_visible()
     assert len(pending) == 1
     pending.pop().fulfill(status=503, body="private provider response")
     expect(page.locator("#performance-status")).to_contain_text("could not be loaded")
-    expect(page.locator(".performance-row")).to_have_count(0)
-    expect(page.locator("#performance-page")).to_have_text("Page 1 of 1")
+    expect(selection).to_be_disabled()
     expect(page.locator("body")).not_to_contain_text("private provider response")
     page.get_by_role("button", name="Refresh", exact=True).click()
     assert len(pending) == 1
     pending.pop().fulfill(json=evidence)
-    expect(page.locator(".performance-row")).to_have_count(25)
-    expect(following).to_be_enabled()
+    expect(selection).to_be_enabled()
+    expect(selection).to_have_attribute("max", "95")
     page.get_by_label("Day", exact=True).fill("2020-01-01")
     page.get_by_role("button", name="Today", exact=True).click()
     assert len(pending) == 2
@@ -169,14 +160,66 @@ def test_calculation_paging_waits_for_reads_and_recovers_from_failure(daily_hist
     expect(page.locator("#performance-summary")).to_contain_text("96 completed calculations")
     old_read.fulfill(json={**evidence, "day": "2020-01-01", "calculations": []})
     expect(page.get_by_label("Day", exact=True)).to_have_value(evidence["day"])
-    expect(page.locator(".performance-row")).to_have_count(25)
+    expect(selection).to_have_attribute("max", "95")
     page.route(
         "**/v1/planning-performance?day=2020-01-02",
         lambda route: route.fulfill(json={**evidence, "day": "2020-01-02", "calculations": []}),
     )
     page.get_by_label("Day", exact=True).fill("2020-01-02")
-    expect(page.locator(".performance-row")).to_have_count(0)
-    expect(page.locator("#performance-list")).to_contain_text("No completed calculations")
+    expect(page.locator("#performance-summary")).to_contain_text("No completed calculations")
+    expect(selection).to_be_disabled()
+    expect(page.locator("#performance-open")).to_be_disabled()
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_chart_access_preserves_zero_long_and_intermediate_calculations(daily_history):
+    """Zero-length and long timings retain seconds, and intermediate runs remain reachable without a list."""
+    page, evidence, detail_reads, _ = daily_history
+    failures = []
+    page.on("pageerror", lambda error: failures.append(str(error)))
+    zero, long = evidence["calculations"][:2]
+    zero.update(
+        started_at=(datetime.fromisoformat(zero["started_at"]) + timedelta(minutes=5)).isoformat(),
+        duration_seconds=0,
+        first_candidate_seconds=0,
+    )
+    long.update(duration_seconds=3600.2345, first_candidate_seconds=11.24982)
+    page.route(
+        "**/v1/planning-performance?day=*",
+        lambda route: route.fulfill(json={**evidence, "calculations": [zero, long]}),
+    )
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#performance-summary")).to_contain_text("2 completed calculations")
+    expect(page.locator("#performance-selected")).to_contain_text("3,600.2 s")
+    canvas = page.locator("#performance-chart")
+    assert canvas.evaluate("canvas => Chart.getChart(canvas).data.datasets[0].data.length") == 1
+    extra = page.get_by_label("Show additional calculations between quarter hours")
+    extra.check()
+    canvas.focus()
+    canvas.press("Home")
+    canvas.press("Enter")
+    expect(page.locator("#calculation-summary")).to_contain_text("Total 0 s")
+    assert detail_reads[-1] == zero["id"]
+    page.keyboard.press("Escape")
+    for toggle in page.locator("#performance-legend input").all():
+        toggle.uncheck()
+    canvas.focus()
+    canvas.press("End")
+    canvas.press("Enter")
+    expect(page.locator("#calculation-summary")).to_contain_text("Total 3,600.2 s")
+    assert detail_reads[-1] == long["id"]
+    page.keyboard.press("Escape")
+    extra.uncheck()
+    page.route(
+        "**/v1/planning-performance?day=*",
+        lambda route: route.fulfill(json={**evidence, "calculations": [zero]}),
+    )
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#performance-summary")).to_contain_text("Enable additional calculations")
+    expect(page.locator("#performance-selection")).to_be_disabled()
+    extra.check()
+    expect(page.locator("#performance-selection")).to_be_enabled()
+    assert not failures
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)

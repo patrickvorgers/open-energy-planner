@@ -1647,15 +1647,16 @@ issues physical commands or resolves unknown execution.
 
 ## Planning performance insight
 
-The calculation list follows the compact Activity history presentation described
-under [large read-only lists](../docs/development/CONFIGURATION-UI.md#large-read-only-lists).
-The existing complete daily summary response remains authoritative. The browser
-renders 25 rows per page without additional reads or changing chart evidence.
-Rows retain chronological order and open the existing calculation dialog by
-record ID. Paging does not rebuild the chart or change the selected day. Day
-changes and explicit refresh reset to page one. Pending reads disable page
-navigation, obsolete responses retain their existing generation guard, and
-failed reads clear the list rather than leaving another day's rows visible.
+The daily calculation chart is the single visible entry to recorded details.
+There is no duplicate history list. Its existing complete daily summary response
+remains authoritative. Clicking a bar opens the original calculation by ID.
+Keyboard Left/Right and Home/End select plotted calculations. Enter or Space
+opens the same dialog. A native range input and detail button provide standard
+assistive controls, revealed on keyboard focus rather than as a substitute list.
+Their live description retains the selected time, outcome and duration.
+Refresh preserves the selected identity when still plotted. Filter changes
+retain it when possible. Pending reads disable detail actions, obsolete reads
+retain the generation guard, and failed reads clear selection and chart data.
 
 The duration chart groups tooltip entries by calculation index, so either
 stacked section shows all its visible timing stages together with the total
@@ -1669,7 +1670,7 @@ The planning service retains the result alongside validation outcome. The serial
 
 `optimization/performance.py` owns `CalculationHistory` and authenticated `GET /v1/planning-performance?day=YYYY-MM-DD`. It reuses the planning namespace in `oep_documents`, with atomic `calculations-<UTC-start-date>.json` arrays. Daily reads directly address three adjacent UTC partitions and filter start instants in the HA timezone, including 23-hour and 25-hour days. Missing HA timezone is a setup conflict. Each daily array contains summaries only. Individual `calculation-<id>.json` records retain the bounded curve and original metadata. The authenticated detail endpoint loads one calculation when its dialog opens, avoiding full-day curve transfers and rewrites. Both documents commit atomically. Existing database transfer includes these documents without a new SQL schema. Retention follows original plan evidence: no automatic deletion or arbitrary age cutoff is introduced. Original plan archives remain unchanged and are never replayed to reconstruct progress.
 
-The frontend reuses OEP navigation, type, palette, Chart.js and date/money/percentage formatters. Insights defaults to HA today with another-day selection. The largest chart answers which calculations took longer. Blue candidate-finding, amber continuation and purple unknown-time segments share a zero baseline. The chart defaults to calculations starting in UTC quarter-hour minutes. Checking the option reveals calculations between those minutes without inferring their trigger cause. Unchecking it hides them from the chart. All calculations remain in the accessible list. Repeated local minutes have occurrence suffixes in labels, action names, tooltips and calculation details, while original instants remain unchanged. Checkbox legends match Planning. The time axis spans the first existing instant of the selected installation-local day to the first instant of the next day, including 23-hour and 25-hour DST days. A wholly skipped calendar date shows an explanatory empty state. Bars occupy 90 percent of a quarter-hour width. Forecast quality uses its archived day boundaries. Hourly bars are centered on their visible interval within that day and partial edge bars are narrowed to fit. Original hourly timestamps, values and tooltip intervals remain unchanged. Neither chart adds time-axis offsets. The actual solver budget is a reference, not a total-round target. The native accessible dialog restores focus and day selection when closed, and becomes full-screen on phones. Details distinguish candidate costs, proof bounds, independent checks and publication. No raw provider messages or invented causal explanations are shown. Costs between different input horizons are not comparable as realized savings.
+The frontend reuses OEP navigation, type, palette, Chart.js and date/money/percentage formatters. Insights defaults to HA today with another-day selection. The largest chart answers which calculations took longer. Blue candidate-finding, amber continuation and purple unknown-time segments share a zero baseline. The chart defaults to calculations starting in UTC quarter-hour minutes. Checking the option reveals calculations between those minutes without inferring their trigger cause. Unchecking it hides them from the chart. All recorded calculations remain reachable by enabling intermediate rounds and using the chart or its keyboard controls. Repeated local minutes have occurrence suffixes in labels, action names, tooltips and calculation details, while original instants remain unchanged. Checkbox legends match Planning. The time axis spans the first existing instant of the selected installation-local day to the first instant of the next day, including 23-hour and 25-hour DST days. A wholly skipped calendar date shows an explanatory empty state. Bars occupy 90 percent of a quarter-hour width. Forecast quality uses its archived day boundaries. Hourly bars are centered on their visible interval within that day and partial edge bars are narrowed to fit. Original hourly timestamps, values and tooltip intervals remain unchanged. Neither chart adds time-axis offsets. The actual solver budget is a reference, not a total-round target. The native accessible dialog restores focus and day selection when closed, and becomes full-screen on phones. Details distinguish candidate costs, proof bounds, independent checks and publication. No raw provider messages or invented causal explanations are shown. Costs between different input horizons are not comparable as realized savings.
 
 Synthetic mode uses UTC for calculation history when no discovery timezone is available. Home Assistant mode requires its discovered timezone and never substitutes the demo fallback.
 

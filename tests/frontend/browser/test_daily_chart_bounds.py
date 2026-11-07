@@ -1,6 +1,5 @@
 """Daily chart bounds retain installation-local days and original numeric evidence."""
 
-import re
 from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
@@ -51,7 +50,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
     page.goto(url + "/planning-performance")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator(".performance-row")).to_have_count(3)
+    expect(page.locator("#performance-summary")).to_contain_text("3 completed calculations")
     expect(page.locator("#performance-status")).to_have_text("")
     extra = page.get_by_label("Show additional calculations between quarter hours")
     expect(extra).not_to_be_checked()
@@ -356,13 +355,13 @@ def test_skipped_calendar_date_remains_responsive(app_page):
         "The selected calendar day does not exist in the Home Assistant installation timezone."
     )
     assert page.locator("#performance-chart").evaluate("canvas => !Chart.getChart(canvas)")
-    expect(page.locator(".performance-row")).to_have_count(0)
+    expect(page.locator("#performance-selection")).to_be_disabled()
     assert not errors
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
 def test_repeated_local_calculation_times_are_distinct(app_page):
-    """Amsterdam's two 02:00 minutes stay distinguishable in list, actions, dialog and chart tooltip."""
+    """Amsterdam's two 02:00 minutes stay distinguishable in keyboard access, dialog and chart tooltip."""
     page, url = app_page
     discover(page, url)
     evidence = page.request.get(
@@ -382,32 +381,23 @@ def test_repeated_local_calculation_times_are_distinct(app_page):
         details[row["id"]] = detail
 
     def respond(route):
-        """Keep the synthetic list and detail instants consistent."""
+        """Keep the synthetic chart summaries and detail instants consistent."""
         route.fulfill(json=details.get(route.request.url.rsplit("/", 1)[-1], evidence))
 
     page.route("**/v1/planning-performance**", respond)
     page.goto(url + "/planning-performance")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator(".performance-row")).to_have_count(3)
-    first = page.get_by_role("button", name=re.compile(r"^View calculation at .*\(1 of 2\)$"))
-    second = page.get_by_role("button", name=re.compile(r"^View calculation at .*\(2 of 2\)$"))
-    expect(first).to_be_visible()
-    expect(second).to_be_visible()
-    expect(page.locator(".performance-row").nth(0)).to_contain_text("(1 of 2)")
-    expect(page.locator(".performance-row").nth(1)).to_contain_text("(2 of 2)")
+    expect(page.locator("#performance-summary")).to_contain_text("3 completed calculations")
     canvas = page.locator("#performance-chart")
+    canvas.focus()
     for index, suffix in ((0, "(1 of 2)"), (1, "(2 of 2)")):
-        canvas.evaluate(
-            """(canvas,index) => {
-            const chart=Chart.getChart(canvas);
-            chart.tooltip.setActiveElements([{datasetIndex:0,index}],{x:0,y:0});chart.update();
-        }""",
-            index,
-        )
+        canvas.press("Home")
+        if index:
+            canvas.press("ArrowRight")
+        expect(page.locator("#performance-selected")).to_contain_text(suffix)
         assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title[0]").endswith(suffix)
-    first.click()
-    expect(page.locator("#calculation-time")).to_contain_text("(1 of 2)")
-    page.get_by_role("button", name="Close", exact=True).click()
-    second.click()
-    expect(page.locator("#calculation-time")).to_contain_text("(2 of 2)")
+        canvas.press("Enter")
+        expect(page.locator("#calculation-time")).to_contain_text(suffix)
+        page.keyboard.press("Escape")
+        expect(canvas).to_be_focused()

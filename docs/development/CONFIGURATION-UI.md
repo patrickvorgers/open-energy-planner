@@ -30,8 +30,10 @@ source rather than filtering arbitrary rendered content.
 
 ## Large read-only lists
 
-Use the Activity history presentation for long histories and other large result
-lists. Show compact, aligned rows with a timestamp or identity, a readable result
+Use the Activity history presentation when a long history needs a list. Do not
+duplicate an interactive chart with a full visible list when the chart already
+provides the same details. Retain keyboard and assistive access to those details.
+For lists that are needed, show compact, aligned rows with a timestamp or identity, a readable result
 and the few values needed to compare entries. Desktop rows have column headings.
 On mobile, stack secondary values within each row without horizontal scrolling.
 Keep the full label accessible when a long value is visually shortened.
@@ -39,7 +41,7 @@ Keep the full label accessible when a long value is visually shortened.
 Show at most 25 rows per page with **Previous**, **Next** and a visible page
 number above the list. Disable unavailable directions and navigation while a
 read is pending. Keep a stable order appropriate to the task. Activity history is
-newest first. Calculation history follows the day's chronological chart. Opening
+newest first. Opening
 a row must retain its exact identity and use the existing detail view or native
 disclosure. Do not require a repeated action button in every row when the whole
 row already opens its details. Support keyboard activation, visible focus and
@@ -48,8 +50,7 @@ focus return after closing details or reaching a page boundary.
 Changing the day or filters and explicitly refreshing starts at the first page.
 Paging a list must not truncate an associated chart, change its selected period
 or discard unread records. Prefer an existing bounded server cursor when the
-endpoint provides one. Calculation summaries already arrive as one complete
-day and can be paged in the browser without extra requests. Explain empty and
+endpoint provides one. Explain empty and
 failed reads instead of making missing records look like a successful result.
 
 Apply this pattern when building or changing a large list. Do not replace small
