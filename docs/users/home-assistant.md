@@ -20,6 +20,15 @@ For a standalone container, administration uses the app's own token and the inte
 
 ## Review installation settings
 
+### Dates and times
+
+When opened inside Home Assistant, date labels follow your Home Assistant profile's
+language and date-format preference. Times retain the installation timezone.
+After changing your profile preference, reopen or refresh the page to update
+existing labels. A standalone page without access to your HA profile uses the
+browser locale. Native date and time picker controls use the browser's own
+presentation. Formatting never changes saved dates, deadlines or timestamps.
+
 ### Find virtual devices in Home Assistant
 
 Open **Settings > Devices & services > Open Energy Planner**. One connection
