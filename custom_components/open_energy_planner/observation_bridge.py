@@ -6,8 +6,6 @@ from .measurement_sources import HomeAssistantMeasurementSource
 from .measurements import Quantity, SourceBinding
 from .protocol import identifier
 
-MAX_OBSERVATION_BINDINGS = 64
-
 
 class ObservationBridge:
     """Bind one app source revision to selected in-process HA measurements and wire reports."""
@@ -29,7 +27,7 @@ class ObservationBridge:
             )
             for raw in document["bindings"]
         )
-        if not 1 <= len(self.bindings) <= MAX_OBSERVATION_BINDINGS:
+        if not self.bindings:
             raise ValueError("Invalid source count")
         self.source = HomeAssistantMeasurementSource(states)
 

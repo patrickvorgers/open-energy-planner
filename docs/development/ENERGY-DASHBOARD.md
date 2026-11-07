@@ -86,6 +86,39 @@ Original plans and configuration versions remain unchanged. New batteries still
 need OEP-only ratings/relationships. Missing SoC, power or capacity must be fixed
 in Energy first. A removed required field blocks planning against the old settings.
 
+## Complete discovery transfers
+
+The integration captures all supported sensor metadata, Energy suggestions and
+compact history endpoints as one snapshot. A small snapshot remains compatible
+with the single-request catalogue contract. Larger snapshots use ordered HTTP
+pages, each at most 192 KiB including JSON escaping and protocol overhead.
+The authenticated request limit remains 1 MiB. No entity-count or alphabetical
+cutoff decides which sources can appear in settings.
+
+Each paged message carries a transfer identity, capture timestamp, content digest,
+zero-based index and completion flag. The first message supplies the document
+header. Subsequent pages append to explicitly allowed collection paths. The final
+message must reproduce the SHA-256 digest of the complete canonical JSON document.
+The receiver admits one pending transfer, with a 32 MiB aggregate byte budget and
+a five-minute lifetime. It rejects older starts, repeated or out-of-order pages,
+mixed identities, unsupported paths and corrupt completion. A future capture may
+lead the app clock by at most thirty seconds.
+
+Pending pages do not update the public catalogue, its freshness timestamp,
+consumer membership or installation reconciliation. Only complete, validated
+discovery enters the existing publication and reconciliation path. A failed or
+interrupted transfer retains the last complete snapshot. Optional discovery
+failures remain isolated from current-plan synchronization. The release identity,
+authentication, request deadline and malformed-input boundaries remain in force.
+
+Configured device and energy-channel counts are not product limits. Recorder
+queries process at most sixty-four channels per call while retaining all members.
+Existing history windows, query deadlines, response budgets and physical-value
+validation remain active. The HA response reader retains its 256 KiB ordinary
+response budget and 4 MiB snapshot budget. Decoded device projections enforce the
+same byte budgets. A normalized settlement frame is bounded by 192 KiB rather
+than by an arbitrary number of channels.
+
 ## Source display names
 
 The explicit name of a source in Energy is authoritative for its presentation.

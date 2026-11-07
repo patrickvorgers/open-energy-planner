@@ -19,8 +19,8 @@ from .protocol import (
     timestamp,
 )
 from .subentries import add_grouped_entities, retire_empty_groups
+from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
 
-MAX_THERMAL_DEVICES = 4
 MAX_THERMAL_STEPS = 1024
 MAX_THERMAL_POWER_W = 30000
 MAX_THERMAL_ENERGY_KWH = 10000
@@ -109,6 +109,7 @@ def capture(coordinator, projection, now):
 
 def receive(document):
     """Validate bounded app metadata and plans before creating entities or exposing control."""
+    validate_projection_size(document, MAX_API_RESPONSE_BYTES)
     required = {"configuration_version", "revision", "devices"}
     if (
         not isinstance(document, dict)
@@ -122,8 +123,8 @@ def receive(document):
         if not isinstance(document[field], str) or not HASH_PATTERN.fullmatch(document[field]):
             raise ValueError("Invalid thermal revision")
     devices = document["devices"]
-    if not isinstance(devices, list) or len(devices) > MAX_THERMAL_DEVICES:
-        raise ValueError("Invalid thermal device list")
+    if not isinstance(devices, list):
+        raise TypeError("Invalid thermal device list")
     seen_ids, seen_meters = set(), set()
     normalized = []
     for device in devices:

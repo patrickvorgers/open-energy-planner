@@ -4,7 +4,6 @@ import json
 from dataclasses import asdict, fields
 
 from open_energy_planner.solar.calculation.model import (
-    MAX_DEVICES_PER_TYPE,
     MAX_SOLAR_POWER_W,
     SolarConfiguration,
     SolarImport,
@@ -15,7 +14,7 @@ from open_energy_planner.solar.calculation.model import (
 
 
 def parse_configuration(body):
-    """Read bounded explicit sources and shared inverters, rejecting unknown configuration fields."""
+    """Read explicit source and shared inverter lists, rejecting unknown configuration fields."""
     if not isinstance(body, dict) or set(body) - {
         "sources",
         "inverters",
@@ -24,12 +23,8 @@ def parse_configuration(body):
     }:
         raise ValueError("Invalid solar configuration")
     sources, inverters = body["sources"], body["inverters"]
-    if (
-        not isinstance(sources, list)
-        or not isinstance(inverters, list)
-        or max(len(sources), len(inverters)) > MAX_DEVICES_PER_TYPE
-    ):
-        raise ValueError("Expected bounded solar lists")
+    if not isinstance(sources, list) or not isinstance(inverters, list):
+        raise TypeError("Expected solar source and inverter lists")
     return SolarConfiguration(
         tuple(parse_source(source) for source in sources),
         tuple(SolarInverter(**inverter) for inverter in inverters),
@@ -44,9 +39,9 @@ def parse_import(body):
 
 
 def parse_panels(body):
-    """Bound nested panel lists before constructing their independently validated geometry."""
-    if not isinstance(body, (list, tuple)) or len(body) > MAX_DEVICES_PER_TYPE:
-        raise ValueError("Expected bounded solar panels")
+    """Require a panel list or tuple before constructing independently validated geometry."""
+    if not isinstance(body, (list, tuple)):
+        raise TypeError("Expected solar panel list or tuple")
     return tuple(SolarPanel(**panel) for panel in body)
 
 
@@ -55,8 +50,8 @@ def parse_source(body):
     if not isinstance(body, dict):
         raise TypeError("Expected solar source configuration")
     providers = body.get("ha_imports", ())
-    if not isinstance(providers, (list, tuple)) or len(providers) > MAX_DEVICES_PER_TYPE:
-        raise ValueError("Expected bounded solar imports")
+    if not isinstance(providers, (list, tuple)):
+        raise TypeError("Expected solar import list or tuple")
     return SolarSource(
         **{
             **body,
@@ -67,9 +62,9 @@ def parse_source(body):
 
 
 def validate_configuration_suggestions(body, meters):
-    """Validate bounded provider-neutral imports against their actual Energy production meters."""
-    if not isinstance(body, list) or len(body) > MAX_DEVICES_PER_TYPE:
-        raise ValueError("Expected bounded solar configuration suggestions")
+    """Validate provider-neutral import shape, identity and capacity against Energy meters."""
+    if not isinstance(body, list):
+        raise TypeError("Expected solar configuration suggestion list")
     seen = set()
     assigned = set()
     for group in body:
@@ -80,8 +75,8 @@ def validate_configuration_suggestions(body, meters):
             raise ValueError("Solar configuration suggestion does not match Energy")
         seen.add(entity)
         providers = group["providers"]
-        if not isinstance(providers, list) or len(providers) > MAX_DEVICES_PER_TYPE:
-            raise ValueError("Invalid solar configuration providers")
+        if not isinstance(providers, list):
+            raise TypeError("Invalid solar configuration providers")
         issue = group["issue"]
         if issue not in (
             None,
@@ -98,9 +93,7 @@ def validate_configuration_suggestions(body, meters):
         assigned.update(identities)
         if not imports and issue is None:
             raise ValueError("Solar configuration is not confirmed available")
-        if sum(len(provider.panels) for provider in imports) > MAX_DEVICES_PER_TYPE or len(
-            {(provider.adapter, provider.entry_id) for provider in imports}
-        ) != len(imports):
+        if len({(provider.adapter, provider.entry_id) for provider in imports}) != len(imports):
             raise ValueError("Invalid solar configuration group")
         panels = tuple(panel for provider in imports for panel in provider.panels)
         if sum(panel.capacity_w for panel in panels) > MAX_SOLAR_POWER_W:
