@@ -116,6 +116,7 @@ jobs:
   review:
     if: >-
       github.ref == 'refs/heads/main' &&
+      github.repository == 'patrickvorgers/open-energy-planner' &&
       github.event.repository.default_branch == 'main' &&
       (github.event_name != 'check_run' ||
        github.event.check_run.app.id == 347564 || github.event.check_run.app.id == 413034) &&

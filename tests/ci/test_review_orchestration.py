@@ -9,7 +9,7 @@ import pytest
 from script.ci import review_orchestration as review
 from script.ci.check_commit_signatures import VerificationError
 
-REPOSITORY = "owner/planner"
+REPOSITORY = "patrickvorgers/open-energy-planner"
 HEAD = "2" * 40
 BASE = "1" * 40
 NOW = datetime(2030, 1, 2, 12, tzinfo=UTC)
@@ -82,7 +82,7 @@ class GitHubEvidence:
             "draft": True,
             "head": {"sha": HEAD, "repo": {"full_name": REPOSITORY}},
             "base": {"sha": BASE, "ref": "main", "repo": {"full_name": REPOSITORY}},
-            "user": {"login": "developer"},
+            "user": {"login": "author", "type": "User", "id": 1001},
             "changed_files": 1,
             "commits": 1,
         }
@@ -125,7 +125,7 @@ class GitHubEvidence:
         """Serve independently specified identities, ancestry and exact-head check pages."""
         self.calls.append(("GET", path))
         if path.endswith("/permission"):
-            return {"permission": self.permission}
+            return {"permission": "write" if "/review-publisher/" in path else self.permission}
         if path.endswith(f"/pulls/{self.current['number']}"):
             return deepcopy(self.current)
         if path.endswith("/git/ref/heads/main"):
@@ -333,7 +333,7 @@ def test_unknown_or_contradictory_availability_never_infers_quota(answer, initia
 
 @pytest.mark.parametrize("permission", ["read", "triage", "none", None])
 def test_unauthorized_request_cannot_publish_provider_commands(permission):
-    """Public commenters cannot spend repository review capacity."""
+    """A commenter who neither owns this PR nor has write authority cannot request its review."""
     client = GitHubEvidence()
     client.permission = permission
     with pytest.raises(VerificationError, match="permission"):
@@ -936,9 +936,15 @@ def test_nullable_mutation_payload_uses_canonical_verification_failure(
     assert "PRIVATE-NULL-GRAPHQL-SENTINEL" not in str(captured.value)
 
 
-@pytest.mark.parametrize("pending_user", ["revoked", "developer"])
-def test_unauthorized_discovered_command_does_not_block_active_progress(monkeypatch, pending_user):
-    """Live permission denial leaves the inbox watermark unchanged while the existing request advances."""
+@pytest.mark.parametrize(
+    "pending_user",
+    ["revoked", "developer"],
+    ids=["unrelated-denied-user", "original-requester-revoked"],
+)
+def test_denied_duplicate_and_original_requester_revocation_have_distinct_effects(
+    monkeypatch, pending_user
+):
+    """Denied duplicates stay unconsumed, and an original writer's revoked authority blocks new sends."""
     client = GitHubEvidence()
     client.run(explicit=True)
     original_consumed = client.state()["consumed"]
@@ -955,8 +961,92 @@ def test_unauthorized_discovered_command_does_not_block_active_progress(monkeypa
     monkeypatch.setattr(client, "get", revoked_permission)
     client.run()
     assert client.state()["consumed"] == original_consumed
-    assert client.state()["phase"] == "coderabbit"
-    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+    if pending_user == "developer":
+        assert client.state()["phase"] == "blocked"
+        assert client.provider_commands() == ["@coderabbitai rate limit"]
+    else:
+        assert client.state()["phase"] == "coderabbit"
+        assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+
+
+@pytest.mark.parametrize("own_author", [False, True])
+def test_repeated_denied_requests_have_bounded_scan_cost(monkeypatch, own_author):
+    """Denied duplicates cost one lookup per scan while eligible active work still advances."""
+    observed_counts = []
+    for duplicate_count in (1, 100):
+        client = GitHubEvidence()
+        if own_author:
+            client.current["user"] = deepcopy(client.command["user"])
+            client.permission = "read"
+        client.run(explicit=True)
+        original_consumed = client.state()["consumed"]
+        client.reply(AVAILABLE)
+        for _ in range(duplicate_count):
+            denied = client.comment("/oep-reviewer review", "denied", "User")
+            denied["user"]["id"] = 2002
+        original_get = client.get
+
+        def denied_permission(path, original_get=original_get):
+            """Record real API work while denying the unrelated repeated participant."""
+            result = original_get(path)
+            return {"permission": "read"} if "/denied/permission" in path else result
+
+        monkeypatch.setattr(client, "get", denied_permission)
+        client.calls.clear()
+        client.run()
+        denied_path = f"repos/{REPOSITORY}/collaborators/denied/permission"
+        pull_path = f"repos/{REPOSITORY}/pulls/12"
+        assert client.calls.count(("GET", denied_path)) == 1
+        observed_counts.append(client.calls.count(("GET", pull_path)))
+        assert client.state()["consumed"] == original_consumed
+        assert client.state()["phase"] == "coderabbit"
+        assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+
+        client.calls.clear()
+        client.run()
+        assert client.calls.count(("GET", denied_path)) == 1
+    assert observed_counts[0] == observed_counts[1]
+
+
+def test_next_inbox_scan_reads_changed_permissions():
+    """A denial from the previous scan cannot hide newly granted write authority."""
+    client = GitHubEvidence()
+    client.permission = "read"
+    for _ in range(100):
+        client.comment("/oep-reviewer review", "developer", "User")
+    client.calls.clear()
+    client.run()
+    assert client.state() is None
+    assert client.calls.count(("GET", f"repos/{REPOSITORY}/pulls/12")) == 1
+    assert (
+        client.calls.count(("GET", f"repos/{REPOSITORY}/collaborators/developer/permission")) == 1
+    )
+    client.permission = "write"
+    client.run()
+    assert client.state()["request"] == client.command["id"] + 100
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_discovery_permission_does_not_authorize_later_publication(monkeypatch):
+    """Revocation after inbox discovery blocks the live publication authorization check."""
+    client = GitHubEvidence()
+    original_get = client.get
+    permission_reads = 0
+
+    def revoked_after_discovery(path):
+        """Allow discovery once and deny every later requester authorization."""
+        nonlocal permission_reads
+        result = original_get(path)
+        if "/developer/permission" in path:
+            permission_reads += 1
+            return {"permission": "write" if permission_reads == 1 else "read"}
+        return result
+
+    monkeypatch.setattr(client, "get", revoked_after_discovery)
+    with pytest.raises(VerificationError):
+        client.run()
+    assert permission_reads == 2
+    assert client.provider_commands() == []
 
 
 def test_unauthorized_newest_command_does_not_hide_an_older_authorized_request(monkeypatch):
@@ -1000,15 +1090,23 @@ def test_pending_permission_api_failure_does_not_advance_or_consume(monkeypatch)
     assert client.provider_commands() == ["@coderabbitai rate limit"]
 
 
-@pytest.mark.parametrize("mutation", ["add", "update"])
-def test_null_graphql_failure_does_not_starve_the_next_pr(tmp_path, monkeypatch, capsys, mutation):
-    """A real nullable mutation on the first PR preserves failure while a second request proceeds."""
+@pytest.mark.parametrize("mutation", ["add", "update", "null-author-recovery"])
+def test_one_pr_metadata_failure_or_recovery_does_not_starve_the_next_pr(
+    tmp_path, monkeypatch, capsys, mutation
+):
+    """A failed mutation or recovered null-author outbox cannot prevent the next PR from proceeding."""
     bad = GitHubEvidence()
     bad.current.update(number=11, node_id="PR_11")
     bad.current["head"]["sha"] = "4" * 40
     for check in bad.checks:
         check["head_sha"] = "4" * 40
     good = GitHubEvidence()
+    if mutation == "null-author-recovery":
+        bad.lose_response = True
+        with pytest.raises(VerificationError):
+            review.process_pr(REPOSITORY, 11, bad, NOW, bad.command["id"], bad.publisher)
+        bad.lose_response = False
+        bad.comment("A deleted account's ordinary comment")["user"] = None
 
     class RoutedEvidence:
         """Route actual controller metadata and mutations to two independent synthetic PRs."""
@@ -1073,8 +1171,13 @@ def test_null_graphql_failure_does_not_starve_the_next_pr(tmp_path, monkeypatch,
         "GitHub",
         lambda token: RoutedPublisher() if token == "synthetic-command-token" else RoutedEvidence(),
     )
-    assert review.main() == 1
-    assert bad.provider_commands() == []
+    if mutation == "null-author-recovery":
+        assert review.main() == 0
+        assert bad.provider_commands() == ["@coderabbitai rate limit"]
+        assert bad.state()["phase"] == "quota"
+    else:
+        assert review.main() == 1
+        assert bad.provider_commands() == []
     assert good.provider_commands() == ["@coderabbitai rate limit"]
     assert "PRIVATE-NULL-SWEEP-SENTINEL" not in capsys.readouterr().out
 
@@ -1350,3 +1453,269 @@ def test_legacy_bot_request_cannot_automatically_adopt_the_user_credential():
     client.run()
     assert client.state()["phase"] == "blocked"
     assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_upstream_pr_author_without_write_can_request_review_of_own_fork_contribution():
+    """A real PR author may request review of a fork contribution submitted to the upstream repo."""
+    client = GitHubEvidence()
+    client.current["user"] = {"type": "User", "login": "developer", "id": 99}
+    client.current["head"]["repo"]["full_name"] = "contributor/oep-fork"
+    client.command["author_association"] = "NONE"
+    client.permission = "read"
+    assert review.requester_authorized(REPOSITORY, 12, client.command, client)
+
+
+@pytest.mark.parametrize("explicit", [True, False])
+def test_fork_author_can_start_and_resume_an_upstream_review_without_write(explicit):
+    """The PR author is found in both direct events and the durable inbox without association privileges."""
+    client = GitHubEvidence()
+    client.current["user"] = {"type": "User", "login": "developer", "id": 99}
+    client.current["head"]["repo"]["full_name"] = "contributor/oep-fork"
+    client.command["author_association"] = "FIRST_TIMER"
+    client.permission = "read"
+    client.run(explicit=explicit)
+    client.reply(AVAILABLE)
+    client.run()
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+    assert client.state()["publisher_id"] == 4242
+
+
+@pytest.mark.parametrize("permission", ["admin", "maintain", "write"])
+def test_upstream_writers_can_request_review_for_another_author(permission):
+    """Each documented upstream writer role may review a PR belonging to another GitHub user."""
+    client = GitHubEvidence()
+    client.permission = permission
+    client.command["author_association"] = "NONE"
+    assert client.current["user"]["id"] != client.command["user"]["id"]
+    client.run(explicit=True)
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"])
+def test_forged_association_does_not_authorize_another_users_pr(association):
+    """Repository-looking comment associations cannot replace live authorship or write authority."""
+    client = GitHubEvidence()
+    client.permission = "read"
+    client.command["author_association"] = association
+    client.run()
+    assert client.provider_commands() == []
+    assert client.state() is None
+
+
+@pytest.mark.parametrize(
+    "user",
+    [
+        {"type": "Bot", "login": "developer", "id": 1001},
+        {"type": "User", "login": "developer", "id": True},
+        {"type": "User", "login": "developer", "id": 0},
+        {"type": "User", "login": "developer", "id": -1},
+        {"type": "User", "login": "developer"},
+        {"type": "User", "login": "bad/name", "id": 1001},
+        None,
+    ],
+)
+def test_malformed_or_bot_requester_cannot_claim_the_author_identity(user):
+    """Only a positive numeric GitHub User ID can exercise the own-PR authorization path."""
+    client = GitHubEvidence()
+    client.command["user"] = user
+    assert not review.requester_authorized(REPOSITORY, 12, client.command, client)
+    assert client.provider_commands() == []
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        {"repo": {"full_name": "contributor/oep-fork"}, "ref": "main"},
+        {"repo": {"full_name": "other/upstream"}, "ref": "main"},
+        {"repo": {"full_name": "patrickvorgers/open-energy-planner"}, "ref": "feature"},
+        {"repo": None, "ref": "main"},
+        None,
+    ],
+)
+def test_even_a_writer_cannot_authorize_a_fork_hosted_or_wrong_target_pr(base):
+    """The target repository and branch guard applies before either author or writer privileges."""
+    client = GitHubEvidence()
+    client.current["base"] = base
+    assert not review.requester_authorized(REPOSITORY, 12, client.command, client)
+    assert client.provider_commands() == []
+
+
+def test_fork_repository_context_cannot_authorize_even_the_matching_pr_author():
+    """A PR hosted inside a fork cannot borrow the upstream authorization or publisher credential."""
+    client = GitHubEvidence()
+    client.current["user"] = deepcopy(client.command["user"])
+    assert not review.requester_authorized("contributor/oep-fork", 12, client.command, client)
+    assert client.calls == []
+
+
+def test_own_pr_permission_never_relaxes_the_publisher_write_requirement():
+    """Being the PR author cannot authorize a read-only publishing account."""
+    client = GitHubEvidence()
+    client.current["user"] = deepcopy(client.publisher.user)
+    original_get = client.get
+
+    def publisher_read_only(path):
+        """Keep the requester authorized while denying write permission to the PR author publisher."""
+        if path.endswith("/collaborators/review-publisher/permission"):
+            return {"permission": "read"}
+        return original_get(path)
+
+    client.get = publisher_read_only
+    with pytest.raises(review.CommandAccountError):
+        client.run(explicit=True)
+    assert client.provider_commands() == []
+
+
+def test_lost_response_recovery_rechecks_original_writer_before_another_command():
+    """Reconciling an existing publication cannot authorize a new review after requester revocation."""
+    client = GitHubEvidence()
+    client.lose_response = True
+    with pytest.raises(VerificationError):
+        client.run(explicit=True)
+    client.lose_response = False
+    client.permission = "read"
+    client.reply(AVAILABLE)
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_deleted_original_request_cannot_authorize_another_provider_command():
+    """A removed request is unavailable authority even when its old quota publication remains."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.comments.remove(client.command)
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_matching_author_name_with_a_different_numeric_id_is_not_ownership():
+    """A matching display login does not replace the live PR author's numeric GitHub identity."""
+    client = GitHubEvidence()
+    client.current["user"] = {"type": "User", "login": "developer", "id": 1001}
+    client.permission = "read"
+    assert not review.requester_authorized(REPOSITORY, 12, client.command, client)
+
+
+def test_entrypoint_refuses_a_fork_hosted_workflow_before_accessing_credentials(
+    tmp_path, monkeypatch
+):
+    """A cloned main workflow cannot acquire the upstream credential path in another repository."""
+    event_file = tmp_path / "fork-context.json"
+    event_file.write_text(
+        json.dumps({"repository": {"full_name": "contributor/oep-fork", "default_branch": "main"}}),
+        encoding="utf-8",
+    )
+    for key, value in {
+        "GITHUB_EVENT_PATH": str(event_file),
+        "GITHUB_REPOSITORY": "contributor/oep-fork",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_EVENT_NAME": "schedule",
+    }.items():
+        monkeypatch.setenv(key, value)
+    credentials = []
+
+    def forbidden_credential(token):
+        """Record any attempt to create an API client in the rejected repository context."""
+        credentials.append(token)
+        raise AssertionError("A fork workflow must not initialize credentials")
+
+    monkeypatch.setattr(review, "GitHub", forbidden_credential)
+    assert review.main() == 1
+    assert credentials == []
+
+
+@pytest.mark.parametrize("user", [None, {}, {"type": "User", "login": "deleted-user", "id": None}])
+def test_unavailable_comment_author_cannot_break_pending_inbox_discovery(user):
+    """Deleted or malformed comment authors are ignored without authorizing or crashing a sweep."""
+    client = GitHubEvidence()
+    client.command["user"] = user
+    client.run()
+    assert client.provider_commands() == []
+    assert client.state() is None
+
+
+@pytest.mark.parametrize(
+    "published", [True, False], ids=["recover-user-receipt", "block-missing-receipt"]
+)
+def test_null_author_outbox_recovery_preserves_identity_and_never_duplicates(published):
+    """A deleted unrelated author cannot crash reconciliation or authorize a duplicate publication."""
+    client = GitHubEvidence()
+    client.lose_response = published
+    client.fail_before_send = not published
+    with pytest.raises(VerificationError):
+        client.run(explicit=True)
+    client.lose_response = False
+    client.fail_before_send = False
+    client.comment("Ordinary comment from an unavailable account")["user"] = None
+    client.run()
+    assert client.state()["publisher_id"] == 4242
+    assert client.state()["phase"] == ("quota" if published else "blocked")
+    assert client.provider_commands() == (["@coderabbitai rate limit"] if published else [])
+    client.run()
+    assert client.provider_commands() == (["@coderabbitai rate limit"] if published else [])
+
+
+@pytest.mark.parametrize("failure", ["revoked", "deleted", "unavailable"])
+def test_original_requester_failure_explains_the_public_status_without_private_data(failure):
+    """A lost request or requester authority points users to authorization rather than provider quota."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    if failure == "revoked":
+        client.permission = "read"
+    elif failure == "deleted":
+        client.comments.remove(client.command)
+    else:
+        original_get = client.get
+
+        def unavailable_permission(path):
+            """Simulate a failed requester permission read with a private provider error."""
+            if path.endswith("/collaborators/developer/permission"):
+                raise VerificationError("PRIVATE-REQUESTER-SENTINEL")
+            return original_get(path)
+
+        client.get = unavailable_permission
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    statuses = [
+        row["body"] for row in client.comments if row["body"].startswith("<!-- oep-review-state:")
+    ]
+    assert "Check the request comment" in statuses[-1]
+    assert "requester" in statuses[-1]
+    assert "CodeRabbit availability could not be verified" not in statuses[-1]
+    assert "PRIVATE-REQUESTER-SENTINEL" not in json.dumps(client.comments)
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("failure", ["revoked", "deleted"])
+def test_requester_failure_during_start_uses_authority_recovery_advice(failure):
+    """A request withdrawn after its first status is created gets authorization-specific advice."""
+    client = GitHubEvidence()
+    original_post = client.post
+
+    def withdraw_after_initial_status(path, payload):
+        """Change the original request once its initial durable status has actually been written."""
+        result = original_post(path, payload)
+        if payload["query"] == review.ADD_COMMENT and payload["variables"]["body"].startswith(
+            "<!-- oep-review-state:"
+        ):
+            if failure == "revoked":
+                client.permission = "read"
+            else:
+                client.comments.remove(client.command)
+        return result
+
+    client.post = withdraw_after_initial_status
+    with pytest.raises(review.RequesterAuthorityError):
+        client.run(explicit=True)
+    assert client.state()["phase"] == "blocked"
+    statuses = [
+        row["body"] for row in client.comments if row["body"].startswith("<!-- oep-review-state:")
+    ]
+    assert "Check the request comment" in statuses[-1]
+    assert "PR authorship or repository write access" in statuses[-1]
+    assert "CodeRabbit availability could not be verified" not in statuses[-1]
+    assert client.provider_commands() == []
