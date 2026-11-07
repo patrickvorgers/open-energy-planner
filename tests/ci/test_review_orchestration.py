@@ -28,6 +28,38 @@ LIMITED = (
 )
 
 
+class UserPublisher:
+    """Expose only user identity and provider-comment publication through the second credential."""
+
+    def __init__(self, owner):
+        """Share durable comments while preserving a distinct authenticated user account."""
+        self.owner = owner
+        self.user = {"type": "User", "login": "review-publisher", "id": 4242}
+
+    def get(self, path):
+        """Return the account attached to this token without granting metadata-client access."""
+        assert path == "user"
+        return deepcopy(self.user)
+
+    def post(self, path, payload):
+        """Permit only a provider command and retain its real user author after uncertain writes."""
+        assert payload["query"] == review.ADD_COMMENT
+        assert payload["variables"]["body"].startswith(("@coderabbitai", "@kody"))
+        before = len(self.owner.comments)
+        try:
+            return self.owner.post(path, payload)
+        finally:
+            for comment in self.owner.comments[before:]:
+                comment["user"] = deepcopy(self.user)
+                comment["author_association"] = "COLLABORATOR"
+
+
+@pytest.fixture(autouse=True)
+def configured_publisher_token(monkeypatch):
+    """Supply a synthetic second credential without reading host credentials in entrypoint tests."""
+    monkeypatch.setenv("OEP_REVIEW_COMMAND_TOKEN", "synthetic-command-token")
+
+
 class GitHubEvidence:
     """Emulate bounded GitHub reads and durable comment mutations using independent wire fixtures."""
 
@@ -35,6 +67,7 @@ class GitHubEvidence:
         """Create an eligible Draft and an explicit maintainer command, without any provider work."""
         self.now = NOW
         self.comments = []
+        self.publisher = UserPublisher(self)
         self.permission = "write"
         self.main = BASE
         self.unresolved = False
@@ -173,7 +206,14 @@ class GitHubEvidence:
     def run(self, explicit=False, minutes=0):
         """Execute the real controller against persisted metadata after an optional elapsed interval."""
         self.now = NOW + timedelta(minutes=minutes)
-        review.process_pr(REPOSITORY, 12, self, self.now, self.command["id"] if explicit else None)
+        review.process_pr(
+            REPOSITORY,
+            12,
+            self,
+            self.now,
+            self.command["id"] if explicit else None,
+            self.publisher,
+        )
 
     def state(self):
         """Decode durable state after rereading comments, as a restarted worker would."""
@@ -545,7 +585,11 @@ def test_real_entrypoint_runs_only_trusted_main_metadata(tmp_path, monkeypatch, 
     monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
     monkeypatch.setenv("GITHUB_TOKEN", "synthetic-not-a-token")
     monkeypatch.setenv("GITHUB_EVENT_NAME", event_name)
-    monkeypatch.setattr(review, "GitHub", lambda token: client)
+    monkeypatch.setattr(
+        review,
+        "GitHub",
+        lambda token: client.publisher if token == "synthetic-command-token" else client,
+    )
     assert review.main() == 0
     assert client.provider_commands() == ["@coderabbitai rate limit"]
     monkeypatch.setenv("GITHUB_REF", "refs/heads/contributor")
@@ -691,7 +735,11 @@ def test_sweep_records_failure_but_still_processes_the_next_pr(tmp_path, monkeyp
         "GITHUB_EVENT_NAME": "schedule",
     }.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(review, "GitHub", lambda token: client)
+    monkeypatch.setattr(
+        review,
+        "GitHub",
+        lambda token: client.publisher if token == "synthetic-command-token" else client,
+    )
     assert review.main() == 1
     assert client.provider_commands() == ["@coderabbitai rate limit"]
 
@@ -756,7 +804,11 @@ def test_global_inventory_failure_still_fails_closed(tmp_path, monkeypatch, caps
         "GITHUB_EVENT_NAME": "schedule",
     }.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(review, "GitHub", lambda token: client)
+    monkeypatch.setattr(
+        review,
+        "GitHub",
+        lambda token: client.publisher if token == "synthetic-command-token" else client,
+    )
     assert review.main() == 1
     assert client.provider_commands() == []
     assert "PRIVATE-INVENTORY-SENTINEL" not in capsys.readouterr().out
@@ -1003,7 +1055,24 @@ def test_null_graphql_failure_does_not_starve_the_next_pr(tmp_path, monkeypatch,
         "GITHUB_EVENT_NAME": "schedule",
     }.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(review, "GitHub", lambda token: RoutedEvidence())
+
+    class RoutedPublisher:
+        """Publish each command with the same user while retaining independent PR storage."""
+
+        def get(self, path):
+            """Read the shared user credential identity."""
+            return good.publisher.get(path)
+
+        def post(self, path, payload):
+            """Dispatch provider commands to their fixed subject without permitting status writes."""
+            selected = bad if payload["variables"]["subject"] == "PR_11" else good
+            return selected.publisher.post(path, payload)
+
+    monkeypatch.setattr(
+        review,
+        "GitHub",
+        lambda token: RoutedPublisher() if token == "synthetic-command-token" else RoutedEvidence(),
+    )
     assert review.main() == 1
     assert bad.provider_commands() == []
     assert good.provider_commands() == ["@coderabbitai rate limit"]
@@ -1126,3 +1195,158 @@ def test_status_comment_identifies_oep_with_its_existing_logo():
     )
     assert "Status: Quota" in statuses[0]["body"]
     assert client.state()["phase"] == "quota"
+
+
+def test_provider_commands_use_the_user_while_status_remains_bot_owned():
+    """Separate credentials publish provider commands and durable controller status under distinct authors."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.run()
+    commands = [row for row in client.comments if row["body"].startswith("@coderabbitai")]
+    statuses = [row for row in client.comments if row["body"].startswith("<!-- oep-review-state:")]
+    assert [row["body"].splitlines()[0] for row in commands] == [
+        "@coderabbitai rate limit",
+        "@coderabbitai review",
+    ]
+    assert all(row["user"]["type"] == "User" and row["user"]["id"] == 4242 for row in commands)
+    assert all(row["user"]["type"] == "Bot" and row["user"]["id"] == 41898282 for row in statuses)
+    assert client.state()["publisher_id"] == 4242
+
+
+@pytest.mark.parametrize(
+    "user",
+    [
+        {"type": "Bot", "login": "github-actions", "id": 41898282},
+        {"type": "User", "login": "review-publisher", "id": True},
+        {"type": "User", "login": "review-publisher", "id": 0},
+        {"type": "User", "login": "invalid/name", "id": 4242},
+    ],
+)
+def test_invalid_command_account_never_falls_back_to_the_workflow_bot(user):
+    """A bot or malformed account blocks the request before any provider command is published."""
+    client = GitHubEvidence()
+    client.publisher.user = user
+    with pytest.raises(review.CommandAccountError):
+        client.run(explicit=True)
+    assert client.provider_commands() == []
+    assert client.state()["phase"] == "blocked"
+    assert "OEP_REVIEW_COMMAND_TOKEN" in client.state()["message"]
+
+
+@pytest.mark.parametrize("publisher", [None, "metadata"])
+def test_missing_or_reused_metadata_credential_cannot_send_provider_commands(publisher):
+    """An absent command credential never causes a fallback to the metadata credential."""
+    client = GitHubEvidence()
+    client.publisher = client if publisher == "metadata" else None
+    with pytest.raises(review.CommandAccountError):
+        client.run(explicit=True)
+    assert client.provider_commands() == []
+    assert client.state()["phase"] == "blocked"
+
+
+def test_command_account_must_retain_live_repository_write_access():
+    """A publisher without repository write authority cannot use an otherwise authorized request."""
+    client = GitHubEvidence()
+    original_get = client.get
+
+    def permissions(path):
+        """Retain requester authority while denying the separate publisher's repository access."""
+        if path.endswith("/collaborators/review-publisher/permission"):
+            return {"permission": "read"}
+        return original_get(path)
+
+    client.get = permissions
+    with pytest.raises(review.CommandAccountError):
+        client.run(explicit=True)
+    assert client.provider_commands() == []
+
+
+def test_rotating_to_another_user_cannot_continue_an_existing_request():
+    """Changing the configured account blocks rather than switching sender during a durable request."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.publisher.user = {"type": "User", "login": "another-writer", "id": 5252}
+    client.run()
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    assert client.state()["phase"] == "blocked"
+    assert "OEP_REVIEW_COMMAND_TOKEN" in client.state()["message"]
+
+
+def test_failed_user_identity_read_hides_private_details_and_publishes_no_command():
+    """Credential lookup failure produces owned recovery advice without copying private error values."""
+    client = GitHubEvidence()
+
+    def unavailable(path):
+        """Simulate a failed credential lookup without allowing a publication attempt."""
+        raise VerificationError("PRIVATE-PUBLISHER-SENTINEL")
+
+    client.publisher.get = unavailable
+    with pytest.raises(review.CommandAccountError) as error:
+        client.run(explicit=True)
+    assert "PRIVATE-PUBLISHER-SENTINEL" not in str(error.value)
+    assert "PRIVATE-PUBLISHER-SENTINEL" not in json.dumps(client.comments)
+    assert client.provider_commands() == []
+
+
+def test_outbox_recovery_rejects_a_marker_from_another_user():
+    """Only the authenticated command account can supply a lost-response publication receipt."""
+    client = GitHubEvidence()
+    client.lose_response = True
+    with pytest.raises(VerificationError):
+        client.run(explicit=True)
+    command = next(row for row in client.comments if row["body"].startswith("@coderabbitai"))
+    command["user"] = {"type": "User", "login": "another-writer", "id": 5252}
+    client.lose_response = False
+    client.run()
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    assert client.state()["phase"] == "blocked"
+
+
+def test_missing_secret_at_real_entrypoint_records_blocked_without_using_bot_token(
+    tmp_path, monkeypatch
+):
+    """The actual workflow entrypoint exposes missing command setup and never publishes as its bot."""
+    client = GitHubEvidence()
+    event_file = tmp_path / "missing-secret.json"
+    event_file.write_text(
+        json.dumps(
+            {
+                "repository": {"full_name": REPOSITORY, "default_branch": "main"},
+                "action": "created",
+                "issue": {"number": 12, "pull_request": {"url": "synthetic"}},
+                "comment": client.command,
+            }
+        ),
+        encoding="utf-8",
+    )
+    for key, value in {
+        "GITHUB_EVENT_PATH": str(event_file),
+        "GITHUB_REPOSITORY": REPOSITORY,
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_TOKEN": "synthetic-metadata-token",
+        "GITHUB_EVENT_NAME": "issue_comment",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("OEP_REVIEW_COMMAND_TOKEN")
+    monkeypatch.setattr(review, "GitHub", lambda token: client)
+    assert review.main() == 1
+    assert client.state()["phase"] == "blocked"
+    assert "OEP_REVIEW_COMMAND_TOKEN" in client.state()["message"]
+    assert client.provider_commands() == []
+
+
+def test_legacy_bot_request_cannot_automatically_adopt_the_user_credential():
+    """An active old bot-owned publication cannot change its account when new credentials appear."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    state = client.state()
+    del state["publisher_id"]
+    review.save_state(state, "PR_12", client)
+    command = next(row for row in client.comments if row["body"].startswith("@coderabbitai"))
+    command["user"] = {"type": "Bot", "login": "github-actions[bot]", "id": 41898282}
+    client.reply(AVAILABLE)
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]

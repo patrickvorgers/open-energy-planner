@@ -115,6 +115,7 @@ concurrency:
 jobs:
   review:
     if: >-
+      github.ref == 'refs/heads/main' &&
       github.event.repository.default_branch == 'main' &&
       (github.event_name != 'check_run' ||
        github.event.check_run.app.id == 347564 || github.event.check_run.app.id == 413034) &&
@@ -131,6 +132,7 @@ jobs:
           persist-credentials: false
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          OEP_REVIEW_COMMAND_TOKEN: ${{ secrets.OEP_REVIEW_COMMAND_TOKEN }}
         run: python3 -m script.ci.review_orchestration"""
 
 

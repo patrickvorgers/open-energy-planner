@@ -40,6 +40,7 @@ REQUEST_TIMEOUT = timedelta(days=7)
 TERMINAL = {"complete", "blocked", "superseded"}
 PHASES = TERMINAL | {"sending", "quota", "coderabbit", "kody", "waiting"}
 PUBLIC_FAILURE_MESSAGES = {
+    "publisher": "The provider command account could not be verified. Ask a repository administrator to check the OEP_REVIEW_COMMAND_TOKEN secret and its repository access before requesting review again.",
     "blocked": "Review prerequisites could not be verified. Inspect the current checks and resolved findings before requesting review again.",
     "sending": "Command publication could not be confirmed. Inspect the PR request markers before any retry.",
     "quota": "CodeRabbit availability could not be verified. Inspect the quota reply and workflow before any retry.",
@@ -60,6 +61,33 @@ mutation($id: ID!, $body: String!) {
   updateIssueComment(input: {id: $id, body: $body}) { issueComment { id body } }
 }
 """
+
+
+class CommandAccountError(VerificationError):
+    """Reject an unavailable or unauthorized user credential without exposing its response."""
+
+
+def require_command_account(repository, state, client, publisher):
+    """Verify a separate user credential and keep one account across a durable request."""
+    try:
+        if (
+            publisher is None
+            or publisher is client
+            or (state["sequence"] > 0 and "publisher_id" not in state)
+        ):
+            raise VerificationError("A separate command credential is required")
+        user = publisher.get("user")
+        if (
+            user.get("type") != "User"
+            or type(user.get("id")) is not int
+            or user["id"] <= 0
+            or not requester_authorized(repository, {"user": user}, client)
+            or state.get("publisher_id", user["id"]) != user["id"]
+        ):
+            raise VerificationError("The command account is not authorized")
+    except VerificationError:
+        raise CommandAccountError("Provider command account could not be verified") from None
+    return user["id"]
 
 
 def instant(value):
@@ -133,6 +161,10 @@ def read_state(comments):
             or state["queries"] > MAX_QUOTA_QUERIES
             or state["reviews"] > MAX_CODERABBIT_REQUESTS
             or state["consumed"] < state["request"]
+            or (
+                "publisher_id" in state
+                and (type(state["publisher_id"]) is not int or state["publisher_id"] <= 0)
+            )
         ):
             raise VerificationError("Invalid durable review state")
         sha(state["head"])
@@ -295,12 +327,13 @@ def command_marker(state):
     return f"<!-- oep-review-command:{state['request']}:{state['sequence']} -->"
 
 
-def send_command(repository, number, state, target, subject, client, now):
+def send_command(repository, number, state, target, subject, client, now, publisher=None):
     """Record an outbox intent, recheck identities and publish at most one command for that intent."""
     _, checks = require_revision(repository, number, state, client)
     require_resolved_threads(repository, number, client)
     if provider_active(checks):
         raise VerificationError("A provider is still working on this revision")
+    publisher_id = require_command_account(repository, state, client, publisher)
     if target == "quota":
         if state["queries"] >= MAX_QUOTA_QUERIES:
             raise VerificationError("Quota checks reached the bounded request limit")
@@ -318,6 +351,7 @@ def send_command(repository, number, state, target, subject, client, now):
         command = f"@kody start-review\n<!-- oep-kody-head:{state['head']} -->"
     state.update(
         phase="sending",
+        publisher_id=publisher_id,
         target=target,
         sequence=state["sequence"] + 1,
         checks_after=max((row["id"] for row in checks), default=0),
@@ -327,8 +361,9 @@ def send_command(repository, number, state, target, subject, client, now):
     )
     save_state(state, subject, client)
     require_revision(repository, number, state, client)
+    require_command_account(repository, state, client, publisher)
     result = add_comment(
-        subject, command + "\n" + command_marker(state), command_marker(state), client
+        subject, command + "\n" + command_marker(state), command_marker(state), publisher
     )
     record_publication(state, result["databaseId"], result["createdAt"], subject, client)
 
@@ -352,7 +387,7 @@ def require_requester(repository, command, client):
         raise VerificationError("Review request requires repository write permission")
 
 
-def start_request(repository, number, command, client, now):
+def start_request(repository, number, command, client, now, publisher=None):
     """Authorize a fresh exact command and reuse the existing frozen-review preflight."""
     require_requester(repository, command, client)
     current = client.get(f"repos/{repository}/pulls/{number}")
@@ -391,15 +426,20 @@ def start_request(repository, number, command, client, now):
             for row in checks
         ):
             raise VerificationError("Kody already has evidence for this revision. Inspect it first")
-        send_command(repository, number, state, "quota", current["node_id"], client, now)
-    except VerificationError:
+        send_command(repository, number, state, "quota", current["node_id"], client, now, publisher)
+    except VerificationError as error:
         if state["phase"] != "sending":
-            block_request(state, current["node_id"], client)
+            block_request(
+                state,
+                current["node_id"],
+                client,
+                category="publisher" if isinstance(error, CommandAccountError) else None,
+            )
         raise
     return state
 
 
-def advance(repository, number, state, comments, client, now):
+def advance(repository, number, state, comments, client, now, publisher=None):
     """Resume one request using fresh provider metadata, without interpreting findings as failures."""
     if state["phase"] in TERMINAL:
         return
@@ -439,8 +479,17 @@ def advance(repository, number, state, comments, client, now):
         matches = [
             row
             for row in comments
-            if is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
-            and row["user"].get("id") == GITHUB_ACTIONS_BOT_ID
+            if (
+                (
+                    row.get("user", {}).get("type") == "User"
+                    and row["user"].get("id") == state["publisher_id"]
+                )
+                if "publisher_id" in state
+                else (
+                    is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
+                    and row["user"].get("id") == GITHUB_ACTIONS_BOT_ID
+                )
+            )
             and command_marker(state) in row["body"].splitlines()
         ]
         if len(matches) != 1:
@@ -465,7 +514,7 @@ def advance(repository, number, state, comments, client, now):
         if state["resume"] is None:
             return block_request(state, subject, client, category="retry")
         if now >= instant(state["resume"]):
-            send_command(repository, number, state, "quota", subject, client, now)
+            send_command(repository, number, state, "quota", subject, client, now, publisher)
         return
     if state["phase"] in {"quota", "coderabbit"}:
         replies = []
@@ -486,14 +535,14 @@ def advance(repository, number, state, comments, client, now):
             if now - instant(reply["created_at"]) > REPLY_TIMEOUT:
                 if provider_active(checks):
                     return
-                send_command(repository, number, state, "quota", subject, client, now)
+                send_command(repository, number, state, "quota", subject, client, now, publisher)
                 return
             if availability == "limited":
                 if provider_active(checks):
                     return
                 state["resume"] = resume.isoformat() if resume is not None else None
                 if not state["kody_used"]:
-                    send_command(repository, number, state, "kody", subject, client, now)
+                    send_command(repository, number, state, "kody", subject, client, now, publisher)
                 elif resume is not None:
                     state.update(
                         phase="waiting",
@@ -508,7 +557,9 @@ def advance(repository, number, state, comments, client, now):
                     raise VerificationError(
                         "Unknown CodeRabbit availability. No provider was selected"
                     )
-                send_command(repository, number, state, "coderabbit", subject, client, now)
+                send_command(
+                    repository, number, state, "coderabbit", subject, client, now, publisher
+                )
                 return
         if state["phase"] == "quota":
             if now - instant(state["sent"]) > REPLY_TIMEOUT:
@@ -562,7 +613,7 @@ def advance(repository, number, state, comments, client, now):
         )
 
 
-def process_pr(repository, number, client, now, command_id=None):
+def process_pr(repository, number, client, now, command_id=None, publisher=None):
     """Serialize a PR's request and record safe actionable failures without disclosing provider bodies."""
     if type(number) is not int or number <= 0:
         raise VerificationError("Invalid review PR number")
@@ -603,16 +654,21 @@ def process_pr(repository, number, client, now, command_id=None):
             save_state(state, current["node_id"], client)
             command_id = None
         else:
-            start_request(repository, number, commands[0], client, now)
+            start_request(repository, number, commands[0], client, now, publisher)
             return True
     if state:
         try:
-            return advance(repository, number, state, comments, client, now) is not False
-        except VerificationError:
+            return advance(repository, number, state, comments, client, now, publisher) is not False
+        except VerificationError as error:
             if state["phase"] == "sending":
                 raise
             subject = client.get(f"repos/{repository}/pulls/{number}")["node_id"]
-            return block_request(state, subject, client)
+            return block_request(
+                state,
+                subject,
+                client,
+                category="publisher" if isinstance(error, CommandAccountError) else None,
+            )
     return True
 
 
@@ -629,6 +685,8 @@ def main():
         ):
             raise VerificationError("Review orchestration requires trusted main")
         client = GitHub(environ["GITHUB_TOKEN"])
+        command_token = environ.get("OEP_REVIEW_COMMAND_TOKEN")
+        publisher = GitHub(command_token) if command_token else None
         now = datetime.now(UTC)
         event_name = environ["GITHUB_EVENT_NAME"]
         if event_name == "issue_comment":
@@ -640,7 +698,7 @@ def main():
             if (
                 explicit or is_bot(comment, "coderabbitai[bot]") or is_bot(comment, "kody-ai[bot]")
             ) and process_pr(
-                repository, number, client, now, comment["id"] if explicit else None
+                repository, number, client, now, comment["id"] if explicit else None, publisher
             ) is False:
                 return 1
         elif event_name in {"schedule", "workflow_dispatch", "check_run"}:
@@ -657,7 +715,10 @@ def main():
                     raise VerificationError("Invalid open PR inventory")
                 for pull in pulls:
                     try:
-                        if process_pr(repository, pull["number"], client, now) is False:
+                        if (
+                            process_pr(repository, pull["number"], client, now, publisher=publisher)
+                            is False
+                        ):
                             failed = True
                     except (VerificationError, KeyError, TypeError, ValueError, OSError):
                         failed = True

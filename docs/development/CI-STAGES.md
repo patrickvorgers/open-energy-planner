@@ -190,12 +190,47 @@ provider work. Preserve request markers. Use the manual recovery procedure below
 only after establishing what actually ran. Unknown response formats require a
 tested parser update rather than guessing availability or retrying blindly.
 
-The workflow uses only the built-in workflow token with metadata reads and PR
-comment writes. It checks out trusted `main`, never contributor code, and does
-not require a personal token, a local runner or a new dependency. Provider support
-for commands posted by `github-actions[bot]` must be verified on the activated
-workflow. A missing reply blocks visibly and does not enable another identity,
-paid credits or a billing change.
+The workflow separates two credentials. Its built-in workflow token reads
+repository metadata and owns the durable status comment. The
+`OEP_REVIEW_COMMAND_TOKEN` secret publishes only the fixed CodeRabbit and Kody
+commands. The workflow job and Python entrypoint both require trusted `main`.
+The checkout uses `refs/heads/main`, never contributor code, and does not persist
+credentials. External pull request code never runs in this job.
+
+Before each publication, the controller verifies that the command token belongs
+to a GitHub user with current repository write access. The durable request records
+that account's numeric ID. Another account cannot continue the request or supply
+its lost-response receipt. Renewing a token for the same account is supported.
+Pending requests created by the former bot route cannot switch to a user account
+automatically. Inspect their existing work before explicitly requesting recovery.
+The controller never falls back to publishing provider commands with its workflow
+bot credential. Missing, expired, malformed or unauthorized credentials block
+visibly with administrator recovery advice. No raw token or API error body is
+included in status comments or logs.
+
+### Configure the provider command credential
+
+A repository administrator creates a dedicated fine-grained personal access token
+for the selected GitHub user. Select only `patrickvorgers/open-energy-planner`,
+keep the automatically required metadata read permission, and grant **Pull
+requests: Read and write**. This GitHub permission includes PR operations beyond
+comments. Do not grant contents, workflow, administration or unrelated repository
+access. The selected user must already have repository write access.
+
+Store the token as the repository Actions secret `OEP_REVIEW_COMMAND_TOKEN`.
+Never put it in a branch, pull request, issue, terminal argument, local evidence
+file or chat. Record its expiry through the administrator's normal credential
+management process. Renew it before expiry and replace the secret for the same
+account. Revoke a suspected leaked credential immediately.
+
+An administrator verifies setup with one coordinated quota request and one
+substantive current-head review after the trusted workflow is activated. Preserve
+the actual requester, command author, quota response and review evidence.
+Publication alone does not prove provider acceptance. If a request becomes
+blocked, inspect its existing commands and provider checks before deliberately
+requesting again. Changing the configured account requires a new explicit
+request after resolving existing work. It never authorizes paid credits or
+changes to provider billing.
 
 Record the availability reply and chosen reviewer in the PR. Recheck the frozen
 head and base before sending either review command. Never launch both reviews
