@@ -280,7 +280,7 @@ function render(payload, warning = "") {
         if (notice.since) {
             const since = window.document.createElement("p");
             since.className = "notification-since";
-            const started = metadata.timezone ? when(notice.since, {}, metadata.timezone) : new Date(notice.since).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+            const started = metadata.timezone ? when(notice.since, {}, metadata.timezone) : when(notice.since, {}, "UTC") + " UTC";
             const label = notice.blocks?.length === 0 ? "Active since" : "Blocked since";
             since.textContent = `${label}: ${started}`;
             article.append(since);

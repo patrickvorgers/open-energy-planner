@@ -7,6 +7,26 @@ change its presentation rather than replacing the persistence boundary.
 
 ## Interface wording
 
+### Date presentation
+
+All app-owned dates use `dateLabel` or `when` from `display.js`, including
+rule summaries, selectors, status messages, tables, chart labels and tooltips.
+`dateLabel` preserves a calendar date without interpreting it as an instant.
+`when` retains the Home Assistant installation timezone and minute precision.
+
+Through same-origin ingress, the formatter reads only the current HA user's
+`hass.locale` language and date-format preference from the enclosing
+`home-assistant` element. Nested workspace frames inherit that same preference.
+Language, system, DMY, MDY and YMD follow HA's numeric date ordering and locale
+separators. Month names use the HA language. Preferences are read when formatting,
+so a subsequent render uses current values without saving application settings.
+Standalone or cross-origin pages fall back to the browser locale when HA
+preferences are unavailable. Do not fetch or persist another user's preferences.
+
+Native date and datetime picker presentation belongs to the browser. Their ISO
+values remain unchanged, as do timezone conversion, API contracts and stored
+seconds. Never localize a value used for sorting, filtering, editing or saving.
+
 Describe what the user can do or what has happened. The surrounding application
 already supplies the context, so omit "OEP" and repeated product names from
 ordinary labels, help, confirmations and notifications, including messages
@@ -27,6 +47,36 @@ other applications share the database. This is a presentation rule, not a rename
 of internal identifiers, protocol fields, configuration keys or stored evidence.
 Preserve names supplied by users and external services. Edit owned text at its
 source rather than filtering arbitrary rendered content.
+
+## Large read-only lists
+
+Use the Activity history presentation when a long history needs a list. Do not
+duplicate an interactive chart with a full visible list when the chart already
+provides the same details. Retain keyboard and assistive access to those details.
+For lists that are needed, show compact, aligned rows with a timestamp or identity, a readable result
+and the few values needed to compare entries. Desktop rows have column headings.
+On mobile, stack secondary values within each row without horizontal scrolling.
+Keep the full label accessible when a long value is visually shortened.
+
+Show at most 25 rows per page with **Previous**, **Next** and a visible page
+number above the list. Disable unavailable directions and navigation while a
+read is pending. Keep a stable order appropriate to the task. Activity history is
+newest first. Opening
+a row must retain its exact identity and use the existing detail view or native
+disclosure. Do not require a repeated action button in every row when the whole
+row already opens its details. Support keyboard activation, visible focus and
+focus return after closing details or reaching a page boundary.
+
+Changing the day or filters and explicitly refreshing starts at the first page.
+Paging a list must not truncate an associated chart, change its selected period
+or discard unread records. Prefer an existing bounded server cursor when the
+endpoint provides one. Explain empty and
+failed reads instead of making missing records look like a successful result.
+
+Apply this pattern when building or changing a large list. Do not replace small
+selectors, editable forms or task-specific charts with a universal list widget.
+Verify several pages, the final short page, detail identity, keyboard focus,
+day/filter changes, delayed reads and error recovery on desktop and mobile.
 
 ## Action confirmations
 

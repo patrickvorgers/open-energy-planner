@@ -292,3 +292,102 @@ def test_price_fetch_is_free_but_retention_waits_for_financial_publication(tmp_p
             await runner.cleanup()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("multiple", [False, True])
+def test_historical_statistics_ingress_preserves_live_counters(tmp_path, monkeypatch, multiple):
+    """Authenticated historical sum endpoints retain current reference identity without changing today's budget."""
+    from dataclasses import replace
+    from datetime import datetime, timedelta
+
+    from open_energy_planner.contracts.bonus_history import BaselineRequest
+    from open_energy_planner.savings.bonus import HistoricalBonuses
+    from open_energy_planner.storage.counters import CounterStore
+    from tests.app.contract.test_contract_app import running
+    from tests.app.history.test_history_app import prepare
+    from tests.database.support.archive import read_current
+
+    services = []
+    original = HistoricalBonuses.__init__
+
+    def remember(self, store):
+        """Retain the actual app-owned service to set its otherwise worker-owned pending request."""
+        original(self, store)
+        services.append(self)
+
+    monkeypatch.setattr(HistoricalBonuses, "__init__", remember)
+
+    async def scenario():
+        """Read the annual budget, then ingest an older endpoint through the real versioned HTTP route."""
+        async with running(tmp_path) as (session, url):
+            request, body = await prepare(session, url, multiple=multiple)
+            async with session.post(url + "/v1/history", json=body) as response:
+                assert response.status == 200, await response.text()
+            current = read_current(tmp_path, CounterStore)
+            pending = BaselineRequest(
+                request["contract_version"],
+                "historical-bindings",
+                current.version,
+                request["entity_id"],
+                tuple(
+                    (identity, datetime.fromisoformat(start))
+                    for identity, start in request["periods"]
+                ),
+                tuple(
+                    (identity, datetime.fromisoformat(start))
+                    for identity, start in request["active_periods"]
+                ),
+                datetime.fromisoformat(request["end"]) - timedelta(hours=2),
+                tuple(request.get("entity_ids", [request["entity_id"]])),
+                True,
+            )
+            body = {
+                "request_version": pending.version,
+                "statistics": [
+                    {**channel, "hours": channel["hours"][:-2]} for channel in body["statistics"]
+                ],
+            }
+            services[0].pending = pending
+            path = url + "/v1/settlement/bonus-history"
+            async with ClientSession() as anonymous, anonymous.post(path, json=body) as response:
+                assert response.status == 401
+            async with session.post(path, json={**body, "request_version": "stale"}) as response:
+                assert response.status == 409
+            for timestamp in (1e300, -1e300):
+                invalid_timestamp = {
+                    **body,
+                    "statistics": [
+                        {**channel, "hours": [[timestamp, 1, 1]]} for channel in body["statistics"]
+                    ],
+                }
+                async with session.post(path, json=invalid_timestamp) as response:
+                    assert response.status == 400
+                    assert "inspect application diagnostics" in await response.text()
+                    assert services[0].archive.current is None
+            invalid = {
+                **body,
+                "statistics": [
+                    {**channel, "metadata_id": channel["metadata_id"] + 99}
+                    for channel in body["statistics"]
+                ],
+            }
+            async with session.post(path, json=invalid) as response:
+                assert response.status == 400
+                assert services[0].archive.current is None
+            async with session.post(path, json=body) as response:
+                assert response.status == 200, await response.text()
+            saved = services[0].archive.current.seeds[0]
+            assert saved.observed_at == pending.end
+            assert saved.used_kwh == pytest.approx(2 * (len(body["statistics"][0]["hours"]) - 1))
+            assert len(saved.component_meters) == (2 if multiple else 1)
+            assert (
+                saved.statistics.reference_version == current.seeds[0].statistics.reference_version
+            )
+            assert read_current(tmp_path, CounterStore) == current
+            async with session.post(path, json=body) as response:
+                assert response.status == 409
+            services[0].pending = replace(pending, counter_version="obsolete")
+            async with session.post(path, json=body) as response:
+                assert response.status == 409
+
+    asyncio.run(scenario())
