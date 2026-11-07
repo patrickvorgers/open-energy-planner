@@ -104,6 +104,11 @@ never imports only some planes from a group. A group that fits, including one
 exactly at the page budget, retains every plane. The final digest covers the
 normalized snapshot. The captured input is not mutated. An oversized mandatory
 record, header or incomplete-group marker fails before any page is sent.
+The prepared result keeps this normalized snapshot together with its wire pages.
+After the app accepts the final catalogue message, the coordinator captures
+forecasts from that same snapshot. Incomplete groups do not enter forecast
+capture, while independent complete meters can still upload their predictions.
+Partial, rejected or mixed transfers never supply a new forecast context.
 
 Each paged message carries a transfer identity, capture timestamp, content digest,
 zero-based index and completion flag. The first message supplies the document

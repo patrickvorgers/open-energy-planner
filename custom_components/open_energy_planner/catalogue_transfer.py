@@ -3,37 +3,49 @@
 import hashlib
 import json
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
 CATALOGUE_PAGE_BYTES = 192 * 1024
 
 
-def catalogue_pages(body):
-    """Prepare and yield a complete snapshot within the default JSON byte budget.
+@dataclass(frozen=True)
+class PreparedCatalogue:
+    """Keep normalized discovery and its exact wire pages together until final acceptance."""
 
-    A small snapshot is yielded unchanged without a transfer envelope. Larger
-    snapshots yield a header, ordered collection pages and a final completion
+    snapshot: dict
+    pages: tuple[dict, ...]
+
+
+def prepare_catalogue(body):
+    """Prepare a normalized snapshot and its pages within the default JSON byte budget.
+
+    A small snapshot remains unwrapped with unchanged content. Larger
+    snapshots use a header, ordered collection pages and a final completion
     message. Every message includes its envelope in CATALOGUE_PAGE_BYTES, using
     the default JSON escaping and UTF-8 encoding. The caller sends messages in
     order and requires acceptance of the final reply before using membership.
-    Iteration prepares all pages before yielding the first one. An optional solar
+    Preparation validates all pages before returning them. An optional solar
     configuration group that cannot fit its actual envelope becomes explicitly
     incomplete, without importing only some of its planes. The digest covers
     this normalized snapshot. Preparation never mutates the caller's snapshot.
 
-    Yields:
-        dict: The original small snapshot or the next bounded transfer message.
+    Returns:
+        PreparedCatalogue: A detached normalized snapshot and its wire pages.
+            Use its solar suggestions for forecast capture only after final
+            catalogue acceptance. No second preparation or page reconstruction
+            is needed to obtain the accepted forecast context.
 
     Raises:
         ValueError: JSON contains nonfinite numbers, or a header or individual
             mandatory record or incomplete solar group exceeds the byte budget.
-            Preparation fails before any page is yielded.
+            Preparation fails before any page is returned.
     """
     encoded = json.dumps(body, allow_nan=False).encode()
     if len(encoded) <= CATALOGUE_PAGE_BYTES:
-        yield body
-        return
+        snapshot = deepcopy(body)
+        return PreparedCatalogue(snapshot, (snapshot,))
     transfer = {
         "id": uuid4().hex,
         "revision": hashlib.sha256(b"").hexdigest(),
@@ -118,4 +130,14 @@ def catalogue_pages(body):
     ).hexdigest()
     for page in pages:
         page["transfer"]["revision"] = revision
-        yield page
+    return PreparedCatalogue(snapshot, tuple(pages))
+
+
+def catalogue_pages(body):
+    """Yield prepared pages in order, with validation completed before the first page.
+
+    Callers needing normalized forecast context use prepare_catalogue directly
+    and retain its snapshot until final acceptance. This iterator exposes the
+    same preparation and byte-budget failures without mutating the input.
+    """
+    yield from prepare_catalogue(body).pages

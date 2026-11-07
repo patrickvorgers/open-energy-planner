@@ -341,13 +341,14 @@ class PlanCoordinator:
                     or (catalogue_request and catalogue_request != self.catalogue_request)
                 ):
                     from .catalogue import setup_catalogue
-                    from .catalogue_transfer import catalogue_pages
+                    from .catalogue_transfer import prepare_catalogue
 
                     try:
                         catalogue = await setup_catalogue(self.hass)
                         if self.closed:
                             return
-                        for page in catalogue_pages(catalogue):
+                        prepared = prepare_catalogue(catalogue)
+                        for page in prepared.pages:
                             if self.closed:
                                 return
                             membership = await self.client.request("POST", "/v1/ha/catalogue", page)
@@ -365,7 +366,7 @@ class PlanCoordinator:
                                 "reason": membership["configuration_issue"],
                             }
                         predictions = await self.solar_forecast_bridge.capture(
-                            catalogue["suggestions"].get("solar_configurations", []), now
+                            prepared.snapshot["suggestions"].get("solar_configurations", []), now
                         )
                         if self.closed:
                             return
