@@ -301,7 +301,17 @@ def start_request(repository, number, command, client, now):
     try:
         preflight(repository, number, head, base, client)
         checks = current_checks(repository, head, client)
-        if any(row.get("app", {}).get("id") == KODY_APP_ID for row in checks):
+        if any(
+            row.get("app", {}).get("id") == KODY_APP_ID
+            and not (
+                row.get("status") == "completed"
+                and row.get("conclusion") == "skipped"
+                and row.get("output", {}).get("title") == "Code Review Skipped"
+                and row.get("output", {}).get("summary")
+                == "Automated Review is disabled — Enable 'Automated Code Review' in General Settings"
+            )
+            for row in checks
+        ):
             raise VerificationError("Kody already has evidence for this revision. Inspect it first")
         send_command(repository, number, state, "quota", current["node_id"], client, now)
     except VerificationError as error:

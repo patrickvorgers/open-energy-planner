@@ -553,3 +553,23 @@ def test_manual_preflight_also_rejects_a_controller_authored_same_head_review():
     client.comment(f"@coderabbitai review\n<!-- oep-coderabbit-head:{HEAD} -->")
     with pytest.raises(VerificationError, match="already exists"):
         review.preflight(REPOSITORY, 12, HEAD, BASE, client)
+
+
+def test_automatic_disabled_kody_metadata_does_not_block_an_explicit_review():
+    """The genuine automatic-disabled Kody skip on a Draft is not existing review work."""
+    client = GitHubEvidence()
+    client.kody_result("skipped", "Code Review Skipped")
+    client.checks[-1]["output"]["summary"] = (
+        "Automated Review is disabled — Enable 'Automated Code Review' in General Settings"
+    )
+    client.run(explicit=True)
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_manual_kody_request_blocks_before_its_check_is_created():
+    """A genuine same-head Kody command is existing work even before a provider check appears."""
+    client = GitHubEvidence()
+    client.comment(f"@kody start-review\n<!-- oep-kody-head:{HEAD} -->", "developer", "User")
+    with pytest.raises(VerificationError, match="already exists"):
+        client.run(explicit=True)
+    assert client.provider_commands() == ["@kody start-review"]

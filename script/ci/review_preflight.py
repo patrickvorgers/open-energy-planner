@@ -49,8 +49,7 @@ def require_pr_history(repository, number, current, client):
 
 
 def require_no_request(repository, number, head, client):
-    """Reject an existing same-head manual command from a trusted repository participant."""
-    marker = f"<!-- oep-coderabbit-head:{head} -->"
+    """Reject an existing same-head reviewer command from a participant or the trusted controller."""
     seen = set()
     for page in range(1, MAX_PAGES + 1):
         rows = client.get_list(
@@ -80,12 +79,15 @@ def require_no_request(repository, number, head, client):
                 )
             )
             lines = [line.strip() for line in row["body"].splitlines()]
-            if (
-                trusted
-                and marker in lines
-                and any(line.lower() == "@coderabbitai review" for line in lines)
+            if trusted and any(
+                f"<!-- oep-{provider}-head:{head} -->" in lines
+                and any(line.lower() in commands for line in lines)
+                for provider, commands in (
+                    ("coderabbit", {"@coderabbitai review"}),
+                    ("kody", {"@kody start-review", "@kody review --force"}),
+                )
             ):
-                raise VerificationError("A manual CodeRabbit request already exists for this head")
+                raise VerificationError("A reviewer request already exists for this head")
         if len(rows) < 100:
             return
     raise VerificationError("Review-request history exceeds the page limit")

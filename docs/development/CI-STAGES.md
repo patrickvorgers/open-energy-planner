@@ -212,7 +212,8 @@ are dispositioned. No Codex review SHA or independent-Codex attestation is neede
 The preflight uses only
 trusted main code and read-only metadata. It checks the file inventory, current
 Quick/signature/CodeQL results, resolved discussions, existing CodeRabbit activity
-and trusted same-head manual request markers.
+and trusted same-head CodeRabbit or Kody request markers, including commands
+already published by the Actions controller.
 
 The successful job summary contains the manual comment to post after rechecking
 the frozen head and the shared queue:
@@ -265,6 +266,8 @@ The candidate workflow validates `Kody Code Review` from GitHub App `413034`
 `Code Review Complete` title and successful review-publication summary. Starting,
 skipped, warning, failed, unknown and older-head results do not qualify. The
 latest substantive Kody attempt supersedes earlier Kody evidence on that head.
+An existing automatic-disabled Kody skip does not prevent an explicit orchestrated
+request. It remains metadata only and never supplies substantive review evidence.
 A completed `Code Review Skipped` check whose summary is exactly
 `No New Commits (No changes detected since last review)` is metadata from the
 unchanged revision. It preserves an earlier substantive success on that same
