@@ -443,3 +443,505 @@ def test_historical_reception_retains_old_periods_and_always_keeps_requested_see
     assert older.used_kwh == 1
     assert older.observed_at == START
     assert sum(seed in kept for seed in seeds) == min(63, cached_count)
+
+
+@pytest.mark.parametrize("minute", [0, 15])
+@pytest.mark.parametrize("prefix", [0, 5])
+@pytest.mark.parametrize(
+    "fault", [None, "metadata", "reference", "physical", "missing_end", "stale_book"]
+)
+def test_statistics_replay_requests_historical_endpoint_without_latest_capture(
+    evidence, minute, prefix, fault
+):
+    """A June contract replays November from annual sums without capturing quarters up to today's moving counter."""
+    from datetime import UTC, datetime
+
+    store, baselines = evidence
+    period = datetime(2026, 6, 1, tzinfo=UTC)
+    start = datetime(2026, 11, 1, 13, minute, tzinfo=UTC)
+    endpoint = start.replace(minute=0) + timedelta(hours=bool(minute))
+    latest = start.replace(minute=0) + timedelta(days=5)
+    reference = StatisticsBasis(
+        period + timedelta(days=bool(prefix)),
+        latest,
+        (
+            StatisticReference(EXPORTS[0], 9, "recorder", "kWh", 1000, 1100),
+            StatisticReference(EXPORTS[1], 10, "recorder", "kWh", 2000, 2050),
+        ),
+        prefix,
+        period + timedelta(days=1) if prefix else None,
+        "a" * 64,
+        True,
+    )
+    current = CounterSeed(
+        "bonus",
+        period,
+        150 + prefix,
+        800,
+        export_identity(EXPORTS),
+        latest,
+        ((EXPORTS[0], 400), (EXPORTS[1], 400)),
+        reference,
+    )
+    selected = contract(bonus=True)
+    selected = replace(selected, bonuses=(replace(selected.bonuses[0], contract_start=period),))
+    rows = []
+    for index in range(5):
+        instant = start + timedelta(minutes=15 * index)
+        frame = Frame(
+            instant,
+            instant + timedelta(minutes=15),
+            dict.fromkeys(EXPORTS, 0),
+            {},
+            {},
+            {EXPORTS[0]: 300, EXPORTS[1]: 400},
+            "recorded",
+        )
+        rows.append((frame, {"bindings": {"exports": EXPORTS}}))
+    retain(store, rows)
+    book = CounterBook(latest, (current,))
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        baselines.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=3),
+            "bindings",
+        )
+    request = baselines.pending
+    assert request.statistics_sum and request.end == endpoint
+    assert request.counter_version == book.version
+
+    from open_energy_planner.contracts.bonus_statistics import StatisticsChannel
+
+    channels = tuple(
+        StatisticsChannel(
+            identity,
+            (
+                (reference.reference_at - timedelta(hours=1), identity.reference_sum, 0),
+                (endpoint - timedelta(hours=1), total, physical),
+            ),
+        )
+        for identity, total, physical in zip(reference.series, (1080, 2020), (300, 400))
+    )
+    original_frames = store.frames()
+    if fault:
+        first = channels[0]
+        if fault == "metadata":
+            channels = (
+                replace(first, identity=replace(first.identity, metadata_id=99)),
+                *channels[1:],
+            )
+        elif fault == "reference":
+            channels = (
+                replace(first, hours=((first.hours[0][0], 999, 0), first.hours[1])),
+                *channels[1:],
+            )
+        elif fault == "physical":
+            channels = (
+                replace(
+                    first, hours=(first.hours[0], (first.hours[1][0], first.hours[1][1], None))
+                ),
+                *channels[1:],
+            )
+        elif fault == "missing_end":
+            channels = (replace(first, hours=first.hours[:1]), *channels[1:])
+        else:
+            book = replace(book, recorded_at=latest + timedelta(hours=1))
+        with pytest.raises(ValueError):
+            baselines.receive_statistics(request, channels, book, latest + timedelta(hours=3))
+        assert baselines.archive.current is None and store.frames() == original_frames
+        return
+    baselines.receive_statistics(request, channels, book, latest + timedelta(hours=3))
+    seeds = baselines.prepare(
+        selected,
+        rows[0][0],
+        rows[0][1]["bindings"],
+        (),
+        book,
+        latest + timedelta(hours=3),
+        "bindings",
+    )
+    assert seeds[0].used_kwh == 100 + prefix
+    assert seeds[0].observed_at == start
+    assert seeds[0].component_meters == ((EXPORTS[0], 300), (EXPORTS[1], 400))
+    assert current.used_kwh == 150 + prefix and book.seeds == (current,)
+    assert store.frames() == original_frames
+    assert (
+        baselines.archive.provenance(baselines.archive.current.seeds[0])["statistics"]["prefix_kwh"]
+        == prefix
+    )
+    restarted = HistoricalBonuses(store)
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        restarted.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=3),
+            "bindings",
+        )
+    # A revalidated historical correction must not silently reuse an older endpoint.
+    updated = replace(book, recorded_at=latest + timedelta(hours=1))
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        baselines.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            updated,
+            latest + timedelta(hours=3),
+            "bindings",
+        )
+
+
+@pytest.mark.parametrize("multiple", [False, True])
+def test_statistics_period_start_checkpoint_is_reused_after_historical_ingress(evidence, multiple):
+    """At contract start the boundary row proves zero export. A returned first-hour checkpoint must not cause endless retries."""
+    from open_energy_planner.contracts.bonus_statistics import StatisticsChannel
+
+    store, baselines = evidence
+    exports = EXPORTS if multiple else EXPORTS[:1]
+    count = len(exports)
+    selected = contract(bonus=True)
+    selected = replace(
+        selected,
+        bonuses=(replace(selected.bonuses[0], effective_from=START, contract_start=START),),
+    )
+    now = START + timedelta(days=1)
+    basis = StatisticsBasis(
+        START,
+        now,
+        tuple(
+            StatisticReference(entity, index + 1, "recorder", "kWh", 1000, 1000 + 10 / count)
+            for index, entity in enumerate(exports)
+        ),
+        0,
+        None,
+        "a" * 64,
+        True,
+    )
+    current = CounterSeed(
+        "bonus",
+        START,
+        10,
+        310,
+        export_identity(exports),
+        now,
+        tuple((entity, 310 / count) for entity in exports),
+        basis,
+    )
+    book = CounterBook(now, (current,))
+    # The first hour exports .5+.5+1+1=3 kWh, but today's 10-kWh endpoint is not captured.
+    quarters = ((300, 0.5), (300.5, 0.5), (301, 1), (302, 1), (303, 0))
+    rows = tuple(
+        (
+            Frame(
+                START + timedelta(minutes=15 * index),
+                START + timedelta(minutes=15 * (index + 1)),
+                dict.fromkeys(exports, exported / count),
+                {},
+                {},
+                dict.fromkeys(exports, meter / count),
+                "recorded",
+            ),
+            {"bindings": {"exports": exports}},
+        )
+        for index, (meter, exported) in enumerate(quarters)
+    )
+    retain(store, rows)
+    original = store.frames()
+
+    def prepare():
+        """Retry the real historical selection with the exact same current counter book."""
+        return baselines.prepare(
+            selected, rows[0][0], rows[0][1]["bindings"], (), book, now, "period-start-bindings"
+        )
+
+    with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+        prepare()
+    pending = baselines.pending
+    # Supply exactly the requested endpoint. The unfixed request asks for the first hour
+    # rather than the already sufficient zero-difference period boundary.
+    channels = tuple(
+        StatisticsChannel(
+            identity,
+            ((START - timedelta(hours=1), 1000, 300 / count),)
+            + (((START, 1000 + 3 / count, 303 / count),) if pending.end > START else ()),
+        )
+        for identity in basis.series
+    )
+    baselines.receive_statistics(pending, channels, book, now)
+    recovered = prepare()
+    assert pending.end == START
+    assert recovered[0].observed_at == START
+    assert recovered[0].used_kwh == 0
+    assert recovered[0].component_meters == tuple((entity, 300 / count) for entity in exports)
+    assert recovered[0].statistics.reference_version == basis.reference_version
+    assert recovered[0].statistics.latest_at == START
+    assert baselines.pending is None
+    assert store.frames() == original and book.seeds == (current,)
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_captured_backdate_before_statistics_reference_remains_usable(evidence, complete):
+    """A confirmed 5-kWh prefix plus 1 later kWh minus 2 measured kWh gives 4 kWh before the reference."""
+    store, baselines = evidence
+    selected = contract(bonus=True)
+    period = selected.bonuses[0].period_start(START)
+    reference = START + timedelta(hours=1)
+    latest = START + timedelta(hours=2)
+    basis = StatisticsBasis(
+        reference,
+        latest,
+        (StatisticReference("sensor.export", 1, "recorder", "kWh", 1000, 1001),),
+        5,
+        reference,
+        "a" * 64,
+        True,
+    )
+    seed = CounterSeed(
+        "bonus", period, 6, 302, "sensor.export", latest, (("sensor.export", 302),), basis
+    )
+    book = CounterBook(latest, (seed,))
+    rows = tuple(
+        (
+            Frame(
+                START + timedelta(minutes=15 * index),
+                START + timedelta(minutes=15 * (index + 1)),
+                {"sensor.export": 0.25},
+                {},
+                {},
+                {"sensor.export": 300 + 0.25 * index},
+                "recorded",
+            ),
+            {"bindings": {"exports": ["sensor.export"]}},
+        )
+        for index in range(9)
+        if complete or index != 1
+    )
+    retain(store, rows)
+    original = store.frames()
+    if complete:
+        recovered = baselines.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=1),
+            "before-reference",
+        )
+        assert recovered[0].used_kwh == 4
+        assert recovered[0].observed_at == START
+        assert recovered[0].meter_kwh == 300
+    else:
+        with pytest.raises(PendingSettlement):
+            baselines.prepare(
+                selected,
+                rows[0][0],
+                rows[0][1]["bindings"],
+                (),
+                book,
+                latest + timedelta(hours=1),
+                "before-reference",
+            )
+    assert baselines.pending is None
+    assert store.frames() == original and book.seeds == (seed,)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "late_gap",
+        "needed_gap",
+        "late_changed",
+        "needed_changed",
+        "late_gap_changed",
+        "bad_endpoint",
+        "late_gap_then_anchor_changed",
+        "change_after_anchor",
+    ],
+)
+@pytest.mark.parametrize("anchor_quarters", [8, 104])
+def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(
+    evidence, failure, anchor_quarters
+):
+    """A complete local 1.5-kWh tail gives .5-kWh opening from a 2-kWh hourly sum. Relevant gaps and meter changes stay blocked."""
+    from open_energy_planner.contracts.bonus_statistics import StatisticsChannel
+
+    store, baselines = evidence
+    selected = contract(bonus=True)
+    period = selected.bonuses[0].period_start(START)
+    endpoint = START + timedelta(hours=1)
+    latest = START + timedelta(minutes=15 * anchor_quarters)
+    basis = StatisticsBasis(
+        period,
+        latest,
+        (
+            StatisticReference(
+                "sensor.export", 1, "recorder", "kWh", 1000, 1000 + 0.5 * anchor_quarters
+            ),
+        ),
+        0,
+        None,
+        "a" * 64,
+        True,
+    )
+    current = CounterSeed(
+        "bonus",
+        period,
+        0.5 * anchor_quarters,
+        300 + 0.5 * anchor_quarters,
+        "sensor.export",
+        latest,
+        (("sensor.export", 300 + 0.5 * anchor_quarters),),
+        basis,
+    )
+    book = CounterBook(latest, (current,))
+    rows = []
+    for index in range(anchor_quarters + 2):
+        if (
+            index == 6
+            and failure
+            in (
+                "late_gap",
+                "late_gap_changed",
+                "bad_endpoint",
+                "late_gap_then_anchor_changed",
+                "change_after_anchor",
+            )
+            or index == 2
+            and failure == "needed_gap"
+        ):
+            continue
+        exports = (
+            ["sensor.other"]
+            if (
+                (failure == "late_changed" and index == 6)
+                or (failure == "needed_changed" and index == 2)
+                or (failure == "late_gap_changed" and index == 7)
+                or (failure == "late_gap_then_anchor_changed" and index == anchor_quarters)
+                or (failure == "change_after_anchor" and index == anchor_quarters + 1)
+            )
+            else ["sensor.export"]
+        )
+        instant = START + timedelta(minutes=15 * index)
+        rows.append(
+            (
+                Frame(
+                    instant,
+                    instant + timedelta(minutes=15),
+                    {"sensor.export": 0.5},
+                    {},
+                    {},
+                    {"sensor.export": 300 + 0.5 * index},
+                    "recorded",
+                ),
+                {"bindings": {"exports": exports}},
+            )
+        )
+    retain(store, rows)
+    first = rows[1]
+    original = store.frames()
+
+    def prepare():
+        """Retry the same measured interval against the unchanged current statistics book."""
+        return baselines.prepare(
+            selected,
+            first[0],
+            first[1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=1),
+            "local-endpoint",
+        )
+
+    if failure not in ("late_gap", "bad_endpoint", "change_after_anchor"):
+        with pytest.raises(PendingSettlement):
+            prepare()
+        assert baselines.pending is None
+    else:
+        with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+            prepare()
+        pending = baselines.pending
+        assert pending.end == endpoint
+        channel = StatisticsChannel(
+            basis.series[0],
+            (
+                (period - timedelta(hours=1), 1000, 0),
+                (endpoint - timedelta(hours=1), 1002, 303 if failure == "bad_endpoint" else 302),
+            ),
+        )
+        baselines.receive_statistics(pending, (channel,), book, latest + timedelta(hours=1))
+        if failure == "bad_endpoint":
+            with pytest.raises(PendingSettlement, match="disagrees"):
+                prepare()
+        else:
+            recovered = prepare()
+            assert recovered[0].used_kwh == 0.5
+            assert recovered[0].observed_at == first[0].start
+            assert recovered[0].meter_kwh == 300.5
+    assert store.frames() == original and book.seeds == (current,)
+
+
+@pytest.mark.parametrize("anchor_quarters", [8, 104])
+@pytest.mark.parametrize("changed_at_continuity", [False, True])
+def test_post_gap_source_walk_stops_at_partial_anchor_continuity(
+    evidence, monkeypatch, anchor_quarters, changed_at_continuity
+):
+    """A partial anchor needs its next boundary row. A later meter change is unrelated, with one bounded SQL pass per page."""
+    from open_energy_planner.savings.bonus import ExportCaptureGap
+
+    store, baselines = evidence
+    anchor = START + timedelta(minutes=15 * anchor_quarters + 5)
+    period = contract(bonus=True).bonuses[0].period_start(START)
+    seed = CounterSeed(
+        "bonus",
+        period,
+        0.5 * anchor_quarters + 1 / 6,
+        300 + 0.5 * anchor_quarters + 1 / 6,
+        "sensor.export",
+        anchor,
+    )
+    changed_index = anchor_quarters + (1 if changed_at_continuity else 2)
+    for index in range(anchor_quarters + 3):
+        if index == 6:
+            continue
+        instant = START + timedelta(minutes=15 * index)
+        frame = Frame(
+            instant,
+            instant + timedelta(minutes=15),
+            {"sensor.export": 0.5},
+            {},
+            {},
+            {"sensor.export": 300 + 0.5 * index},
+            "recorded",
+        )
+        store.put_frames(
+            (frame,),
+            {
+                "bindings": {
+                    "exports": ["sensor.other" if index == changed_index else "sensor.export"]
+                }
+            },
+        )
+    reads = []
+    read_frames = store.frames
+
+    def record_read(*args, **kwargs):
+        """Observe real bounded reads without changing their rows or pagination."""
+        reads.append((args, kwargs))
+        return read_frames(*args, **kwargs)
+
+    monkeypatch.setattr(store, "frames", record_read)
+    with pytest.raises(PendingSettlement) as error:
+        baselines.backdate(seed, START + timedelta(minutes=15), ("sensor.export",))
+    assert isinstance(error.value, ExportCaptureGap) is not changed_at_continuity
+    if not changed_at_continuity:
+        assert error.value.start == START + timedelta(minutes=90)
+    assert len(reads) == (1 if anchor_quarters == 8 else 2)
+    assert all(kwargs["limit"] == 96 for _args, kwargs in reads)
