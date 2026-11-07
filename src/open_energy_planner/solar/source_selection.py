@@ -10,7 +10,6 @@ from open_energy_planner.forecast_quality.calculation.metrics import integral
 from open_energy_planner.forecast_quality.daily import day_window
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.calculation.model import (
-    MAX_DEVICES_PER_TYPE,
     MAX_SOLAR_ENERGY_KWH,
     ForecastSource,
     SolarEnergy,
@@ -168,8 +167,8 @@ def _read_comparison(documents, path, source_id, day, timezone, hours):
         for value in values:
             number(value, 0, MAX_SOLAR_ENERGY_KWH)
     revisions = record.get("ha_configuration_versions", [])
-    if not isinstance(revisions, list) or len(revisions) > MAX_DEVICES_PER_TYPE:
-        raise ValueError("Invalid retained solar provider revisions")
+    if not isinstance(revisions, list):
+        raise TypeError("Invalid retained solar provider revisions")
     for revision in revisions:
         identity(revision)
     return record

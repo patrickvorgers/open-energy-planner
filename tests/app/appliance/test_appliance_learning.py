@@ -162,8 +162,8 @@ def test_retained_records_do_not_exhaust_active_appliance_capacity(service):
     ]
 
 
-def test_domain_still_rejects_more_than_sixteen_active_appliances(service):
-    """The domain guard protects its active-device bound even if a caller bypasses selection parsing."""
+def test_domain_preserves_more_than_sixteen_active_appliances(service):
+    """All seventeen explicitly selected appliances retain independent configuration and identity."""
     options = [
         {"entity_id": f"sensor.device_{index}_energy", "upstream": None} for index in range(17)
     ]
@@ -171,11 +171,12 @@ def test_domain_still_rejects_more_than_sixteen_active_appliances(service):
     service.consumers.selected = tuple(
         {"entity_id": option["entity_id"], "weather_sensitive": False} for option in options
     )
-    for option in options[:16]:
+    for option in options:
         service.configure(option["entity_id"], True)
-    with pytest.raises(ValueError, match="Too many"):
-        service.configure(options[16]["entity_id"], True)
-    assert len(service.state["devices"]) == 16
+    assert len(service.state["devices"]) == 17
+    assert {row["entity_id"] for row in service.document()["devices"]} == {
+        option["entity_id"] for option in options
+    }
 
 
 def test_http_profile_and_history_writes_preserve_contract_and_skip_unchanged_refresh(service):

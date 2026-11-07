@@ -5,6 +5,10 @@ from datetime import timedelta
 from math import isfinite
 
 from open_energy_planner.demand.calculation.model import EnergyTerm
+from open_energy_planner.home_assistant.catalogue_transfer import (
+    CATALOGUE_REQUEST_BYTES,
+    CatalogueTransfer,
+)
 from open_energy_planner.home_assistant.names import display_devices
 from open_energy_planner.home_assistant.solar_panels import validate_panel_settings
 from open_energy_planner.installation.calculation.annual_estimate import annual_estimate
@@ -13,11 +17,9 @@ from open_energy_planner.solar.wire import validate_configuration_suggestions
 from ..demand.wire import parse_configuration as parse_demand
 from ..installation.model import (
     MAX_BATTERY_NUMERIC_SETTING,
-    MAX_DEVICES_PER_TYPE,
 )
 
-MAX_CATALOGUE_ENTITIES = 1024
-MAX_CATALOGUE_REQUEST_BYTES = 1024 * 1024
+MAX_CATALOGUE_REQUEST_BYTES = CATALOGUE_REQUEST_BYTES
 DEFAULT_ANNUAL_HOUSEHOLD_KWH = 3500
 GENERATED_DEVICE_ID_HEX_LENGTH = 16
 MAX_ENTITY_ID_LENGTH = 127
@@ -54,6 +56,11 @@ class HACatalogue:
         self.value = None
         self.updated = None
         self.requested = None
+        self.transfer = CatalogueTransfer()
+
+    def receive_page(self, body, now):
+        """Keep bounded discovery fragments private until their complete snapshot is assembled."""
+        return self.transfer.receive(body, now)
 
     def receive(self, body, now):
         """Validate typed sensor metadata, Energy readiness and compact sum endpoints, excluding arbitrary HA attributes."""
@@ -72,8 +79,8 @@ class HACatalogue:
             or not country.isalpha()
         ):
             raise ValueError("Invalid Home Assistant country")
-        if not isinstance(body["entities"], list) or len(body["entities"]) > MAX_CATALOGUE_ENTITIES:
-            raise ValueError("Too many setup entities")
+        if not isinstance(body["entities"], list):
+            raise TypeError("Expected setup entities")
         for entity in body["entities"]:
             if not isinstance(entity, dict) or set(entity) - {
                 "device_name",
@@ -120,8 +127,8 @@ class HACatalogue:
         }:
             raise ValueError("Invalid Energy suggestions")
         consumers = hints.get("consumers", [])
-        if not isinstance(consumers, list) or len(consumers) > MAX_CATALOGUE_ENTITIES:
-            raise ValueError("Invalid Energy consumers")
+        if not isinstance(consumers, list):
+            raise TypeError("Invalid Energy consumers")
         identities = set()
         for consumer in consumers:
             if not isinstance(consumer, dict) or set(consumer) not in (
@@ -143,7 +150,6 @@ class HACatalogue:
             powers = hints["grid_power_entities"]
             if (
                 not isinstance(powers, list)
-                or len(powers) > MAX_DEVICES_PER_TYPE
                 or len(set(powers)) != len(powers)
                 or any(
                     not isinstance(entity, str)
@@ -161,10 +167,8 @@ class HACatalogue:
             if not isinstance(roles, dict) or set(roles) != {"imports", "exports"}:
                 raise ValueError("Invalid grid settlement roles")
             for key, sign in (("imports", 1), ("exports", -1)):
-                if (
-                    not isinstance(roles[key], list)
-                    or len(roles[key]) > MAX_CATALOGUE_ENTITIES
-                    or any(terms.get(entity_item) != sign for entity_item in roles[key])
+                if not isinstance(roles[key], list) or any(
+                    terms.get(entity_item) != sign for entity_item in roles[key]
                 ):
                     raise ValueError("Invalid grid settlement bindings")
         # Reuse the domain parser for proposed AC energy channels. Never trust an arbitrary expression.
@@ -178,7 +182,6 @@ class HACatalogue:
         )
         if (
             not isinstance(hints["soc"], list)
-            or len(hints["soc"]) > MAX_DEVICES_PER_TYPE
             or any(
                 not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
                 for value_item in hints["soc"]
@@ -186,7 +189,6 @@ class HACatalogue:
             or not (hints["grid_power"] is None or isinstance(hints["grid_power"], str))
             or type(hints["solar"]) is not bool
             or not isinstance(hints["solar_sources"], list)
-            or len(hints["solar_sources"]) > MAX_DEVICES_PER_TYPE
             or any(
                 not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
                 for value_item in hints["solar_sources"]
@@ -197,11 +199,8 @@ class HACatalogue:
             raise ValueError("Invalid Energy status")
         if (hints["energy_status"] == "ready") != bool(hints["terms"]):
             raise ValueError("Energy readiness requires a complete balance")
-        if (
-            not isinstance(hints["batteries"], list)
-            or len(hints["batteries"]) > MAX_DEVICES_PER_TYPE
-        ):
-            raise ValueError("Invalid battery suggestions")
+        if not isinstance(hints["batteries"], list):
+            raise TypeError("Invalid battery suggestions")
         for battery in hints["batteries"]:
             if (
                 not isinstance(battery, dict)

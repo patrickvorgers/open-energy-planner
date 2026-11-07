@@ -8,6 +8,13 @@ The first-run wizard has five stages: Home Assistant, connection and household, 
 
 If Energy is incomplete, correct it in Home Assistant and refresh discovery. Do not add replacement entity IDs in an unrelated OEP field. A configured meter may be discoverable before it has usable readings or history.
 
+Large source lists are transferred in complete, bounded parts. The app keeps the
+previous complete list if a refresh fails before the new list is published.
+If the final acknowledgement is lost, the complete new list may already be
+visible. There is no fixed configured-device maximum.
+See [hardware sizing and calculation time](planning-performance.md#size-hardware-for-your-installation)
+for the effect of a larger installation.
+
 ## Connection and household
 
 Confirm **Maximum grid import (kW)** and **Maximum grid export (kW)** for the complete modeled connection. These are aggregate planning limits, not per-phase protection. Use the permitted limits for your equipment and connection rather than copying the example.

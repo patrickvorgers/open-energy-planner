@@ -16,6 +16,76 @@ from custom_components.open_energy_planner.const import DOMAIN
 from tests.custom_component.support.chain import TOKEN, app_write, find, running_chain, setup_energy
 
 
+def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(monkeypatch):
+    """A car after 2,000 unrelated sensors crosses real HA HTTP discovery without truncation."""
+    import json
+
+    async def scenario():
+        """Capture real bounded requests while the app assembles and validates the full snapshot."""
+        async with running_chain(live=True) as (hass, entry, url, _root):
+            for index in range(2000):
+                hass.states.async_set(
+                    f"sensor.synthetic_meter_{index:04}",
+                    "1",
+                    {
+                        "friendly_name": f"Independent synthetic meter {index}",
+                        "unit_of_measurement": "W",
+                    },
+                )
+            hass.states.async_set(
+                "sensor.zzz_family_vehicle_soc",
+                "65",
+                {
+                    "friendly_name": "Family vehicle battery",
+                    "unit_of_measurement": "%",
+                    "device_class": "battery",
+                },
+            )
+            coordinator = entry.runtime_data
+            request = coordinator.client.request
+            exchanges = []
+
+            async def record_request(method, path, body=None):
+                """Record only independently generated discovery messages and actual acknowledgements."""
+                result = await request(method, path, body)
+                if path == "/v1/ha/catalogue":
+                    exchanges.append((len(json.dumps(body).encode()), result["accepted"]))
+                return result
+
+            monkeypatch.setattr(coordinator.client, "request", record_request)
+            coordinator.catalogue_sent = None
+            await coordinator.sync()
+            async with (
+                ClientSession() as session,
+                session.get(
+                    url + "/v1/ev", headers={"Authorization": f"Bearer {TOKEN}"}
+                ) as response,
+            ):
+                assert response.status == 200
+                state = await response.json()
+            entities = state["catalogue"]["entities"]
+            assert (
+                sum(
+                    entity["entity_id"].startswith("sensor.synthetic_meter_") for entity in entities
+                )
+                == 2000
+            )
+            assert (
+                next(
+                    entity
+                    for entity in entities
+                    if entity["entity_id"] == "sensor.zzz_family_vehicle_soc"
+                )["unit"]
+                == "%"
+            )
+            assert len(exchanges) > 2
+            assert all(size <= 196608 for size, _accepted in exchanges)
+            assert all(not accepted for _size, accepted in exchanges[:-1])
+            assert exchanges[-1][1] is True
+
+    asyncio.run(scenario())
+
+
 def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monkeypatch):
     """A build mismatch after a matching snapshot still reaches the HA action-required policy."""
     from open_energy_planner import build_info
@@ -751,16 +821,17 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
 
 @pytest.mark.parametrize("large_balance", [False, True])
 @pytest.mark.parametrize("long_battery", [False, True])
-def test_ha_setup_catalogue_skips_long_ids_and_discards_oversized_whole_balance(
+def test_ha_setup_catalogue_skips_long_ids_and_preserves_large_valid_balance(
     large_balance, long_battery
 ):
-    """Long sensor and battery-meter IDs cannot poison discovery. Incomplete/oversized Energy balances are discarded whole, while a valid two-term balance remains usable."""
+    """Invalid identities cannot poison discovery, while every valid Energy balance channel is retained."""
     import json
 
     from homeassistant.auth import auth_manager_from_config
     from homeassistant.components.energy.data import async_get_manager
 
     from custom_components.open_energy_planner.catalogue import setup_catalogue
+    from custom_components.open_energy_planner.catalogue_transfer import catalogue_pages
     from open_energy_planner.home_assistant.catalogue import HACatalogue
 
     async def scenario():
@@ -816,9 +887,15 @@ def test_ha_setup_catalogue_skips_long_ids_and_discards_oversized_whole_balance(
             if long_battery:
                 assert body["suggestions"]["batteries"] == []
                 assert body["suggestions"]["energy_status"] == "incomplete"
-            assert len(json.dumps(body).encode("utf-8")) < 256 * 1024
+            assert (
+                sum(entity["entity_id"].startswith("sensor.unicode") for entity in body["entities"])
+                == 300
+            )
+            assert all(
+                len(json.dumps(page).encode()) <= 192 * 1024 for page in catalogue_pages(body)
+            )
             assert all(entity_item["entity_id"] != long_id for entity_item in body["entities"])
-            assert len(body["suggestions"]["terms"]) == (0 if large_balance or long_battery else 2)
+            assert len(body["suggestions"]["terms"]) == (0 if long_battery else count)
             catalogue = HACatalogue()
             catalogue.receive(body, dt_util.utcnow())
             assert catalogue.current(dt_util.utcnow())["stale"] is False
@@ -837,6 +914,7 @@ def test_setup_catalogue_budgets_year_history_and_preserves_preferred_entities(
     from homeassistant.components.energy.data import async_get_manager
 
     from custom_components.open_energy_planner.catalogue import setup_catalogue
+    from custom_components.open_energy_planner.catalogue_transfer import catalogue_pages
 
     async def scenario():
         """Exercise real HA discovery and HTTP admission with independently supplied year endpoints."""
@@ -912,9 +990,8 @@ def test_setup_catalogue_budgets_year_history_and_preserves_preferred_entities(
             )
             body = await setup_catalogue(hass)
             encoded = json.dumps(body).encode("utf-8")
-            assert len(encoded) < 1024 * 1024
             if consumer_count:
-                assert len(encoded) > 256 * 1024
+                assert len(encoded) > 1024 * 1024
             async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session:
                 if not consumer_count:
                     async with session.post(
@@ -923,14 +1000,16 @@ def test_setup_catalogue_budgets_year_history_and_preserves_preferred_entities(
                         headers={"Content-Type": "application/json"},
                     ) as response:
                         assert response.status == 413
-                async with session.post(url + "/v1/ha/catalogue", json=body) as response:
-                    assert response.status == 200
+                for page in catalogue_pages(body):
+                    assert len(json.dumps(page).encode()) <= 192 * 1024
+                    async with session.post(url + "/v1/ha/catalogue", json=page) as response:
+                        assert response.status == 200
                 async with session.get(url + "/v1/setup") as response:
                     setup = await response.json()
             entity_ids = [entity["entity_id"] for entity in body["entities"]]
             assert preferred <= set(entity_ids)
             assert set(entity_ids[: len(preferred)]) == preferred
-            assert len(entity_ids) < len(preferred) + 400
+            assert sum(entity.startswith("sensor.extra_") for entity in entity_ids) == 400
             assert body["history"] == history
             assert setup["annual_estimate"]["annual_kwh"] == 58400
             assert setup["annual_estimate"]["days"] == 365
@@ -941,7 +1020,6 @@ def test_setup_catalogue_budgets_year_history_and_preserves_preferred_entities(
 
 def test_setup_catalogue_keeps_ordinary_sensors_before_large_binary_population():
     """More than 1024 binary states cannot evict ordinary EV SoC/power metadata or preferred Energy sources."""
-    import json
 
     from homeassistant.auth import auth_manager_from_config
     from homeassistant.components.energy.data import async_get_manager
@@ -975,8 +1053,7 @@ def test_setup_catalogue_keeps_ordinary_sensors_before_large_binary_population()
             )
             body = await setup_catalogue(hass)
             entity_ids = [entity["entity_id"] for entity in body["entities"]]
-            assert len(entity_ids) <= 1024
-            assert len(json.dumps(body["entities"]).encode("utf-8")) <= 192 * 1024
+            assert len(entity_ids) > 1024
             assert entity_ids.index("sensor.zzzz_energy") < entity_ids.index("sensor.zz_ev_power")
             assert entity_ids.index("sensor.zzzzz_missing_energy") < entity_ids.index(
                 "sensor.zz_ev_power"
@@ -1003,7 +1080,6 @@ def test_setup_catalogue_keeps_ordinary_sensors_before_large_binary_population()
 
 def test_energy_device_connection_survives_a_large_unrelated_sensor_catalogue():
     """A charger's registered connection and integration title survive more than 1024 unrelated sensors."""
-    import json
 
     from homeassistant.auth import auth_manager_from_config
     from homeassistant.components.energy.data import async_get_manager
@@ -1078,8 +1154,7 @@ def test_energy_device_connection_survives_a_large_unrelated_sensor_catalogue():
             assert rows[connected.entity_id]["integration_id"] == entry.entry_id
             assert rows[connected.entity_id]["integration_name"] == "Garage charger"
             assert "state" not in rows[connected.entity_id]
-            assert len(rows) <= 1024
-            assert len(json.dumps(body["entities"]).encode()) <= 192 * 1024
+            assert len(rows) > 1024
             HACatalogue().receive(body, dt_util.utcnow())
 
     asyncio.run(scenario())

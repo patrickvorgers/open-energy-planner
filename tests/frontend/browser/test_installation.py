@@ -21,6 +21,164 @@ from tests.frontend.browser.helpers import (
 )
 
 
+def _discovered_installation_devices(page, url, kind, count):
+    """Provide distinct Energy-owned meters and complete battery metadata without physical hardware."""
+    body = discover(page, url)
+    hints = body["suggestions"]
+
+    def entity(identity, unit, device_class):
+        """Add independently named synthetic metadata using the actual catalogue wire shape."""
+        body["entities"].append(
+            {
+                "entity_id": identity,
+                "name": identity,
+                "device_id": "",
+                "unit": unit,
+                "device_class": device_class,
+                "state_class": "total_increasing" if device_class == "energy" else "measurement",
+            }
+        )
+
+    entity("sensor.outgoing", "kWh", "energy")
+    hints["grid_export"] = "sensor.outgoing"
+    hints["terms"].append({"entity_id": "sensor.outgoing", "sign": -1})
+    for index in range(count):
+        if kind == "solar":
+            identity = f"sensor.solar_{index:02}"
+            entity(identity, "kWh", "energy")
+            hints["solar_sources"].append(identity)
+            hints["terms"].append({"entity_id": identity, "sign": 1})
+            hints["solar_configurations"].append(
+                {
+                    "entity_id": identity,
+                    "providers": [],
+                    "issue": "solar_configuration_not_available",
+                }
+            )
+            hints["solar"] = True
+        else:
+            battery = {"capacity_kwh": 10}
+            for field, unit, device_class in (
+                ("energy_entity", "kWh", "energy"),
+                ("charge_energy_entity", "kWh", "energy"),
+                ("soc_entity", "%", "battery"),
+                ("power_entity", "W", "power"),
+            ):
+                identity = f"sensor.battery_{index:02}_{field}"
+                entity(identity, unit, device_class)
+                battery[field] = identity
+            hints["batteries"].append(battery)
+            hints["soc"].append(battery["soc_entity"])
+            hints["terms"].extend(
+                {"entity_id": battery[field], "sign": sign}
+                for field, sign in (("energy_entity", 1), ("charge_energy_entity", -1))
+            )
+    response = page.request.post(
+        url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=body
+    )
+    assert response.ok, f"Synthetic catalogue request failed (HTTP {response.status})"
+    return body
+
+
+@pytest.mark.parametrize("kind", ["solar", "battery"])
+def test_seventeen_installation_devices_can_be_saved_reloaded_and_edited(app_page, kind):
+    """Every one of seventeen Energy sources survives setup and a later edit of the final device."""
+    from copy import deepcopy
+
+    page, url = app_page
+    _discovered_installation_devices(page, url, kind, 17)
+    connect(page)
+    grid(page)
+    if kind == "solar":
+        selector = page.locator("#installation-solar")
+        expect(selector.locator("option")).to_have_count(17)
+        for index in range(17):
+            selector.select_option(str(index))
+            source = page.locator("#solar-rows > fieldset").nth(index)
+            source.get_by_label("Panel capacity (kWp)", exact=True).fill("1")
+            source.get_by_label("Inverter AC rating (kW)", exact=True).fill("3")
+    page.get_by_role("button", name="Continue", exact=True).click()
+    if kind == "battery":
+        selector = page.locator("#installation-battery")
+        expect(selector.locator("option")).to_have_count(17)
+        for index in range(17):
+            selector.select_option(str(index))
+            battery = page.locator("#battery-rows > fieldset").nth(index)
+            battery.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
+            battery.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
+            battery.get_by_label("Own inverter AC rating (kW)", exact=True).fill("3")
+    finish(page)
+    saved = read_settings(page, url)
+    assert (
+        len(saved["solar"]["sources"] if kind == "solar" else saved["installation"]["batteries"])
+        == 17
+    )
+    page.reload()
+    connect(page)
+    installation_area(page, 1 if kind == "solar" else 2, edit=True)
+    selector = page.locator("#installation-solar" if kind == "solar" else "#installation-battery")
+    expect(selector.locator("option")).to_have_count(17)
+    selector.select_option("16")
+    if kind == "solar":
+        page.locator("#solar-rows > fieldset").nth(16).get_by_label(
+            "Inverter AC rating (kW)", exact=True
+        ).fill("3.5")
+    else:
+        page.locator("#battery-rows > fieldset").nth(16).get_by_label(
+            "Maximum charge power (kW)", exact=True
+        ).fill("2.25")
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    edited = read_settings(page, url)
+    if kind == "solar":
+        assert edited["solar"]["sources"] == saved["solar"]["sources"]
+        expected = deepcopy(saved["solar"]["inverters"])
+        identity = saved["solar"]["sources"][16]["inverter_id"]
+        next(inverter for inverter in expected if inverter["inverter_id"] == identity)[
+            "ac_limit_w"
+        ] = 3500
+        assert edited["solar"]["inverters"] == expected
+    else:
+        expected = deepcopy(saved["installation"]["batteries"])
+        expected[16]["charge_limit_w"] = 2250
+        assert edited["installation"]["batteries"] == expected
+
+
+def test_seventeenth_manual_panel_group_can_be_added_saved_and_reloaded(app_page):
+    """Seventeen independently identified planes retain geometry after creation, reload and editing."""
+    page, url = app_page
+    _discovered_installation_devices(page, url, "solar", 1)
+    connect(page)
+    grid(page)
+    source = page.locator("#solar-rows > fieldset").first
+    source.get_by_label("Panel capacity (kWp)", exact=True).fill("0.1")
+    source.get_by_label("Inverter AC rating (kW)", exact=True).fill("3")
+    for index in range(1, 17):
+        source.get_by_role("button", name="Add panel group", exact=True).click()
+        group = source.locator(".solar-panel").nth(index)
+        group.locator('[data-key="panel_name"]').fill(f"Plane {index + 1}")
+        group.locator('[data-key="panel_capacity"]').fill("0.1")
+        group.locator('[data-key="panel_azimuth"]').fill("180")
+        group.locator('[data-key="panel_tilt"]').fill("35")
+    expect(source.locator(".solar-panel")).to_have_count(17)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    saved = read_settings(page, url)["solar"]["sources"][0]["panels"]
+    assert len(saved) == 17
+    assert len({panel["panel_id"] for panel in saved}) == 17
+    assert sum(panel["capacity_w"] for panel in saved) == 1700
+    page.reload()
+    connect(page)
+    installation_area(page, 1, edit=True)
+    expect(source.locator(".solar-panel")).to_have_count(17)
+    source.locator(".solar-panel").nth(16).locator('[data-key="panel_tilt"]').fill("40")
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    edited = read_settings(page, url)["solar"]["sources"][0]["panels"]
+    assert edited[:16] == saved[:16]
+    assert edited[16] == {**saved[16], "tilt": 40}
+
+
 @pytest.mark.parametrize("available_days", [365, 180])
 def test_installation_distinguishes_measured_year_from_extrapolation(app_page, available_days):
     """Desktop/mobile use the available seasonal balance and explain whether its annual total is measured."""

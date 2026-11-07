@@ -9,13 +9,14 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
 from homeassistant.util import dt as dt_util
 
+from .recorder_batches import channel_batches
+
 HISTORY_TIMEOUT_SECONDS = 15
 
 HISTORY_RETRY_MINUTES = 15
 MAX_HISTORY_REQUEST_DAYS = 367
 
 MAX_HISTORY_HOURS = 9000
-MAX_HISTORY_METERS = 16
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class HistoryBridge:
         entities = request.get("entity_ids", [entity])
         if (
             not isinstance(entities, list)
-            or not 1 <= len(entities) <= MAX_HISTORY_METERS
+            or not entities
             or any(not isinstance(item, str) or not item.startswith("sensor.") for item in entities)
             or len(set(entities)) != len(entities)
         ):
@@ -62,7 +63,9 @@ class HistoryBridge:
 
         def read():
             """Read only supported energy sums through HA's own Recorder statistics API."""
-            metadata = get_metadata(self.hass, statistic_ids=set(entities))
+            metadata = {}
+            for batch in channel_batches(entities):
+                metadata.update(get_metadata(self.hass, statistic_ids=set(batch)))
             if any(
                 not metadata.get(item)
                 or not metadata[item][1]["has_sum"]
@@ -70,15 +73,19 @@ class HistoryBridge:
                 for item in entities
             ):
                 return {**result, "error": "unsupported_statistics"}
-            channels = statistics_during_period(
-                self.hass,
-                start,
-                end,
-                set(entities),
-                "hour",
-                {"energy": "kWh"},
-                {"sum", "state"},
-            )
+            channels = {}
+            for batch in channel_batches(entities):
+                channels.update(
+                    statistics_during_period(
+                        self.hass,
+                        start,
+                        end,
+                        set(batch),
+                        "hour",
+                        {"energy": "kWh"},
+                        {"sum", "state"},
+                    )
+                )
             if request.get("basis") == "statistics_sum":
                 if any(not channels.get(item) for item in entities):
                     return {**result, "error": "history_missing"}

@@ -17,7 +17,6 @@ from open_energy_planner.home_assistant.observations import (
 from open_energy_planner.installation.location import SiteLocation
 
 MAX_IDENTIFIER_LENGTH = 128
-MAX_OBSERVATION_BINDINGS = 64
 MAX_READING_AGE_SECONDS = 300
 MAX_SOURCE_AGE_SECONDS = 3600
 MAX_REPORT_TRANSPORT_AGE_SECONDS = 30
@@ -66,8 +65,8 @@ def parse_configuration(body, *, revision=None):
     """
     if not isinstance(body, dict) or not isinstance(body.get("bindings"), list):
         raise TypeError("Source bindings are required")
-    if not 1 <= len(body["bindings"]) <= MAX_OBSERVATION_BINDINGS:
-        raise ValueError("Select between one and 64 sources")
+    if not body["bindings"]:
+        raise ValueError("Select at least one source")
     specs = []
     for raw in body["bindings"]:
         if not isinstance(raw, dict):

@@ -1,6 +1,5 @@
 """Read-only HA setup metadata adapter. No wizard, persistence or planning."""
 
-import json
 from collections import Counter
 from math import isfinite
 
@@ -12,12 +11,8 @@ from homeassistant.helpers import entity_registry as er
 from .solar_adapters import solar_configuration_suggestion
 
 MAX_CATALOGUE_TEXT_LENGTH = 160
-MAX_CATALOGUE_PAYLOAD_BYTES = 192 * 1024
-MAX_CATALOGUE_REQUEST_BYTES = 1024 * 1024
 
-MAX_ENERGY_CHANNELS = 16
 MAX_ENTITY_ID_LENGTH = 127
-MAX_CATALOGUE_ENTITIES = 1024
 MAX_BATTERY_CAPACITY_KWH = 1000000.0
 
 
@@ -202,17 +197,12 @@ async def energy_suggestions(hass):
         not complete
         or not imports
         or ((result["solar"] or storage) and not exports)
-        or len(result["terms"]) > MAX_ENERGY_CHANNELS
         or len({energy_term["entity_id"] for energy_term in result["terms"]})
         != len(result["terms"])
     ):
         result["terms"] = []
     else:
         result["energy_status"] = "ready"
-    result["soc"] = result["soc"][:MAX_ENERGY_CHANNELS]
-    result["solar_sources"] = result["solar_sources"][:MAX_ENERGY_CHANNELS]
-    result["solar_configurations"] = result["solar_configurations"][:MAX_ENERGY_CHANNELS]
-    result["batteries"] = result["batteries"][:MAX_ENERGY_CHANNELS]
     if not result["terms"]:
         result["settlement"] = {"imports": [], "exports": []}
     return result
@@ -223,11 +213,10 @@ async def setup_catalogue(hass):
 
     Country is optional: None when unset, otherwise HA's two-letter code. The
     app uses it only as a bidding-area hint. This integration never infers an area.
-    Entity metadata retains its preferred-first 192 KiB budget. The complete JSON
-    request, including year-long history and suggestions, must fit below 1 MiB.
-
-    Raises:
-        ValueError: If the complete serialized request reaches the request budget.
+    Entity metadata retains preferred-first ordering without a count cutoff.
+    The catalogue serializer owns bounded pages for the complete snapshot,
+    including compact history and suggestions. It marks an optional solar
+    configuration incomplete when its full group cannot fit a transfer page.
     """
     registry = er.async_get(hass)
     suggestions = await energy_suggestions(hass)
@@ -289,7 +278,6 @@ async def setup_catalogue(hass):
         if entity_id and entity_id.startswith("sensor.")
     )
     entities = []
-    size = 0
     for state in sorted(
         states,
         key=lambda sensor_state: (
@@ -350,13 +338,6 @@ async def setup_catalogue(hass):
                 ),
             }
         )
-        # Match aiohttp's default JSON escaping, including non-ASCII friendly names.
-        size += len(json.dumps(entities[-1]).encode("utf-8")) + 2
-        if size > MAX_CATALOGUE_PAYLOAD_BYTES:
-            entities.pop()
-            break
-        if len(entities) == MAX_CATALOGUE_ENTITIES:
-            break
     from .setup_history import setup_history
 
     body = {
@@ -366,6 +347,4 @@ async def setup_catalogue(hass):
         "country": hass.config.country,
         "history": await setup_history(hass, suggestions["terms"]) if hass.is_running else [],
     }
-    if len(json.dumps(body).encode("utf-8")) >= MAX_CATALOGUE_REQUEST_BYTES:
-        raise ValueError("Setup catalogue exceeds the request budget")
     return body

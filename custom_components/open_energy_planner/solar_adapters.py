@@ -7,7 +7,9 @@ The registry is the sole provider-specific seam for future supported adapters.
 
 from math import isfinite
 
-MAX_SOLAR_PLANES = 16
+from .catalogue_transfer import CATALOGUE_PAGE_BYTES
+from .wire_limits import validate_projection_size
+
 MAX_SOLAR_POWER_W = 10000000
 MAX_SOLAR_TILT_DEGREES = 90
 MAX_SOLAR_AZIMUTH_DEGREES = 360
@@ -29,7 +31,7 @@ def forecast_solar_configuration(entry):
     evidence that multiple entries share one physical converter.
     """
     planes = entry.get_subentries_of_type("plane")
-    if not 1 <= len(planes) <= MAX_SOLAR_PLANES:
+    if not planes:
         raise ValueError("Incomplete solar panel configuration")
     panels = [
         {
@@ -47,7 +49,7 @@ def forecast_solar_configuration(entry):
     ):
         raise ValueError("Invalid solar panel name")
     limit = entry.options.get("inverter_size")
-    return {
+    result = {
         "adapter": "forecast_solar",
         "entry_id": entry.entry_id,
         "panels": panels,
@@ -57,6 +59,8 @@ def forecast_solar_configuration(entry):
             else _quantity(limit, 1, MAX_SOLAR_POWER_W)
         ),
     }
+    validate_projection_size(result, CATALOGUE_PAGE_BYTES)
+    return result
 
 
 CONFIGURATION_ADAPTERS = {"forecast_solar": forecast_solar_configuration}
@@ -75,7 +79,6 @@ def solar_configuration_suggestion(hass, source):
         return {**result, "issue": "solar_configuration_not_available"}
     if (
         not isinstance(selected, list)
-        or len(selected) > MAX_SOLAR_PLANES
         or any(not isinstance(entry_id, str) for entry_id in selected)
         or len(set(selected)) != len(selected)
     ):
@@ -91,9 +94,13 @@ def solar_configuration_suggestion(hass, source):
         except (ValueError, TypeError, KeyError, AttributeError):
             return {**result, "issue": "solar_configuration_incomplete"}
     if (
-        sum(len(provider["panels"]) for provider in providers) > MAX_SOLAR_PLANES
-        or sum(panel["capacity_w"] for provider in providers for panel in provider["panels"])
+        sum(panel["capacity_w"] for provider in providers for panel in provider["panels"])
         > MAX_SOLAR_POWER_W
     ):
         return {**result, "issue": "solar_configuration_incomplete"}
-    return {**result, "providers": providers}
+    complete = {**result, "providers": providers}
+    try:
+        validate_projection_size(complete, CATALOGUE_PAGE_BYTES)
+    except ValueError:
+        return {**result, "issue": "solar_configuration_incomplete"}
+    return complete
