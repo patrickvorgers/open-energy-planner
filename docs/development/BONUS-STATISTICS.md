@@ -145,7 +145,11 @@ re-evaluated. Settlement first uses exact retained physical measurements when
 available, including when those measurements establish usage before the
 confirmed statistics reference. A pure capture gap strictly after the needed
 historical endpoint may use statistics recovery. Changed meter evidence or a gap
-at or before that endpoint remains blocking. If the stored sequence ends before
+at or before that endpoint remains blocking. Before classifying a late gap as
+recoverable, the same bounded capture walk validates retained meter bindings
+through the original checkpoint and its needed partial-anchor continuity row.
+It does not calculate usage across a gap or inspect unrelated later bindings.
+The existing batch and history bounds remain unchanged. If the stored sequence ends before
 the checkpoint, it requests the
 completed hourly endpoint at or immediately after the historical interval.
 At the exact period start, the preceding reference row proves a zero sum

@@ -762,9 +762,14 @@ def test_captured_backdate_before_statistics_reference_remains_usable(evidence, 
         "needed_changed",
         "late_gap_changed",
         "bad_endpoint",
+        "late_gap_then_anchor_changed",
+        "change_after_anchor",
     ],
 )
-def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(evidence, failure):
+@pytest.mark.parametrize("anchor_quarters", [8, 104])
+def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(
+    evidence, failure, anchor_quarters
+):
     """A complete local 1.5-kWh tail gives .5-kWh opening from a 2-kWh hourly sum. Relevant gaps and meter changes stay blocked."""
     from open_energy_planner.contracts.bonus_statistics import StatisticsChannel
 
@@ -772,25 +777,43 @@ def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(evidence
     selected = contract(bonus=True)
     period = selected.bonuses[0].period_start(START)
     endpoint = START + timedelta(hours=1)
-    latest = START + timedelta(hours=2)
+    latest = START + timedelta(minutes=15 * anchor_quarters)
     basis = StatisticsBasis(
         period,
         latest,
-        (StatisticReference("sensor.export", 1, "recorder", "kWh", 1000, 1004),),
+        (
+            StatisticReference(
+                "sensor.export", 1, "recorder", "kWh", 1000, 1000 + 0.5 * anchor_quarters
+            ),
+        ),
         0,
         None,
         "a" * 64,
         True,
     )
     current = CounterSeed(
-        "bonus", period, 4, 304, "sensor.export", latest, (("sensor.export", 304),), basis
+        "bonus",
+        period,
+        0.5 * anchor_quarters,
+        300 + 0.5 * anchor_quarters,
+        "sensor.export",
+        latest,
+        (("sensor.export", 300 + 0.5 * anchor_quarters),),
+        basis,
     )
     book = CounterBook(latest, (current,))
     rows = []
-    for index in range(9):
+    for index in range(anchor_quarters + 2):
         if (
             index == 6
-            and failure in ("late_gap", "late_gap_changed", "bad_endpoint")
+            and failure
+            in (
+                "late_gap",
+                "late_gap_changed",
+                "bad_endpoint",
+                "late_gap_then_anchor_changed",
+                "change_after_anchor",
+            )
             or index == 2
             and failure == "needed_gap"
         ):
@@ -801,6 +824,8 @@ def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(evidence
                 (failure == "late_changed" and index == 6)
                 or (failure == "needed_changed" and index == 2)
                 or (failure == "late_gap_changed" and index == 7)
+                or (failure == "late_gap_then_anchor_changed" and index == anchor_quarters)
+                or (failure == "change_after_anchor" and index == anchor_quarters + 1)
             )
             else ["sensor.export"]
         )
@@ -835,7 +860,7 @@ def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(evidence
             "local-endpoint",
         )
 
-    if failure not in ("late_gap", "bad_endpoint"):
+    if failure not in ("late_gap", "bad_endpoint", "change_after_anchor"):
         with pytest.raises(PendingSettlement):
             prepare()
         assert baselines.pending is None
@@ -861,3 +886,62 @@ def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(evidence
             assert recovered[0].observed_at == first[0].start
             assert recovered[0].meter_kwh == 300.5
     assert store.frames() == original and book.seeds == (current,)
+
+
+@pytest.mark.parametrize("anchor_quarters", [8, 104])
+@pytest.mark.parametrize("changed_at_continuity", [False, True])
+def test_post_gap_source_walk_stops_at_partial_anchor_continuity(
+    evidence, monkeypatch, anchor_quarters, changed_at_continuity
+):
+    """A partial anchor needs its next boundary row. A later meter change is unrelated, with one bounded SQL pass per page."""
+    from open_energy_planner.savings.bonus import ExportCaptureGap
+
+    store, baselines = evidence
+    anchor = START + timedelta(minutes=15 * anchor_quarters + 5)
+    period = contract(bonus=True).bonuses[0].period_start(START)
+    seed = CounterSeed(
+        "bonus",
+        period,
+        0.5 * anchor_quarters + 1 / 6,
+        300 + 0.5 * anchor_quarters + 1 / 6,
+        "sensor.export",
+        anchor,
+    )
+    changed_index = anchor_quarters + (1 if changed_at_continuity else 2)
+    for index in range(anchor_quarters + 3):
+        if index == 6:
+            continue
+        instant = START + timedelta(minutes=15 * index)
+        frame = Frame(
+            instant,
+            instant + timedelta(minutes=15),
+            {"sensor.export": 0.5},
+            {},
+            {},
+            {"sensor.export": 300 + 0.5 * index},
+            "recorded",
+        )
+        store.put_frames(
+            (frame,),
+            {
+                "bindings": {
+                    "exports": ["sensor.other" if index == changed_index else "sensor.export"]
+                }
+            },
+        )
+    reads = []
+    read_frames = store.frames
+
+    def record_read(*args, **kwargs):
+        """Observe real bounded reads without changing their rows or pagination."""
+        reads.append((args, kwargs))
+        return read_frames(*args, **kwargs)
+
+    monkeypatch.setattr(store, "frames", record_read)
+    with pytest.raises(PendingSettlement) as error:
+        baselines.backdate(seed, START + timedelta(minutes=15), ("sensor.export",))
+    assert isinstance(error.value, ExportCaptureGap) is not changed_at_continuity
+    if not changed_at_continuity:
+        assert error.value.start == START + timedelta(minutes=90)
+    assert len(reads) == (1 if anchor_quarters == 8 else 2)
+    assert all(kwargs["limit"] == 96 for _args, kwargs in reads)

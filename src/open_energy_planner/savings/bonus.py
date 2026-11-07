@@ -84,6 +84,7 @@ class HistoricalBonuses:
                 "Historical bonus anchor does not match the export meters or period"
             )
         cursor, total, initial, anchor_frame = start, 0.0, None, None
+        capture_gap = None
         while cursor <= seed.observed_at + SETTLEMENT_INTERVAL:
             rows = self.store.frames(
                 cursor, end=seed.observed_at + 2 * SETTLEMENT_INTERVAL, limit=MAX_BATCH_INTERVALS
@@ -92,6 +93,20 @@ class HistoricalBonuses:
                 break
             for row in rows:
                 frame = parse_frame(row["frame"])
+                if frame.start < cursor:
+                    raise PendingSettlement(
+                        "Historical bonus export evidence has a gap or changed meters"
+                    )
+                if frame.start != cursor and capture_gap is None:
+                    capture_gap = ExportCaptureGap(
+                        "Historical bonus export evidence has a gap or changed meters", cursor
+                    )
+                if (
+                    capture_gap is not None
+                    and frame.start > seed.observed_at
+                    and (anchor_frame is None or frame.start > anchor_frame.end)
+                ):
+                    raise capture_gap
                 if (
                     set(row["context"]["bindings"]["exports"]) != set(exports)
                     or not set(exports) <= frame.meter_start.keys()
@@ -99,10 +114,13 @@ class HistoricalBonuses:
                     raise PendingSettlement(
                         "Historical bonus export evidence has a gap or changed meters"
                     )
-                if frame.start != cursor:
-                    raise ExportCaptureGap(
-                        "Historical bonus export evidence has a gap or changed meters", cursor
-                    )
+                if capture_gap is not None:
+                    if frame.start >= seed.observed_at:
+                        raise capture_gap
+                    if seed.observed_at < frame.end:
+                        anchor_frame = frame
+                    cursor = frame.end
+                    continue
                 if initial is None:
                     initial = {entity: frame.meter_start[entity] for entity in exports}
                 if anchor_frame is not None:
@@ -161,6 +179,8 @@ class HistoricalBonuses:
                 self.backdated.clear()
             self.backdated[key] = result
             return result
+        if capture_gap is not None:
+            raise capture_gap
         raise ExportCaptureGap("Historical bonus baseline awaits captured export evidence", cursor)
 
     def prepare(self, contract, frame, bindings, seeds, book, now, revision, previous=None):
