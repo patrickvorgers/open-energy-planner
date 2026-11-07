@@ -95,6 +95,16 @@ pages, each at most 192 KiB including JSON escaping and protocol overhead.
 The authenticated request limit remains 1 MiB. No entity-count or alphabetical
 cutoff decides which sources can appear in settings.
 
+The serializer prepares and validates all pages before sending the first one.
+Optional solar configuration groups are measured with their actual transfer
+identity, timestamp, page index and JSON envelope. If a complete group cannot
+fit, only that group's provider geometry becomes explicitly incomplete. Its
+production meter and all other source metadata remain available. The serializer
+never imports only some planes from a group. A group that fits, including one
+exactly at the page budget, retains every plane. The final digest covers the
+normalized snapshot. The captured input is not mutated. An oversized mandatory
+record, header or incomplete-group marker fails before any page is sent.
+
 Each paged message carries a transfer identity, capture timestamp, content digest,
 zero-based index and completion flag. The first message supplies the document
 header. Subsequent pages append to explicitly allowed collection paths. The final

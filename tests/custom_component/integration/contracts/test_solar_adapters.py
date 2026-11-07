@@ -68,7 +68,9 @@ def test_unload_drains_solar_work_without_reopening_listeners(monkeypatch, pause
                 }.get(paused_stage):
                     entered.set()
                     await release.wait()
-                if path in ("/v1/ha/catalogue", "/v1/solar/ha-forecasts"):
+                if path == "/v1/ha/catalogue":
+                    return {"accepted": True}
+                if path == "/v1/solar/ha-forecasts":
                     return {}
                 return await original_request(method, path, body)
 
@@ -409,6 +411,155 @@ def suggestion(*entries):
     )
 
 
+@pytest.mark.parametrize("overflow_bytes", [-1, 0, 1])
+def test_optional_solar_geometry_uses_actual_transfer_envelope(monkeypatch, overflow_bytes):
+    """Only geometry exceeding the real wrapped page becomes incomplete, retaining every source."""
+    import json
+    from copy import deepcopy
+
+    from custom_components.open_energy_planner import catalogue_transfer
+    from open_energy_planner.home_assistant.catalogue import HACatalogue
+    from tests.ha_contract.support.metadata import setup_metadata
+
+    captured = datetime(2026, 11, 7, 12, 0, 0, 123456, tzinfo=UTC)
+
+    class FixedClock(datetime):
+        """Use a fixed six-digit capture timestamp for independent byte-boundary arithmetic."""
+
+        @classmethod
+        def now(cls, timezone):
+            """Return the independently specified UTC capture time."""
+            return captured.astimezone(timezone)
+
+    monkeypatch.setattr(catalogue_transfer, "datetime", FixedClock)
+    monkeypatch.setattr(catalogue_transfer, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
+    body = setup_metadata()
+    body["entities"].extend(
+        {
+            "entity_id": f"sensor.synthetic_{index:04}",
+            "name": f"Independent synthetic source {index}",
+            "device_id": "",
+            "unit": "W",
+            "device_class": "power",
+            "state_class": "measurement",
+        }
+        for index in range(10000)
+    )
+    body["entities"].append(
+        {
+            "entity_id": "sensor.combined",
+            "name": "Solar",
+            "device_id": "",
+            "unit": "kWh",
+            "device_class": "energy",
+            "state_class": "total_increasing",
+        }
+    )
+    body["suggestions"].update(solar=True, solar_sources=["sensor.combined"])
+    body["suggestions"]["terms"].append({"entity_id": "sensor.combined", "sign": 1})
+    body["entities"].append({**body["entities"][-1], "entity_id": "sensor.small"})
+    body["suggestions"]["solar_sources"].append("sensor.small")
+    body["suggestions"]["terms"].append({"entity_id": "sensor.small", "sign": 1})
+    prefix_pages = list(catalogue_transfer.catalogue_pages(body))
+    transfer_index = prefix_pages[-1]["transfer"]["index"]
+    assert transfer_index >= 10
+    planes = [
+        SimpleNamespace(
+            subentry_id=f"plane_{index}",
+            title="é" if index == 0 else "",
+            data={"modules_power": 1, "azimuth": 180, "declination": 30},
+        )
+        for index in range(700)
+    ]
+    provider = entry("synthetic")
+    provider.get_subentries_of_type = lambda _kind: planes
+    proposal = suggestion(provider)
+    wrapper = {
+        "transfer": {
+            "id": "a" * 32,
+            "revision": "b" * 64,
+            "captured_at": captured.isoformat(),
+            "index": transfer_index,
+            "complete": False,
+        },
+        "path": ["suggestions", "solar_configurations"],
+        "items": [proposal],
+    }
+    remaining = 196608 + overflow_bytes - len(json.dumps(wrapper).encode())
+    assert remaining > 0
+    for plane, panel in zip(planes, proposal["providers"][0]["panels"], strict=True):
+        added = min(200 - len(plane.title), remaining)
+        plane.title += "x" * added
+        panel["name"] = plane.title
+        remaining -= added
+    assert remaining == 0
+    assert len(json.dumps(wrapper).encode()) == 196608 + overflow_bytes
+    assert len(json.dumps(proposal).encode()) < 196608
+    assert suggestion(provider) == proposal
+    later_proposal = {**suggestion(entry("other")), "entity_id": "sensor.small"}
+    body["suggestions"]["solar_configurations"] = [proposal, later_proposal]
+    original = deepcopy(body)
+    pages = list(catalogue_transfer.catalogue_pages(body))
+    assert all(len(json.dumps(page).encode()) <= 196608 for page in pages)
+    catalogue = HACatalogue()
+    for page in pages[:-1]:
+        assert catalogue.receive_page(json.loads(json.dumps(page)), captured) is None
+        assert catalogue.value is None
+    complete = catalogue.receive_page(json.loads(json.dumps(pages[-1])), captured)
+    catalogue.receive(complete, captured)
+    assert catalogue.value["entities"] == original["entities"]
+    assert catalogue.value["suggestions"]["terms"] == original["suggestions"]["terms"]
+    assert catalogue.value["suggestions"]["solar_sources"] == ["sensor.combined", "sensor.small"]
+    received_groups = catalogue.value["suggestions"]["solar_configurations"]
+    assert len(received_groups) == 2
+    assert received_groups[1] == later_proposal
+    received = received_groups[0]
+    if overflow_bytes > 0:
+        assert received == {
+            "entity_id": "sensor.combined",
+            "providers": [],
+            "issue": "solar_configuration_incomplete",
+        }
+    else:
+        assert received == proposal
+        assert len(received["providers"][0]["panels"]) == 700
+    assert body == original
+
+
+@pytest.mark.parametrize("oversized_part", ["entity", "solar_identity", "header"])
+def test_unrepresentable_catalogue_fails_before_emitting_pages(oversized_part):
+    """Mandatory and fallback overflow retain the prior catalogue without sending partial pages."""
+    from copy import deepcopy
+
+    from custom_components.open_energy_planner.catalogue_transfer import catalogue_pages
+    from open_energy_planner.home_assistant.catalogue import HACatalogue
+    from tests.ha_contract.support.metadata import setup_metadata
+
+    captured = datetime(2026, 11, 7, tzinfo=UTC)
+    catalogue = HACatalogue()
+    previous = setup_metadata()
+    catalogue.receive(previous, captured)
+    body = deepcopy(previous)
+    if oversized_part == "entity":
+        body["entities"][0]["name"] = "x" * 196608
+    elif oversized_part == "solar_identity":
+        body["suggestions"]["solar_configurations"] = [
+            {"entity_id": "sensor." + "x" * 196608, "providers": [], "issue": None}
+        ]
+    else:
+        body["timezone"] = "x" * 196608
+    original = deepcopy(body)
+    sent = []
+    with pytest.raises(ValueError, match="Catalogue record exceeds the discovery page budget"):
+        for page in catalogue_pages(body):
+            sent.append(page)
+            assert catalogue.receive_page(page, captured) is None
+    assert sent == []
+    assert catalogue.value == previous
+    assert catalogue.updated == captured
+    assert body == original
+
+
 def test_forecast_solar_uses_exact_fields_and_retains_two_selected_groups():
     """Two explicitly selected entries retain their geometry and identities without summing converter limits."""
     result = suggestion(entry("eleven"), entry("ten", capacity=3100, azimuth=125, tilt=40))
@@ -569,13 +720,13 @@ def test_raw_provider_assignments_remain_ambiguous_when_one_group_is_incomplete(
     [
         (1, False, "ready", 1),
         (2, True, "incomplete", 1),
-        (17, False, "incomplete", 16),
+        (17, False, "ready", 17),
     ],
 )
-def test_duplicate_and_excess_meters_leave_a_bounded_readable_catalogue(
+def test_duplicate_and_large_meter_sets_leave_an_explicit_readable_catalogue(
     count, duplicate, status, accepted
 ):
-    """Bad Energy membership stays explicitly incomplete instead of rejecting the entire solar catalogue."""
+    """Duplicate membership stays incomplete while every distinct meter survives a larger installation."""
     from unittest.mock import AsyncMock, patch
 
     from homeassistant.util import dt as dt_util
@@ -585,7 +736,7 @@ def test_duplicate_and_excess_meters_leave_a_bounded_readable_catalogue(
     from tests.custom_component.support.chain import running_chain
 
     async def scenario():
-        """Read malformed metadata through real HA state discovery and the app catalogue validator."""
+        """Read duplicate or larger membership through real HA discovery and the app validator."""
         async with running_chain(live=True) as (hass, _entry, _url, _root):
             sources = [
                 {

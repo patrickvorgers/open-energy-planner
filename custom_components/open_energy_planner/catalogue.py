@@ -213,11 +213,10 @@ async def setup_catalogue(hass):
 
     Country is optional: None when unset, otherwise HA's two-letter code. The
     app uses it only as a bidding-area hint. This integration never infers an area.
-    Entity metadata retains its preferred-first 192 KiB budget. The complete JSON
-    request, including year-long history and suggestions, must fit below 1 MiB.
-
-    Raises:
-        ValueError: If the complete serialized request reaches the request budget.
+    Entity metadata retains preferred-first ordering without a count cutoff.
+    The catalogue serializer owns bounded pages for the complete snapshot,
+    including compact history and suggestions. It marks an optional solar
+    configuration incomplete when its full group cannot fit a transfer page.
     """
     registry = er.async_get(hass)
     suggestions = await energy_suggestions(hass)
