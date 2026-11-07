@@ -86,7 +86,7 @@ HA Energy is never modified. All OEP settings persist in the app. No solar sourc
 | Thin HA integration | Forward Energy sources, normalized Recorder history and HA location. App owns settings |
 | Solar weather adapter | Fetch Open-Meteo GHI/DNI/DHI, air temperature and wind, validate units, normalize interval labels |
 | Physical model adapter | pvlib-python 0.16.1 solar geometry, irradiance transposition, Faiman temperature and PVWatts DC output |
-| Solar learning | Plain regularized per-source regression, independent of HTTP/HA/pvlib objects |
+| Solar learning | Per-source scalar baseline and CPU XGBoost challenger, independent of HTTP/HA/pvlib objects |
 | App runtime/storage | Coalesced model jobs, current weather/history, stale-result protection and immutable evidence |
 | Planning-basis adapter | Replace PV energy while retaining upstream physical installation/load/price settings |
 | Existing planner | Optimize and independently validate energy flows and costs. Never operate physical equipment |
@@ -207,6 +207,46 @@ train immediately without an old OEP forecast archive. However, historical
 realized weather does not prove old forecast quality. Receipt times are retained.
 Reanalysis must not masquerade as a weather forecast known at a past decision.
 
+A nonlinear CPU XGBoost challenger can learn recurring shade and weather/calendar
+patterns per independently measured source. It uses hourly UTC calendar cycles,
+GHI/DNI/DHI, temperature, wind and capacity-normalized PVWatts DC production.
+The fixed CPU model uses 96 trees of depth three and one native thread. The CPU-only
+runtime is shared with other learning domains. Model policies and selection
+remain owned by each domain.
+
+Training needs at least 100 admitted daylight hours on 28 dates before a separate
+final seven-day validation week. That week needs at least 28 daylight hours
+covering all seven dates. The scalar comparison is fitted on the same older clean
+training hours. Held-out outcomes never enter either fitted comparison. A shadow
+candidate must beat both PVWatts and the simple correction by at least
+0.005 kWh per hour and 5%. Constant bias can therefore retain the simpler correction. These historical errors use retrieved historical weather.
+They are not evidence of predictions actually issued in the past.
+
+Cleaning retains original cumulative sums and weather. It excludes gaps, decreases,
+incomplete hours, missing/unreceived weather, low physical yield, clipping and
+production outside configured physical or bounded correction ranges. Training-only
+outlier fences use the same UTC hour within 45-day seasonal groups. At least eight
+samples are required. The fence is the median plus/minus the greater of three IQRs
+and 0.15 correction ratio. Repeated shade remains learnable. Validation observations
+are not removed by these statistical fences. Counts and UTC exclusion intervals
+are archived, alongside raw source references and the training/validation split.
+Neither a price signal nor a statistical anomaly proves executed curtailment.
+The existing curtailment and hybrid route evidence guards remain mandatory.
+
+Tree predictions correct physical DC before the shared inverter conversion and cap.
+Weights use bounded, validated native JSON, never pickle. Training data and native
+prediction objects have bounded in-memory caches. Immutable weights are stored
+once, separately from each training report. Public status exposes readiness,
+training/validation counts and exclusion reasons, without native model blobs.
+
+Even a historically better tree remains in shadow mode until three complete,
+matched HA-local days of forecasts captured before their outcomes show material
+improvement over PVWatts with the same absolute and relative gain requirements.
+Manual **ML model** selection cannot bypass this tree gate. A changed learning
+policy, geometry or site starts an independent evidence family. Older scalar
+forecast evidence cannot promote the tree. Unavailable learning retains usable
+PVWatts/scalar candidates and logs a safe, deduplicated recovery explanation.
+
 Automatic solar source selection uses forecast accuracy rather than simulated decision costs.
 The household economic selection policy in [model selection](MODEL-SELECTION.md)
 remains separate. A smaller solar error does not guarantee a cheaper energy plan.
@@ -216,9 +256,10 @@ Baseline, learned candidate and selected forecasts remain archived independently
 
 Each source offers **Automatic**, **PVWatts**, **Home Assistant** and **ML model**.
 ML remains unavailable until sufficient usable production history exists. Manual
-choices bypass accuracy warm-up but never bypass measurement-boundary or freshness
-validation. Unavailable choices explicitly fall back to PVWatts. Forecast quality
-shows the requested and actual source, comparison coverage and MAE in kWh per hour.
+Home Assistant and legacy scalar choices bypass accuracy warm-up but never bypass
+measurement-boundary or freshness validation. Nonlinear ML choices require their
+own forward accuracy evidence. Unavailable choices explicitly fall back to
+PVWatts. Forecast quality shows the requested and actual source, comparison coverage and MAE in kWh per hour.
 
 Core Forecast.Solar is the first forecast adapter. The integration reads the Core
 coordinator's cached native library estimate within this provider adapter. The library returns

@@ -716,3 +716,44 @@ def test_finite_calculation_progress_transfers_without_source_dependency(route):
         {"elapsed_seconds": 4, "objective": -0.5, "best_bound": -0.6},
     ]
     assert restored.detail(identity)["first_candidate_seconds"] == 2
+
+
+def test_nonlinear_solar_archive_migrates_and_replays_without_source_database(route):
+    """Every backend route preserves native trees and raw validation/exclusion evidence for source-independent replay."""
+    from open_energy_planner.solar.boosting import SolarBoostedModel
+    from open_energy_planner.solar.calculation.model import version
+    from open_energy_planner.solar.storage import SolarStore
+    from open_energy_planner.solar.wire import document
+    from tests.app.solar.test_boosting import fit_case
+
+    (source, target), root = route
+    SqlPlanRepository(root / "source", engine=source)
+    result, history, physical, weather, now = fit_case(corrupt=True)
+    store = SolarStore(SqlDocuments(source, "solar"))
+    model = document(result.model)
+    weights = {"schema": model["schema"], "model_json": model.pop("model_json")}
+    weights_reference = version(weights)
+    model["weights_reference"] = weights_reference
+    store.archive("ml-weights", weights_reference, weights)
+    report = {"model": model, "summary": document(result.summary)}
+    store.archive("ml-training", result.model.version, report)
+    store.archive("history", "original", document(history))
+    migrate_archive(source, target, overwrite_target=True)
+    source.dispose()
+    restored = SolarStore(SqlDocuments(target, "solar"))
+    copied = restored.documents.read("ml-training-" + result.model.version + ".json")
+    assert copied == report
+    assert restored.documents.read("history-original.json") == document(history)
+    copied_weights = restored.documents.read("ml-weights-" + weights_reference + ".json")
+    assert copied_weights == weights
+    replay = SolarBoostedModel.restore(
+        {
+            **{key: value for key, value in copied["model"].items() if key != "weights_reference"},
+            "model_json": copied_weights["model_json"],
+        }
+    )
+    assert replay.factors(physical, weather, known_at=now) == result.model.factors(
+        physical, weather, known_at=now
+    )
+    assert copied["summary"]["excluded_counts"]["production_out_of_range"] == 1
+    assert copied["summary"]["excluded_counts"]["statistical_outlier"] == 1
