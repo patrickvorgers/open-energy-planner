@@ -1659,6 +1659,16 @@ Refresh preserves the selected identity when still plotted. Filter changes
 retain it when possible. Pending reads disable detail actions, obsolete reads
 retain the generation guard, and failed reads clear selection and chart data.
 
+The page's existing API boundary owns independent session, daily-history and
+detail read contexts. Identical pending reads share one promise. A replacement
+aborts and awaits its predecessor before starting a new fetch. A named
+five-second deadline covers fetch and body parsing, with timer cleanup after
+settlement. Closing details cancels that context. A queued old close event does
+not cancel a reopened popup. Only the typed authentication failure selects the
+Connect advice. Other transport, parsing and projection failures show fixed
+owned recovery messages, never arbitrary exception text. Generation checks
+still prevent obsolete results from replacing the current day or calculation.
+
 The duration chart groups tooltip entries by calculation index, so either
 stacked section shows all its visible timing stages together with the total
 duration and publication outcome. The existing locale-aware seconds formatter

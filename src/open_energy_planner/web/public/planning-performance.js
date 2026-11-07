@@ -15,13 +15,37 @@ const clock = value => when(value,{hour:"2-digit",minute:"2-digit"}) + occurrenc
 const bottomLegend = {id:"performanceBottomLegend",beforeLayout(chart){chart.options.plugins.legend.position="bottom";}};
 const QUARTER_MILLISECONDS = 15 * MINUTE_MILLISECONDS;
 const MAX_TIME_LABELS = 8;
+const CALCULATION_READ_TIMEOUT_MILLISECONDS = 5000;
+const pendingReads = new Map();
+/** Identify only the app-owned authentication failure, never arbitrary exception messages. */
+class ConnectionRequiredError extends Error {}
+/** Keep projection, transport and parsing exceptions outside the visible explanation. */
+const readMessage = (error, fallback = "Calculation history could not be loaded. Try Refresh.") => error instanceof ConnectionRequiredError ? "Connect to read calculation history." : fallback;
 let token = "", chart = null, detailChart = null, rows = [], requestVersion = 0, detailVersion = 0, plottedRows = [], loading = false, selectedId = null, selectedIndex = 0;
-/** Keep credentials in memory and never display raw server errors. */
-async function api(path) {
- const response = await fetch(base + path,{headers:token ? {Authorization:`Bearer ${token}`} : {},redirect:"error",cache:"no-store"});
- if(response.status===401)find("connect").hidden=false;
- if (!response.ok) throw new Error(response.status === 401 ? "Connect to read calculation history." : "Calculation history could not be loaded. Try Refresh.");
- return response.json();
+/** Share identical reads and settle cancelled predecessors before replacing their evidence context. */
+async function api(path, context) {
+ const previous = pendingReads.get(context);
+ if (previous?.path === path && previous.token === token && !previous.controller.signal.aborted) return previous.promise;
+ previous?.controller.abort();
+ const current = {path, token, controller:new AbortController(), promise:null};
+ current.promise = (async () => {
+  if (previous) await previous.promise.catch(() => {});
+  current.controller.signal.throwIfAborted();
+  const deadline = setTimeout(() => current.controller.abort(), CALCULATION_READ_TIMEOUT_MILLISECONDS);
+  try {
+   const response = await fetch(base + path,{headers:current.token ? {Authorization:`Bearer ${current.token}`} : {},redirect:"error",cache:"no-store",signal:current.controller.signal});
+   if (response.status === 401) find("connect").hidden = false;
+   if (!response.ok) {
+    await response.body?.cancel();
+    if (response.status === 401) throw new ConnectionRequiredError();
+    throw new Error();
+   }
+   return await response.json();
+  } finally {clearTimeout(deadline);}
+ })();
+ pendingReads.set(context, current);
+ try {return await current.promise;}
+ finally {if (pendingReads.get(context) === current) pendingReads.delete(context);}
 }
 /** State facts only. Solver termination does not establish the cause of a slow calculation. */
 function outcome(row) {
@@ -38,8 +62,7 @@ async function detail(row) {
  find("calculation-time").textContent=when(row.started_at) + occurrence(row.started_at);
  for(const id of ["calculation-facts","calculation-cost-note","calculation-proof","calculation-samples"])find(id).replaceChildren();
  if(!dialog.open)dialog.showModal();
- try { row = await api(`v1/planning-performance/${encodeURIComponent(row.id)}`); }
- catch(error){if(version===detailVersion && dialog.open)find("calculation-summary").textContent=error.message;return;}
+ try { row = await api(`v1/planning-performance/${encodeURIComponent(row.id)}`, "detail");
  if(version!==detailVersion || !dialog.open)return;
  const samples = row.progress || [], first = samples[0], last = samples.at(-1);
  find("calculation-time").textContent = when(row.started_at) + occurrence(row.started_at);
@@ -57,6 +80,7 @@ async function detail(row) {
  detailChart = new Chart(find("improvement-chart"),{plugins:[bottomLegend],type:"line",data:{datasets:[{label:`Candidate cost (${unit})`,data:samples.map(sample=>({x:sample.elapsed_seconds,y:sample.objective})),borderColor:"#087f8c",backgroundColor:"#087f8c",stepped:"before",pointRadius:2},{label:`Best possible bound (${unit})`,data:samples.map(sample=>({x:sample.elapsed_seconds,y:sample.best_bound})),borderColor:"#b7791f",borderDash:[6,4],stepped:"before",pointRadius:0,spanGaps:false}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{x:{type:"linear",min:0,title:{display:true,text:"Elapsed seconds"}},y:{ticks:{callback:money}}},plugins:{tooltip:{callbacks:{title:items=>seconds(items[0].parsed.x),label:item=>`${item.dataset.label}: ${money(item.parsed.y)}`}}}}});
  const table = find("calculation-samples"); table.replaceChildren();
  for (const sample of samples) {const item = document.createElement("tr"); for (const value of [seconds(sample.elapsed_seconds),money(sample.objective),money(sample.best_bound)]) {const cell = document.createElement("td"); cell.textContent = value; item.append(cell);} table.append(item);}
+ } catch(error){if(version===detailVersion && dialog.open)find("calculation-summary").textContent=readMessage(error, "Calculation details could not be loaded. Close this popup and try again.");}
 }
 /** Expose the selected archived calculation directly on the interactive chart. */
 function renderSelection() {
@@ -144,9 +168,9 @@ function render() {
 /** Ignore late responses after a day change. Failed reads clear stale data rather than misdate it. */
 async function load() {
  const version = ++requestVersion; loading = true; renderSelection(); find("performance-status").textContent="Loading calculation history.";
- try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone); find("performance-day").value=data.day; rows=data.calculations; loading = false; render(); find("performance-status").textContent="";
+ try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`, "history"); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone); find("performance-day").value=data.day; rows=data.calculations; loading = false; render(); find("performance-status").textContent="";
  const address=new URL(location.href), selectedId=address.searchParams.get("calculation"); if(selectedId){address.searchParams.delete("calculation");history.replaceState(null,"",address);const selectedRow=rows.find(row=>row.id===selectedId);if(selectedRow&&!find("calculation-detail").open)detail(selectedRow);}
- } catch(error){if(version!==requestVersion)return; rows=[]; loading = false; render(); find("performance-summary").textContent="Calculation history is unavailable for the selected day."; find("performance-status").textContent=error.message;}
+ } catch(error){if(version!==requestVersion)return; rows=[]; loading = false; render(); find("performance-summary").textContent="Calculation history is unavailable for the selected day."; find("performance-status").textContent=readMessage(error);}
 }
 find("performance-chart").addEventListener("focus", showSelection);
 find("performance-chart").addEventListener("keydown", event => {
@@ -157,11 +181,11 @@ find("performance-chart").addEventListener("keydown", event => {
   showSelection();
  } else if (["Enter", " "].includes(event.key)) {event.preventDefault(); openSelection();}
 });
-find("calculation-detail").addEventListener("close",()=>{detailVersion++;detailChart?.destroy();detailChart=null;});
+find("calculation-detail").addEventListener("close",()=>{if(find("calculation-detail").open)return;detailVersion++;pendingReads.get("detail")?.controller.abort();detailChart?.destroy();detailChart=null;});
 find("calculation-close").addEventListener("click",()=>find("calculation-detail").close());
 find("performance-extra").addEventListener("change",render);
 find("performance-day").addEventListener("change",load);
 find("performance-refresh").addEventListener("click",load);
 find("performance-today").addEventListener("click",()=>{find("performance-day").value=localDate();load();});
 find("connect").addEventListener("submit",event=>{event.preventDefault();token=find("token").value;find("token").value="";find("connect").hidden=true;load();});
-api("setup/session").then(session=>{useHomeAssistantTimezone(session.timezone);find("performance-day").value=new URLSearchParams(location.search).get("day")||localDate();find("connect").hidden=Boolean(session.ingress);if(session.ingress)load();else find("performance-status").textContent="Connect to read calculation history.";}).catch(error=>{find("performance-status").textContent=error.message;});
+api("setup/session", "session").then(session=>{useHomeAssistantTimezone(session.timezone);find("performance-day").value=new URLSearchParams(location.search).get("day")||localDate();find("connect").hidden=Boolean(session.ingress);if(session.ingress)load();else find("performance-status").textContent="Connect to read calculation history.";}).catch(error=>{find("performance-status").textContent=readMessage(error);});

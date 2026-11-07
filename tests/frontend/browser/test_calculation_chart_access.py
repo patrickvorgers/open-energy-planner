@@ -1,5 +1,6 @@
 """Daily calculation charts expose exact details without a duplicate visible record list."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -374,3 +375,203 @@ def test_chart_modifier_shortcuts_do_not_select_or_open_calculations(daily_histo
     canvas.press("Enter")
     expect(page.get_by_role("dialog")).to_be_visible()
     assert detail_reads == ["synthetic-calculation-000"]
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+@pytest.mark.parametrize("target", ["history", "detail", "session"])
+@pytest.mark.parametrize("failure", ["fetch", "json", "render"])
+def test_calculation_read_failures_never_display_exception_text(daily_history, target, failure):
+    """Transport, parsing and projection failures show owned advice across every evidence entry point."""
+    page, _, _, _ = daily_history
+    secret = "synthetic-private-exception-identity"
+    script = """({target, failure, secret}) => {
+        const original = window.fetch;
+        window.fetch = async (path, options) => {
+            const address = String(path);
+            const selected = target === 'session' ? address.endsWith('setup/session') :
+                target === 'detail' ? address.includes('v1/planning-performance/') :
+                address.includes('v1/planning-performance?');
+            if (!selected) return original(path, options);
+            if (failure === 'fetch') throw new Error(secret);
+            const response = await original(path, options);
+            if (failure === 'json') response.json = async () => { throw new SyntaxError(secret); };
+            else {
+                const read = response.json.bind(response);
+                response.json = async () => {
+                    const value = await read();
+                    const field = target === 'session' ? 'timezone' : target === 'detail' ? 'progress' : 'calculations';
+                    Object.defineProperty(value, field, {get() { throw new Error(secret); }});
+                    return value;
+                };
+            }
+            return response;
+        };
+    }"""
+    values = {"target": target, "failure": failure, "secret": secret}
+    if target == "session":
+        page.add_init_script("(" + script + ")(" + json.dumps(values) + ")")
+        page.reload()
+    else:
+        page.evaluate(script, values)
+        if target == "detail":
+            page.locator("#performance-chart").focus()
+            page.locator("#performance-chart").press("Enter")
+        else:
+            page.get_by_role("button", name="Refresh", exact=True).click()
+    status = page.locator("#calculation-summary" if target == "detail" else "#performance-status")
+    expect(status).to_contain_text("could not be loaded")
+    expect(page.locator("body")).not_to_contain_text(secret)
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_calculation_history_coalesces_refresh_and_settles_replaced_day(daily_history):
+    """A replacement waits for an aborted read to settle, while repeated refresh shares one request."""
+    page, evidence, _, _ = daily_history
+    page.evaluate(
+        """() => {
+        const original = window.fetch;
+        window.calculationReads = {starts: 0, active: 0, maximum: 0, aborted: 0};
+        const state = window.calculationReads;
+        window.fetch = (path, options) => {
+            if (!String(path).includes('v1/planning-performance?')) return original(path, options);
+            state.starts++; state.active++; state.maximum = Math.max(state.maximum, state.active);
+            return new Promise((resolve, reject) => {
+                state.finish = value => {state.active--; resolve(new Response(JSON.stringify(value)));};
+                options?.signal?.addEventListener('abort', () => {
+                    state.aborted++;
+                    state.settleAborted = () => {state.active--; reject(new DOMException('Aborted', 'AbortError'));};
+                }, {once: true});
+            });
+        };
+        }"""
+    )
+    refresh = page.get_by_role("button", name="Refresh", exact=True)
+    refresh.click()
+    refresh.click()
+    refresh.click()
+    assert page.evaluate("calculationReads.starts") == 1
+    page.get_by_label("Day", exact=True).fill("2020-01-01")
+    expect(page.locator("#performance-chart")).to_have_attribute("aria-disabled", "true")
+    assert page.evaluate("calculationReads.aborted") == 1
+    assert page.evaluate("calculationReads.starts") == 1
+    page.evaluate("calculationReads.settleAborted()")
+    page.wait_for_function("() => calculationReads.starts === 2")
+    page.evaluate("value => calculationReads.finish(value)", {**evidence, "day": "2020-01-01"})
+    expect(page.locator("#performance-status")).to_have_text("")
+    expect(page.get_by_label("Day", exact=True)).to_have_value("2020-01-01")
+    assert page.evaluate("calculationReads.active") == 0
+    assert page.evaluate("calculationReads.maximum") == 1
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+@pytest.mark.parametrize("target", ["history", "detail"])
+@pytest.mark.parametrize("stage", ["headers", "body"])
+def test_calculation_reads_time_out_during_headers_or_body_and_recover(
+    daily_history, target, stage
+):
+    """A five-second budget includes body parsing and is cleaned up before a successful manual retry."""
+    page, _, _, _ = daily_history
+    beginning = datetime(2026, 11, 7, tzinfo=UTC)
+    page.clock.install(time=beginning)
+    page.clock.pause_at(beginning + timedelta(seconds=1))
+    page.evaluate(
+        """({target, stage}) => {
+        window.originalCalculationFetch = window.fetch;
+        window.calculationAborts = 0;
+        window.fetch = async (path, options) => {
+            const selected = target === 'detail' ? String(path).includes('v1/planning-performance/') :
+                String(path).includes('v1/planning-performance?');
+            if (!selected) return window.originalCalculationFetch(path, options);
+            const stalled = () => new Promise((resolve, reject) => options?.signal?.addEventListener('abort', () => {
+                window.calculationAborts++; reject(new DOMException('Aborted', 'AbortError'));
+            }, {once: true}));
+            return stage === 'headers' ? stalled() : {ok: true, status: 200, json: stalled};
+        };
+        }""",
+        {"target": target, "stage": stage},
+    )
+    if target == "detail":
+        page.locator("#performance-chart").focus()
+        page.locator("#performance-chart").press("Enter")
+    else:
+        page.get_by_role("button", name="Refresh", exact=True).click()
+    status = page.locator("#calculation-summary" if target == "detail" else "#performance-status")
+    expect(status).to_contain_text("Loading")
+    page.clock.run_for(4999)
+    expect(status).to_contain_text("Loading")
+    page.clock.run_for(2)
+    expect(status).to_contain_text("could not be loaded")
+    assert page.evaluate("calculationAborts") == 1
+    page.evaluate("window.fetch = window.originalCalculationFetch")
+    if target == "detail":
+        page.keyboard.press("Escape")
+        page.locator("#performance-chart").press("Enter")
+        expect(status).to_contain_text("Total")
+    else:
+        page.get_by_role("button", name="Refresh", exact=True).click()
+        expect(status).to_have_text("")
+        expect(page.locator("#performance-chart")).to_have_attribute("aria-disabled", "false")
+    page.clock.run_for(5001)
+    assert page.evaluate("calculationAborts") == 1
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_calculation_detail_can_reopen_before_its_previous_close_event(daily_history):
+    """A queued close event belongs to the closed popup and cannot cancel the newly opened detail."""
+    page, _, _, _ = daily_history
+    canvas = page.locator("#performance-chart")
+    canvas.focus()
+    canvas.press("Enter")
+    expect(page.locator("#calculation-summary")).to_contain_text("Total")
+    for _ in range(3):
+        canvas.evaluate(
+            """canvas => {
+            document.querySelector('#calculation-detail').close();
+            canvas.focus();
+            canvas.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}));
+            }"""
+        )
+        expect(page.locator("#calculation-summary")).to_contain_text("Total")
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+@pytest.mark.parametrize("target", ["history", "detail", "session"])
+def test_calculation_authentication_failure_keeps_connect_advice(daily_history, target):
+    """Only actual unauthorized responses reveal Connect and retain canonical recovery advice."""
+    page, _, _, _ = daily_history
+    pattern = {
+        "history": "**/v1/planning-performance?*",
+        "detail": "**/v1/planning-performance/*",
+        "session": "**/setup/session",
+    }[target]
+    page.route(pattern, lambda route: route.fulfill(status=401, body="synthetic-private-body"))
+    if target == "session":
+        page.reload()
+    elif target == "detail":
+        page.locator("#performance-chart").focus()
+        page.locator("#performance-chart").press("Enter")
+    else:
+        page.get_by_role("button", name="Refresh", exact=True).click()
+    status = page.locator("#calculation-summary" if target == "detail" else "#performance-status")
+    expect(status).to_have_text("Connect to read calculation history.")
+    if target != "detail":
+        expect(page.get_by_label("Installation API token")).to_be_visible()
+    expect(page.locator("body")).not_to_contain_text("synthetic-private-body")
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_calculation_fetch_error_cannot_impersonate_authentication_failure(daily_history):
+    """A lookalike fetch exception is still an untrusted failure, not app-owned authentication advice."""
+    page, _, _, _ = daily_history
+    page.evaluate(
+        """() => {
+        const original = window.fetch;
+        window.fetch = (path, options) => String(path).includes('v1/planning-performance?') ?
+            Promise.reject(new Error('Connect to read calculation history.')) : original(path, options);
+        }"""
+    )
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#performance-status")).to_have_text(
+        "Calculation history could not be loaded. Try Refresh."
+    )
+    expect(page.locator("#connect")).not_to_be_visible()

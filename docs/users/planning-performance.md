@@ -19,6 +19,12 @@ Refresh retains the selected calculation when it is still present. Enable
 additional calculations to navigate those bars too. Empty or failed history
 reads cannot open an old calculation under the newly selected day.
 
+If history or details cannot be read within five seconds, the page shows recovery
+advice. Use **Refresh** to retry history, or close and reopen the calculation
+popup to retry its details. Repeated refresh clicks share the pending read.
+Choosing another day replaces that read. Reading or retrying never changes your
+plans or recorded history.
+
 The stacked bars separate the first observed financial candidate from further calculation time when both were recorded. An unknown first-candidate time produces a total-only bar. Missing historical progress cannot be reconstructed from the total duration.
 
 Hover over either section of a bar to see one tooltip for that calculation,
