@@ -684,3 +684,180 @@ def test_statistics_period_start_checkpoint_is_reused_after_historical_ingress(e
     assert recovered[0].statistics.latest_at == START
     assert baselines.pending is None
     assert store.frames() == original and book.seeds == (current,)
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_captured_backdate_before_statistics_reference_remains_usable(evidence, complete):
+    """A confirmed 5-kWh prefix plus 1 later kWh minus 2 measured kWh gives 4 kWh before the reference."""
+    store, baselines = evidence
+    selected = contract(bonus=True)
+    period = selected.bonuses[0].period_start(START)
+    reference = START + timedelta(hours=1)
+    latest = START + timedelta(hours=2)
+    basis = StatisticsBasis(
+        reference,
+        latest,
+        (StatisticReference("sensor.export", 1, "recorder", "kWh", 1000, 1001),),
+        5,
+        reference,
+        "a" * 64,
+        True,
+    )
+    seed = CounterSeed(
+        "bonus", period, 6, 302, "sensor.export", latest, (("sensor.export", 302),), basis
+    )
+    book = CounterBook(latest, (seed,))
+    rows = tuple(
+        (
+            Frame(
+                START + timedelta(minutes=15 * index),
+                START + timedelta(minutes=15 * (index + 1)),
+                {"sensor.export": 0.25},
+                {},
+                {},
+                {"sensor.export": 300 + 0.25 * index},
+                "recorded",
+            ),
+            {"bindings": {"exports": ["sensor.export"]}},
+        )
+        for index in range(9)
+        if complete or index != 1
+    )
+    retain(store, rows)
+    original = store.frames()
+    if complete:
+        recovered = baselines.prepare(
+            selected,
+            rows[0][0],
+            rows[0][1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=1),
+            "before-reference",
+        )
+        assert recovered[0].used_kwh == 4
+        assert recovered[0].observed_at == START
+        assert recovered[0].meter_kwh == 300
+    else:
+        with pytest.raises(PendingSettlement):
+            baselines.prepare(
+                selected,
+                rows[0][0],
+                rows[0][1]["bindings"],
+                (),
+                book,
+                latest + timedelta(hours=1),
+                "before-reference",
+            )
+    assert baselines.pending is None
+    assert store.frames() == original and book.seeds == (seed,)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "late_gap",
+        "needed_gap",
+        "late_changed",
+        "needed_changed",
+        "late_gap_changed",
+        "bad_endpoint",
+    ],
+)
+def test_statistics_recovery_ignores_only_a_pure_gap_after_its_endpoint(evidence, failure):
+    """A complete local 1.5-kWh tail gives .5-kWh opening from a 2-kWh hourly sum. Relevant gaps and meter changes stay blocked."""
+    from open_energy_planner.contracts.bonus_statistics import StatisticsChannel
+
+    store, baselines = evidence
+    selected = contract(bonus=True)
+    period = selected.bonuses[0].period_start(START)
+    endpoint = START + timedelta(hours=1)
+    latest = START + timedelta(hours=2)
+    basis = StatisticsBasis(
+        period,
+        latest,
+        (StatisticReference("sensor.export", 1, "recorder", "kWh", 1000, 1004),),
+        0,
+        None,
+        "a" * 64,
+        True,
+    )
+    current = CounterSeed(
+        "bonus", period, 4, 304, "sensor.export", latest, (("sensor.export", 304),), basis
+    )
+    book = CounterBook(latest, (current,))
+    rows = []
+    for index in range(9):
+        if (
+            index == 6
+            and failure in ("late_gap", "late_gap_changed", "bad_endpoint")
+            or index == 2
+            and failure == "needed_gap"
+        ):
+            continue
+        exports = (
+            ["sensor.other"]
+            if (
+                (failure == "late_changed" and index == 6)
+                or (failure == "needed_changed" and index == 2)
+                or (failure == "late_gap_changed" and index == 7)
+            )
+            else ["sensor.export"]
+        )
+        instant = START + timedelta(minutes=15 * index)
+        rows.append(
+            (
+                Frame(
+                    instant,
+                    instant + timedelta(minutes=15),
+                    {"sensor.export": 0.5},
+                    {},
+                    {},
+                    {"sensor.export": 300 + 0.5 * index},
+                    "recorded",
+                ),
+                {"bindings": {"exports": exports}},
+            )
+        )
+    retain(store, rows)
+    first = rows[1]
+    original = store.frames()
+
+    def prepare():
+        """Retry the same measured interval against the unchanged current statistics book."""
+        return baselines.prepare(
+            selected,
+            first[0],
+            first[1]["bindings"],
+            (),
+            book,
+            latest + timedelta(hours=1),
+            "local-endpoint",
+        )
+
+    if failure not in ("late_gap", "bad_endpoint"):
+        with pytest.raises(PendingSettlement):
+            prepare()
+        assert baselines.pending is None
+    else:
+        with pytest.raises(PendingSettlement, match="being read from Home Assistant"):
+            prepare()
+        pending = baselines.pending
+        assert pending.end == endpoint
+        channel = StatisticsChannel(
+            basis.series[0],
+            (
+                (period - timedelta(hours=1), 1000, 0),
+                (endpoint - timedelta(hours=1), 1002, 303 if failure == "bad_endpoint" else 302),
+            ),
+        )
+        baselines.receive_statistics(pending, (channel,), book, latest + timedelta(hours=1))
+        if failure == "bad_endpoint":
+            with pytest.raises(PendingSettlement, match="disagrees"):
+                prepare()
+        else:
+            recovered = prepare()
+            assert recovered[0].used_kwh == 0.5
+            assert recovered[0].observed_at == first[0].start
+            assert recovered[0].meter_kwh == 300.5
+    assert store.frames() == original and book.seeds == (current,)

@@ -25,6 +25,15 @@ def _require_physical_statistics(seed):
         raise PendingSettlement("Validated physical bonus endpoint is unavailable")
 
 
+class ExportCaptureGap(PendingSettlement):
+    """Identify the first missing physical interval separately from changed meter evidence."""
+
+    def __init__(self, message: str, start: datetime):
+        """Retain the owned waiting explanation and the earliest unproven interval boundary."""
+        super().__init__(message)
+        self.start = start
+
+
 class HistoricalBonuses:
     """Keep historical seeds separate from authoritative current planning confirmations.
 
@@ -84,12 +93,15 @@ class HistoricalBonuses:
             for row in rows:
                 frame = parse_frame(row["frame"])
                 if (
-                    frame.start != cursor
-                    or set(row["context"]["bindings"]["exports"]) != set(exports)
+                    set(row["context"]["bindings"]["exports"]) != set(exports)
                     or not set(exports) <= frame.meter_start.keys()
                 ):
                     raise PendingSettlement(
                         "Historical bonus export evidence has a gap or changed meters"
+                    )
+                if frame.start != cursor:
+                    raise ExportCaptureGap(
+                        "Historical bonus export evidence has a gap or changed meters", cursor
                     )
                 if initial is None:
                     initial = {entity: frame.meter_start[entity] for entity in exports}
@@ -149,7 +161,7 @@ class HistoricalBonuses:
                 self.backdated.clear()
             self.backdated[key] = result
             return result
-        raise PendingSettlement("Historical bonus baseline awaits captured export evidence")
+        raise ExportCaptureGap("Historical bonus baseline awaits captured export evidence", cursor)
 
     def prepare(self, contract, frame, bindings, seeds, book, now, revision, previous=None):
         """Prepare exact beginning usage, or request missing older periods from HA.
@@ -206,10 +218,6 @@ class HistoricalBonuses:
                 and seed in book.seeds
                 and seed.observed_at > frame.start
             ):
-                if endpoint < seed.statistics.reference_at:
-                    raise PendingSettlement(
-                        "Historical bonus interval predates the confirmed statistics reference"
-                    )
                 cached = historical.get((family, period, identity))
                 if (
                     book is None
@@ -220,12 +228,13 @@ class HistoricalBonuses:
                     try:
                         result.append(self.backdate(seed, frame.start, exports))
                         continue
-                    except PendingSettlement as error:
-                        if (
-                            str(error)
-                            != "Historical bonus baseline awaits captured export evidence"
-                        ):
+                    except ExportCaptureGap as error:
+                        if error.start <= endpoint:
                             raise
+                    if endpoint < seed.statistics.reference_at:
+                        raise PendingSettlement(
+                            "Historical bonus interval predates the confirmed statistics reference"
+                        )
                     statistics_missing.append((family, period))
                     continue
                 _require_physical_statistics(cached)
