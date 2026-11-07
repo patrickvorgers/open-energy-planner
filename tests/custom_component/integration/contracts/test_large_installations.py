@@ -157,8 +157,12 @@ def test_decoded_projection_bound_rejects_unbounded_callers():
         validate_projection_size({"padding": "x" * 262145}, 262144)
 
 
-@pytest.mark.parametrize("path,byte_limit", [("/v1/ev", 262144), ("/v1/snapshot", 4194304)])
-def test_http_resource_limits_remain_enforced_for_large_projections(path, byte_limit):
+@pytest.mark.parametrize(
+    "path,byte_limit",
+    [("/v1/ev", 262144), ("/v1/snapshot", 4194304), ("/v1/ha/catalogue", 4194304)],
+)
+@pytest.mark.parametrize("framing", ["declared", "chunked"])
+def test_http_resource_limits_remain_enforced_for_large_projections(path, byte_limit, framing):
     """Larger device support never permits an unbounded streaming HTTP response."""
     from aiohttp import ClientSession, web
     from aiohttp.test_utils import TestServer
@@ -171,8 +175,61 @@ def test_http_resource_limits_remain_enforced_for_large_projections(path, byte_l
 
         async def oversized(_request):
             """Supply only synthetic bytes and the required matching protocol identity."""
-            return web.json_response(
+            response = web.json_response(
                 {"padding": "x" * (byte_limit + 1)},
+                headers={
+                    "X-OEP-Release": BUILD_INFO["version"],
+                    "X-OEP-Build": BUILD_INFO["build"] or "",
+                },
+            )
+            if framing == "chunked":
+                response.enable_chunked_encoding()
+            return response
+
+        application = web.Application()
+        application.router.add_route("*", path, oversized)
+        async with TestServer(application) as server, ClientSession() as session:
+            client = LocalClient(session, str(server.make_url("/")), "synthetic-token")
+            with pytest.raises(ValueError, match="App response exceeds size limit"):
+                await client.request("POST" if path == "/v1/ha/catalogue" else "GET", path)
+
+    asyncio.run(scenario())
+
+
+def test_catalogue_membership_response_uses_snapshot_budget_without_widening_ordinary_routes():
+    """The same typed device list fits a catalogue reply while ordinary endpoints keep their smaller bound."""
+    import json
+
+    from aiohttp import ClientSession, web
+    from aiohttp.test_utils import TestServer
+
+    from custom_components.open_energy_planner.client import LocalClient
+    from custom_components.open_energy_planner.const import BUILD_INFO
+
+    async def scenario():
+        """Read the same concrete device response through the actual endpoint-specific HTTP limiter."""
+        devices = [
+            {
+                "id": f"solar_{index:016x}",
+                "kind": "solar",
+                "name": f"Synthetic solar source {index:04}",
+                "energy_entity": f"sensor.solar_meter_{index:04}",
+                "configured": False,
+                "can_curtail": False,
+            }
+            for index in range(1600)
+        ]
+        body = {
+            "accepted": True,
+            "configuration_issue": "energy_configuration_changed",
+            "devices": devices,
+        }
+        assert 262144 < len(json.dumps(body).encode()) < 4194304
+
+        async def respond(_request):
+            """Keep release validation intact for both supported response classes."""
+            return web.json_response(
+                body,
                 headers={
                     "X-OEP-Release": BUILD_INFO["version"],
                     "X-OEP-Build": BUILD_INFO["build"] or "",
@@ -180,11 +237,14 @@ def test_http_resource_limits_remain_enforced_for_large_projections(path, byte_l
             )
 
         application = web.Application()
-        application.router.add_get(path, oversized)
+        application.router.add_post("/v1/ha/catalogue", respond)
+        application.router.add_get("/v1/solar", respond)
         async with TestServer(application) as server, ClientSession() as session:
             client = LocalClient(session, str(server.make_url("/")), "synthetic-token")
+            received = await client.request("POST", "/v1/ha/catalogue", {})
+            assert received == body
             with pytest.raises(ValueError, match="App response exceeds size limit"):
-                await client.request("GET", path)
+                await client.request("GET", "/v1/solar")
 
     asyncio.run(scenario())
 

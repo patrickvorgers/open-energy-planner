@@ -34,7 +34,8 @@ class LocalClient:
 
         Use a five-second deadline. Authentication rejection is distinguished from
         other HTTP, transport and malformed-response failures for user-facing recovery.
-        Whole-plan endpoints allow 4 MiB. Other endpoints allow 256 KiB.
+        Whole-plan and catalogue membership replies allow 4 MiB. Other endpoints
+        allow 256 KiB.
 
         Raises:
             ReleaseMismatchError: If a marked 409 response rejects this build or a
@@ -80,6 +81,7 @@ class LocalClient:
                 "/v1/solar/history",
                 "/v1/sources",
                 "/v1/replan",
+                "/v1/ha/catalogue",
             ) or (method == "PUT" and path == "/v1/installation")
             limit = MAX_SNAPSHOT_RESPONSE_BYTES if snapshot_response else MAX_API_RESPONSE_BYTES
             data = bytearray()
