@@ -84,6 +84,7 @@ function metadata(predicate) { return (current?.catalogue?.entities || []).filte
 
 /** Show a selected store without discarding edits made to any other store. */
 function renderEditor() {
+    const profileOpen = find("thermal-demand-profile")?.open ?? false;
     const selector = find("thermal-store-select"); selector.replaceChildren();
     for (const store of draft.stores) { const option = node("option", displayName(store)); option.value = store.id; selector.append(option); }
     if (!draft.stores.some(store => store.id === selectedId)) selectedId = draft.stores[0]?.id || null;
@@ -106,7 +107,7 @@ function renderEditor() {
     numberInput(physics, store, "ambient_c", "Tank surroundings temperature (°C)", "The temperature around the insulated tank. This non-freezing water model supports 0 to 60 °C, no higher than the maximum planning temperature.", {min: 0, max: 60, temperature: true});
     numberInput(physics, store, "loss_w_per_c", "Heat-loss coefficient (W/°C)", "Declare the tank's heat loss per degree of difference from its surroundings. This is a model assumption, not a measured value.", {max: 1000});
     editor.append(physics);
-    const profile = node("details"); profile.id = "thermal-demand-profile"; profile.append(node("summary", "Expected hot-water heat demand by hour"), node("p", "Enter expected thermal kWh drawn during each local clock hour. These declared rates are assumptions, not measured hot-water use. At least one hour must be positive before enabling planning."));
+    const profile = node("details"); profile.id = "thermal-demand-profile"; profile.open = profileOpen; profile.append(node("summary", "Expected hot-water heat demand by hour"), node("p", "Enter expected thermal kWh drawn during each local clock hour. These declared rates are assumptions, not measured hot-water use. At least one hour must be positive before enabling planning."));
     const hours = node("div"); hours.className = "workspace-grid";
     store.draw_profile_kwh.forEach((energy, hour) => {
         const label = node("label", `${String(hour).padStart(2, "0")}:00 to ${String(hour + 1).padStart(2, "0")}:00 (thermal kWh)`), input = node("input"); input.type = "number"; input.min = 0; input.max = 100; input.step = "any"; input.required = true; input.dataset.hour = String(hour); input.value = energy ?? "";

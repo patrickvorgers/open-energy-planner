@@ -8,8 +8,8 @@ export function retainInputs(render) {
     const previous = controls(), values = previous.map(input => input.value);
     const focused = document.activeElement, focusIndex = previous.indexOf(focused);
     const field = focused?.dataset.field, fieldIndex = field ? [...document.querySelectorAll("[data-field]")].filter(control => control.dataset.field === field).indexOf(focused) : -1;
-    const handlers = focusIndex >= 0 ? [focused.onfocus, focused.onblur] : null;
-    if (handlers) { focused.onfocus = null; focused.onblur = null; }
+    const keepNativeEditing = event => event.stopImmediatePropagation();
+    if (focusIndex >= 0) for (const type of ["focus", "blur"]) focused.addEventListener(type, keepNativeEditing, true);
     try {
         render();
         const replacement = controls();
@@ -19,7 +19,7 @@ export function retainInputs(render) {
         if (focused?.isConnected) focused.focus({preventScroll: true});
         else if (fieldIndex >= 0) [...document.querySelectorAll("[data-field]")].filter(control => control.dataset.field === field)[fieldIndex]?.focus({preventScroll: true});
     } finally {
-        if (handlers) [focused.onfocus, focused.onblur] = handlers;
+        if (focusIndex >= 0) for (const type of ["focus", "blur"]) focused.removeEventListener(type, keepNativeEditing, true);
     }
 }
 
