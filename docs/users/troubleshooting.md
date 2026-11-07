@@ -57,9 +57,10 @@ separately. After correcting HA configuration, save or cancel pending edits and
 use Check saved settings to reload available metadata. Large catalogues are
 transferred in bounded parts. Sources are not omitted because their names sort
 late or the installation contains many sensors. A new list becomes available
-only when its complete transfer has been validated. An interrupted refresh keeps
-the previous complete list. Allow the next routine integration refresh before
-checking again. Do not recreate a working HA integration to work around a
+only when its complete transfer has been validated. An interruption before
+publication keeps the previous complete list. If only the final acknowledgement
+is lost, the new complete list may already be visible. Allow the next routine
+integration refresh before checking again. Do not recreate a working HA integration to work around a
 temporarily unavailable source list.
 
 ## Cost or benefit is unavailable

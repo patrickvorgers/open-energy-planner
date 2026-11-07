@@ -347,7 +347,9 @@ class PlanCoordinator:
                         catalogue = await setup_catalogue(self.hass)
                         if self.closed:
                             return
-                        prepared = prepare_catalogue(catalogue)
+                        prepared = await self.hass.async_add_executor_job(
+                            prepare_catalogue, catalogue
+                        )
                         for page in prepared.pages:
                             if self.closed:
                                 return

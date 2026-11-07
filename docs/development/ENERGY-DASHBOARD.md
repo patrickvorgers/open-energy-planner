@@ -121,8 +121,11 @@ lead the app clock by at most thirty seconds.
 
 Pending pages do not update the public catalogue, its freshness timestamp,
 consumer membership or installation reconciliation. Only complete, validated
-discovery enters the existing publication and reconciliation path. A failed or
-interrupted transfer retains the last complete snapshot. Optional discovery
+discovery enters the existing publication and reconciliation path. A failure or
+interruption before publication retains the last complete snapshot. Publication
+precedes reconciliation and the final reply. An error after publication or a lost
+final reply can therefore leave the new complete catalogue visible even though
+the sender did not receive acceptance. Optional discovery
 failures remain isolated from current-plan synchronization. The release identity,
 authentication, request deadline and malformed-input boundaries remain in force.
 
@@ -133,6 +136,9 @@ validation remain active. The HA response reader retains its 256 KiB ordinary
 response budget and 4 MiB snapshot budget. Decoded device projections enforce the
 same byte budgets. A normalized settlement frame is bounded by 192 KiB rather
 than by an arbitrary number of channels.
+The integration separately limits each serialized settlement report to 192 KiB,
+including request identity, imports, exports and frames. Capture stops before
+adding a frame that would exceed this limit. If no frame fits, it returns no report.
 
 ## Source display names
 

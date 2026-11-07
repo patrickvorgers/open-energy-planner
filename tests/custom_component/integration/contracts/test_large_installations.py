@@ -11,7 +11,7 @@ from tests.custom_component.support.chain import running_chain
 
 
 def test_eighty_settlement_channels_use_bounded_recorder_queries(monkeypatch):
-    """Every channel reaches the financial evidence while database queries and report bytes stay bounded."""
+    """All eighty channels reach the frame while each Recorder call handles at most sixty-four channels."""
     from datetime import timedelta
 
     from custom_components.open_energy_planner import settlement

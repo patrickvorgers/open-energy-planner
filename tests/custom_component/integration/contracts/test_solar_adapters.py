@@ -15,6 +15,105 @@ from custom_components.open_energy_planner.solar_adapters import (
     solar_configuration_suggestion,
 )
 
+DISCOVERY_PAGE_BUDGET_BYTES = 192 * 1024
+
+
+@pytest.mark.parametrize("unload_during_preparation", [False, True])
+def test_catalogue_preparation_uses_worker_and_drains_before_unload(
+    monkeypatch, unload_during_preparation
+):
+    """HA remains responsive during worker preparation, and unload prevents late sends and captures."""
+    from threading import Event, get_ident
+
+    from custom_components.open_energy_planner import catalogue_transfer
+    from tests.custom_component.support.chain import running_chain
+
+    async def scenario():
+        """Coordinate worker and event-loop checkpoints without timing-based performance assertions."""
+        async with running_chain(live=True) as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            loop = asyncio.get_running_loop()
+            loop_thread = get_ident()
+            entered, closing = asyncio.Event(), asyncio.Event()
+            release, finished = Event(), Event()
+            preparation_threads, prepared_results, sent, captures = [], [], [], []
+            original_prepare = catalogue_transfer.prepare_catalogue
+            original_request = coordinator.client.request
+            original_capture = coordinator.solar_forecast_bridge.capture
+            original_close = coordinator.close
+
+            def prepare(body):
+                """Pause only a worker so an incorrect event-loop caller fails without deadlocking HA."""
+                preparation_threads.append(get_ident())
+                if get_ident() == loop_thread:
+                    entered.set()
+                else:
+                    loop.call_soon_threadsafe(entered.set)
+                    assert release.wait(timeout=10), "Test did not release catalogue worker"
+                result = original_prepare(body)
+                prepared_results.append(result)
+                finished.set()
+                return result
+
+            async def request(method, path, body=None):
+                """Retain actual authenticated exchanges and record sends after preparation."""
+                if path in ("/v1/ha/catalogue", "/v1/solar/ha-forecasts"):
+                    sent.append((path, coordinator.closed))
+                return await original_request(method, path, body)
+
+            async def capture(suggestions, now):
+                """Keep real forecast capture while recording its accepted normalized context."""
+                captures.append(suggestions)
+                return await original_capture(suggestions, now)
+
+            async def close():
+                """Signal real unload and retain its active-synchronization drain."""
+                closing.set()
+                await original_close()
+
+            monkeypatch.setattr(catalogue_transfer, "prepare_catalogue", prepare)
+            monkeypatch.setattr(coordinator.client, "request", request)
+            monkeypatch.setattr(coordinator.solar_forecast_bridge, "capture", capture)
+            monkeypatch.setattr(coordinator, "close", close)
+            coordinator.catalogue_sent = None
+            synchronization = asyncio.create_task(coordinator.sync())
+            tasks = [synchronization]
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=5)
+                assert len(preparation_threads) == 1
+                assert preparation_threads[0] != loop_thread
+                checkpoint = asyncio.Event()
+                loop.call_soon(checkpoint.set)
+                await checkpoint.wait()
+                assert not finished.is_set()
+                assert sent == captures == []
+                if unload_during_preparation:
+                    unload = asyncio.create_task(hass.config_entries.async_unload(entry.entry_id))
+                    tasks.append(unload)
+                    await asyncio.wait_for(closing.wait(), timeout=5)
+                    assert coordinator.closed
+                    assert not unload.done()
+                    assert not finished.is_set()
+            finally:
+                release.set()
+                outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+            assert not any(isinstance(outcome, BaseException) for outcome in outcomes)
+            assert finished.is_set()
+            if unload_during_preparation:
+                assert outcomes[-1] is True
+                assert sent == captures == []
+            else:
+                assert any(path == "/v1/ha/catalogue" for path, _closed in sent)
+                assert any(path == "/v1/solar/ha-forecasts" for path, _closed in sent)
+                assert all(not closed for _path, closed in sent)
+                assert captures == [
+                    prepared_results[0].snapshot["suggestions"].get("solar_configurations", [])
+                ]
+
+    asyncio.run(scenario())
+
 
 @pytest.mark.parametrize("paused_stage", ["catalogue", "forecast", "upload"])
 def test_unload_drains_solar_work_without_reopening_listeners(monkeypatch, paused_stage):
@@ -412,7 +511,17 @@ def suggestion(*entries):
 
 
 def _solar_transfer_fixture(monkeypatch, overflow_bytes, captured):
-    """Size valid provider geometry against an independent actual-wire boundary and later meter."""
+    """Size valid provider geometry against an independent actual-wire boundary and later meter.
+
+    Args:
+        monkeypatch: Pin the capture clock and transfer identity for byte arithmetic.
+        overflow_bytes: Bytes above the independently specified wrapped page budget.
+            Negative values leave spare room. Zero fits exactly.
+        captured: Aware UTC capture time used in the envelope and the patched clock.
+
+    Returns:
+        tuple: The catalogue body and the two provider entries backing its solar proposals.
+    """
     import json
 
     from custom_components.open_energy_planner import catalogue_transfer
@@ -480,7 +589,7 @@ def _solar_transfer_fixture(monkeypatch, overflow_bytes, captured):
         "path": ["suggestions", "solar_configurations"],
         "items": [proposal],
     }
-    remaining = 196608 + overflow_bytes - len(json.dumps(wrapper).encode())
+    remaining = DISCOVERY_PAGE_BUDGET_BYTES + overflow_bytes - len(json.dumps(wrapper).encode())
     assert remaining > 0
     for plane, panel in zip(planes, proposal["providers"][0]["panels"], strict=True):
         added = min(200 - len(plane.title), remaining)
@@ -488,8 +597,8 @@ def _solar_transfer_fixture(monkeypatch, overflow_bytes, captured):
         panel["name"] = plane.title
         remaining -= added
     assert remaining == 0
-    assert len(json.dumps(wrapper).encode()) == 196608 + overflow_bytes
-    assert len(json.dumps(proposal).encode()) < 196608
+    assert len(json.dumps(wrapper).encode()) == DISCOVERY_PAGE_BUDGET_BYTES + overflow_bytes
+    assert len(json.dumps(proposal).encode()) < DISCOVERY_PAGE_BUDGET_BYTES
     assert suggestion(provider) == proposal
     other_provider = entry("other")
     later_proposal = {**suggestion(other_provider), "entity_id": "sensor.small"}
@@ -511,7 +620,7 @@ def test_optional_solar_geometry_uses_actual_transfer_envelope(monkeypatch, over
     proposal, later_proposal = body["suggestions"]["solar_configurations"]
     original = deepcopy(body)
     pages = list(catalogue_transfer.catalogue_pages(body))
-    assert all(len(json.dumps(page).encode()) <= 196608 for page in pages)
+    assert all(len(json.dumps(page).encode()) <= DISCOVERY_PAGE_BUDGET_BYTES for page in pages)
     catalogue = HACatalogue()
     for page in pages[:-1]:
         assert catalogue.receive_page(json.loads(json.dumps(page)), captured) is None
@@ -663,13 +772,17 @@ def test_unrepresentable_catalogue_fails_before_emitting_pages(oversized_part):
     catalogue.receive(previous, captured)
     body = deepcopy(previous)
     if oversized_part == "entity":
-        body["entities"][0]["name"] = "x" * 196608
+        body["entities"][0]["name"] = "x" * DISCOVERY_PAGE_BUDGET_BYTES
     elif oversized_part == "solar_identity":
         body["suggestions"]["solar_configurations"] = [
-            {"entity_id": "sensor." + "x" * 196608, "providers": [], "issue": None}
+            {
+                "entity_id": "sensor." + "x" * DISCOVERY_PAGE_BUDGET_BYTES,
+                "providers": [],
+                "issue": None,
+            }
         ]
     else:
-        body["timezone"] = "x" * 196608
+        body["timezone"] = "x" * DISCOVERY_PAGE_BUDGET_BYTES
     original = deepcopy(body)
     sent = []
     with pytest.raises(ValueError, match="Catalogue record exceeds the discovery page budget"):
