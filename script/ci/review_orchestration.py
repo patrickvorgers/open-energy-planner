@@ -41,6 +41,7 @@ REQUEST_TIMEOUT = timedelta(days=7)
 TERMINAL = {"complete", "blocked", "superseded"}
 PHASES = TERMINAL | {"sending", "quota", "coderabbit", "kody", "waiting"}
 PUBLIC_FAILURE_MESSAGES = {
+    "requester": "The original review request or its requester authority could not be verified. Check the request comment and the requester's current PR authorship or repository write access, then request review again.",
     "publisher": "The provider command account could not be verified. Ask a repository administrator to check the OEP_REVIEW_COMMAND_TOKEN secret and its repository access before requesting review again.",
     "blocked": "Review prerequisites could not be verified. Inspect the current checks and resolved findings before requesting review again.",
     "sending": "Command publication could not be confirmed. Inspect the PR request markers before any retry.",
@@ -66,6 +67,10 @@ mutation($id: ID!, $body: String!) {
 
 class CommandAccountError(VerificationError):
     """Reject an unavailable or unauthorized user credential without exposing its response."""
+
+
+class RequesterAuthorityError(VerificationError):
+    """Identify a missing or unverifiable original request without exposing API details."""
 
 
 def require_command_account(repository, state, client, publisher):
@@ -430,14 +435,19 @@ def require_requester(repository, number, command, client):
 
 def require_original_requester(repository, number, state, client):
     """Recheck the original explicit request before another credential publishes on its behalf."""
-    commands = [
-        row
-        for row in comments_for(repository, number, client)
-        if row["id"] == state["request"] and row["body"].strip() == REVIEW_COMMAND
-    ]
-    if len(commands) != 1:
-        raise VerificationError("The original explicit review request is unavailable")
-    require_requester(repository, number, commands[0], client)
+    try:
+        commands = [
+            row
+            for row in comments_for(repository, number, client)
+            if row["id"] == state["request"] and row["body"].strip() == REVIEW_COMMAND
+        ]
+        if len(commands) != 1:
+            raise VerificationError("The original explicit review request is unavailable")
+        require_requester(repository, number, commands[0], client)
+    except VerificationError:
+        raise RequesterAuthorityError(
+            "Original requester authority could not be verified"
+        ) from None
 
 
 def start_request(repository, number, command, client, now, publisher=None):
@@ -486,7 +496,13 @@ def start_request(repository, number, command, client, now, publisher=None):
                 state,
                 current["node_id"],
                 client,
-                category="publisher" if isinstance(error, CommandAccountError) else None,
+                category=(
+                    "publisher"
+                    if isinstance(error, CommandAccountError)
+                    else "requester"
+                    if isinstance(error, RequesterAuthorityError)
+                    else None
+                ),
             )
         raise
     return state
@@ -533,10 +549,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
             row
             for row in comments
             if (
-                (
-                    row.get("user", {}).get("type") == "User"
-                    and row["user"].get("id") == state["publisher_id"]
-                )
+                (github_user(row.get("user")) and row["user"].get("id") == state["publisher_id"])
                 if "publisher_id" in state
                 else (
                     is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
@@ -719,7 +732,13 @@ def process_pr(repository, number, client, now, command_id=None, publisher=None)
                 state,
                 subject,
                 client,
-                category="publisher" if isinstance(error, CommandAccountError) else None,
+                category=(
+                    "publisher"
+                    if isinstance(error, CommandAccountError)
+                    else "requester"
+                    if isinstance(error, RequesterAuthorityError)
+                    else None
+                ),
             )
     return True
 

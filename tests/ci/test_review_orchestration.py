@@ -936,8 +936,14 @@ def test_nullable_mutation_payload_uses_canonical_verification_failure(
     assert "PRIVATE-NULL-GRAPHQL-SENTINEL" not in str(captured.value)
 
 
-@pytest.mark.parametrize("pending_user", ["revoked", "developer"])
-def test_unauthorized_discovered_command_does_not_block_active_progress(monkeypatch, pending_user):
+@pytest.mark.parametrize(
+    "pending_user",
+    ["revoked", "developer"],
+    ids=["unrelated-denied-user", "original-requester-revoked"],
+)
+def test_denied_duplicate_and_original_requester_revocation_have_distinct_effects(
+    monkeypatch, pending_user
+):
     """Denied duplicates stay unconsumed, and an original writer's revoked authority blocks new sends."""
     client = GitHubEvidence()
     client.run(explicit=True)
@@ -1004,15 +1010,23 @@ def test_pending_permission_api_failure_does_not_advance_or_consume(monkeypatch)
     assert client.provider_commands() == ["@coderabbitai rate limit"]
 
 
-@pytest.mark.parametrize("mutation", ["add", "update"])
-def test_null_graphql_failure_does_not_starve_the_next_pr(tmp_path, monkeypatch, capsys, mutation):
-    """A real nullable mutation on the first PR preserves failure while a second request proceeds."""
+@pytest.mark.parametrize("mutation", ["add", "update", "null-author-recovery"])
+def test_one_pr_metadata_failure_or_recovery_does_not_starve_the_next_pr(
+    tmp_path, monkeypatch, capsys, mutation
+):
+    """A failed mutation or recovered null-author outbox cannot prevent the next PR from proceeding."""
     bad = GitHubEvidence()
     bad.current.update(number=11, node_id="PR_11")
     bad.current["head"]["sha"] = "4" * 40
     for check in bad.checks:
         check["head_sha"] = "4" * 40
     good = GitHubEvidence()
+    if mutation == "null-author-recovery":
+        bad.lose_response = True
+        with pytest.raises(VerificationError):
+            review.process_pr(REPOSITORY, 11, bad, NOW, bad.command["id"], bad.publisher)
+        bad.lose_response = False
+        bad.comment("A deleted account's ordinary comment")["user"] = None
 
     class RoutedEvidence:
         """Route actual controller metadata and mutations to two independent synthetic PRs."""
@@ -1077,8 +1091,13 @@ def test_null_graphql_failure_does_not_starve_the_next_pr(tmp_path, monkeypatch,
         "GitHub",
         lambda token: RoutedPublisher() if token == "synthetic-command-token" else RoutedEvidence(),
     )
-    assert review.main() == 1
-    assert bad.provider_commands() == []
+    if mutation == "null-author-recovery":
+        assert review.main() == 0
+        assert bad.provider_commands() == ["@coderabbitai rate limit"]
+        assert bad.state()["phase"] == "quota"
+    else:
+        assert review.main() == 1
+        assert bad.provider_commands() == []
     assert good.provider_commands() == ["@coderabbitai rate limit"]
     assert "PRIVATE-NULL-SWEEP-SENTINEL" not in capsys.readouterr().out
 
@@ -1536,3 +1555,87 @@ def test_unavailable_comment_author_cannot_break_pending_inbox_discovery(user):
     client.run()
     assert client.provider_commands() == []
     assert client.state() is None
+
+
+@pytest.mark.parametrize(
+    "published", [True, False], ids=["recover-user-receipt", "block-missing-receipt"]
+)
+def test_null_author_outbox_recovery_preserves_identity_and_never_duplicates(published):
+    """A deleted unrelated author cannot crash reconciliation or authorize a duplicate publication."""
+    client = GitHubEvidence()
+    client.lose_response = published
+    client.fail_before_send = not published
+    with pytest.raises(VerificationError):
+        client.run(explicit=True)
+    client.lose_response = False
+    client.fail_before_send = False
+    client.comment("Ordinary comment from an unavailable account")["user"] = None
+    client.run()
+    assert client.state()["publisher_id"] == 4242
+    assert client.state()["phase"] == ("quota" if published else "blocked")
+    assert client.provider_commands() == (["@coderabbitai rate limit"] if published else [])
+    client.run()
+    assert client.provider_commands() == (["@coderabbitai rate limit"] if published else [])
+
+
+@pytest.mark.parametrize("failure", ["revoked", "deleted", "unavailable"])
+def test_original_requester_failure_explains_the_public_status_without_private_data(failure):
+    """A lost request or requester authority points users to authorization rather than provider quota."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    if failure == "revoked":
+        client.permission = "read"
+    elif failure == "deleted":
+        client.comments.remove(client.command)
+    else:
+        original_get = client.get
+
+        def unavailable_permission(path):
+            """Simulate a failed requester permission read with a private provider error."""
+            if path.endswith("/collaborators/developer/permission"):
+                raise VerificationError("PRIVATE-REQUESTER-SENTINEL")
+            return original_get(path)
+
+        client.get = unavailable_permission
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    statuses = [
+        row["body"] for row in client.comments if row["body"].startswith("<!-- oep-review-state:")
+    ]
+    assert "Check the request comment" in statuses[-1]
+    assert "requester" in statuses[-1]
+    assert "CodeRabbit availability could not be verified" not in statuses[-1]
+    assert "PRIVATE-REQUESTER-SENTINEL" not in json.dumps(client.comments)
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("failure", ["revoked", "deleted"])
+def test_requester_failure_during_start_uses_authority_recovery_advice(failure):
+    """A request withdrawn after its first status is created gets authorization-specific advice."""
+    client = GitHubEvidence()
+    original_post = client.post
+
+    def withdraw_after_initial_status(path, payload):
+        """Change the original request once its initial durable status has actually been written."""
+        result = original_post(path, payload)
+        if payload["query"] == review.ADD_COMMENT and payload["variables"]["body"].startswith(
+            "<!-- oep-review-state:"
+        ):
+            if failure == "revoked":
+                client.permission = "read"
+            else:
+                client.comments.remove(client.command)
+        return result
+
+    client.post = withdraw_after_initial_status
+    with pytest.raises(review.RequesterAuthorityError):
+        client.run(explicit=True)
+    assert client.state()["phase"] == "blocked"
+    statuses = [
+        row["body"] for row in client.comments if row["body"].startswith("<!-- oep-review-state:")
+    ]
+    assert "Check the request comment" in statuses[-1]
+    assert "PR authorship or repository write access" in statuses[-1]
+    assert "CodeRabbit availability could not be verified" not in statuses[-1]
+    assert client.provider_commands() == []
