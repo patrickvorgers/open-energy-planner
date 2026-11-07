@@ -429,7 +429,7 @@ def test_individual_consumer_choices_share_the_active_database(archive):
 
 def test_weather_learning_resumes_from_original_forward_evidence(archive):
     """Every backend reopens real native JSON and completes earlier unseen days before promoting."""
-    from tests.app.appliance.test_weather_learning import forecast_day
+    from tests.app.forecast.support.weather_learning import forecast_day
 
     engine, _root = archive
     documents = SqlDocuments(engine, "demand")

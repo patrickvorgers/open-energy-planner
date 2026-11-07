@@ -54,7 +54,7 @@ def test_transfer_progress_reports_real_copy_and_verification_counts(route):
 
 def test_weather_learning_transfers_and_finishes_without_source(route):
     """Every backend transfer retains native model JSON and forward evidence after the source closes."""
-    from tests.app.appliance.test_weather_learning import forecast_day
+    from tests.app.forecast.support.weather_learning import forecast_day
 
     (source, target), root = route
     original = SqlPlanRepository(root / "source", engine=source)
