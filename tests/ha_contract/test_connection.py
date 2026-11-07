@@ -118,7 +118,10 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                     assert (await response.json())["instance_id"] == pairing.instance_id
                 for route, body_mib, expected_status in (
                     ("/v1/history", 2, 409),
+                    ("/v1/settlement/bonus-history", 2, 409),
+                    ("/v1/settlement/bonus-history", 17, 413),
                     ("/v1/observations", 2, 413),
+                    ("/v1/solar/ha-forecasts", 2, 413),
                     ("/v1/history", 17, 413),
                 ):
                     async with client.post(
@@ -132,7 +135,12 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                     ) as response:
                         assert response.status == expected_status
                         if expected_status == 409:
-                            assert "History request changed" in await response.text()
+                            message = (
+                                "Historical bonus request changed"
+                                if route.endswith("bonus-history")
+                                else "History request changed"
+                            )
+                            assert message in await response.text()
                 annual_report = {
                     "request_version": "not-current",
                     "statistics": [
@@ -189,6 +197,32 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                         headers={"Authorization": "Bearer " + token},
                     ) as response:
                         assert response.status == 400, "Peer reaches validated EV operation"
+                async with client.post(
+                    url + "/v1/solar/ha-forecasts",
+                    json={},
+                    ssl=fingerprint,
+                    headers={"Authorization": "Bearer " + token},
+                ) as response:
+                    assert response.status == 400, "Peer reaches validated HA forecast receipt"
+                async with client.get(
+                    url + "/v1/solar/ha-forecasts",
+                    ssl=fingerprint,
+                    headers={"Authorization": "Bearer " + token},
+                ) as response:
+                    assert response.status == 403, "Only POST forecast submission is peer-owned"
+                async with client.post(
+                    url + "/v1/solar/ha-forecasts", json={}, ssl=fingerprint
+                ) as response:
+                    assert response.status == 401, (
+                        "Forecast submission still requires a paired credential"
+                    )
+                async with client.post(
+                    url + "/v1/solar",
+                    json={},
+                    ssl=fingerprint,
+                    headers={"Authorization": "Bearer " + token},
+                ) as response:
+                    assert response.status == 403, "Solar configuration remains app-owned"
                 async with client.post(
                     url + "/v1/forecast-quality/history",
                     json=[],

@@ -86,6 +86,67 @@ Original plans and configuration versions remain unchanged. New batteries still
 need OEP-only ratings/relationships. Missing SoC, power or capacity must be fixed
 in Energy first. A removed required field blocks planning against the old settings.
 
+## Complete discovery transfers
+
+The integration captures all supported sensor metadata, Energy suggestions and
+compact history endpoints as one snapshot. A small snapshot remains compatible
+with the single-request catalogue contract. Larger snapshots use ordered HTTP
+pages, each at most 192 KiB including JSON escaping and protocol overhead.
+The authenticated request limit remains 1 MiB. No entity-count or alphabetical
+cutoff decides which sources can appear in settings.
+
+The serializer prepares and validates all pages before sending the first one.
+Optional solar configuration groups are measured with their actual transfer
+identity, timestamp, page index and JSON envelope. If a complete group cannot
+fit, only that group's provider geometry becomes explicitly incomplete. Its
+production meter and all other source metadata remain available. The serializer
+never imports only some planes from a group. A group that fits, including one
+exactly at the page budget, retains every plane. The final digest covers the
+normalized snapshot. The captured input is not mutated. An oversized mandatory
+record, header or incomplete-group marker fails before any page is sent.
+The prepared result keeps this normalized snapshot together with its wire pages.
+After the app accepts the final catalogue message, the coordinator captures
+forecasts from that same snapshot. Incomplete groups do not enter forecast
+capture, while independent complete meters can still upload their predictions.
+Partial, rejected or mixed transfers never supply a new forecast context.
+The paired TLS gateway admits forecast submission only through the exact
+`POST /v1/solar/ha-forecasts` operation. Current Energy provider associations are
+validated before persistence. Solar configuration and other HTTP methods remain
+outside this peer permission.
+
+Each paged message carries a transfer identity, capture timestamp, content digest,
+zero-based index and completion flag. The first message supplies the document
+header. Subsequent pages append to explicitly allowed collection paths. The final
+message must reproduce the SHA-256 digest of the complete canonical JSON document.
+The receiver admits one pending transfer, with a 32 MiB aggregate byte budget and
+a five-minute lifetime. It rejects older starts, repeated or out-of-order pages,
+mixed identities, unsupported paths and corrupt completion. A future capture may
+lead the app clock by at most thirty seconds.
+
+Pending pages do not update the public catalogue, its freshness timestamp,
+consumer membership or installation reconciliation. Only complete, validated
+discovery enters the existing publication and reconciliation path. A failure or
+interruption before publication retains the last complete snapshot. Publication
+precedes reconciliation and the final reply. An error after publication or a lost
+final reply can therefore leave the new complete catalogue visible even though
+the sender did not receive acceptance. Optional discovery
+failures remain isolated from current-plan synchronization. The release identity,
+authentication, request deadline and malformed-input boundaries remain in force.
+
+Configured device and energy-channel counts are not product limits. Recorder
+queries process at most sixty-four channels per call while retaining all members.
+Existing history windows, query deadlines, response budgets and physical-value
+validation remain active. The HA response reader retains its 256 KiB ordinary
+response budget and 4 MiB snapshot budget. Catalogue acceptance replies use the
+snapshot budget because they return the complete accepted device membership.
+This does not widen ordinary settings responses or the bounded request pages.
+Decoded device projections enforce the
+same byte budgets. A normalized settlement frame is bounded by 192 KiB rather
+than by an arbitrary number of channels.
+The integration separately limits each serialized settlement report to 192 KiB,
+including request identity, imports, exports and frames. Capture stops before
+adding a frame that would exceed this limit. If no frame fits, it returns no report.
+
 ## Source display names
 
 The explicit name of a source in Energy is authoritative for its presentation.

@@ -1,12 +1,128 @@
 """Activity is readable and live on desktop and mobile without changing energy configuration."""
 
 from datetime import datetime
+from itertools import pairwise
+from math import isfinite
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
+from tests.frontend.browser.activity_fixture import ACTIVITY_SCENARIO_TIME
 from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
+
+
+@pytest.fixture
+def app_page(app_page):
+    """Keep browser dates aligned with the Activity publisher and its seeded local day."""
+    page, url = app_page
+    page.clock.install(time=ACTIVITY_SCENARIO_TIME)
+    return page, url
+
+
+def assert_serial_requests(requests):
+    """Check completed browser intervals without relying on callback delivery order."""
+    intervals = []
+    for request in requests:
+        response = request.response()
+        assert response is not None and response.finished() is None
+        timing = request.timing
+        start, duration = timing["startTime"], timing["responseEnd"]
+        assert isfinite(start) and start > 0
+        assert isfinite(duration) and duration >= 0
+        intervals.append((start, start + duration))
+    intervals.sort()
+    for previous, following in pairwise(intervals):
+        assert previous[1] <= following[0], "Browser history requests overlapped"
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_serial_request_oracle_rejects_real_overlap(app_page):
+    """Two deliberately overlapping browser reads must fail the transport assertion."""
+    page, url = app_page
+    page.goto(url + "/activity")
+    held = []
+
+    def hold(route):
+        """Keep both reads pending until their real browser intervals overlap."""
+        held.append(route)
+        page.evaluate("count => window.overlapReads = count", len(held))
+
+    page.route("**/_test/transport-oracle?*", hold)
+    for sequence in (1, 2):
+        with page.expect_request(f"**/_test/transport-oracle?read={sequence}"):
+            page.evaluate(
+                "sequence => { fetch(`_test/transport-oracle?read=${sequence}`); }", sequence
+            )
+        # The first response remains held while the second request starts.
+        page.wait_for_function("count => window.overlapReads === count", arg=sequence)
+        assert len(held) == sequence
+    requests = [route.request for route in held]
+    for route in reversed(held):
+        route.fulfill(json={"ok": True})
+    with pytest.raises(AssertionError, match="Browser history requests overlapped"):
+        assert_serial_requests(requests)
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_calculated_plan_title_shows_one_period_before_strategy(app_page):
+    """Completed calculations show the horizon once, while running attempts retain their period."""
+    page, url = app_page
+    discover(page, url)
+
+    def history(route):
+        """Use independent captured plan contexts without altering stored plans or live publishers."""
+        body = route.fetch().json()
+        original = body["activities"][0]
+        period = {"start": "2026-10-25T00:00:17+00:00", "end": "2026-10-25T02:00:17+00:00"}
+        body["activities"] = [
+            {
+                **original,
+                "id": f"{index:032x}",
+                "owner": "planning",
+                "kind": "planning",
+                "title": "Calculate energy plan",
+                "state": "running" if strategy is None else "completed",
+                "finished_at": None if strategy is None else original["started_at"],
+                "detail": "Synthetic energy planning example.",
+                "context": period
+                if strategy is None
+                else {
+                    **period,
+                    "plan_generated_at": "2026-10-24T23:45:59+00:00",
+                    "plan_strategy": strategy,
+                    "plan_id": f"synthetic-plan-{index}",
+                },
+            }
+            for index, strategy in enumerate(("minimize cost", "minimize consumption", None), 1)
+        ]
+        body["next"] = None
+        route.fulfill(json=body)
+
+    page.route("**/v1/activities?**", history)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expected = [
+        "Calculate energy plan: Plan 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM: Minimize cost",
+        "Calculate energy plan: Plan 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM: Minimize consumption",
+        "Calculate energy plan: 10/25/2026, 2:00 AM to 10/25/2026, 3:00 AM",
+    ]
+    for index, title in enumerate(expected, 1):
+        heading = page.locator(f'#activity-list [data-activity-id="{index:032x}"] summary strong')
+        expect(heading).to_have_text(title)
+        expect(heading).to_have_attribute("title", title)
+    completed = page.locator('#activity-list [data-activity-id="00000000000000000000000000000001"]')
+    completed.locator("summary").click()
+    expect(completed.get_by_role("link", name="View this plan")).to_have_attribute(
+        "href", f"{url}/overview?plan=synthetic-plan-1#planning"
+    )
+    assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+    directory = Path("results/ci/activity-plan-title")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.locator("#activity-list").screenshot(
+        path=str(directory / f"title-{page.viewport_size['width']}.png")
+    )
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
@@ -136,7 +252,6 @@ def test_activity_plan_link_reads_exact_archive_without_mutation_or_fallback(app
             "plan_strategy": plan["strategy"],
         },
     ).ok
-    page.clock.install()
     page.goto(url + "/activity?embedded=1")
     if "/api/hassio_ingress/" not in url:
         expect(page.locator("#connect")).to_be_visible()
@@ -645,13 +760,12 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
     page.get_by_role("button", name="Next", exact=True).click()
     expect(page.locator("#activity-page")).to_have_text("Page 2")
     wait_for_product_reads(page)
-    held, active, peak = [], set(), [0]
+    held, requests = [], []
 
     def started(request):
         """Measure only browser history requests, excluding the independent fixture API client."""
         if "/v1/activities?" in request.url:
-            active.add(request)
-            peak[0] = max(peak[0], len(active))
+            requests.append(request)
 
     def hold(route):
         """Keep each actual history response pending until the test explicitly completes it."""
@@ -659,8 +773,6 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
         page.evaluate("count => window.resetHistoryReads = count", len(held))
 
     page.on("request", started)
-    page.on("requestfinished", lambda request: active.discard(request))
-    page.on("requestfailed", lambda request: active.discard(request))
     page.route("**/v1/activities?**", hold)
     next_page = page.get_by_role("button", name="Next", exact=True)
     next_page.focus()
@@ -674,7 +786,7 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
             data={"detail": marker},
         ).ok
         expect(page.locator("#activity-health")).to_contain_text(marker)
-    assert len(held) == 1 and peak[0] == 1
+    assert len(held) == 1 and len(requests) == 1
     expect(next_page).to_be_disabled()
     next_page.dispatch_event("click")
     assert len(held) == 1
@@ -716,7 +828,8 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
     expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "false")
     expect(next_page).to_be_enabled()
     expect(page.get_by_label("Day", exact=True) if move_focus else next_page).to_be_focused()
-    assert len(held) == 2 and peak[0] == 1 and not active
+    assert len(held) == 2 and len(requests) == 2
+    assert_serial_requests(requests)
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
@@ -1025,7 +1138,6 @@ def test_activity_keeps_live_history_bounded_and_later_schedules_visible(app_pag
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     expect(page.locator("#activity-upcoming")).not_to_contain_text("Later model training")
-    page.clock.install()
     page.clock.fast_forward(2 * 60 * 60 * 1000)
     expect(page.locator("#activity-upcoming")).to_contain_text("Later model training")
     page.get_by_label("Activity type").select_option("weather")
@@ -1097,3 +1209,27 @@ def test_activity_refresh_is_single_and_parser_errors_are_safe(app_page):
     page.unroute("**/v1/activities?**")
     refresh.click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(25)
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_historical_bonus_wait_does_not_request_contract_reconfiguration(app_page):
+    """Desktop and mobile identify historical checkpoint evidence without asking users to alter a valid contract."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    assert page.request.post(
+        url + "/_test/activity-bonus-wait", headers={"Authorization": f"Bearer {TOKEN}"}
+    ).ok
+    page.get_by_label("Activity type").select_option("settlement")
+    waiting = page.locator("#activity-list details").filter(has_text="Evaluate measured savings")
+    waiting.locator("summary").click()
+    expect(waiting).to_contain_text("processed 0 of 96 measured intervals")
+    expect(waiting).to_contain_text("Do not change a valid contract start date")
+    expect(waiting).to_contain_text("Previous published financial results remain available")
+    expect(waiting).not_to_contain_text("Check the bonus budget under Contract")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    directory = Path("results/ci/historical-bonus")
+    directory.mkdir(parents=True, exist_ok=True)
+    waiting.screenshot(path=str(directory / f"waiting-{page.viewport_size['width']}.png"))

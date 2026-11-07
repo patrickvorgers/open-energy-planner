@@ -1,7 +1,7 @@
 // Read-only views never activate an archived plan or reset the reference scenario.
 import "./chart_theme.js";
 import {calendarDays, calendarTime} from "./chart_days.js";
-import {money, when, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
+import {money, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {energyBalances, quarterBalanceSeries, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
@@ -154,7 +154,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
     tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); document.body.append(tooltip);
     const canvas = $(id), legend = $(`${id}-legend`);
     legend.replaceChildren();
-    const axisTime = utcDays ? (value) => new Date(value).toISOString().slice(0, 10) : value => when(value);
+    const axisTime = utcDays ? (value) => dateLabel(new Date(value).toISOString().slice(0, 10)) : value => when(value);
     const datasets = series.map((s, index) => {
         const values = [];
         for (const segment of s.segments || [s.points || []]) {

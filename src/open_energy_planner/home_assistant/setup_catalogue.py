@@ -290,6 +290,9 @@ class SetupDiscovery:
         try:
             body = await request.clone(client_max_size=MAX_CATALOGUE_REQUEST_BYTES).json()
             async with self.lock:
+                body = self.catalogue.receive_page(body, datetime.now(UTC))
+                if body is None:
+                    return web.json_response({"accepted": False})
                 self.catalogue.receive(body, datetime.now(UTC))
                 consumer_version = self.demand.consumers.version
                 self.demand.consumers.sync(body)

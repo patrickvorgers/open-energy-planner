@@ -20,7 +20,6 @@ from open_energy_planner.prices.model import aware
 MAX_ANNUAL_CONSUMPTION_KWH = 1000000.0
 MAX_ENTITY_ID_LENGTH = 128
 MAX_DEVICE_ID_LENGTH = 64
-MAX_ENERGY_CHANNELS = 16
 MAX_TEMPERATURE_CELSIUS = 65
 MIN_TEMPERATURE_MAGNITUDE_CELSIUS = 90
 DEFAULT_READING_DURATION_HOURS = 0.25
@@ -110,16 +109,12 @@ class DemandConfiguration:
         ZoneInfo(self.timezone)
         quantity(self.annual_kwh)
         object.__setattr__(self, "annual_kwh", float(self.annual_kwh))
-        if (
-            not isinstance(self.terms, tuple)
-            or not 0 <= len(self.terms) <= MAX_ENERGY_CHANNELS
-            or any(not isinstance(energy_term, EnergyTerm) for energy_term in self.terms)
+        if not isinstance(self.terms, tuple) or any(
+            not isinstance(energy_term, EnergyTerm) for energy_term in self.terms
         ):
-            raise ValueError("Expected up to 16 AC energy terms")
-        if (
-            not isinstance(self.exclusions, tuple)
-            or len(self.exclusions) > MAX_ENERGY_CHANNELS
-            or any(not isinstance(excluded_load, ExcludedLoad) for excluded_load in self.exclusions)
+            raise ValueError("Expected AC energy terms")
+        if not isinstance(self.exclusions, tuple) or any(
+            not isinstance(excluded_load, ExcludedLoad) for excluded_load in self.exclusions
         ):
             raise ValueError("Expected bounded separately planned loads")
         if self.terms and not any(term.sign == 1 for term in self.terms):

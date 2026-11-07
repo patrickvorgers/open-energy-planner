@@ -96,6 +96,72 @@ def test_review_preflight_owns_only_trusted_main_metadata_reads():
     assert not admission_violations(path.read_text(), REVIEW_PREFLIGHT_PROTOCOL)
 
 
+REVIEW_ORCHESTRATION_PROTOCOL = """on:
+  issue_comment:
+    types: [created]
+  check_run:
+    types: [completed]
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  checks: read
+  pull-requests: write
+  issues: write
+concurrency:
+  group: oep-review-orchestration
+  cancel-in-progress: false
+jobs:
+  review:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'patrickvorgers/open-energy-planner' &&
+      github.event.repository.default_branch == 'main' &&
+      (github.event_name != 'check_run' ||
+       github.event.check_run.app.id == 347564 || github.event.check_run.app.id == 413034) &&
+      (github.event_name != 'issue_comment' ||
+       (github.event.issue.pull_request &&
+        (github.event.comment.body == '/oep-reviewer review' ||
+         github.event.comment.user.login == 'coderabbitai[bot]' ||
+         github.event.comment.user.login == 'kody-ai[bot]')))
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OEP_REVIEW_COMMAND_TOKEN: ${{ secrets.OEP_REVIEW_COMMAND_TOKEN }}
+        run: python3 -m script.ci.review_orchestration"""
+
+
+def test_review_orchestration_has_only_trusted_metadata_and_comment_capabilities():
+    """The orchestration workflow cannot gain contributor checkout, test execution or release writes."""
+    path = Path(__file__).resolve().parents[2] / ".github/workflows/review-orchestration.yaml"
+    assert not admission_violations(path.read_text(), REVIEW_ORCHESTRATION_PROTOCOL)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
+        ("ref: refs/heads/main", "ref: ${{ github.event.issue.head.sha }}"),
+        ("persist-credentials: false", "persist-credentials: true"),
+        ("contents: read", "contents: write"),
+        ("checks: read", "checks: write"),
+        ("steps:", "steps:\n      - run: docker compose up"),
+        ("cancel-in-progress: false", "cancel-in-progress: true"),
+        ("run: python3 -m script.ci.review_orchestration", "run: bash arbitrary.sh"),
+    ],
+)
+def test_review_orchestration_rejects_unreviewed_execution_capabilities(before, after):
+    """The fixed workflow protocol rejects privilege growth and PR-controlled execution."""
+    assert admission_violations(
+        REVIEW_ORCHESTRATION_PROTOCOL.replace(before, after, 1), REVIEW_ORCHESTRATION_PROTOCOL
+    )
+
+
 @pytest.mark.parametrize(
     "before,after",
     [

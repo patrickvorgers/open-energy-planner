@@ -9,7 +9,6 @@ import {identity} from "./identity.js";
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
-const MAX_STORES = 4;
 let token = "", current = null, draft = {stores: []}, savedVersion = null;
 let selectedId = null, editOriginId = null, editing = false, conflict = false, requestGeneration = 0;
 bindSettingsActions();
@@ -34,7 +33,7 @@ function displayName(store) { return current?.devices?.find(device => device.id 
 
 /** Check every retained store, including drafts outside the selected editor. The server validates authoritatively. */
 function validDraft() {
-    return draft.stores.length <= MAX_STORES && draft.stores.every(store => {
+    return draft.stores.every(store => {
         const fields = ["volume_litres", "minimum_c", "maximum_c", "ambient_c", "loss_w_per_c", "heater_w"];
         return store.energy_entity && store.temperature_entity && store.power_entity && fields.every(key => Number.isFinite(store[key])) && store.volume_litres > 0 && store.minimum_c >= 0 && store.maximum_c > store.minimum_c && store.maximum_c <= 120 && store.loss_w_per_c >= 0 && store.heater_w > 0 && Number.isInteger(store.heater_w) && Array.isArray(store.draw_profile_kwh) && store.draw_profile_kwh.length === 24 && store.draw_profile_kwh.every(value => Number.isFinite(value) && value >= 0) && (!store.enabled || store.draw_profile_kwh.some(value => value > 0));
     });
@@ -45,7 +44,7 @@ function syncEditor() {
     for (const control of find("thermal-editor").querySelectorAll("input, select, button")) control.disabled = !editing || saveState.busy;
     find("thermal-store-select").disabled = saveState.busy || editing || !draft.stores.length;
     find("edit-thermal").disabled = saveState.busy || editing || !selected();
-    find("add-thermal").disabled = saveState.busy || draft.stores.length >= MAX_STORES;
+    find("add-thermal").disabled = saveState.busy;
     find("refresh-thermal").disabled = saveState.busy;
     find("refresh-thermal-evidence").disabled = saveState.busy;
     find("thermal-editor").hidden = !editing; find("thermal-summary").hidden = editing;
@@ -155,7 +154,7 @@ async function refreshEvidence() {
 }
 find("thermal-store-select").onchange = event => { selectedId = event.target.value; renderEditor(); };
 find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); };
-find("add-thermal").onclick = () => { if (saveState.busy || draft.stores.length >= MAX_STORES) return; const store = {id: identity(), energy_entity: "", temperature_entity: "", power_entity: "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false}; editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); };
+find("add-thermal").onclick = () => { if (saveState.busy) return; const store = {id: identity(), energy_entity: "", temperature_entity: "", power_entity: "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false}; editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); };
 find("thermal-settings").onsubmit = async event => {
     event.preventDefault(); if (saveState.busy || !editing || conflict || !validDraft()) return;
     ++requestGeneration; saveState.begin(); syncEditor();

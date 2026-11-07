@@ -22,7 +22,6 @@ from .consumer_sensors import CONSUMER_ID_HEX_LENGTH, ConsumerSensor
 from .protocol import timestamp
 from .subentries import add_grouped_entities, retire_empty_groups
 
-MAX_APPLIANCES = 16
 MAX_CYCLE_HISTORY_HOURS = 12
 FINE_STATISTIC_MINUTES = 5
 MAX_CYCLE_READING_GAP_SECONDS = 900
@@ -237,12 +236,11 @@ def register_services(hass):
 
 def receive(coordinator, value):
     """Validate optional task projection and emit request/expiry events once per state transition."""
-    if (
-        not isinstance(value, dict)
-        or not isinstance(value.get("devices", []), list)
-        or len(value.get("devices", [])) > MAX_APPLIANCES
-    ):
-        raise ValueError("Invalid appliance projection")
+    from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
+
+    validate_projection_size(value, MAX_API_RESPONSE_BYTES)
+    if not isinstance(value, dict) or not isinstance(value.get("devices", []), list):
+        raise TypeError("Invalid appliance projection")
     previous = getattr(coordinator, "appliances", {})
     old = {row["entity_id"]: row for row in previous.get("devices", [])}
     known = {item["entity_id"] for item in coordinator.consumer_forecasts.get("options", [])}

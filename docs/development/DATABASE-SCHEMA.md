@@ -996,7 +996,12 @@ Energy values are kWh. Times are aware UTC instants. The rule/period/source link
 is logical, validated against the current contract and frozen measurement
 bindings rather than a SQL foreign key. Component readings sum to the aggregate
 meter. These automatically derived historical anchors initialize old settlement
-intervals. They never replace confirmed planning books in `bonus-counters`.
+intervals. Historical statistics seeds also use the existing optional
+`statistics` JSON described in the annual counter extension, including Recorder
+identities, reference/latest sums, physical availability, confirmed prefix and
+history digest. Their immutable origin documents retain the same statistics
+and confirmation provenance. Validation against the live counter-book version
+is process-local. Restart re-requests HA evidence before cached reuse. They never replace confirmed planning books in `bonus-counters`.
 Backdated anchors and their provenance are also retained in immutable settlement
 results as `counter_seeds`. No new table, column or index is needed. Complete
 backend transfer includes both namespaces, their immutable books and pointers.

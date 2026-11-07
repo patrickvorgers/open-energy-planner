@@ -125,6 +125,7 @@ PROOF_CI_FILES = frozenset(
         "check_main_ci_reuse",
         "check_suite_completion",
         "review_preflight",
+        "review_orchestration",
         "scope_report",
         "ci_scope",
         "ci_groups",
@@ -134,7 +135,13 @@ PROOF_CI_FILES = frozenset(
 
 HA_CI_FILES = frozenset({"script/ci/ha_suites.py", "script/ci/ha_shard.py"})
 ADMISSION_WORKFLOW = ".github/workflows/ci-admission.yaml"
-REVIEW_METADATA_FILES = frozenset({".coderabbit.yaml", ".github/workflows/review-preflight.yaml"})
+REVIEW_METADATA_FILES = frozenset(
+    {
+        ".coderabbit.yaml",
+        ".github/workflows/review-preflight.yaml",
+        ".github/workflows/review-orchestration.yaml",
+    }
+)
 CHECKS_WORKFLOW = ".github/workflows/checks.yaml"
 SETUP_PYTHON_REFERENCE = (
     r"(?m)^([ \t]*uses: actions/setup-python@)[0-9a-f]{40}(?:[ \t]+#[^\r\n]*)?[ \t]*$"

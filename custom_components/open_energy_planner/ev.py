@@ -14,9 +14,8 @@ from .const import DOMAIN
 from .measurement_sources import FULL_SOC_PERCENT, HomeAssistantMeasurementSource
 from .measurements import Quantity, SourceBinding
 from .subentries import add_grouped_entities, retire_empty_groups
+from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
 
-MAX_VEHICLES = 16
-MAX_CHARGE_POINTS = 4
 MAX_EV_POWER_W = 100000
 MAX_EV_CAPACITY_KWH = 1000
 
@@ -116,14 +115,14 @@ def receive(value):
     """Validate bounded app projections before dynamic entities or source reads can use them."""
     from .protocol import identifier, timestamp
 
+    validate_projection_size(value, MAX_API_RESPONSE_BYTES)
+
     if (
         not isinstance(value, dict)
         or not isinstance(value.get("vehicles"), list)
         or not isinstance(value.get("points"), list)
     ):
         raise TypeError("Invalid EV projection")
-    if len(value["vehicles"]) > MAX_VEHICLES or len(value["points"]) > MAX_CHARGE_POINTS:
-        raise ValueError("Too many EV devices")
     identifier(value.get("configuration_version"))
     identifier(value.get("revision"))
     vehicle_ids = {identifier(row.get("id")) for row in value["vehicles"] if isinstance(row, dict)}

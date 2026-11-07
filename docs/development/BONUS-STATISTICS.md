@@ -136,3 +136,39 @@ existing transport and physical endpoint semantics. The HA integration only
 reads metadata and normalized rows through Recorder's public statistics API.
 Annual arithmetic, continuity decisions, persistence and concurrency belong to
 the app. Physical equipment and production Home Assistant are not touched.
+
+
+## Historical settlement checkpoints
+
+A valid current statistics checkpoint can be newer than the first interval being
+re-evaluated. Settlement first uses exact retained physical measurements when
+available, including when those measurements establish usage before the
+confirmed statistics reference. A pure capture gap strictly after the needed
+historical endpoint may use statistics recovery. Changed meter evidence or a gap
+at or before that endpoint remains blocking. Before classifying a late gap as
+recoverable, the same bounded capture walk validates retained meter bindings
+through the original checkpoint and its needed partial-anchor continuity row.
+It does not calculate usage across a gap or inspect unrelated later bindings.
+The existing batch and history bounds remain unchanged. If the stored sequence ends before
+the checkpoint, it requests the
+completed hourly endpoint at or immediately after the historical interval.
+At the exact period start, the preceding reference row proves a zero sum
+difference and the physical boundary reading. The statistics request and cache
+therefore keep that exact endpoint instead of advancing to the following hour.
+The separate hourly-delta path still requires a following completed hour.
+The existing statistics transport supplies each meter's identity, sum and
+physical endpoint. The app reuses endpoint derivation and verifies the same
+reference date, metadata identities, units and reference sums as the current
+validated counter. The confirmed missing-period prefix and its confirmation
+remain authoritative. Missing physical endpoints or changed references fail
+closed. Hourly gaps do not invent quarter measurements or imply zero export.
+
+The historical result belongs to `savings-bonus-counters`, with immutable
+statistics provenance. Current planning counters and original frames remain
+unchanged. Historical cache reuse is bound to the current counter-book version
+in process memory. Restart or a new live book requests fresh historical evidence
+before reuse, including when a historical endpoint may have been corrected.
+The existing historical ingress binds reports to the contract, configuration,
+meters and counter version under the settlement mutation lock. Its TLS gateway
+route uses the same bounded 16 MiB annual-statistics allowance. Other peer routes
+retain their existing body limits.
