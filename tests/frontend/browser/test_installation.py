@@ -76,7 +76,7 @@ def _discovered_installation_devices(page, url, kind, count):
     response = page.request.post(
         url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=body
     )
-    assert response.ok, response.text()
+    assert response.ok, f"Synthetic catalogue request failed (HTTP {response.status})"
     return body
 
 
