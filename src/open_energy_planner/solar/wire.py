@@ -14,7 +14,7 @@ from open_energy_planner.solar.calculation.model import (
 
 
 def parse_configuration(body):
-    """Read bounded explicit sources and shared inverters, rejecting unknown configuration fields."""
+    """Read explicit source and shared inverter lists, rejecting unknown configuration fields."""
     if not isinstance(body, dict) or set(body) - {
         "sources",
         "inverters",
@@ -24,7 +24,7 @@ def parse_configuration(body):
         raise ValueError("Invalid solar configuration")
     sources, inverters = body["sources"], body["inverters"]
     if not isinstance(sources, list) or not isinstance(inverters, list):
-        raise TypeError("Expected bounded solar lists")
+        raise TypeError("Expected solar source and inverter lists")
     return SolarConfiguration(
         tuple(parse_source(source) for source in sources),
         tuple(SolarInverter(**inverter) for inverter in inverters),
@@ -39,9 +39,9 @@ def parse_import(body):
 
 
 def parse_panels(body):
-    """Bound nested panel lists before constructing their independently validated geometry."""
+    """Require a panel list or tuple before constructing independently validated geometry."""
     if not isinstance(body, (list, tuple)):
-        raise TypeError("Expected bounded solar panels")
+        raise TypeError("Expected solar panel list or tuple")
     return tuple(SolarPanel(**panel) for panel in body)
 
 
@@ -51,7 +51,7 @@ def parse_source(body):
         raise TypeError("Expected solar source configuration")
     providers = body.get("ha_imports", ())
     if not isinstance(providers, (list, tuple)):
-        raise TypeError("Expected bounded solar imports")
+        raise TypeError("Expected solar import list or tuple")
     return SolarSource(
         **{
             **body,
@@ -62,9 +62,9 @@ def parse_source(body):
 
 
 def validate_configuration_suggestions(body, meters):
-    """Validate bounded provider-neutral imports against their actual Energy production meters."""
+    """Validate provider-neutral import shape, identity and capacity against Energy meters."""
     if not isinstance(body, list):
-        raise TypeError("Expected bounded solar configuration suggestions")
+        raise TypeError("Expected solar configuration suggestion list")
     seen = set()
     assigned = set()
     for group in body:

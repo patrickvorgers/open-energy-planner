@@ -10,7 +10,22 @@ CATALOGUE_PAGE_BYTES = 192 * 1024
 
 
 def catalogue_pages(body):
-    """Keep small discoveries compatible and transfer larger snapshots without dropping records."""
+    """Yield a complete snapshot lazily within the default JSON-encoded byte budget.
+
+    A small snapshot is yielded unchanged without a transfer envelope. Larger
+    snapshots yield a header, ordered collection pages and a final completion
+    message. Every message includes its envelope in CATALOGUE_PAGE_BYTES, using
+    the default JSON escaping and UTF-8 encoding. The caller sends messages in
+    order and requires acceptance of the final reply before using membership.
+
+    Yields:
+        dict: The original small snapshot or the next bounded transfer message.
+
+    Raises:
+        ValueError: JSON contains nonfinite numbers, or a header or individual
+            record exceeds the byte budget. Iteration can fail after earlier
+            pages have already been yielded.
+    """
     encoded = json.dumps(body, allow_nan=False).encode()
     if len(encoded) <= CATALOGUE_PAGE_BYTES:
         yield body

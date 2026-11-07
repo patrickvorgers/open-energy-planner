@@ -277,7 +277,7 @@ def test_eight_thermal_devices_reach_ha_projection():
 
 
 def test_large_consumer_catalogue_and_selection_retain_all_meters():
-    """More than 1,024 options and sixteen selected consumers remain available without truncation."""
+    """All 1,100 options and forty selected consumers remain available without truncation."""
     options = [
         {"entity_id": f"sensor.load_{index:04}", "name": f"Synthetic consumer {index}"}
         for index in range(1100)

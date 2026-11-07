@@ -39,7 +39,28 @@ class CatalogueTransfer:
         self.latest_capture = None
 
     def receive(self, body, now):
-        """Return only complete snapshots, leaving final domain validation to the catalogue owner."""
+        """Assemble a snapshot without publishing partial catalogue membership.
+
+        The caller serializes access with the application configuration lock.
+        Ordered pages mutate pending assembly state. A new start must have a
+        capture time newer than latest_capture. An unpaged snapshot clears the
+        pending transfer and sets latest_capture to the supplied receipt time.
+        Completion clears pending state after verifying the content digest.
+        The catalogue owner still validates domain content before publication.
+
+        Args:
+            body: Decoded discovery snapshot or transfer message.
+            now: Timezone-aware receipt time used for age and clock-skew checks.
+
+        Returns:
+            dict | None: A complete unpaged or assembled snapshot, or None while
+                the ordered transfer remains incomplete.
+
+        Raises:
+            ValueError: The message violates transfer shape, byte budgets,
+                capture age/order, sequence or digest requirements. Invalid
+                input discards pending state without rolling back latest_capture.
+        """
         try:
             return self._receive(body, now)
         except (ValueError, TypeError, KeyError, OverflowError):

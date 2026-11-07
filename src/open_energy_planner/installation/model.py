@@ -261,7 +261,7 @@ class InstallationProblem:
         inverter references and unambiguous battery/PV command IDs. Every interval
         supplies exactly the declared PV source quantities. Shared PV/battery
         converters require hybrid capability. Work tuples enforce their respective
-        type, count and identity constraints, including interval-aligned thermal
+        type and identity constraints, including interval-aligned thermal
         demand. Reserve checkpoints are unique ordered timezone-aware interval
         ends. Optional terminal valuations match all batteries, configured reserves
         and usable capacity. Validation builds no native model or persistent state.
