@@ -13,8 +13,6 @@ from open_energy_planner.core.units import (
 )
 from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
 
-MAX_CHARGE_POINTS = 4
-MAX_VEHICLES = 16
 MAX_EV_CAPACITY_KWH = 1000
 MAX_EV_POWER_W = 100000
 EV_ENERGY_TOLERANCE_KWH = 1e-7

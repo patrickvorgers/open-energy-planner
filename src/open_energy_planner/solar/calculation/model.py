@@ -20,7 +20,6 @@ MAX_PANEL_TILT_DEGREES = 90
 MIN_WEATHER_TEMPERATURE_CELSIUS = -90
 DEFAULT_INVERTER_EFFICIENCY = 0.96
 MIN_INVERTER_EFFICIENCY = 0.5
-MAX_DEVICES_PER_TYPE = 16
 MAX_WEATHER_TEMPERATURE_CELSIUS = 65
 MAX_WIND_SPEED_M_S = 120
 MAX_IRRADIANCE_W_M2 = 2000
@@ -91,7 +90,7 @@ class SolarImport:
         identity(self.entry_id)
         if (
             not isinstance(self.panels, tuple)
-            or not 1 <= len(self.panels) <= MAX_DEVICES_PER_TYPE
+            or not self.panels
             or any(not isinstance(panel, SolarPanel) for panel in self.panels)
             or len({panel.panel_id for panel in self.panels}) != len(self.panels)
         ):
@@ -145,7 +144,6 @@ class SolarSource:
         object.__setattr__(self, "tilt", float(self.tilt))
         if (
             not isinstance(self.panels, tuple)
-            or len(self.panels) > MAX_DEVICES_PER_TYPE
             or any(not isinstance(panel, SolarPanel) for panel in self.panels)
             or len({panel.panel_id for panel in self.panels}) != len(self.panels)
         ):
@@ -158,7 +156,6 @@ class SolarSource:
             raise ValueError("Solar panel capacities must equal their metered group capacity")
         if (
             not isinstance(self.ha_imports, tuple)
-            or len(self.ha_imports) > MAX_DEVICES_PER_TYPE
             or any(not isinstance(provider, SolarImport) for provider in self.ha_imports)
             or len({(provider.adapter, provider.entry_id) for provider in self.ha_imports})
             != len(self.ha_imports)
@@ -205,11 +202,9 @@ class SolarConfiguration:
     inverters: tuple[SolarInverter, ...]
 
     def __post_init__(self):
-        """Require unique meters/IDs, referenced inverter instances and bounded configuration."""
+        """Require unique meters/IDs and referenced inverter instances."""
         if not isinstance(self.sources, tuple) or not isinstance(self.inverters, tuple):
             raise TypeError("Expected immutable solar configuration")
-        if len(self.sources) > MAX_DEVICES_PER_TYPE or len(self.inverters) > MAX_DEVICES_PER_TYPE:
-            raise ValueError("Too many solar instances")
         if any(not isinstance(source, SolarSource) for source in self.sources) or any(
             not isinstance(inverter, SolarInverter) for inverter in self.inverters
         ):

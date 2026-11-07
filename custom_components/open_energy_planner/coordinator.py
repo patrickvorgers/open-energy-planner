@@ -25,11 +25,11 @@ from .observation_bridge import ObservationBridge
 from .protocol import RevokedPlan, Schedule, identifier, timestamp, validate_device_configuration
 from .settlement import SettlementBridge
 from .solar_forecasts import SolarForecastBridge
+from .wire_limits import MAX_SNAPSHOT_RESPONSE_BYTES, validate_projection_size
 
 CATALOGUE_REFRESH_MINUTES = 5
 POLL_INTERVAL_SECONDS = 5
 
-MAX_VIRTUAL_DEVICES = 32
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -341,14 +341,21 @@ class PlanCoordinator:
                     or (catalogue_request and catalogue_request != self.catalogue_request)
                 ):
                     from .catalogue import setup_catalogue
+                    from .catalogue_transfer import prepare_catalogue
 
                     try:
                         catalogue = await setup_catalogue(self.hass)
                         if self.closed:
                             return
-                        membership = await self.client.request(
-                            "POST", "/v1/ha/catalogue", catalogue
+                        prepared = await self.hass.async_add_executor_job(
+                            prepare_catalogue, catalogue
                         )
+                        for page in prepared.pages:
+                            if self.closed:
+                                return
+                            membership = await self.client.request("POST", "/v1/ha/catalogue", page)
+                        if membership.get("accepted") is not True:
+                            raise ValueError("Catalogue snapshot was not accepted")
                         if self.closed:
                             return
                         if membership.get("devices") is not None:
@@ -361,7 +368,7 @@ class PlanCoordinator:
                                 "reason": membership["configuration_issue"],
                             }
                         predictions = await self.solar_forecast_bridge.capture(
-                            catalogue["suggestions"].get("solar_configurations", []), now
+                            prepared.snapshot["suggestions"].get("solar_configurations", []), now
                         )
                         if self.closed:
                             return
@@ -405,14 +412,11 @@ class PlanCoordinator:
                         data["plan"] = None
                 devices = data.get("installation", {}).get("devices")
                 if devices is not None:
-                    if (
-                        not isinstance(devices, list)
-                        or len(devices) > MAX_VIRTUAL_DEVICES
-                        or any(
-                            not isinstance(device_item, dict)
-                            or device_item.get("kind") not in ("solar", "battery")
-                            for device_item in devices
-                        )
+                    validate_projection_size(devices, MAX_SNAPSHOT_RESPONSE_BYTES)
+                    if not isinstance(devices, list) or any(
+                        not isinstance(device_item, dict)
+                        or device_item.get("kind") not in ("solar", "battery")
+                        for device_item in devices
                     ):
                         raise ValueError("Invalid device catalogue")
                     keys = [identifier(device_item.get("id")) for device_item in devices]

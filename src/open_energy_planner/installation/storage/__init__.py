@@ -4,7 +4,6 @@ import json
 
 from open_energy_planner.home_assistant.observation_wire import parse_configuration
 from open_energy_planner.installation.model import (
-    MAX_DEVICES_PER_TYPE,
     Installation,
     InstalledBattery,
 )
@@ -21,8 +20,8 @@ def parse(body):
     for key in ("version", "expected_version"):
         data.pop(key, None)
     for key in ("inverters", "batteries"):
-        if not isinstance(data.get(key, []), list) or len(data.get(key, [])) > MAX_DEVICES_PER_TYPE:
-            raise ValueError("Invalid installation collection")
+        if not isinstance(data.get(key, []), list):
+            raise TypeError("Invalid installation collection")
     data["inverters"] = tuple(SolarInverter(**inverter) for inverter in data.get("inverters", []))
     data["batteries"] = tuple(
         InstalledBattery(**battery_item) for battery_item in data.get("batteries", [])

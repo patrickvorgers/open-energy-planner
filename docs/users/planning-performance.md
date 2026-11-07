@@ -2,6 +2,21 @@
 
 Open **Insights > Planning performance** when you want to understand how long calculations took and what result they produced. It is a read-only history. Opening a calculation does not activate its plan or change solver settings.
 
+## Size hardware for your installation
+
+There is no fixed product maximum for the number of configured vehicles,
+charge points, boilers, appliances, solar groups, batteries or energy channels.
+More devices and scheduling choices can require more CPU, memory and calculation
+time. Twice as many devices does not necessarily mean twice the calculation time.
+
+Choose hardware with enough headroom for Home Assistant, other applications,
+input preparation and plan publication as well as solver work. Use the history
+below to check whether normal operation produces usable plans within the
+calculation budget. More powerful hardware can help with complex installations,
+but cannot make contradictory constraints feasible. Transport size limits,
+timeouts, physical limits and input validation remain active. There is no
+universal device count that guarantees timely plans on every host.
+
 ## Inspect a day
 
 1. Choose the **Day** in the Home Assistant timezone, or use **Today**.

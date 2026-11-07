@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.calculation.model import (
-    MAX_DEVICES_PER_TYPE,
     MAX_SOLAR_ENERGY_KWH,
     MIN_POSITIVE_SOLAR_SETTING,
     SolarImport,
@@ -74,8 +73,8 @@ def parse_ha_predictions(body, suggestions, now):
     if not now - HA_RECEIPT_TOLERANCE <= observed <= now:
         raise ValueError("Invalid HA solar observation time")
     groups = body["groups"]
-    if not isinstance(groups, list) or len(groups) > MAX_DEVICES_PER_TYPE:
-        raise ValueError("Invalid HA solar groups")
+    if not isinstance(groups, list):
+        raise TypeError("Invalid HA solar groups")
     expected = {row["entity_id"]: row for row in suggestions if row["issue"] is None}
     result = {}
     for group in groups:

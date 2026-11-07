@@ -8,6 +8,8 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
 from homeassistant.util import dt as dt_util
 
+from .recorder_batches import channel_batches
+
 SECONDS_PER_DAY = 86400
 HISTORY_TIMEOUT_SECONDS = 15
 
@@ -32,7 +34,9 @@ async def setup_history(hass, terms):
 
     def read():
         """Use HA's executor and unit conversion. Missing statistics remain absent rather than zero."""
-        metadata = get_metadata(hass, statistic_ids=ids)
+        metadata = {}
+        for batch in channel_batches(ids):
+            metadata.update(get_metadata(hass, statistic_ids=set(batch)))
         if any(
             entity not in metadata
             or not metadata[entity][1]["has_sum"]
@@ -43,9 +47,19 @@ async def setup_history(hass, terms):
 
         def points_between(first_reference, last_reference):
             """Keep real UTC midnight sums in kWh without interpolating missing references."""
-            rows = statistics_during_period(
-                hass, first_reference, last_reference, ids, "hour", {"energy": "kWh"}, {"sum"}
-            )
+            rows = {}
+            for batch in channel_batches(ids):
+                rows.update(
+                    statistics_during_period(
+                        hass,
+                        first_reference,
+                        last_reference,
+                        set(batch),
+                        "hour",
+                        {"energy": "kWh"},
+                        {"sum"},
+                    )
+                )
             return {
                 entity: {
                     row["end"]: row["sum"]

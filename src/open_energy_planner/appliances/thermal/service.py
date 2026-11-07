@@ -12,7 +12,6 @@ from open_energy_planner.appliances.thermal.model import (
     MAX_THERMAL_CLOCK_SKEW_SECONDS,
     MAX_THERMAL_ENTITY_ID_LENGTH,
     MAX_THERMAL_HOURLY_DRAW_KWH,
-    MAX_THERMAL_STORES,
     TEMPERATURE_MAX_AGE_SECONDS,
     THERMAL_CONFIGURATION_BOUNDS,
     THERMAL_DISPATCH_LEAD_SECONDS,
@@ -138,8 +137,8 @@ class ThermalService:
         if not isinstance(configuration, dict) or set(configuration) != {"stores"}:
             raise ValueError("Specify thermal stores")
         stores = configuration["stores"]
-        if not isinstance(stores, list) or len(stores) > MAX_THERMAL_STORES:
-            raise ValueError("Too many thermal stores")
+        if not isinstance(stores, list):
+            raise TypeError("Expected thermal stores")
         for row in stores:
             if not isinstance(row, dict) or set(row) != CONFIGURATION_FIELDS:
                 raise ValueError("Invalid thermal settings")
@@ -248,8 +247,8 @@ class ThermalService:
         if self.captured_at is not None and reported < self.captured_at:
             raise ValueError("Thermal capture went backwards")
         rows = body["readings"]
-        if not isinstance(rows, list) or len(rows) > MAX_THERMAL_STORES:
-            raise ValueError("Invalid thermal readings")
+        if not isinstance(rows, list):
+            raise TypeError("Invalid thermal readings")
         allowed = {row["id"] for row in self.state["stores"]}
         admitted = {}
         for row in rows:

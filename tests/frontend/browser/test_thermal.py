@@ -281,6 +281,127 @@ def test_thermal_conflict_and_failed_save_retain_all_input(thermal_page):
     expect(power).to_have_value("3")
 
 
+def _multiple_boilers(state, count):
+    """Seed distinct valid boiler identities and selectable synthetic HA sources."""
+    template = deepcopy(state["document"]["configuration"]["stores"][0])
+    device = deepcopy(state["document"]["devices"][0])
+    stores, devices, consumers, entities = [], [], [], []
+    for index in range(1, count + 1):
+        store = {
+            **deepcopy(template),
+            "id": f"00000000-0000-4000-8000-{100 + index:012}",
+            "energy_entity": f"sensor.boiler_{index}_energy",
+            "temperature_entity": f"sensor.boiler_{index}_temperature",
+            "power_entity": f"sensor.boiler_{index}_power",
+        }
+        stores.append(store)
+        devices.append({**deepcopy(device), **store, "name": f"Boiler {index}"})
+        consumers.append(
+            {"entity_id": store["energy_entity"], "name": f"Boiler {index}", "upstream": None}
+        )
+        entities.extend(
+            {
+                "entity_id": store[field],
+                "name": name,
+                "device_name": f"Boiler {index}",
+                "device_class": kind,
+                "unit": unit,
+            }
+            for field, name, kind, unit in (
+                ("temperature_entity", "Water temperature", "temperature", "°C"),
+                ("power_entity", "Heater power", "power", "W"),
+            )
+        )
+    state["document"].update(
+        configuration={"stores": stores}, devices=devices, energy_consumers=consumers
+    )
+    state["document"]["catalogue"]["entities"] = entities
+    return stores
+
+
+def test_fifth_boiler_can_be_cancelled_configured_saved_and_reloaded(thermal_page):
+    """A fifth independent boiler retains physical validation, staged cancellation and all four neighbours."""
+    page, state = thermal_page
+    available = _multiple_boilers(state, 5)
+    original = deepcopy(available[:4])
+    state["document"]["configuration"]["stores"] = deepcopy(original)
+    state["document"]["devices"] = state["document"]["devices"][:4]
+    page.reload()
+    expect(page.locator("#thermal-store-select option")).to_have_count(4)
+    expect(page.locator("#add-thermal")).to_be_enabled()
+    page.locator("#add-thermal").click()
+    expect(page.locator('[data-field="enabled"]')).not_to_be_checked()
+    expect(page.locator("#save-thermal")).to_be_disabled()
+    page.locator("#cancel-thermal").click()
+    expect(page.locator("#thermal-store-select option")).to_have_count(4)
+    assert state["posts"] == []
+    page.locator("#add-thermal").click()
+    for field in ("energy_entity", "temperature_entity", "power_entity"):
+        page.locator(f'[data-field="{field}"]').select_option(available[4][field])
+    for field, value in (
+        ("volume_litres", "120"),
+        ("minimum_c", "45"),
+        ("maximum_c", "40"),
+        ("ambient_c", "20"),
+        ("loss_w_per_c", "1.2"),
+        ("heater_w", "2"),
+    ):
+        page.locator(f'[data-field="{field}"]').fill(value)
+    expect(page.locator("#save-thermal")).to_be_disabled()
+    assert state["posts"] == []
+    page.locator('[data-field="maximum_c"]').fill("65")
+    expect(page.locator("#save-thermal")).to_be_enabled()
+    page.locator("#save-thermal").click()
+    expect(page.locator("#thermal-save-state")).to_have_text("All changes saved.")
+    saved = state["posts"][-1]["configuration"]["stores"]
+    assert saved[:4] == original
+    assert len(saved) == 5
+    assert saved[4] == {
+        **available[4],
+        "id": saved[4]["id"],
+        "draw_profile_kwh": [0] * 24,
+        "enabled": False,
+    }
+    page.reload()
+    selector = page.locator("#thermal-store-select")
+    expect(selector.locator("option")).to_have_count(5)
+    selector.select_option(saved[4]["id"])
+    expect(page.locator("#thermal-title")).to_have_text("Boiler 5")
+    expect(page.locator("#thermal-summary")).to_contain_text("sensor.boiler_5_energy")
+    page.evaluate("scrollTo(0, 0)")
+    if page.viewport_size["width"] in (1440, 390):
+        page.screenshot(
+            path=f"results/ci/fifth-boiler-{page.viewport_size['width']}.png", full_page=True
+        )
+
+
+def test_existing_six_boilers_can_be_edited_without_losing_neighbours(thermal_page):
+    """Saving one boiler in an existing six-store configuration preserves every other identity and value."""
+    page, state = thermal_page
+    original = deepcopy(_multiple_boilers(state, 6))
+    page.reload()
+    selector = page.locator("#thermal-store-select")
+    expect(selector.locator("option")).to_have_count(6)
+    selector.select_option(original[4]["id"])
+    page.locator("#edit-thermal").click()
+    page.locator('[data-field="heater_w"]').fill("3")
+    expect(page.locator("#save-thermal")).to_be_enabled()
+    page.locator("#save-thermal").click()
+    expect(page.locator("#thermal-save-state")).to_have_text("All changes saved.")
+    expected = deepcopy(original)
+    expected[4]["heater_w"] = 3000
+    assert state["posts"][-1]["configuration"]["stores"] == expected
+    page.reload()
+    expect(selector.locator("option")).to_have_count(6)
+    selector.select_option(original[4]["id"])
+    page.locator("#edit-thermal").click()
+    expect(page.locator('[data-field="heater_w"]')).to_have_value("3")
+    page.locator('[data-field="heater_w"]').fill("4")
+    page.locator("#cancel-thermal").click()
+    assert state["document"]["configuration"]["stores"] == expected
+    assert len(state["posts"]) == 1
+
+
 def test_selected_boiler_remove_cancel_and_save_preserve_other_identity_and_physics(thermal_page):
     """Removal is staged. Cancel restores the selected store, and Save preserves its neighbour exactly."""
     page, state = thermal_page
