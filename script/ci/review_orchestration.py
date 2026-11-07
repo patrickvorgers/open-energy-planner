@@ -1,6 +1,6 @@
 """Orchestrate explicit PR review requests using trusted metadata and durable PR comments.
 
-Only an authorized ``@oep review`` starts work. Provider callbacks and scheduled
+Only an authorized ``/oep-reviewer review`` starts work. Provider callbacks and scheduled
 checks resume existing requests. This controller never admits CI, resolves
 findings, marks a PR Ready or executes contributor code.
 """
@@ -29,6 +29,7 @@ from script.ci.review_preflight import (
     preflight,
 )
 
+REVIEW_COMMAND = "/oep-reviewer review"
 STATE_PREFIX = "<!-- oep-review-state:"
 MAX_PAGES = 10
 MAX_QUOTA_QUERIES = 8
@@ -150,7 +151,10 @@ def save_state(state, subject, client):
     stored = {key: value for key, value in state.items() if key != "node_id"}
     body = (
         f"{STATE_PREFIX}{json.dumps(stored, sort_keys=True)} -->\n"
-        "## OEP review\n\n"
+        '## <img src="https://raw.githubusercontent.com/patrickvorgers/open-energy-planner/'
+        "39f6ee5f559df8a5b493884fd3b5a4ce93394188/"
+        'custom_components/open_energy_planner/brand/icon.png" '
+        'alt="OEP logo" width="24" height="24"> OEP review\n\n'
         f"Revision: `{state['head']}`\n\n"
         f"Status: {state['phase'].capitalize()}\n\n{state['message']}\n\n"
         "This request does not mark the PR Ready or start candidate CI. "
@@ -569,7 +573,7 @@ def process_pr(repository, number, client, now, command_id=None):
         pending = [
             row
             for row in comments
-            if row["body"].strip() == "@oep review"
+            if row["body"].strip() == REVIEW_COMMAND
             and row.get("user", {}).get("type") == "User"
             and row.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
             and row["id"] > (state["consumed"] if state else 0)
@@ -582,7 +586,7 @@ def process_pr(repository, number, client, now, command_id=None):
         commands = [
             row
             for row in comments
-            if row["id"] == command_id and row["body"].strip() == "@oep review"
+            if row["id"] == command_id and row["body"].strip() == REVIEW_COMMAND
         ]
         if len(commands) != 1:
             raise VerificationError("The original explicit review command is unavailable")
@@ -632,7 +636,7 @@ def main():
                 return 0
             comment = event["comment"]
             number = event["issue"]["number"]
-            explicit = comment.get("body", "").strip() == "@oep review"
+            explicit = comment.get("body", "").strip() == REVIEW_COMMAND
             if (
                 explicit or is_bot(comment, "coderabbitai[bot]") or is_bot(comment, "kody-ai[bot]")
             ) and process_pr(

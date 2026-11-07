@@ -68,7 +68,7 @@ class GitHubEvidence:
                 (3, "CodeQL", 57789),
             )
         ]
-        self.command = self.comment("@oep review", "developer", "User")
+        self.command = self.comment("/oep-reviewer review", "developer", "User")
 
     def comment(self, body, login="github-actions[bot]", kind="Bot"):
         """Persist one uniquely identified synthetic comment, including its immutable author metadata."""
@@ -429,7 +429,7 @@ def test_fixed_prerequisite_requires_a_new_explicit_command():
     client.checks[0]["conclusion"] = "success"
     client.run()
     assert client.provider_commands() == []
-    client.command = client.comment("@oep review", "developer", "User")
+    client.command = client.comment("/oep-reviewer review", "developer", "User")
     client.run()
     assert client.provider_commands() == ["@coderabbitai rate limit"]
 
@@ -700,7 +700,7 @@ def test_consumed_duplicate_cannot_start_a_review_after_a_later_push():
     """A duplicate command acknowledged on one revision is not a fresh request for a later revision."""
     client = GitHubEvidence()
     client.run(explicit=True)
-    client.command = client.comment("@oep review", "developer", "User")
+    client.command = client.comment("/oep-reviewer review", "developer", "User")
     client.run(explicit=True)
     changed_head = "3" * 40
     client.current["head"]["sha"] = changed_head
@@ -709,7 +709,7 @@ def test_consumed_duplicate_cannot_start_a_review_after_a_later_push():
     client.run()
     assert client.provider_commands() == ["@coderabbitai rate limit"]
     assert client.state()["phase"] == "superseded"
-    client.command = client.comment("@oep review", "developer", "User")
+    client.command = client.comment("/oep-reviewer review", "developer", "User")
     client.run()
     assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai rate limit"]
     assert client.state()["head"] == changed_head
@@ -766,7 +766,7 @@ def test_duplicate_command_consumption_requires_current_authority():
     """Revoked write access cannot acknowledge a command into the durable inbox watermark."""
     client = GitHubEvidence()
     client.run(explicit=True)
-    client.command = client.comment("@oep review", "developer", "User")
+    client.command = client.comment("/oep-reviewer review", "developer", "User")
     client.permission = "read"
     with pytest.raises(VerificationError, match="permission"):
         client.run(explicit=True)
@@ -891,7 +891,7 @@ def test_unauthorized_discovered_command_does_not_block_active_progress(monkeypa
     client.run(explicit=True)
     original_consumed = client.state()["consumed"]
     client.reply(AVAILABLE)
-    client.comment("@oep review", pending_user, "User")
+    client.comment("/oep-reviewer review", pending_user, "User")
     original_get = client.get
 
     def revoked_permission(path):
@@ -911,7 +911,7 @@ def test_unauthorized_newest_command_does_not_hide_an_older_authorized_request(m
     """The pending inbox selects the newest authorized command instead of starving older valid work."""
     client = GitHubEvidence()
     original_request = client.command["id"]
-    client.comment("@oep review", "revoked", "User")
+    client.comment("/oep-reviewer review", "revoked", "User")
     original_get = client.get
 
     def revoked_permission(path):
@@ -932,7 +932,7 @@ def test_pending_permission_api_failure_does_not_advance_or_consume(monkeypatch)
     client.run(explicit=True)
     original_consumed = client.state()["consumed"]
     client.reply(AVAILABLE)
-    client.comment("@oep review", "revoked", "User")
+    client.comment("/oep-reviewer review", "revoked", "User")
     original_get = client.get
 
     def unavailable_permission(path):
@@ -1077,3 +1077,52 @@ def test_substantive_completion_has_priority_over_expired_review_budget(quota):
     client.run(minutes=121)
     assert client.state()["phase"] == "complete"
     assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+
+
+def test_reviewer_slash_command_starts_only_the_explicit_request():
+    """The application slash command starts quota selection without mentioning a GitHub user."""
+    client = GitHubEvidence()
+    client.command["body"] = "/oep-reviewer review"
+    client.run(explicit=True)
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("body", ["@oep review", "/oep review", "@oep-reviewer review"])
+def test_legacy_and_mention_commands_never_start_from_history(body):
+    """Historical mentions and superseded names cannot create a request during a later sweep."""
+    client = GitHubEvidence()
+    client.command["body"] = body
+    client.run()
+    assert client.provider_commands() == []
+    assert client.state() is None
+
+
+def test_blocked_historical_request_stays_inert_after_command_rename():
+    """Renaming the trigger never revives a blocked request or rewrites its original comment."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.run(minutes=16)
+    assert client.state()["phase"] == "blocked"
+    client.command["body"] = "@oep review"
+    original_comments = deepcopy(client.comments)
+    client.run(minutes=17)
+    assert client.comments == original_comments
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_status_comment_identifies_oep_with_its_existing_logo():
+    """The durable status presents the OEP logo and readable ownership without raw provider text."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    statuses = [row for row in client.comments if row["body"].startswith("<!-- oep-review-state:")]
+    assert len(statuses) == 1
+    heading = statuses[0]["body"].splitlines()[1]
+    assert heading == (
+        '## <img src="https://raw.githubusercontent.com/patrickvorgers/open-energy-planner/'
+        "39f6ee5f559df8a5b493884fd3b5a4ce93394188/"
+        'custom_components/open_energy_planner/brand/icon.png" '
+        'alt="OEP logo" width="24" height="24"> OEP review'
+    )
+    assert "Status: Quota" in statuses[0]["body"]
+    assert client.state()["phase"] == "quota"
