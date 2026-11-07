@@ -13,9 +13,7 @@ from .entity import PlannerEntity
 from .protocol import timestamp
 from .subentries import add_grouped_entities, retire_empty_groups
 
-MAX_CONSUMERS = 16
 MAX_STEPS = 256
-MAX_CONSUMER_OPTIONS = 1024
 MAX_METADATA_TEXT_LENGTH = 160
 FORECAST_LIFETIME_MINUTES = 30
 CONSUMER_ID_HEX_LENGTH = 16
@@ -39,13 +37,8 @@ def validate(value):
     if not isinstance(value, dict):
         raise TypeError("Invalid consumer forecasts")
     options, selected = value.get("options", []), value.get("selected", [])
-    if (
-        not isinstance(options, list)
-        or not isinstance(selected, list)
-        or len(selected) > MAX_CONSUMERS
-        or len(options) > MAX_CONSUMER_OPTIONS
-    ):
-        raise ValueError("Invalid consumer selection")
+    if not isinstance(options, list) or not isinstance(selected, list):
+        raise TypeError("Invalid consumer selection")
     for item in (*options, *selected):
         if (
             not isinstance(item, dict)
@@ -72,8 +65,8 @@ def validate(value):
     if not isinstance(result, dict) or result.get("status") not in FORECAST_STATUSES:
         raise ValueError("Invalid consumer status")
     records = result.get("devices", [])
-    if not isinstance(records, list) or len(records) > MAX_CONSUMERS:
-        raise ValueError("Invalid consumer forecast list")
+    if not isinstance(records, list):
+        raise TypeError("Invalid consumer forecast list")
     seen = set()
     for item in records:
         if (

@@ -8,10 +8,9 @@ from re import fullmatch
 from uuid import UUID
 
 from .const import RELEASE
+from .wire_limits import MAX_SNAPSHOT_RESPONSE_BYTES, validate_projection_size
 
 MAX_INSTALLATION_STEPS = 1024
-MAX_EV_CHARGE_POINTS = 4
-MAX_THERMAL_STORES = 4
 MAX_THERMAL_HEATER_W = 30000
 THERMAL_CONFIGURATION_BOUNDS = {
     "volume_litres": (1, 10000),
@@ -250,8 +249,9 @@ def validate_ev_context(context, steps):
     if not isinstance(context, dict) or set(context) != {"revision", "work"}:
         raise ValueError("Invalid EV execution context")
     rows = context["work"]
-    if not isinstance(rows, list) or len(rows) > MAX_EV_CHARGE_POINTS:
-        raise ValueError("Invalid EV execution membership")
+    validate_projection_size(context, MAX_SNAPSHOT_RESPONSE_BYTES)
+    if not isinstance(rows, list):
+        raise TypeError("Invalid EV execution membership")
     if rows:
         identifier(context["revision"])
     by_point = {}
@@ -319,8 +319,9 @@ def validate_thermal_context(context, steps):
     if not isinstance(context, dict) or set(context) != {"revision", "devices"}:
         raise ValueError("Invalid thermal execution context")
     rows = context["devices"]
-    if not isinstance(rows, list) or len(rows) > MAX_THERMAL_STORES:
-        raise ValueError("Invalid thermal execution membership")
+    validate_projection_size(context, MAX_SNAPSHOT_RESPONSE_BYTES)
+    if not isinstance(rows, list):
+        raise TypeError("Invalid thermal execution membership")
     if rows and (
         not isinstance(context["revision"], str)
         or not fullmatch(r"[0-9a-f]{64}", context["revision"])

@@ -10,7 +10,6 @@ from math import isfinite
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.history.model import (
     MAX_CUMULATIVE_ENERGY_KWH,
-    MAX_HISTORY_COMPONENTS,
     MAX_HISTORY_HOURS,
 )
 from open_energy_planner.prices.model import aware
@@ -106,7 +105,7 @@ class StatisticsBasis:
             raise ValueError("Statistics checkpoint predates reference")
         if (
             not isinstance(self.series, tuple)
-            or not 1 <= len(self.series) <= MAX_HISTORY_COMPONENTS
+            or not self.series
             or any(not isinstance(item, StatisticReference) for item in self.series)
             or len({item.statistic_id for item in self.series}) != len(self.series)
         ):
@@ -197,7 +196,7 @@ def parse_statistics(body, request):
     if not isinstance(body, dict) or set(body) != {"request_version", "statistics"}:
         raise ValueError("Invalid export statistics fields")
     values = body["statistics"]
-    if not isinstance(values, list) or not 1 <= len(values) <= MAX_HISTORY_COMPONENTS:
+    if not isinstance(values, list) or not values:
         raise ValueError("Invalid statistics channel count")
     channels = []
     for value in values:

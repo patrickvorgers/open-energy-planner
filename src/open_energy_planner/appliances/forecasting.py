@@ -22,16 +22,15 @@ from open_energy_planner.demand.reconstruction import DemandReconstructor
 from open_energy_planner.demand.wire import forecast_document
 from open_energy_planner.home_assistant.names import source_name
 
-MAX_CONSUMER_FORECASTS = 16
 CONSUMER_SETTINGS_POINTER = "consumer-settings.json"
 COMPOSITE_MODEL_ID = "consumer-composite-v1"
 CONSUMER_ID_HEX_LENGTH = 16
 
 
 def parse_selection(value):
-    """Accept only bounded Energy meter identities and an explicit weather flag."""
-    if not isinstance(value, list) or len(value) > MAX_CONSUMER_FORECASTS:
-        raise ValueError("Too many individual consumers")
+    """Accept unique Energy meter identities and an explicit weather flag."""
+    if not isinstance(value, list):
+        raise TypeError("Expected individual consumers")
     selected = []
     for item in value:
         if (

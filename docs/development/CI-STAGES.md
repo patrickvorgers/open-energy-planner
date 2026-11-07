@@ -92,28 +92,180 @@ main checks before Ready, candidate CI or merge.
 
 ## Choose the reviewer before requesting a review
 
-Agents apply this order to each explicit automated-review request after the
-current-head cheap checks and coordinated merge slot are ready:
+After the current-head cheap checks pass and the coordinated review slot is
+available, the PR author or an upstream repository writer deliberately requests review by
+posting the following comment. A coding agent needs no additional human
+confirmation once those prerequisites and the coordinated slot are ready:
+
+```text
+/oep-reviewer review
+```
+
+The slash prefix avoids mentioning an unrelated GitHub account. Former command
+names are not aliases and cannot start requests from historical comments.
+The central status comment uses the OEP logo and an **OEP review** heading.
+If images are unavailable, its text still identifies OEP and the current status.
+
+Only PRs submitted to `patrickvorgers/open-energy-planner` against its `main`
+branch are eligible. A source branch may belong to a fork. A PR hosted within a
+fork or targeting another repository is not eligible, and a copied workflow
+cannot use the upstream credential path. The workflow job and Python entrypoint
+both enforce this repository boundary.
+
+A GitHub user may request review of their own upstream PR without repository
+write access. Ownership is determined from the positive numeric user ID in the
+live PR metadata, not a login string or comment association label. Users with
+current upstream write, maintain or admin permission may request review of any
+eligible upstream PR. Bots and unrelated non-writers cannot request reviews.
+Before every new provider command, the controller rereads the original explicit
+request and verifies its author's current authority. A removed request or revoked
+writer role cannot authorize another publication. Reconciling an existing
+publication does not authorize new work.
+
+These requester permissions do not change the publishing account's requirements.
+The separate user credential must retain upstream write access, even if that
+account also owns the PR. Shared provider quotas and the existing cheap checks,
+frozen revision, findings, candidate CI and merge gates still apply.
+
+This exact standalone comment is the manual trigger and the operator's
+attestation that existing findings have been dispositioned. It authorizes review
+of the live Draft revision accepted by the workflow. Do not push while the
+request is being accepted. Pushes, Ready transitions, labels and check completion
+do not independently request reviews. The workflow does not mark the PR Ready,
+start candidate CI, resolve findings or merge.
+
+The trusted-main **OEP review orchestration** workflow reuses the existing
+preflight, verifies the requester's current authority, and records the head,
+base and progress in an **OEP review** PR comment. It applies this order:
 
 1. Post `@coderabbitai rate limit` on the PR and wait for CodeRabbit's fresh reply.
    This checks included review availability without starting a review, as
    documented in [CodeRabbit's rate-limit guide](https://docs.coderabbit.ai/management/rate-limits).
    Use the actual response for this request. Do not infer capacity from a fixed
    plan allowance, an earlier review or a stale reply from another PR.
-2. If included capacity is available, follow the existing CodeRabbit preflight
-   and request one CodeRabbit review of the frozen head.
+2. If included capacity is available, request one CodeRabbit review of the frozen head.
 3. If CodeRabbit explicitly reports no included capacity, request Kody-ai once
    using `@kody start-review` with `<!-- oep-kody-head:<current-head-sha> -->`.
    A positive availability check does not reserve capacity. If the subsequent
    CodeRabbit request is explicitly rate-limited, switch to the same Kody route
-   without retrying CodeRabbit.
+   without immediately retrying CodeRabbit.
+4. If Kody completes its review, stop regardless of whether it found issues.
+   A substantive review is not a promise that the code is correct. The coding
+   agent still evaluates and addresses every finding before Ready for review.
+5. If Kody explicitly fails technically, wait until CodeRabbit's reported retry
+   time and query its capacity again. A completed `timed_out` check or a failed
+   check titled `Code Review Failed` is recognized as technical failure.
+   Skipped, ambiguous and incomplete results are not technical-failure evidence.
+   Only a fresh positive quota response permits another CodeRabbit review.
+
+Provider comments and completed provider checks resume requests. A short scheduled
+check also runs at minutes 7, 22, 37 and 52 of each hour, so delayed retries do not
+hold a runner open and do not depend on a coding agent staying online. GitHub may
+delay scheduled runs. Fifteen minutes is the intended polling interval, not a
+guaranteed retry deadline. A manual workflow dispatch resumes the same durable
+requests and does not independently authorize a review. The PR comment is also
+the durable inbox if Actions replaces a queued trigger. Repeated commands for
+active work do not duplicate it. Discovery checks each candidate's live PR
+authorship or repository write authority. A denied unrelated inbox command is skipped without consuming it or stopping
+other authorized work. Inbox discovery reads the live PR once per scan and
+reuses authorization results only for the same numeric user ID and login within
+that scan. The next scan reads permissions again. These discovery results never
+replace the fresh original-requester and publisher checks before publication.
+Revocation of the original requester blocks further
+provider publications for that request. An unavailable permission check and an explicitly handled
+unauthorized command still fail closed. Each acknowledged command is durably consumed
+independently of the original request identity. A later push cannot revive an
+older duplicate as a new request.
+
+Each request permits at most eight quota queries, two actual CodeRabbit requests
+and one Kody request. It expires after seven days. Missing quota replies block
+after fifteen minutes. A genuine but stale quota reply triggers a fresh bounded
+quota query only when no provider is active. Its old availability never authorizes
+a review. Generic review acknowledgements are not quota evidence and do not
+expire an active review. Reviews without an unambiguous completion block after
+two hours without starting an overlapping provider. An unfinished CodeRabbit
+review reaches that deadline before quota handling can defer its resume.
+Substantive current-head completion is checked first. Scheduled execution determines
+when these limits are observed. A head/base change, a newer main, closure or a
+Ready transition supersedes pending work. Synchronize and validate an updated
+Draft, then explicitly request review of that revision.
+If a confirmed quota limit supplies no usable retry time, Kody may still review.
+If Kody then fails technically, the request blocks instead of inventing a
+CodeRabbit retry deadline.
+
+The controller writes a durable intent before each provider command. If a worker
+loses the publication response, it recovers a uniquely marked command from the PR
+instead of sending it again. An uncertain outcome without that command blocks.
+Losing the subsequent status-confirmation response also preserves that outbox.
+Global workflow serialization protects these operations. A direct manual
+provider command can still race with the controller. Do not mix both routes.
+
+Nullable or malformed GraphQL mutation payloads use the same canonical failure
+path and retain an unresolved publication intent for reconciliation.
+Public failure messages use fixed categories with an inspection action. They
+never copy exception values or provider payloads. A malformed, over-limit or
+unavailable PR does not prevent the scheduled sweep from checking other PRs.
+The workflow still reports failure if a PR cannot be processed or becomes blocked
+during that sweep.
+An unavailable or invalid global PR inventory also fails the workflow.
+
+For a **Blocked** status, inspect its explanation, the Actions run, actual provider
+checks and all findings. A new explicit request can reconsider failed prerequisites
+after they are fixed. It cannot bypass an existing review command or unresolved
+provider work. Preserve request markers. Use the manual recovery procedure below
+only after establishing what actually ran. Unknown response formats require a
+tested parser update rather than guessing availability or retrying blindly.
+
+The workflow separates two credentials. Its built-in workflow token reads
+repository metadata and owns the durable status comment. The
+`OEP_REVIEW_COMMAND_TOKEN` secret publishes only the fixed CodeRabbit and Kody
+commands. The workflow job and Python entrypoint both require trusted `main`.
+The checkout uses `refs/heads/main`, never contributor code, and does not persist
+credentials. External pull request code never runs in this job.
+
+Before each publication, the controller verifies that the command token belongs
+to a GitHub user with current repository write access. The durable request records
+that account's numeric ID. Another account cannot continue the request or supply
+its lost-response receipt. Renewing a token for the same account is supported.
+Pending requests created by the former bot route cannot switch to a user account
+automatically. Inspect their existing work before explicitly requesting recovery.
+The controller never falls back to publishing provider commands with its workflow
+bot credential. Missing, expired, malformed or unauthorized credentials block
+visibly with administrator recovery advice. No raw token or API error body is
+included in status comments or logs.
+
+### Configure the provider command credential
+
+A repository administrator creates a dedicated fine-grained personal access token
+for the selected GitHub user. Select only `patrickvorgers/open-energy-planner`,
+keep the automatically required metadata read permission, and grant **Pull
+requests: Read and write**. This GitHub permission includes PR operations beyond
+comments. Do not grant contents, workflow, administration or unrelated repository
+access. The selected user must already have repository write access.
+
+Store the token as the repository Actions secret `OEP_REVIEW_COMMAND_TOKEN`.
+Never put it in a branch, pull request, issue, terminal argument, local evidence
+file or chat. Record its expiry through the administrator's normal credential
+management process. Renew it before expiry and replace the secret for the same
+account. Revoke a suspected leaked credential immediately.
+
+An administrator verifies setup with one coordinated quota request and one
+substantive current-head review after the trusted workflow is activated. Preserve
+the actual requester, command author, quota response and review evidence.
+Publication alone does not prove provider acceptance. If a request becomes
+blocked, inspect its existing commands and provider checks before deliberately
+requesting again. Changing the configured account requires a new explicit
+request after resolving existing work. It never authorizes paid credits or
+changes to provider billing.
 
 Record the availability reply and chosen reviewer in the PR. Recheck the frozen
 head and base before sending either review command. Never launch both reviews
-in parallel, repeat an existing request or enable usage billing or paid credits.
+in parallel, repeat an uncertain request or enable usage billing or paid credits.
 An unavailable status reply, provider outage or generic failure is not evidence
 of quota exhaustion. Stop and report that condition instead of guessing or
-silently switching providers. The existing Dependabot exception remains.
+silently switching providers. The bounded delayed retry above is permitted only
+after Kody's explicit technical failure and fresh CodeRabbit quota evidence.
+The existing Dependabot exception remains.
 
 This is the order agents use when requesting reviews. It does not change the
 candidate-admission rules. A completed substantive review of the current head
@@ -121,6 +273,10 @@ from either CodeRabbit or Kody-ai remains valid for Ready, CI and merge. All
 findings from every reviewer still require evaluation, replies and resolution.
 
 ## Prepare one final CodeRabbit review
+
+This direct-provider route remains available for deliberate manual recovery or
+when diagnosing the orchestrator. Prefer `/oep-reviewer review` for ordinary requests.
+Do not run this route alongside active orchestrated work.
 
 Keep every PR within **150 changed files**. All files count, including binary,
 removed and renamed files. Split a 151-file PR. Do not hide files with provider
@@ -141,13 +297,14 @@ subagent or Codex Cloud review stage. Existing findings from any reviewer still
 require evidence-based disposition.
 
 After the preceding queued merge is complete, include and test the actual current
-main before freezing the final head and base. Run **Manual CodeRabbit review preflight** from
+main before freezing the final head and base. For this deliberate direct-provider recovery route, run **Manual CodeRabbit review preflight** from
 `main` with the PR number and expected head/base. Affirm that existing findings
 are dispositioned. No Codex review SHA or independent-Codex attestation is needed.
 The preflight uses only
 trusted main code and read-only metadata. It checks the file inventory, current
 Quick/signature/CodeQL results, resolved discussions, existing CodeRabbit activity
-and trusted same-head manual request markers.
+and trusted same-head CodeRabbit or Kody request markers, including commands
+already published by the Actions controller.
 
 The successful job summary contains the manual comment to post after rechecking
 the frozen head and the shared queue:
@@ -163,7 +320,9 @@ workflow concurrency group serializes preflights, not provider review capacity.
 All chats must coordinate one queue and use actual provider availability, not a
 hardcoded hourly allowance. Keep this conservative procedure during paid months
 too. Never remove a request marker, push an empty commit or retry CodeRabbit
-automatically to evade the duplicate guard. A confirmed rate limit selects the
+automatically to evade the duplicate guard. The orchestrator's bounded delayed
+recovery is the documented exception, with a separate durable action marker.
+A confirmed rate limit selects the
 Kody-ai fallback described above after the frozen identities and prerequisites
 are rechecked.
 
@@ -198,6 +357,8 @@ The candidate workflow validates `Kody Code Review` from GitHub App `413034`
 `Code Review Complete` title and successful review-publication summary. Starting,
 skipped, warning, failed, unknown and older-head results do not qualify. The
 latest substantive Kody attempt supersedes earlier Kody evidence on that head.
+An existing automatic-disabled Kody skip does not prevent an explicit orchestrated
+request. It remains metadata only and never supplies substantive review evidence.
 A completed `Code Review Skipped` check whose summary is exactly
 `No New Commits (No changes detected since last review)` is metadata from the
 unchanged revision. It preserves an earlier substantive success on that same
@@ -250,8 +411,10 @@ checks again. Follow the final-review procedure above rather than requesting
 CodeRabbit on every push. After completing corrections and current-head
 review, choose Ready again. An early Ready transition with missing evidence fails
 before image builds. Complete the missing work and make a fresh Ready transition.
-There is no polling workflow, periodic run, special disposition comment or
-automatic retry after a failed test. The ordinary matrix still selects suites.
+There is no candidate-CI polling workflow, periodic candidate run, special
+disposition comment or automatic retry after a failed test. The separate review
+resumption schedule only handles existing explicit review requests and never
+starts candidate CI. The ordinary matrix still selects suites.
 Ready does not force the full suite or add query performance tests by itself.
 
 Use `ci: run` only for a deliberate retry on an already reviewed, non-Draft
@@ -305,7 +468,7 @@ The remaining CI responsibilities have separate reviewed owners:
 | `ci_scope.py`, `ci_groups.py` | CI regressions for selection and pure suite membership |
 | `ha_suites.py`, `ha_shard.py` | `selected:ci,ha` for HA arguments and worker partitioning |
 | `.github/workflows/ci-admission.yaml` | CI regressions for admission, Quick and evidence reuse |
-| `.coderabbit.yaml`, `.github/workflows/review-preflight.yaml` | CI regressions for review configuration and the fixed trusted-main metadata preflight |
+| `.coderabbit.yaml`, `.github/workflows/review-preflight.yaml`, `.github/workflows/review-orchestration.yaml` | CI regressions for review configuration, the fixed trusted-main metadata preflight and bounded comment-based review orchestration |
 | `proof_git.py`, `pytest_suites.py`, `ci.py`, `check_images.py`, `checks.yaml` | Full functional and query-performance coverage for actual shared execution |
 
 `proof_git.py` owns fixed Git processes and immutable policy loading. Workflows

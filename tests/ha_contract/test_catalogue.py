@@ -102,7 +102,7 @@ def test_setup_catalogue_does_not_accept_unbounded_or_arbitrary_ha_attributes():
     with pytest.raises(ValueError, match="Invalid setup entity"):
         catalogue.receive(body, datetime.now(UTC))
     body["entities"] = [{}] * 1025
-    with pytest.raises(ValueError, match="Too many setup entities"):
+    with pytest.raises(ValueError, match="Invalid setup entity"):
         catalogue.receive(body, datetime.now(UTC))
 
 

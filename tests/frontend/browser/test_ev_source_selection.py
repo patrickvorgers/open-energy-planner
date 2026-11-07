@@ -9,6 +9,64 @@ from tests.frontend.browser.helpers import TOKEN, discover
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
+def test_large_catalogue_tail_vehicle_is_selectable_and_saved(app_page):
+    """A vehicle beyond 2,000 ordinary sources remains selectable on desktop and mobile."""
+    import json
+
+    page, url = app_page
+    body = discover(page, url)
+    body["entities"].extend(
+        {
+            "entity_id": f"sensor.synthetic_meter_{index:04}",
+            "name": f"Independent synthetic meter {index}",
+            "device_name": f"Synthetic meter {index}",
+            "unit": "W",
+            "device_class": "power",
+            "state_class": "measurement",
+            "device_id": "",
+        }
+        for index in range(2000)
+    )
+    body["entities"].append(
+        {
+            "entity_id": "sensor.zzz_family_vehicle_soc",
+            "name": "Vehicle battery level",
+            "device_name": "Family EV",
+            "unit": "%",
+            "device_class": "battery",
+            "state_class": "measurement",
+            "device_id": "synthetic-family-ev",
+            "integration_id": "synthetic-car-entry",
+            "integration_name": "Family EV",
+        }
+    )
+    assert 196608 < len(json.dumps(body).encode()) < 1048576
+    headers = {"Authorization": "Bearer " + TOKEN}
+    response = page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body)
+    assert response.ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
+        "synthetic-car-entry"
+    )
+    page.get_by_label("Vehicle state of charge", exact=True).select_option(
+        "sensor.zzz_family_vehicle_soc"
+    )
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    page.evaluate("() => window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/large-catalogue-vehicle-{page.viewport_size['width']}.png", full_page=True
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()
+    assert saved["vehicles"][0]["name"] == "Family EV"
+    assert saved["vehicles"][0]["soc_entity"] == "sensor.zzz_family_vehicle_soc"
+
+
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
 @pytest.mark.parametrize(
     "app_page",

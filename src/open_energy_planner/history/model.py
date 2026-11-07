@@ -10,7 +10,6 @@ from open_energy_planner.prices.model import aware
 
 MAX_CUMULATIVE_ENERGY_KWH = 1000000000.0
 MAX_HISTORY_HOURS = 9000
-MAX_HISTORY_COMPONENTS = 16
 COMPONENT_METER_TOLERANCE_KWH = 1e-6
 
 
@@ -63,11 +62,8 @@ class EnergyHistory:
             for previous_item, next_item in pairwise(self.hours)
         ):
             raise ValueError("Unordered or duplicate history")
-        if (
-            not isinstance(self.component_meters, (tuple, list))
-            or len(self.component_meters) > MAX_HISTORY_COMPONENTS
-        ):
-            raise ValueError("Invalid history components")
+        if not isinstance(self.component_meters, (tuple, list)):
+            raise TypeError("Invalid history components")
         components = []
         for item in self.component_meters:
             if (

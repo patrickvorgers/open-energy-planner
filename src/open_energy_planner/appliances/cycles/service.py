@@ -18,7 +18,6 @@ from open_energy_planner.appliances.cycles.learning import (
 from open_energy_planner.appliances.cycles.model import (
     CONFIRMATION_SECONDS,
     DURATION_ALLOWANCE_SECONDS,
-    MAX_APPLIANCES,
     PROFILE_STEP_SECONDS,
     ApplianceWork,
     CycleProfile,
@@ -134,9 +133,6 @@ class ApplianceService:
         """
         if candidate == self.state:
             return
-        active = {row["entity_id"] for row in self.consumers.selected}
-        if len(active.intersection(candidate["devices"])) > MAX_APPLIANCES:
-            raise ValueError("Too many shiftable appliances")
         archived, progress = separate_progress(candidate)
         previous, previous_progress = separate_progress(self.state)
         with self.documents.transaction():

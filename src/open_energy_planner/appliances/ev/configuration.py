@@ -4,10 +4,8 @@ from datetime import time
 from uuid import UUID
 
 from open_energy_planner.appliances.ev.model import (
-    MAX_CHARGE_POINTS,
     MAX_EV_CAPACITY_KWH,
     MAX_EV_POWER_W,
-    MAX_VEHICLES,
     number,
 )
 from open_energy_planner.core.units import FULL_SOC_PERCENT
@@ -42,13 +40,8 @@ def configuration(body, catalogue, consumers, appliances):
     if not isinstance(body, dict) or set(body) != {"vehicles", "points"}:
         raise ValueError("Specify vehicles and charge points")
     metadata = {row["entity_id"]: row for row in catalogue["entities"]}
-    if (
-        not isinstance(body["vehicles"], list)
-        or not isinstance(body["points"], list)
-        or len(body["vehicles"]) > MAX_VEHICLES
-        or len(body["points"]) > MAX_CHARGE_POINTS
-    ):
-        raise ValueError("Too many vehicles or charge points")
+    if not isinstance(body["vehicles"], list) or not isinstance(body["points"], list):
+        raise TypeError("Expected vehicle and charge-point lists")
     vehicles, points = [], []
     for row in body["vehicles"]:
         if not isinstance(row, dict) or set(row) - {"soc_timestamp_attribute"} != {

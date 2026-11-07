@@ -5,7 +5,7 @@ import {PriceSourceSettings} from "./price-sources.js";
 import {azimuthLabel, DIRECTION_CHOICES, editableSolarPanels, DEFAULT_PANEL_TILT_DEGREES} from "./solar-geometry.js";
 // The browser collects settings. Domain validation, storage and planning stay in the app.
 const $ = (id) => document.getElementById(id);
-const MAX_SOLAR_PANEL_GROUPS = 16, MAX_PANEL_NAME_LENGTH = 200;
+const MAX_PANEL_NAME_LENGTH = 200;
 let token = "", ingressSession = false,
     config,
     step = 0,
@@ -173,8 +173,6 @@ function sensorChoices(kind, selected) {
     return choices;
 }
 function row(container, collection, title, old = {}) {
-    if (collection.length >= 16)
-        throw new Error("A maximum of 16 devices of each type is supported.");
     const node = document.createElement("fieldset"),
         legend = document.createElement("legend");
     legend.textContent = title;
@@ -220,7 +218,6 @@ function addSolar(old = {}) {
     node.append(geometry);
     /** Insert one exact plane without deriving any values from its display name. */
     const addPanel = (panel = {}) => {
-        if (geometry.querySelectorAll(".solar-panel").length >= MAX_SOLAR_PANEL_GROUPS) throw new Error(`A maximum of ${MAX_SOLAR_PANEL_GROUPS} panel groups is supported.`);
         const group = document.createElement("div"), heading = document.createElement("h3");
         group.className = "solar-panel";
         group.dataset.panelId = panel.panel_id || identity("panel");

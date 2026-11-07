@@ -1,5 +1,6 @@
 """Finite, timezone-aware settlement inputs. No HA, ORM or solver objects."""
 
+import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from math import isfinite
@@ -11,7 +12,7 @@ from ..prices.model import aware
 SETTLEMENT_MINUTES = 15
 SETTLEMENT_INTERVAL = timedelta(minutes=SETTLEMENT_MINUTES)
 MAX_BATCH_INTERVALS = 96
-MAX_CHANNELS_PER_FRAME = 64
+MAX_SETTLEMENT_FRAME_BYTES = 192 * 1024
 MAX_ENERGY_KWH = 1_000_000
 MAX_SETTLEMENT_ID_LENGTH = 128
 ENERGY_TOLERANCE_KWH = 1e-7
@@ -64,8 +65,8 @@ class Frame:
             raise ValueError("Invalid settlement interval")
         for name in ("channels", "battery_start", "battery_end", "meter_start"):
             values = getattr(self, name)
-            if not isinstance(values, dict) or len(values) > MAX_CHANNELS_PER_FRAME:
-                raise ValueError("Invalid settlement channels")
+            if not isinstance(values, dict):
+                raise TypeError("Invalid settlement channels")
             if any(
                 not isinstance(key, str) or not 1 <= len(key) <= MAX_SETTLEMENT_ID_LENGTH
                 for key in values
@@ -75,6 +76,12 @@ class Frame:
             object.__setattr__(
                 self, name, {key: energy(value, maximum) for key, value in values.items()}
             )
+        channels = {
+            name: getattr(self, name)
+            for name in ("channels", "battery_start", "battery_end", "meter_start")
+        }
+        if len(json.dumps(channels, allow_nan=False).encode()) > MAX_SETTLEMENT_FRAME_BYTES:
+            raise ValueError("Settlement frame exceeds size limit")
 
     def record(self):
         """Return transport-safe immutable evidence without dropping timestamps or quality."""

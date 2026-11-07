@@ -3,7 +3,6 @@
 from dataclasses import asdict
 
 from open_energy_planner.demand.calculation.model import (
-    MAX_ENERGY_CHANNELS,
     DemandConfiguration,
     EnergyTerm,
     ExcludedLoad,
@@ -20,13 +19,8 @@ def parse_configuration(body):
         "expected_version",
     }:
         raise ValueError("Unsupported demand configuration")
-    if (
-        not isinstance(body.get("terms"), list)
-        or len(body["terms"]) > MAX_ENERGY_CHANNELS
-        or not isinstance(body.get("exclusions", []), list)
-        or len(body.get("exclusions", [])) > MAX_ENERGY_CHANNELS
-    ):
-        raise ValueError("Invalid demand channel list")
+    if not isinstance(body.get("terms"), list) or not isinstance(body.get("exclusions", []), list):
+        raise TypeError("Invalid demand channel list")
     terms, exclusions = [], []
     for raw in body["terms"]:
         if not isinstance(raw, dict) or set(raw) != {"entity_id", "sign"}:
