@@ -146,7 +146,7 @@ def test_savings_chart_breaks_missing_coverage_without_timezone_labels(app_page,
         == 1
     )
     if aggregated:
-        expect(page.locator("#savings-chart-range")).to_have_text("From 2026-10-20 to 2026-10-23")
+        expect(page.locator("#savings-chart-range")).to_have_text("From 10/20/2026 to 10/23/2026")
         assert (
             page.locator("#savings-chart").evaluate(
                 "canvas => Chart.getChart(canvas).options.scales.x.title.text"

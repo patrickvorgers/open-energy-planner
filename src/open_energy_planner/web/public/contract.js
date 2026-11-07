@@ -1,4 +1,4 @@
-import {money, when, localDate, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
+import {money, when, dateLabel, localDate, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {SaveBar} from "./save-bar.js";
 import {confirmAction} from "./confirmation.js";
@@ -81,7 +81,7 @@ function refreshRows(collection, title, collapse = false) {
     for (const inputs of collection) {
         const details = inputs.effective_from.closest("details"), start = details.dataset.savedStart;
         const status = !start ? "New rule" : start === activeStarts[title] ? "Active" : Date.parse(start) > Date.now() ? "Scheduled" : "Superseded";
-        details.querySelector("summary").textContent = `${title}: ${inputs.effective_from.value || "Start date required"}: ${status}${details.dataset.dirty ? ": Unsaved changes" : ""}`;
+        details.querySelector("summary").textContent = `${title}: ${inputs.effective_from.value ? dateLabel(inputs.effective_from.value) : "Start date required"}: ${status}${details.dataset.dirty ? ": Unsaved changes" : ""}`;
         if (collapse) details.open = status === "Active" || !start;
     }
 }
@@ -91,7 +91,7 @@ function showSavedRules(result) {
     const values = result.periods || [], title = "Price rule";
     activeStarts[title] = values.filter((value) => Date.parse(value.effective_from) <= Date.now()).sort((left, right) => Date.parse(left.effective_from) - Date.parse(right.effective_from)).at(-1)?.effective_from;
     const nextStart = values.filter(value => Date.parse(value.effective_from) > Date.now()).sort((left, right) => Date.parse(left.effective_from) - Date.parse(right.effective_from))[0]?.effective_from;
-    find("rule-context").textContent = `In effect: ${activeStarts[title] ? localDate(activeStarts[title]) : "No rule"}${nextStart ? `: Next change: ${localDate(nextStart)}` : ""}`;
+    find("rule-context").textContent = `In effect: ${activeStarts[title] ? dateLabel(activeStarts[title]) : "No rule"}${nextStart ? `: Next change: ${dateLabel(nextStart)}` : ""}`;
     periods.forEach((inputs, index) => {
         const details = inputs.effective_from.closest("details"), savedStart = values[index]?.effective_from || "";
         details.dataset.savedStart = savedStart; delete details.dataset.dirty;
@@ -396,7 +396,7 @@ async function budgets(refreshed = false) {
         for (const budget of active) {
             const panel = document.createElement("div"), facts = document.createElement("dl"); facts.className = "settings-summary";
             const period = document.createElement("p"); period.className = "budget-period";
-            period.textContent = `Current annual period: ${budget.period_start ? localDate(budget.period_start) : "Unavailable"}`; panel.append(period);
+            period.textContent = `Current annual period: ${budget.period_start ? dateLabel(budget.period_start) : "Unavailable"}`; panel.append(period);
             const remaining = document.createElement("p"); remaining.className = "budget-remaining";
             const amount = document.createElement("strong"), unit = document.createElement("small"); amount.textContent = money(budget.remaining_kwh); unit.textContent = " kWh remaining this annual period"; remaining.append(amount, unit); panel.append(remaining);
             if (budget.used_kwh != null && budget.cap_kwh > 0) {
@@ -640,14 +640,14 @@ function renderContractSummary() {
     const inputs = periods[selectedPeriod], summary = find("contract-summary"); summary.replaceChildren();
     if (!inputs) return;
     const editor = bonusEditors.get(inputs), bonus = editor.inputs;
-    for (const [label, value] of [["Contract starts", inputs.contract_start.value], ["Rule starts", inputs.effective_from.value || "Not set"], ["Import formula", inputs.import_formula.value], ["Export formula", inputs.export_formula.value], ["Export bonus", editor.enabled.checked ? "Included" : "Off"]]) contractFact(summary, label, value);
+    for (const [label, value] of [["Contract starts", dateLabel(inputs.contract_start.value)], ["Rule starts", inputs.effective_from.value ? dateLabel(inputs.effective_from.value) : "Not set"], ["Import formula", inputs.import_formula.value], ["Export formula", inputs.export_formula.value], ["Export bonus", editor.enabled.checked ? "Included" : "Off"]]) contractFact(summary, label, value);
     if (editor.enabled.checked) {
         const condition = conditionEditors.get(bonus)();
         const comparison = comparisonChoices.find(([key]) => key === condition?.operator)?.[1];
         for (const [label, value] of [["Extra rate", bonus.rate_formula.value], ["Price condition", condition ? `${condition.expression}: ${comparison} ${condition.threshold}` : "None"], ["Paid window", bonus.window.value === "clock" ? `${bonus.start_time.value}–${bonus.end_time.value}` : optionLabel(bonus.window.value)], ["Annual cap", bonus.cap_kwh.value ? `${money(Number(bonus.cap_kwh.value))} kWh` : "Not configured"], ["Annual reset", bonus.reset_basis.selectedOptions[0].textContent]]) contractFact(summary, label, value);
     }
     const selectedEnd = periods[selectedPeriod + 1]?.effective_from.value;
-    find("selected-rule-until").textContent = selectedEnd ? `Until ${selectedEnd} (exclusive)` : "No end date";
+    find("selected-rule-until").textContent = selectedEnd ? `Until ${dateLabel(selectedEnd)} (exclusive)` : "No end date";
 
 }
 find("show-price-examples").onclick = () => find("price-rule-help").showModal();
