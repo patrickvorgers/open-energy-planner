@@ -6,6 +6,7 @@ import {bindSettingsActions} from "./settings-actions.js";
 import {useHomeAssistantTimezone, sourceName} from "./display.js";
 import {settingsSummary} from "./appliance-settings-detail.js";
 import {identity} from "./identity.js";
+import {sourceRefresh, retainInputs} from "./source-refresh.js";
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
@@ -153,8 +154,15 @@ async function refreshEvidence() {
     } catch (error) { find("status").textContent = error.message; }
 }
 find("thermal-store-select").onchange = event => { selectedId = event.target.value; renderEditor(); };
-find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); };
-find("add-thermal").onclick = () => { if (saveState.busy) return; const store = {id: identity(), energy_entity: "", temperature_entity: "", power_entity: "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false}; editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); };
+const refreshSources = sourceRefresh(api, "thermal", find("refresh-thermal-sources"), find("status"), catalogue => {
+    if (saveState.busy || !current) return;
+    current.catalogue = catalogue;
+    retainInputs(renderEditor);
+    saveState.update();
+});
+find("refresh-thermal-sources").onclick = () => { if (!saveState.busy) return refreshSources(); };
+find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); };
+find("add-thermal").onclick = () => { if (saveState.busy) return; const store = {id: identity(), energy_entity: "", temperature_entity: "", power_entity: "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false}; editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); refreshSources(); };
 find("thermal-settings").onsubmit = async event => {
     event.preventDefault(); if (saveState.busy || !editing || conflict || !validDraft()) return;
     ++requestGeneration; saveState.begin(); syncEditor();

@@ -63,7 +63,9 @@ def register(app, service, catalogue, repository, live, lock):
             return web.json_response(
                 {
                     **document(),
-                    "catalogue": catalogue.value,
+                    "catalogue": catalogue.choices.catalogue(
+                        "thermal", catalogue.value, datetime.now(UTC)
+                    ),
                     "energy_consumers": list(service.consumers.options),
                 }
             )
@@ -84,7 +86,12 @@ def register(app, service, catalogue, repository, live, lock):
                         raise ValueError("Thermal settings changed. Refresh before saving")
                     function, arguments = (
                         service.configure,
-                        (body["configuration"], catalogue.value),
+                        (
+                            body["configuration"],
+                            catalogue.choices.catalogue(
+                                "thermal", catalogue.value, datetime.now(UTC)
+                            ),
+                        ),
                     )
                 elif operation == "observations":
                     function, arguments = service.receive, (body, datetime.now(UTC))

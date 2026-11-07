@@ -33,6 +33,12 @@ cycle must be resolved before removal is permitted.
 
 ## Prepare EV charging
 
+Add/Edit fetches matching Home Assistant sources on demand, including cars that
+are not configured yet. **Refresh Home Assistant sources** updates the choices
+without discarding your draft. The same action is available for electric boilers.
+If the integration is disconnected, the previous choices and edits remain visible.
+Reconnect it and use the action again. Cancel restores the saved configuration.
+
 Configure the vehicle's usable battery capacity, SoC source and charging limit separately from the charge point. The point needs its own consumption/power source, connection evidence, allowed vehicles and declared control capability.
 
 When adding a vehicle, first choose the Home Assistant integration that manages

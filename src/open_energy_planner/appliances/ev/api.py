@@ -81,7 +81,9 @@ def register(app, service, catalogue, repository, live, lock):
                     **service.document(
                         datetime.now(UTC), timezone(), catalogue.value, repository.state["plan"]
                     ),
-                    "catalogue": catalogue.value,
+                    "catalogue": catalogue.choices.catalogue(
+                        "ev", catalogue.value, datetime.now(UTC)
+                    ),
                     "energy_consumers": list(service.consumers.options),
                 }
             )
@@ -104,7 +106,10 @@ def register(app, service, catalogue, repository, live, lock):
                         raise ValueError("EV settings changed. Refresh before saving")
                     function, arguments = (
                         service.configure,
-                        (body["configuration"], catalogue.value),
+                        (
+                            body["configuration"],
+                            catalogue.choices.catalogue("ev", catalogue.value, now),
+                        ),
                     )
                 elif operation == "observations":
                     function, arguments = service.receive, (body, now)

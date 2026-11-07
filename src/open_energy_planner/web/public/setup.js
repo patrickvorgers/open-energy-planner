@@ -2,6 +2,7 @@ import {money, when, percentage, percentageInput, inputNumber, useHomeAssistantT
 import {SaveBar} from "./save-bar.js";
 import {InstallationLayout} from "./installation-layout.js";
 import {PriceSourceSettings} from "./price-sources.js";
+import {sourceRefresh} from "./source-refresh.js";
 import {azimuthLabel, DIRECTION_CHOICES, editableSolarPanels, DEFAULT_PANEL_TILT_DEGREES} from "./solar-geometry.js";
 // The browser collects settings. Domain validation, storage and planning stay in the app.
 const $ = (id) => document.getElementById(id);
@@ -948,6 +949,10 @@ async function refreshPairing() {
 }
 setInterval(() => refreshPairing().catch((error) => status(error.message)), 3000);
 /** Refresh read-only data or explicitly discard a draft. Failed reads retain the existing editor. */
+const refreshDraftSources = sourceRefresh(
+    (path, body) => api(path, body === undefined ? "GET" : "POST", body), null,
+    $("reload"), $("status"), async () => { await refreshSourceNames(); }
+);
 async function refreshInstallation(discard) {
     if (saveState.busy) return;
     if (discard && step === 5) {
@@ -965,8 +970,10 @@ async function refreshInstallation(discard) {
         return;
     }
     if (saveState.dirty && !discard) {
+        $("status").hidden = false;
+        await refreshDraftSources();
         await refreshPriceSources();
-        saveState.update("Save or discard your changes before reloading settings.");
+        saveState.update($("status").textContent);
         return;
     }
     await saveState.refresh(() => load(!discard, discard), {discard});

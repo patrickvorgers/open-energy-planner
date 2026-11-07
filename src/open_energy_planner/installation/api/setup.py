@@ -2,7 +2,6 @@
 
 from dataclasses import asdict
 from datetime import UTC, datetime
-from uuid import uuid4
 
 from aiohttp import web
 
@@ -10,6 +9,7 @@ from open_energy_planner.demand.wire import parse_configuration as parse_demand
 from open_energy_planner.home_assistant.catalogue import (
     COUNTRY_BIDDING_AREA_HINTS,
     COUNTRY_BIDDING_AREA_OPTIONS,
+    MAX_CATALOGUE_REQUEST_BYTES,
     HACatalogue,
 )
 from open_energy_planner.home_assistant.setup_catalogue import SetupDiscovery
@@ -45,7 +45,7 @@ def register(
     catalogue = catalogue or HACatalogue()
     if live:
         if required:
-            catalogue.requested = str(uuid4())
+            catalogue.request_refresh()
         live.configuration_issue = lambda: catalogue.configuration_issue(
             installation.current, solar.configuration, demand.configuration, required=required
         )
@@ -61,7 +61,7 @@ def register(
             if (
                 catalogue.current(datetime.now(UTC))["stale"] or request.query.get("refresh") == "1"
             ) and catalogue.requested is None:
-                catalogue.requested = str(uuid4())
+                catalogue.request_refresh()
             return web.json_response(
                 {
                     "mode": "home_assistant" if live else "synthetic",
@@ -239,7 +239,47 @@ def register(
                 text="Invalid setup: check units, ratings and shared inverter links"
             ) from None
 
+    async def source_refresh(request):
+        """Request or observe a source-only refresh without loading or changing saved configuration."""
+        if live is None:
+            raise web.HTTPConflict(text="Source refresh requires Home Assistant mode")
+        async with lock:
+            if request.method == "POST":
+                catalogue.request_refresh()
+            return web.json_response(catalogue.refresh_status())
+
+    async def source_choices(request):
+        """Request finite editor scopes through admin authorization, retaining active membership."""
+        try:
+            async with lock:
+                scope = request.match_info["scope"]
+                now = datetime.now(UTC)
+                if request.method == "POST":
+                    if await request.json() != {}:
+                        raise ValueError("Invalid source choice request")
+                    catalogue.choices.request(scope, now)
+                return web.json_response(catalogue.choices.status(scope, catalogue.value, now))
+        except (ValueError, TypeError, KeyError):
+            raise web.HTTPBadRequest(
+                text="Source choices could not be refreshed. Retry from the appliance settings."
+            ) from None
+
+    async def receive_choices(request):
+        """Validate the requested bounded peer result without running source reconciliation."""
+        try:
+            body = await request.clone(client_max_size=MAX_CATALOGUE_REQUEST_BYTES).json()
+            async with lock:
+                accepted = catalogue.choices.receive(body, datetime.now(UTC))
+                return web.json_response({"accepted": accepted})
+        except (ValueError, TypeError, KeyError, OverflowError):
+            raise web.HTTPBadRequest(text="Invalid source choice response") from None
+
+    app.router.add_post("/v1/ha/source-choices", receive_choices)
+    app.router.add_get("/v1/ha/source-choices/{scope}", source_choices)
+    app.router.add_post("/v1/ha/source-choices/{scope}", source_choices)
     app.router.add_post("/v1/ha/catalogue", discovery_handler.discovery)
+    app.router.add_get("/v1/ha/catalogue/refresh", source_refresh)
+    app.router.add_post("/v1/ha/catalogue/refresh", source_refresh)
     app.router.add_get("/v1/setup", settings)
     app.router.add_post("/v1/setup/preview", preview)
     return catalogue

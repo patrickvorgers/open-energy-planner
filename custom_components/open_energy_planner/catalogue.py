@@ -208,26 +208,13 @@ async def energy_suggestions(hass):
     return result
 
 
-async def setup_catalogue(hass):
-    """Publish bounded sensor metadata and Energy hints, without arbitrary attributes.
-
-    Country is optional: None when unset, otherwise HA's two-letter code. The
-    app uses it only as a bidding-area hint. This integration never infers an area.
-    Entity metadata retains preferred-first ordering without a count cutoff.
-    The catalogue serializer owns bounded pages for the complete snapshot,
-    including compact history and suggestions. It marks an optional solar
-    configuration incomplete when its full group cannot fit a transfer page.
-    """
-    registry = er.async_get(hass)
-    suggestions = await energy_suggestions(hass)
-    from homeassistant.components.energy.data import async_get_manager
-
-    manager = await async_get_manager(hass)
+def energy_display_names(preferences):
+    """Project explicit Energy names without forwarding unrelated preference fields."""
     energy_names = {}
     for source in (
-        *(manager.data or {}).get("energy_sources", ()),
-        *(manager.data or {}).get("device_consumption", ()),
-        *(manager.data or {}).get("device_consumption_water", ()),
+        *(preferences or {}).get("energy_sources", ()),
+        *(preferences or {}).get("device_consumption", ()),
+        *(preferences or {}).get("device_consumption_water", ()),
     ):
         name = source.get("name")
         if not isinstance(name, str) or not name.strip():
@@ -243,6 +230,11 @@ async def setup_catalogue(hass):
             if isinstance(entity, str):
                 label = name.strip()[:MAX_CATALOGUE_TEXT_LENGTH]
                 energy_names[entity] = label if energy_names.get(entity, label) == label else ""
+    return energy_names
+
+
+def preferred_entities(suggestions):
+    """Identify configured Energy sources and their related measurement channels."""
     preferred = {term["entity_id"] for term in suggestions["terms"]}
     preferred.update(suggestions["soc"])
     preferred.add(suggestions["grid_power"])
@@ -254,97 +246,172 @@ async def setup_catalogue(hass):
     )
     for battery in suggestions["batteries"]:
         preferred.update(value for value in battery.values() if isinstance(value, str))
+    return preferred - {None}
+
+
+def energy_entities(preferences):
+    """Retain explicit Energy bindings even when an incomplete balance cannot produce suggestions."""
+    identities = set()
+    for source in (
+        *(preferences or {}).get("energy_sources", ()),
+        *(preferences or {}).get("device_consumption", ()),
+    ):
+        for route in (
+            source,
+            source.get("power_config", {}),
+            *source.get("power", ()),
+            *source.get("flow_from", ()),
+            *source.get("flow_to", ()),
+        ):
+            for field in (
+                "stat_energy_from",
+                "stat_energy_to",
+                "stat_consumption",
+                "stat_rate",
+                "stat_soc",
+                "included_in_stat",
+            ):
+                identity = route.get(field)
+                if (
+                    isinstance(identity, str)
+                    and identity.startswith("sensor.")
+                    and len(identity) <= MAX_ENTITY_ID_LENGTH
+                ):
+                    identities.add(identity)
+    return identities
+
+
+def ordered_entities(hass, entities, suggestions):
+    """Retain deterministic Energy-first order without truncating ordinary sources."""
+    registry = er.async_get(hass)
+    preferred = preferred_entities(suggestions)
     # Keep connection sensors on Energy devices ahead of unrelated household sensors.
     preferred_devices = {
         entry.device_id
         for entity_id in preferred
         if (entry := registry.async_get(entity_id)) and entry.device_id
     }
-    states = [
-        *hass.states.async_all("sensor"),
-        *hass.states.async_all("binary_sensor"),
-        *hass.states.async_all("water_heater"),
-    ]
-    present = {state.entity_id for state in states}
-    related = {
-        state.entity_id
-        for state in states
-        if (entry := registry.async_get(state.entity_id)) and entry.device_id in preferred_devices
+    return sorted(
+        entities,
+        key=lambda entity: (
+            entity["entity_id"] not in preferred,
+            entity["device_id"] not in preferred_devices,
+            entity["entity_id"].startswith("binary_sensor."),
+            entity["entity_id"],
+        ),
+    )
+
+
+def catalogue_entity(hass, state, energy_names):
+    """Read one sanitized metadata projection on HA's event loop, excluding owned virtual devices."""
+    if len(state.entity_id) > MAX_ENTITY_ID_LENGTH:
+        return None
+    entry = er.async_get(hass).async_get(state.entity_id)
+    if entry and entry.platform == "open_energy_planner":
+        return None
+    physical = dr.async_get(hass).async_get(entry.device_id) if entry and entry.device_id else None
+    integration = (
+        hass.config_entries.async_get_entry(entry.config_entry_id)
+        if entry and entry.config_entry_id
+        else None
+    )
+    return {
+        "entity_id": state.entity_id,
+        "name": str(state.name)[:MAX_CATALOGUE_TEXT_LENGTH],
+        **(
+            {"energy_name": energy_names[state.entity_id]}
+            if energy_names.get(state.entity_id)
+            else {}
+        ),
+        "device_name": str(
+            (physical.name_by_user or physical.name or state.name) if physical else state.name
+        )[:MAX_CATALOGUE_TEXT_LENGTH],
+        "unit": str(
+            hass.config.units.temperature_unit
+            if state.domain == "water_heater"
+            else state.attributes.get("unit_of_measurement", "")
+        )[:MAX_CATALOGUE_TEXT_LENGTH],
+        "device_class": str(
+            "temperature"
+            if state.domain == "water_heater"
+            else state.attributes.get("device_class", "")
+        )[:MAX_CATALOGUE_TEXT_LENGTH],
+        "state_class": str(state.attributes.get("state_class", ""))[:MAX_CATALOGUE_TEXT_LENGTH],
+        "device_id": entry.device_id if entry and entry.device_id else "",
+        **(
+            {
+                "integration_id": integration.entry_id,
+                "integration_name": integration.title[:MAX_CATALOGUE_TEXT_LENGTH],
+            }
+            if integration
+            else {}
+        ),
     }
-    # These metadata-only placeholders never enter HA's measurement state machine.
+
+
+async def setup_catalogue(hass, selected=None, *, include_history=True):
+    """Capture selected active sources or all supported metadata for a deliberate candidate query.
+
+    Country remains an optional bidding-area hint. Complete bounded transfer,
+    including explicit incomplete optional geometry, belongs to the serializer.
+    """
+    from homeassistant.components.energy.data import async_get_manager
+
+    suggestions = await energy_suggestions(hass)
+    manager = await async_get_manager(hass)
+    names = energy_display_names(manager.data)
+    states = (
+        [
+            *hass.states.async_all("sensor"),
+            *hass.states.async_all("binary_sensor"),
+            *hass.states.async_all("water_heater"),
+        ]
+        if selected is None
+        else [state for identity in selected if (state := hass.states.get(identity)) is not None]
+    )
+    present = {state.entity_id for state in states}
+    # These placeholders never enter HA's measurement state machine.
     states.extend(
         State(entity_id, STATE_UNKNOWN)
-        for entity_id in preferred - present
-        if entity_id and entity_id.startswith("sensor.")
+        for entity_id in (preferred_entities(suggestions) if selected is None else selected)
+        - present
+        if entity_id.startswith(("sensor.", "binary_sensor.", "water_heater."))
     )
-    entities = []
-    for state in sorted(
-        states,
-        key=lambda sensor_state: (
-            sensor_state.entity_id not in preferred,
-            sensor_state.entity_id not in related,
-            sensor_state.entity_id.startswith("binary_sensor."),
-            sensor_state.entity_id,
-        ),
-    ):
-        if len(state.entity_id) > MAX_ENTITY_ID_LENGTH:
-            continue
-        entry = registry.async_get(state.entity_id)
-        if entry and entry.platform == "open_energy_planner":
-            continue
-        physical = (
-            dr.async_get(hass).async_get(entry.device_id) if entry and entry.device_id else None
-        )
-        integration = (
-            hass.config_entries.async_get_entry(entry.config_entry_id)
-            if entry and entry.config_entry_id
-            else None
-        )
-        entities.append(
-            {
-                "entity_id": state.entity_id,
-                "name": str(state.name)[:MAX_CATALOGUE_TEXT_LENGTH],
-                **(
-                    {"energy_name": energy_names[state.entity_id]}
-                    if energy_names.get(state.entity_id)
-                    else {}
-                ),
-                "device_name": str(
-                    (physical.name_by_user or physical.name or state.name)
-                    if physical
-                    else state.name
-                )[:MAX_CATALOGUE_TEXT_LENGTH],
-                "unit": str(
-                    hass.config.units.temperature_unit
-                    if state.domain == "water_heater"
-                    else state.attributes.get("unit_of_measurement", "")
-                )[:MAX_CATALOGUE_TEXT_LENGTH],
-                "device_class": str(
-                    "temperature"
-                    if state.domain == "water_heater"
-                    else state.attributes.get("device_class", "")
-                )[:MAX_CATALOGUE_TEXT_LENGTH],
-                "state_class": str(state.attributes.get("state_class", ""))[
-                    :MAX_CATALOGUE_TEXT_LENGTH
-                ],
-                "device_id": entry.device_id if entry and entry.device_id else "",
-                **(
-                    {
-                        "integration_id": integration.entry_id,
-                        "integration_name": integration.title[:MAX_CATALOGUE_TEXT_LENGTH],
-                    }
-                    if integration
-                    else {}
-                ),
-            }
-        )
+    entities = [
+        metadata
+        for state in states
+        if (metadata := catalogue_entity(hass, state, names)) is not None
+    ]
     from .setup_history import setup_history
 
     body = {
-        "entities": entities,
+        "entities": ordered_entities(hass, entities, suggestions),
         "suggestions": suggestions,
         "timezone": hass.config.time_zone,
         "country": hass.config.country,
-        "history": await setup_history(hass, suggestions["terms"]) if hass.is_running else [],
+        "history": await setup_history(hass, suggestions["terms"])
+        if include_history and hass.is_running
+        else [],
     }
     return body
+
+
+async def source_choices(hass, scope):
+    """Capture a complete finite chooser scope without retaining unrelated metadata or reading history."""
+    if scope not in ("ev", "thermal"):
+        raise ValueError("Unsupported source choice scope")
+    domains = ("sensor", "binary_sensor") if scope == "ev" else ("sensor", "water_heater")
+    identities = set()
+    for domain in domains:
+        for state in hass.states.async_all(domain):
+            kind = state.attributes.get("device_class")
+            unit = state.attributes.get("unit_of_measurement")
+            if (
+                domain != "sensor"
+                or kind == "power"
+                and unit in ("W", "kW")
+                or (scope == "ev" and unit == "%" and kind in (None, "", "battery"))
+                or (scope == "thermal" and kind == "temperature" and unit in ("°C", "°F"))
+            ):
+                identities.add(state.entity_id)
+    return await setup_catalogue(hass, selected=identities, include_history=False)

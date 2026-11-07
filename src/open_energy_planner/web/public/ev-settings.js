@@ -6,6 +6,7 @@ import {SaveBar} from "./save-bar.js";
 import {confirmAction} from "./confirmation.js";
 import {bindApplianceSettingsNavigation} from "./appliance-settings-navigation.js";
 import {bindSettingsActions} from "./settings-actions.js";
+import {sourceRefresh, retainInputs} from "./source-refresh.js";
 bindSettingsActions();
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = (id) => document.getElementById(id);
@@ -52,7 +53,7 @@ function input(card, row, key, label, help, type = "number", limits = {}) {
     control.oninput = () => { const value = type === "number" ? inputNumber(control) : control.value; row[key] = watts && value !== null ? Math.round(value * WATTS_PER_KW) : value; changed(); };
     wrapper.append(control, node("small", help)); card.append(wrapper); return control;
 }
-function select(card, row, key, label, help, options, emptyMessage = "No matching Home Assistant sources were discovered. Check that the integration exposes this sensor, then refresh the saved settings.") {
+function select(card, row, key, label, help, options, emptyMessage = "No matching Home Assistant sources were discovered. Check that the integration exposes this sensor, then choose Refresh Home Assistant sources.") {
     const wrapper = node("label"), control = node("select"); wrapper.className = "ev-field"; wrapper.append(node("span", label)); control.required = true; control.dataset.field = key;
     control.setAttribute("aria-label", label);
     const blank = node("option", "Select a source"); blank.value = ""; control.append(blank);
@@ -197,7 +198,14 @@ async function load(selection = selectedId) {
         selectedId = selection; editing = false; find("connect").hidden = true; find("settings").hidden = false; find("status").textContent = current.issue || ""; render(); saveState.loaded(); syncEditor();
     } catch (error) { find("status").textContent = error.message; saveState.update(error.message); }
 }
-find("edit-ev").onclick = () => { if (!saveState.busy && selected()) { editOriginId = selectedId; editing = true; syncEditor(); } };
+const refreshSources = sourceRefresh(api, "ev", find("refresh-ev-sources"), find("status"), catalogue => {
+    if (saveState.busy || !current) return;
+    current.catalogue = catalogue;
+    retainInputs(render);
+    saveState.update();
+});
+find("refresh-ev-sources").onclick = () => { if (!saveState.busy) return refreshSources(); };
+find("edit-ev").onclick = () => { if (!saveState.busy && selected()) { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); } };
 find("ev-device-select").onchange = event => { if (saveState.busy || editing) return; selectedId = event.target.value; render(); };
 find("add-ev").onclick = () => { if (!saveState.busy && !editing && !saveState.dirty) find("ev-add-dialog").showModal(); };
 find("continue-add-ev").onclick = () => {
@@ -207,6 +215,7 @@ find("continue-add-ev").onclick = () => {
     editOriginId = selectedId;
     (vehicle ? draft.vehicles : draft.points).push(row); selectedId = row.id; editing = true;
     find("ev-add-dialog").close(); render(); changed();
+    refreshSources();
 };
 find("remove-ev").onclick = removeSelected;
 find("reload-ev").onclick = () => { find("ev-more").open = false; return saveState.refresh(load); };

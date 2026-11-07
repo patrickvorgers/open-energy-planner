@@ -684,7 +684,7 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, t
                 cache.async_set_updated_data(SimpleNamespace())
                 provider.runtime_data = cache
 
-            async def catalogue(_hass):
+            async def catalogue(_hass, *, selected=None):
                 """Supply the same captured immutable metadata to the real transfer coordinator."""
                 return body
 

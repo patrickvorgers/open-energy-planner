@@ -86,9 +86,71 @@ Original plans and configuration versions remain unchanged. New batteries still
 need OEP-only ratings/relationships. Missing SoC, power or capacity must be fixed
 in Energy first. A removed required field blocks planning against the old settings.
 
+## Event-driven source discovery
+
+The integration subscribes before its initial capture. Active metadata contains
+explicit Energy bindings and additional sources actually configured in the app.
+These include EV state of charge, charge-point connection and power, and boiler
+temperature, power and consumption. Disabled configured appliances retain their
+bindings. Missing configured sources retain metadata placeholders. The integration
+does not keep a permanent copy of every HA entity.
+
+Entity and device registry events refresh affected active records. Value-only
+state updates do not trigger metadata work. Energy preference updates rebuild its
+dependency set. This includes the selected Forecast.Solar entries and all their
+panel subentries. Only Forecast.Solar is supported. An unsupported or unreadable
+selected provider remains explicitly incomplete and does not replace retained
+panel settings with partial geometry. Core configuration events refresh HA-owned
+timezone, country and temperature units. Recorder statistics events update compact
+history independently from entity metadata.
+
+There is no periodic full metadata audit. Initialisation, explicit refresh, failed
+capture recovery, changes during capture or a rejected revision confirmation can
+require a complete active snapshot. Failed metadata attempts use a five-minute
+backoff. A new explicit request bypasses it. While the watches are healthy and the
+accepted snapshot is unchanged, the integration confirms its exact revision at
+most once per minute without reading source metadata. The app expires freshness
+after fifteen minutes without confirmation. A pending partial transfer cannot be
+confirmed. App restart or revision mismatch requires complete publication again.
+This is connection/watch confirmation, not a sensor-value heartbeat or proof that
+an upstream provider generated new measurements.
+
+Explicit active refresh requests coalesce and expire after sixty seconds if the
+peer does not report an outcome. Expiry preserves the accepted data and permits
+a fresh explicit nonce. A delayed failure for an old nonce cannot cancel a newer
+request. No timeout schedules a periodic full scan.
+
+Forecast capture remains independent. Provider updates and the existing
+five-minute forecast fallback use the last accepted normalized solar context,
+only while discovery is healthy. An unchanged metadata catalogue does not stop
+forecast refreshes. Forecast uploads retain the complete independent meter set.
+
+### On-demand appliance choices
+
+Opening Add or Edit in EV or electric-boiler settings requests the corresponding
+finite chooser scope. The refresh button repeats that explicit request without
+discarding inputs. EV candidates include compatible percentage and power sensors
+and binary sensors. Boiler candidates include compatible temperature and power
+sensors and water heaters. Energy-owned consumption choices remain authoritative.
+All matching sources are collected without a count or alphabetical cutoff.
+
+The admin requests `/v1/ha/source-choices/{scope}`. The authenticated integration
+receives only the finite scope and nonce in its snapshot and submits complete
+bounded pages to `/v1/ha/source-choices`. The peer cannot initiate chooser requests.
+Each scope has one pending request, expires after sixty seconds and retains an
+accepted result for five minutes. A failed or expired request requires a new
+explicit request. Old nonces cannot publish into a newer request.
+
+Candidates use a separate assembler and validation path. Partial results are
+private. Complete results augment editor choices and write-time source validation
+only. They never replace active membership, reconcile Energy, refresh active
+freshness or supply forecasts. After a configuration is saved, its explicit source
+bindings join the active discovery set on the next synchronization. Temporary
+candidate results expire without changing the saved configuration.
+
 ## Complete discovery transfers
 
-The integration captures all supported sensor metadata, Energy suggestions and
+The integration captures all active source metadata, Energy suggestions and
 compact history endpoints as one snapshot. A small snapshot remains compatible
 with the single-request catalogue contract. Larger snapshots use ordered HTTP
 pages, each at most 192 KiB including JSON escaping and protocol overhead.

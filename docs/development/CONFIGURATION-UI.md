@@ -198,9 +198,13 @@ selected power or connection sources. Choices outside the filter remain visible
 and can be combined with sources from another integration. Cancel restores
 confirmed settings. A source list without compatible
 metadata explains what to check instead of showing an unexplained empty dropdown.
-HA catalogue collection includes the complete sensor, binary-sensor and
-water-heater metadata set. Energy devices retain deterministic priority in the
-transfer order, without dropping later sources. Large discoveries use the
+Active HA metadata contains Energy and configured app sources. Opening Add/Edit
+requests complete compatible candidates for that editor without changing active
+membership. **Refresh Home Assistant sources** repeats this read while retaining
+numeric drafts, selected source IDs and keyboard focus. Failure keeps the previous
+choices and offers an explicit retry. Cancel still restores saved configuration.
+Temporary candidates expire after five minutes. Refresh them again if a previously
+unconfigured source is no longer available when saving. Large discoveries use the
 [complete snapshot protocol](ENERGY-DASHBOARD.md#complete-discovery-transfers).
 Only config-entry identity and title are forwarded, never provider credentials
 or arbitrary config-entry data.
