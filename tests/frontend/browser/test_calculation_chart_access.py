@@ -139,7 +139,16 @@ def test_chart_access_waits_for_reads_and_recovers_without_stale_day_data(daily_
     """Pending, failed and superseded reads cannot open a calculation under another selected day."""
     page, evidence, _, _ = daily_history
     pending = []
-    page.route("**/v1/planning-performance?day=*", lambda route: pending.append(route))
+    received = 0
+
+    def hold(route):
+        """Publish callback delivery separately from request start and retained response identity."""
+        nonlocal received
+        pending.append(route)
+        received += 1
+        page.evaluate("count => window.calculationReadCount = count", received)
+
+    page.route("**/v1/planning-performance?day=*", hold)
     canvas = page.locator("#performance-chart")
     selection = page.locator("#performance-chart")
     canvas.focus()
@@ -150,18 +159,22 @@ def test_chart_access_waits_for_reads_and_recovers_without_stale_day_data(daily_
     canvas.focus()
     canvas.press("Enter")
     expect(page.get_by_role("dialog")).not_to_be_visible()
+    page.wait_for_function("count => window.calculationReadCount === count", arg=1)
     assert len(pending) == 1
     pending.pop().fulfill(status=503, body="private provider response")
     expect(page.locator("#performance-status")).to_contain_text("could not be loaded")
     expect(selection).to_have_attribute("aria-disabled", "true")
     expect(page.locator("body")).not_to_contain_text("private provider response")
     page.get_by_role("button", name="Refresh", exact=True).click()
+    page.wait_for_function("count => window.calculationReadCount === count", arg=2)
     assert len(pending) == 1
     pending.pop().fulfill(json=evidence)
     expect(selection).to_have_attribute("aria-disabled", "false")
     expect(selection).to_have_attribute("aria-valuemax", "95")
     page.get_by_label("Day", exact=True).fill("2020-01-01")
+    page.wait_for_function("count => window.calculationReadCount === count", arg=3)
     page.get_by_role("button", name="Today", exact=True).click()
+    page.wait_for_function("count => window.calculationReadCount === count", arg=4)
     assert len(pending) == 2
     old_read, current_read = pending
     current_read.fulfill(json=evidence)
