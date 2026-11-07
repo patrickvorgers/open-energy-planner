@@ -15,7 +15,7 @@ const clock = value => when(value,{hour:"2-digit",minute:"2-digit"}) + occurrenc
 const bottomLegend = {id:"performanceBottomLegend",beforeLayout(chart){chart.options.plugins.legend.position="bottom";}};
 const QUARTER_MILLISECONDS = 15 * MINUTE_MILLISECONDS;
 const MAX_TIME_LABELS = 8;
-let token = "", chart = null, detailChart = null, rows = [], requestVersion = 0, detailVersion = 0, plottedRows = [], loading = false;
+let token = "", chart = null, detailChart = null, rows = [], requestVersion = 0, detailVersion = 0, plottedRows = [], loading = false, selectedId = null, selectedIndex = 0;
 /** Keep credentials in memory and never display raw server errors. */
 async function api(path) {
  const response = await fetch(base + path,{headers:token ? {Authorization:`Bearer ${token}`} : {},redirect:"error",cache:"no-store"});
@@ -58,25 +58,25 @@ async function detail(row) {
  const table = find("calculation-samples"); table.replaceChildren();
  for (const sample of samples) {const item = document.createElement("tr"); for (const value of [seconds(sample.elapsed_seconds),money(sample.objective),money(sample.best_bound)]) {const cell = document.createElement("td"); cell.textContent = value; item.append(cell);} table.append(item);}
 }
-/** Keep one native keyboard selection rather than duplicate the chart as a visible history list. */
+/** Expose the selected archived calculation directly on the interactive chart. */
 function renderSelection() {
- const selection = find("performance-selection"), previous = selection.dataset.calculationId;
- selection.max = Math.max(0, plottedRows.length - 1);
- selection.value = Math.max(0, plottedRows.findIndex(row => row.id === previous));
- selection.disabled = loading || !plottedRows.length;
- find("performance-open").disabled = selection.disabled;
- find("performance-chart").tabIndex = selection.disabled ? -1 : 0;
- const row = plottedRows[selection.valueAsNumber];
- selection.dataset.calculationId = row?.id || "";
- find("performance-open").setAttribute("aria-label", row ? `View calculation at ${clock(row.started_at)}` : "View calculation");
- selection.setAttribute("aria-valuetext", row ? `Calculation ${selection.valueAsNumber + 1} of ${plottedRows.length}: ${clock(row.started_at)}: ${outcome(row)}: ${seconds(row.duration_seconds)}` : "No calculation selected.");
+ const canvas = find("performance-chart");
+ selectedIndex = Math.max(0, plottedRows.findIndex(row => row.id === selectedId));
+ const disabled = loading || !plottedRows.length;
+ canvas.tabIndex = disabled ? -1 : 0;
+ canvas.setAttribute("aria-disabled", String(disabled));
+ canvas.setAttribute("aria-valuemax", Math.max(0, plottedRows.length - 1));
+ canvas.setAttribute("aria-valuenow", selectedIndex);
+ const row = plottedRows[selectedIndex];
+ selectedId = row?.id || null;
+ canvas.setAttribute("aria-valuetext", row ? `Calculation ${selectedIndex + 1} of ${plottedRows.length}: ${clock(row.started_at)}: ${outcome(row)}: ${seconds(row.duration_seconds)}` : "No calculation selected.");
  find("performance-selected").textContent = row ? `${when(row.started_at)}${occurrence(row.started_at)}: ${outcome(row)}: Total ${seconds(row.duration_seconds)}: ${row.first_candidate_seconds == null ? "First candidate time not recorded." : `First candidate ${seconds(row.first_candidate_seconds)}: Further calculation ${seconds(Math.max(0,row.duration_seconds-row.first_candidate_seconds))}`}` : "No calculation selected.";
 }
 /** Highlight the selected bar and expose the same grouped tooltip without changing chart evidence. */
 function showSelection() {
  if (loading || !chart || !plottedRows.length) return;
- const selection = find("performance-selection"), index = selection.valueAsNumber;
- selection.dataset.calculationId = plottedRows[index]?.id || "";
+ const index = selectedIndex;
+ selectedId = plottedRows[index]?.id || null;
  renderSelection();
  const active = chart.getSortedVisibleDatasetMetas().filter(meta => meta.type === "bar" && Number.isFinite(chart.data.datasets[meta.index].data[index]?.y)).map(meta => ({datasetIndex:meta.index, index}));
  const point = active.length ? chart.getDatasetMeta(active[0].datasetIndex).data[index] : null;
@@ -86,7 +86,7 @@ function showSelection() {
 }
 /** Open exactly the selected recorded calculation, including when all plotted series are hidden. */
 function openSelection() {
- const row = plottedRows[find("performance-selection").valueAsNumber];
+ const row = plottedRows[selectedIndex];
  if (!loading && row) detail(row);
 }
 /** Render the complete selected day and retain its original archived calculation identities. */
@@ -124,7 +124,7 @@ function render() {
   },
  };
  const series = [["First candidate observed","#0072b2",row=>row.first_candidate_seconds],["Further calculation","#b45f00",row=>row.first_candidate_seconds == null ? null : Math.max(0,row.duration_seconds-row.first_candidate_seconds)],["First time unknown","#73528d",row=>row.first_candidate_seconds == null ? row.duration_seconds : null]];
- chart = new Chart(find("performance-chart"),{plugins:[{id:"quarterWidths",afterDatasetsUpdate(chart){for(const meta of chart.getSortedVisibleDatasetMetas()){if(meta.type!=="bar")continue;for(const bar of meta.data)bar.width=Math.abs(chart.scales.x.getPixelForValue(minimum+QUARTER_MILLISECONDS)-chart.scales.x.getPixelForValue(minimum))*0.9;}}}],type:"bar",data:{datasets:series.map(([label,color,value])=>({label,backgroundColor:color,data:plottedRows.map(row=>({x:Date.parse(row.started_at),y:value(row)})),barPercentage:0.9,categoryPercentage:1}))},options:{responsive:true,maintainAspectRatio:false,animation:false,onClick:(_event,elements)=>{if(!loading && elements[0] && chart.data.datasets[elements[0].datasetIndex].type!=="line"){find("performance-selection").dataset.calculationId=plottedRows[elements[0].index].id;renderSelection();detail(plottedRows[elements[0].index]);}},scales:{x:{type:"linear",offset:false,min:minimum,max:maximum,stacked:true,afterBuildTicks:scale=>{const stride=Math.ceil((maximum-minimum)/QUARTER_MILLISECONDS/(MAX_TIME_LABELS-1))*QUARTER_MILLISECONDS;scale.ticks=[];for(let time=minimum;time<=maximum;time+=stride)scale.ticks.push({value:time});},ticks:{maxTicksLimit:MAX_TIME_LABELS,maxRotation:0,minRotation:0,callback:value=>when(value,{hour:"2-digit",minute:"2-digit",hourCycle:"h23"})}},y:{stacked:true,min:0,title:{display:true,text:"Seconds"}}},plugins:{legend:{display:false},tooltip}}});
+ chart = new Chart(find("performance-chart"),{plugins:[{id:"quarterWidths",afterDatasetsUpdate(chart){for(const meta of chart.getSortedVisibleDatasetMetas()){if(meta.type!=="bar")continue;for(const bar of meta.data)bar.width=Math.abs(chart.scales.x.getPixelForValue(minimum+QUARTER_MILLISECONDS)-chart.scales.x.getPixelForValue(minimum))*0.9;}}}],type:"bar",data:{datasets:series.map(([label,color,value])=>({label,backgroundColor:color,data:plottedRows.map(row=>({x:Date.parse(row.started_at),y:value(row)})),barPercentage:0.9,categoryPercentage:1}))},options:{responsive:true,maintainAspectRatio:false,animation:false,onClick:(_event,elements)=>{if(!loading && elements[0] && chart.data.datasets[elements[0].datasetIndex].type!=="line"){selectedId=plottedRows[elements[0].index].id;renderSelection();detail(plottedRows[elements[0].index]);}},scales:{x:{type:"linear",offset:false,min:minimum,max:maximum,stacked:true,afterBuildTicks:scale=>{const stride=Math.ceil((maximum-minimum)/QUARTER_MILLISECONDS/(MAX_TIME_LABELS-1))*QUARTER_MILLISECONDS;scale.ticks=[];for(let time=minimum;time<=maximum;time+=stride)scale.ticks.push({value:time});},ticks:{maxTicksLimit:MAX_TIME_LABELS,maxRotation:0,minRotation:0,callback:value=>when(value,{hour:"2-digit",minute:"2-digit",hourCycle:"h23"})}},y:{stacked:true,min:0,title:{display:true,text:"Seconds"}}},plugins:{legend:{display:false},tooltip}}});
  const budgets = [...new Set(rows.map(row=>row.time_limit_seconds).filter(Number.isFinite))];
  if (budgets.length === 1) {
   const budget = budgets[0];
@@ -143,20 +143,17 @@ function render() {
 }
 /** Ignore late responses after a day change. Failed reads clear stale data rather than misdate it. */
 async function load() {
- const version = ++requestVersion; loading = true; find("performance-selection").disabled = true; find("performance-open").disabled = true; find("performance-status").textContent="Loading calculation history.";
+ const version = ++requestVersion; loading = true; renderSelection(); find("performance-status").textContent="Loading calculation history.";
  try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone); find("performance-day").value=data.day; rows=data.calculations; loading = false; render(); find("performance-status").textContent="";
  const address=new URL(location.href), selectedId=address.searchParams.get("calculation"); if(selectedId){address.searchParams.delete("calculation");history.replaceState(null,"",address);const selectedRow=rows.find(row=>row.id===selectedId);if(selectedRow&&!find("calculation-detail").open)detail(selectedRow);}
  } catch(error){if(version!==requestVersion)return; rows=[]; loading = false; render(); find("performance-summary").textContent="Calculation history is unavailable for the selected day."; find("performance-status").textContent=error.message;}
 }
-find("performance-selection").addEventListener("input", showSelection);
-find("performance-open").addEventListener("click", openSelection);
 find("performance-chart").addEventListener("focus", showSelection);
 find("performance-chart").addEventListener("keydown", event => {
- if (loading || !plottedRows.length) return;
- const selection = find("performance-selection");
- if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+ if (loading || !plottedRows.length || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+ if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
   event.preventDefault();
-  selection.value = event.key === "Home" ? 0 : event.key === "End" ? plottedRows.length - 1 : Math.max(0, Math.min(plottedRows.length - 1, selection.valueAsNumber + (event.key === "ArrowRight" ? 1 : -1)));
+  selectedIndex = event.key === "Home" ? 0 : event.key === "End" ? plottedRows.length - 1 : Math.max(0, Math.min(plottedRows.length - 1, selectedIndex + (["ArrowRight", "ArrowUp"].includes(event.key) ? 1 : -1)));
   showSelection();
  } else if (["Enter", " "].includes(event.key)) {event.preventDefault(); openSelection();}
 });

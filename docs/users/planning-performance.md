@@ -12,8 +12,9 @@ Open **Insights > Planning performance** when you want to understand how long ca
 There is no duplicate calculation list below the chart. With a keyboard, focus
 the chart and use Left or Right to select a bar, Home or End to jump to the first
 or last bar, and Enter or Space to open its details. The selected time, result
-and duration are announced. Native keyboard controls also become available on
-focus for assistive technology. Closing the popup returns focus to its opener.
+and duration are announced. The chart itself exposes the selected calculation
+to assistive technology. There is no separate selection or action bar. Closing
+the popup returns focus to its opener.
 Refresh retains the selected calculation when it is still present. Enable
 additional calculations to navigate those bars too. Empty or failed history
 reads cannot open an old calculation under the newly selected day.

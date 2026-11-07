@@ -22,9 +22,9 @@ def test_daily_calculation_chart_dialog_and_day_navigation(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     today = datetime.now(ZoneInfo("Europe/Amsterdam")).date()
     expect(page.get_by_label("Day", exact=True)).to_have_value(today.isoformat())
-    expect(page.locator("#performance-selection")).to_have_attribute("max", "2")
+    expect(page.locator("#performance-chart")).to_have_attribute("aria-valuemax", "2")
     expect(page.locator("#performance-summary")).to_contain_text("3 completed calculations")
-    action = page.get_by_role("button", name="View calculation at").first
+    action = page.locator("#performance-chart")
     action.focus()
     page.keyboard.press("Enter")
     dialog = page.get_by_role("dialog")
@@ -43,17 +43,17 @@ def test_daily_calculation_chart_dialog_and_day_navigation(app_page):
     expect(dialog).not_to_be_visible()
     expect(action).to_be_focused()
     page.screenshot(path=str(capture / f"overview-{width}.png"), full_page=True)
-    page.locator("#performance-selection").focus()
-    page.locator("#performance-selection").press("End")
-    page.get_by_role("button", name="View calculation at").click()
+    page.locator("#performance-chart").focus()
+    page.locator("#performance-chart").press("End")
+    page.locator("#performance-chart").press("Enter")
     expect(dialog.locator("#calculation-summary")).to_contain_text("not recorded")
     page.get_by_role("button", name="Close", exact=True).click()
     page.get_by_label("Day", exact=True).fill((today - timedelta(days=1)).isoformat())
-    expect(page.locator("#performance-selection")).to_have_attribute("max", "0")
+    expect(page.locator("#performance-chart")).to_have_attribute("aria-valuemax", "0")
     page.get_by_label("Day", exact=True).fill("2020-01-01")
     expect(page.locator("#performance-summary")).to_contain_text("No completed calculations")
     page.get_by_role("button", name="Today", exact=True).click()
-    expect(page.locator("#performance-selection")).to_have_attribute("max", "2")
+    expect(page.locator("#performance-chart")).to_have_attribute("aria-valuemax", "2")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
     response = page.request.get(
@@ -82,9 +82,9 @@ def test_daily_calculation_chart_dialog_and_day_navigation(app_page):
         "**/v1/planning-performance/" + identity,
         lambda route: route.fulfill(status=503, body="private details"),
     )
-    page.locator("#performance-selection").focus()
-    page.locator("#performance-selection").press("Home")
-    page.get_by_role("button", name="View calculation at").click()
+    page.locator("#performance-chart").focus()
+    page.locator("#performance-chart").press("Home")
+    page.locator("#performance-chart").press("Enter")
     expect(dialog.locator("#calculation-summary")).to_contain_text("could not be loaded")
     expect(dialog).not_to_contain_text("private details")
 
@@ -120,8 +120,8 @@ def test_rejected_candidates_do_not_report_timeout_as_the_publication_cause(app_
     page.goto(url + "/planning-performance")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    selection = page.locator("#performance-selection")
-    expect(selection).to_have_attribute("max", "2")
+    selection = page.locator("#performance-chart")
+    expect(selection).to_have_attribute("aria-valuemax", "2")
     selection.focus()
     dialog = page.get_by_role("dialog")
     for index in range(3):
@@ -134,7 +134,7 @@ def test_rejected_candidates_do_not_report_timeout_as_the_publication_cause(app_
             expect(row).not_to_contain_text("Time budget reached")
         else:
             expect(row).to_contain_text("Time budget reached")
-        page.get_by_role("button", name="View calculation at").click()
+        page.locator("#performance-chart").press("Enter")
         summary = dialog.locator("#calculation-summary")
         expect(summary).to_contain_text("No plan published")
         if index < 2:

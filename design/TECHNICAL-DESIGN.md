@@ -1651,9 +1651,10 @@ The daily calculation chart is the single visible entry to recorded details.
 There is no duplicate history list. Its existing complete daily summary response
 remains authoritative. Clicking a bar opens the original calculation by ID.
 Keyboard Left/Right and Home/End select plotted calculations. Enter or Space
-opens the same dialog. A native range input and detail button provide standard
-assistive controls, revealed on keyboard focus rather than as a substitute list.
-Their live description retains the selected time, outcome and duration.
+opens the same dialog. The focusable chart exposes slider selection semantics
+and a hidden live description for assistive access, retaining the selected time, outcome and
+duration. No separate selection or action bar is rendered. Modified shortcuts
+retain browser and assistive behavior instead of selecting or opening details.
 Refresh preserves the selected identity when still plotted. Filter changes
 retain it when possible. Pending reads disable detail actions, obsolete reads
 retain the generation guard, and failed reads clear selection and chart data.

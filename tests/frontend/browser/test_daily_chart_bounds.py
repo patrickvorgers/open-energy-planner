@@ -355,7 +355,7 @@ def test_skipped_calendar_date_remains_responsive(app_page):
         "The selected calendar day does not exist in the Home Assistant installation timezone."
     )
     assert page.locator("#performance-chart").evaluate("canvas => !Chart.getChart(canvas)")
-    expect(page.locator("#performance-selection")).to_be_disabled()
+    expect(page.locator("#performance-chart")).to_have_attribute("aria-disabled", "true")
     assert not errors
 
 

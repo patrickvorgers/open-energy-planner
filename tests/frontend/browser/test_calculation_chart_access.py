@@ -72,28 +72,35 @@ def daily_history(app_page):
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
 def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_history):
-    """A full day stays reachable by native keyboard controls and chart keys without rendering a list."""
+    """A full day stays reachable by chart keys alone without rendering a list."""
     page, evidence, detail_reads, daily_reads = daily_history
     canvas = page.locator("#performance-chart")
-    selection = page.get_by_role("slider", name="Calculation", exact=True)
-    expect(selection).to_have_attribute("max", "95")
+    selection = page.locator("#performance-chart")
+    expect(selection).to_have_attribute("aria-valuemax", "95")
+    expect(canvas).to_have_role("slider")
     expect(page.get_by_role("heading", name="Calculations", exact=True)).to_have_count(0)
     expect(page.locator("#performance-list")).to_have_count(0)
+    expect(page.locator(".performance-access")).to_have_count(0)
+    expect(page.get_by_role("button", name="View calculation at")).to_have_count(0)
     captures = Path("results/ci/calculation-history-list")
     captures.mkdir(parents=True, exist_ok=True)
     width = page.viewport_size["width"]
     page.screenshot(path=str(captures / f"chart-only-{width}.png"), full_page=True)
     canvas.focus()
     canvas.press("End")
-    expect(selection).to_have_value("95")
+    expect(selection).to_have_attribute("aria-valuenow", "95")
     canvas.press("Enter")
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
     assert detail_reads == ["synthetic-calculation-095"]
     page.keyboard.press("Escape")
     expect(canvas).to_be_focused()
-    expect(selection).to_have_value("95")
+    expect(selection).to_have_attribute("aria-valuenow", "95")
     canvas.press("Home")
+    canvas.press("ArrowUp")
+    expect(canvas).to_have_attribute("aria-valuenow", "1")
+    canvas.press("ArrowDown")
+    expect(canvas).to_have_attribute("aria-valuenow", "0")
     canvas.press("ArrowRight")
     canvas.press(" ")
     expect(dialog).to_be_visible()
@@ -101,9 +108,9 @@ def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_h
     page.keyboard.press("Escape")
     selection.focus()
     selection.press("End")
-    expect(selection).to_have_value("95")
-    page.screenshot(path=str(captures / f"keyboard-controls-{width}.png"), full_page=False)
-    page.get_by_role("button", name="View calculation at").click()
+    expect(selection).to_have_attribute("aria-valuenow", "95")
+    page.screenshot(path=str(captures / f"keyboard-chart-{width}.png"), full_page=False)
+    page.locator("#performance-chart").press("Enter")
     expect(dialog).to_be_visible()
     assert detail_reads[-1] == "synthetic-calculation-095"
     page.keyboard.press("Escape")
@@ -118,12 +125,12 @@ def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_h
     page.set_viewport_size({"width": width, "height": 900 if width > 500 else 844})
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#performance-status")).to_have_text("")
-    expect(selection).to_have_value("95")
+    expect(selection).to_have_attribute("aria-valuenow", "95")
     previous_day = (datetime.fromisoformat(evidence["day"]) - timedelta(days=1)).date().isoformat()
     page.get_by_label("Day", exact=True).fill(previous_day)
-    expect(selection).to_have_attribute("max", "0")
+    expect(selection).to_have_attribute("aria-valuemax", "0")
     page.get_by_role("button", name="Today", exact=True).click()
-    expect(selection).to_have_attribute("max", "95")
+    expect(selection).to_have_attribute("aria-valuemax", "95")
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
@@ -133,11 +140,11 @@ def test_chart_access_waits_for_reads_and_recovers_without_stale_day_data(daily_
     pending = []
     page.route("**/v1/planning-performance?day=*", lambda route: pending.append(route))
     canvas = page.locator("#performance-chart")
-    selection = page.get_by_role("slider", name="Calculation", exact=True)
+    selection = page.locator("#performance-chart")
     canvas.focus()
     page.get_by_role("button", name="Refresh", exact=True).click()
-    expect(selection).to_be_disabled()
-    expect(page.locator("#performance-open")).to_be_disabled()
+    expect(selection).to_have_attribute("aria-disabled", "true")
+    expect(page.locator("#performance-open")).to_have_count(0)
     expect(page.locator("#performance-status")).to_contain_text("Loading")
     canvas.focus()
     canvas.press("Enter")
@@ -145,13 +152,13 @@ def test_chart_access_waits_for_reads_and_recovers_without_stale_day_data(daily_
     assert len(pending) == 1
     pending.pop().fulfill(status=503, body="private provider response")
     expect(page.locator("#performance-status")).to_contain_text("could not be loaded")
-    expect(selection).to_be_disabled()
+    expect(selection).to_have_attribute("aria-disabled", "true")
     expect(page.locator("body")).not_to_contain_text("private provider response")
     page.get_by_role("button", name="Refresh", exact=True).click()
     assert len(pending) == 1
     pending.pop().fulfill(json=evidence)
-    expect(selection).to_be_enabled()
-    expect(selection).to_have_attribute("max", "95")
+    expect(selection).to_have_attribute("aria-disabled", "false")
+    expect(selection).to_have_attribute("aria-valuemax", "95")
     page.get_by_label("Day", exact=True).fill("2020-01-01")
     page.get_by_role("button", name="Today", exact=True).click()
     assert len(pending) == 2
@@ -160,15 +167,15 @@ def test_chart_access_waits_for_reads_and_recovers_without_stale_day_data(daily_
     expect(page.locator("#performance-summary")).to_contain_text("96 completed calculations")
     old_read.fulfill(json={**evidence, "day": "2020-01-01", "calculations": []})
     expect(page.get_by_label("Day", exact=True)).to_have_value(evidence["day"])
-    expect(selection).to_have_attribute("max", "95")
+    expect(selection).to_have_attribute("aria-valuemax", "95")
     page.route(
         "**/v1/planning-performance?day=2020-01-02",
         lambda route: route.fulfill(json={**evidence, "day": "2020-01-02", "calculations": []}),
     )
     page.get_by_label("Day", exact=True).fill("2020-01-02")
     expect(page.locator("#performance-summary")).to_contain_text("No completed calculations")
-    expect(selection).to_be_disabled()
-    expect(page.locator("#performance-open")).to_be_disabled()
+    expect(selection).to_have_attribute("aria-disabled", "true")
+    expect(page.locator("#performance-open")).to_have_count(0)
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
@@ -216,9 +223,9 @@ def test_chart_access_preserves_zero_long_and_intermediate_calculations(daily_hi
     )
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#performance-summary")).to_contain_text("Enable additional calculations")
-    expect(page.locator("#performance-selection")).to_be_disabled()
+    expect(page.locator("#performance-chart")).to_have_attribute("aria-disabled", "true")
     extra.check()
-    expect(page.locator("#performance-selection")).to_be_enabled()
+    expect(page.locator("#performance-chart")).to_have_attribute("aria-disabled", "false")
     assert not failures
 
 
@@ -330,3 +337,40 @@ def test_stacked_calculation_tooltip_combines_sections_and_rounds_seconds(
         assert detail_reads == ["synthetic-calculation-004"]
         improvement = hover_segment(page.locator("#improvement-chart"), 0, 0)
         assert improvement["title"] == [f"{first_time} s"]
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_chart_modifier_shortcuts_do_not_select_or_open_calculations(daily_history):
+    """Browser and assistive shortcuts retain their default and cannot change the selected calculation."""
+    page, _, detail_reads, _ = daily_history
+    canvas = page.locator("#performance-chart")
+    canvas.focus()
+    original = page.locator("#performance-selected").text_content()
+    observed = canvas.evaluate(
+        """canvas => {
+        const results = [];
+        for (const modifier of ['altKey', 'ctrlKey', 'metaKey', 'shiftKey']) {
+            for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' ']) {
+                const event = new KeyboardEvent('keydown', {key, [modifier]: true, bubbles: true, cancelable: true});
+                canvas.dispatchEvent(event);
+                const opened = document.querySelector('#calculation-detail').open;
+                results.push({modifier, key, prevented: event.defaultPrevented, opened,
+                    selected: document.querySelector('#performance-selected').textContent});
+                if (opened) document.querySelector('#calculation-detail').close();
+            }
+        }
+        return results;
+        }"""
+    )
+    assert all(
+        not event["prevented"] and not event["opened"] and event["selected"] == original
+        for event in observed
+    ), observed
+    assert not detail_reads
+    canvas.press("ArrowRight")
+    expect(page.locator("#performance-selected")).not_to_have_text(original)
+    canvas.press("Home")
+    expect(page.locator("#performance-selected")).to_have_text(original)
+    canvas.press("Enter")
+    expect(page.get_by_role("dialog")).to_be_visible()
+    assert detail_reads == ["synthetic-calculation-000"]
