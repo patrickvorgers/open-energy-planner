@@ -109,6 +109,10 @@ After the app accepts the final catalogue message, the coordinator captures
 forecasts from that same snapshot. Incomplete groups do not enter forecast
 capture, while independent complete meters can still upload their predictions.
 Partial, rejected or mixed transfers never supply a new forecast context.
+The paired TLS gateway admits forecast submission only through the exact
+`POST /v1/solar/ha-forecasts` operation. Current Energy provider associations are
+validated before persistence. Solar configuration and other HTTP methods remain
+outside this peer permission.
 
 Each paged message carries a transfer identity, capture timestamp, content digest,
 zero-based index and completion flag. The first message supplies the document
@@ -133,7 +137,10 @@ Configured device and energy-channel counts are not product limits. Recorder
 queries process at most sixty-four channels per call while retaining all members.
 Existing history windows, query deadlines, response budgets and physical-value
 validation remain active. The HA response reader retains its 256 KiB ordinary
-response budget and 4 MiB snapshot budget. Decoded device projections enforce the
+response budget and 4 MiB snapshot budget. Catalogue acceptance replies use the
+snapshot budget because they return the complete accepted device membership.
+This does not widen ordinary settings responses or the bounded request pages.
+Decoded device projections enforce the
 same byte budgets. A normalized settlement frame is bounded by 192 KiB rather
 than by an arbitrary number of channels.
 The integration separately limits each serialized settlement report to 192 KiB,

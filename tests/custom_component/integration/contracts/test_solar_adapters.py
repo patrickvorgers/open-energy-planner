@@ -646,9 +646,13 @@ def test_optional_solar_geometry_uses_actual_transfer_envelope(monkeypatch, over
     assert body == original
 
 
-@pytest.mark.parametrize("transfer_result", ["accepted", "partial", "mixed"])
-def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, transfer_result):
+@pytest.mark.parametrize("transfer_result", ["accepted", "accepted_large", "partial", "mixed"])
+def test_forecast_capture_uses_only_accepted_normalized_catalogue(
+    monkeypatch, transfer_result, request
+):
     """Only accepted normalized geometry reaches real forecast capture and authenticated app parsing."""
+    evidence_properties = request.node.user_properties
+    import json
     import logging
     from copy import deepcopy
 
@@ -662,12 +666,41 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, t
 
     async def scenario():
         """Exercise real Coordinator, bridge, HTTP catalogue publication and forecast association checks."""
-        async with running_chain(live=True) as (hass, oep_entry, url, _root):
+        async with running_chain(
+            live=True,
+            peer_gateway=transfer_result == "accepted_large",
+            fixture_devices=transfer_result != "accepted_large",
+        ) as (
+            hass,
+            oep_entry,
+            url,
+            _root,
+        ):
             coordinator = oep_entry.runtime_data
             coordinator.poll_cancel()
             coordinator.poll_cancel = None
             captured = dt_util.utcnow()
             body, providers = _solar_transfer_fixture(monkeypatch, 1, captured)
+            if transfer_result == "accepted_large":
+                template = body["entities"][-1]
+                for index in range(1600):
+                    entity_id = f"sensor.solar_meter_{index:04}"
+                    body["entities"].append(
+                        {
+                            **template,
+                            "entity_id": entity_id,
+                            "name": f"Synthetic solar source {index:04}",
+                        }
+                    )
+                    body["suggestions"]["solar_sources"].append(entity_id)
+                    body["suggestions"]["terms"].append({"entity_id": entity_id, "sign": 1})
+                    body["suggestions"]["solar_configurations"].append(
+                        {
+                            "entity_id": entity_id,
+                            "providers": [],
+                            "issue": "solar_configuration_not_available",
+                        }
+                    )
             original = deepcopy(body)
             lookup = {provider.entry_id: provider for provider in providers}
             original_get_entry = hass.config_entries.async_get_entry
@@ -698,6 +731,8 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, t
             monkeypatch.setattr(catalogue_module, "setup_catalogue", catalogue)
             monkeypatch.setitem(FORECAST_ADAPTERS, "forecast_solar", prediction)
             captures, uploads, accepted_uploads = [], [], []
+            accepted_devices = []
+            wire_sizes = []
             catalogue_accepted = False
             original_capture = coordinator.solar_forecast_bridge.capture
             original_request = coordinator.client.request
@@ -712,6 +747,8 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, t
                 """Retain authentication and app validation, with explicit incomplete or mixed wire failure."""
                 nonlocal catalogue_accepted
                 if path == "/v1/ha/catalogue":
+                    wire_sizes.append(len(json.dumps(payload).encode()))
+                    assert wire_sizes[-1] <= 196608
                     transfer = payload.get("transfer", {})
                     if transfer_result == "partial" and transfer.get("complete"):
                         return {"accepted": False}
@@ -719,6 +756,8 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, t
                         payload = {**payload, "transfer": {**transfer, "id": "different-snapshot"}}
                     result = await original_request(method, path, payload)
                     catalogue_accepted = result.get("accepted") is True
+                    if catalogue_accepted:
+                        accepted_devices.append(result)
                     return result
                 if path == "/v1/solar/ha-forecasts":
                     uploads.append(deepcopy(payload))
@@ -736,7 +775,7 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, t
                 await coordinator.sync()
                 async with session.get(url + "/v1/setup") as response:
                     after = (await response.json())["catalogue"]["data"]
-            if transfer_result == "accepted":
+            if transfer_result in ("accepted", "accepted_large"):
                 assert catalogue_accepted
                 assert len(uploads) == 1
                 assert accepted_uploads == [{"accepted": True}]
@@ -748,6 +787,60 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(monkeypatch, t
                 assert [group["entity_id"] for group in uploads[0]["groups"]] == ["sensor.small"]
                 assert after["entities"] == original["entities"]
                 assert after["suggestions"]["terms"] == original["suggestions"]["terms"]
+                if transfer_result == "accepted_large":
+                    assert coordinator.devices == accepted_devices[0]["devices"]
+                    reply_bytes = len(json.dumps(accepted_devices[0]).encode())
+                    assert 262144 < reply_bytes < 4194304
+                    assert len(coordinator.devices) == 1602
+                    evidence_properties.extend(
+                        [
+                            ("catalogue_reply_bytes", reply_bytes),
+                            ("catalogue_devices", len(coordinator.devices)),
+                            ("largest_source_page_bytes", max(wire_sizes)),
+                        ]
+                    )
+                    from aiohttp import ClientResponseError
+
+                    from tests.database.support.archive import list_documents, read_document
+
+                    receipt_names = [
+                        name
+                        for name in await hass.async_add_executor_job(
+                            list_documents, _root / "app", "solar"
+                        )
+                        if name.startswith("ha-receipt-")
+                    ]
+                    assert len(receipt_names) == 1
+                    receipt_text = await hass.async_add_executor_job(
+                        read_document, _root / "app", "solar", receipt_names[0]
+                    )
+                    receipt = json.loads(receipt_text)
+                    assert receipt["entity_id"] == "sensor.small"
+                    assert receipt["prediction"]["configuration"]["entry_id"] == "other"
+                    saved_steps = receipt["prediction"]["steps"]
+                    assert len(saved_steps) == 1
+                    assert datetime.fromisoformat(saved_steps[0]["start"]) == captured
+                    assert saved_steps[0]["duration_h"] == 0.25
+                    assert saved_steps[0]["kwh"] == 0.25
+                    for change in ("unknown_meter", "changed_provider"):
+                        invalid = deepcopy(uploads[0])
+                        if change == "unknown_meter":
+                            invalid["groups"][0]["entity_id"] = "sensor.not_selected"
+                        else:
+                            invalid["groups"][0]["providers"][0]["configuration"]["entry_id"] = (
+                                "changed-provider"
+                            )
+                        with pytest.raises(ClientResponseError) as rejected:
+                            await coordinator.client.request(
+                                "POST", "/v1/solar/ha-forecasts", invalid
+                            )
+                        assert rejected.value.status == 400
+                    assert (
+                        await hass.async_add_executor_job(
+                            read_document, _root / "app", "solar", receipt_names[0]
+                        )
+                        == receipt_text
+                    )
             else:
                 assert not catalogue_accepted
                 assert captures == uploads == predicted_entries == []
