@@ -116,9 +116,20 @@ def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_h
     assert detail_reads[-1] == "synthetic-calculation-095"
     page.keyboard.press("Escape")
     assert daily_reads == [evidence["day"]]
-    for resized_width in (768, 390, 1280):
+    for resized_width in (768, 390, 1280, 768, 390, 1280):
         page.set_viewport_size({"width": resized_width, "height": 900})
-        page.wait_for_function("() => document.documentElement.scrollWidth <= innerWidth")
+        # A fitting old canvas can precede the next responsive resize frame.
+        page.wait_for_function(
+            """width => {
+            const canvas = document.querySelector('#performance-chart'), chart = Chart.getChart(canvas);
+            return innerWidth === width && chart?.attached &&
+                canvas.clientWidth === canvas.parentElement.clientWidth &&
+                canvas.clientHeight === canvas.parentElement.clientHeight &&
+                chart.width === parseFloat(canvas.style.width) &&
+                chart.height === parseFloat(canvas.style.height);
+            }""",
+            arg=resized_width,
+        )
         assert (
             canvas.evaluate("canvas => Chart.getChart(canvas).data.datasets[0].data.length") == 96
         )
