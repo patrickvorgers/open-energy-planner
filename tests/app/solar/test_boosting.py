@@ -276,6 +276,43 @@ def test_optional_native_failure_retains_baseline_and_sanitizes_logs(tmp_path, m
     assert "RuntimeError" in caplog.text
 
 
+def test_native_failure_does_not_log_private_source_identity(tmp_path, monkeypatch, caplog):
+    """A configured private identifier and exception values stay out of safe, useful diagnostics."""
+    from open_energy_planner.solar import runtime as runtime_module
+
+    runtime, now = runtime_case(tmp_path)
+    private_id = "private-source-identity-sentinel"
+    histories = dict(runtime.histories)
+    configuration = replace(
+        runtime.configuration,
+        sources=(
+            replace(runtime.configuration.sources[0], source_id=private_id),
+            *runtime.configuration.sources[1:],
+        ),
+    )
+    runtime.store.save(configuration)
+    runtime.configure(configuration)
+    runtime.histories = histories
+
+    def unavailable(*args, **kwargs):
+        """Keep a private provider value in the original exception, outside public diagnostics."""
+        raise RuntimeError("private-provider-value-sentinel")
+
+    monkeypatch.setattr(runtime_module, "fit_boosted_model", unavailable)
+    with caplog.at_level("DEBUG", logger="open_energy_planner.solar.runtime"):
+        assert runtime.install(runtime.build(runtime.job(now)), now)
+    assert private_id not in caplog.text
+    assert "private-provider-value-sentinel" not in caplog.text
+    assert "Solar ML candidate" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "runtime.py:" in caplog.text and "unavailable" in caplog.text
+    public = runtime.document(now)["learning"][private_id]
+    assert public["issue"] == (
+        "The ML candidate could not be updated. Simpler forecasts remain usable."
+    )
+    assert private_id not in public["issue"]
+
+
 def test_hourly_tree_correction_preserves_quarter_geometry_and_shared_inverter_cap():
     """Per-hour corrections scale DC before two roofs share one 0.5 kW AC limit, retaining changing quarter geometry."""
     from open_energy_planner.solar.calculation.predictor import PVWattsPredictor

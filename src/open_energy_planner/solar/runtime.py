@@ -527,8 +527,7 @@ class SolarRuntime:
                     reason=type(error).__name__,
                 )
                 _LOGGER.debug(
-                    "Solar source %s learning failure (%s).\n%s",
-                    source.source_id,
+                    "Solar ML candidate learning failure (%s).\n%s",
                     type(error).__name__,
                     failure_trace(error),
                 )

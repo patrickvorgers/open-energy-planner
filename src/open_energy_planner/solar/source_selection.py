@@ -355,11 +355,22 @@ def choose_sources(
                 < max(MIN_ABSOLUTE_GAIN_KWH, scores[ForecastSource.PVWATTS] * MIN_RELATIVE_GAIN)
             )
         ):
-            chosen = ForecastSource.PVWATTS
+            eligible_scores = {
+                model: error for model, error in scores.items() if model != ForecastSource.ML
+            }
+            chosen = (
+                min(eligible_scores, key=eligible_scores.get)
+                if preference == ForecastSource.AUTOMATIC and eligible_scores
+                else ForecastSource.PVWATTS
+            )
             learning_issue = (
-                "ML is collecting matched forecast accuracy. PVWatts remains active."
-                if not scores
-                else "ML has not improved forecast accuracy enough. PVWatts remains active."
+                (
+                    "ML is collecting matched forecast accuracy. PVWatts remains active."
+                    if not scores
+                    else "ML has not improved forecast accuracy enough. PVWatts remains active."
+                )
+                if chosen == ForecastSource.PVWATTS
+                else None
             )
         selected[source_id] = (chosen, models[chosen])
         statuses[source_id] = {

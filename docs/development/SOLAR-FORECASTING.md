@@ -243,7 +243,10 @@ Even a historically better tree remains in shadow mode until three complete,
 matched HA-local days of forecasts captured before their outcomes show material
 improvement over PVWatts with the same absolute and relative gain requirements.
 Manual **ML model** selection cannot bypass this tree gate. A changed learning
-policy, geometry or site starts an independent evidence family. Older scalar
+policy, geometry or site starts an independent evidence family. Automatic excludes
+trees that fail the gain gate and ranks the remaining eligible forecasts, including
+Home Assistant. Explicit ML selection retains PVWatts until the tree qualifies.
+Older scalar
 forecast evidence cannot promote the tree. Unavailable learning retains usable
 PVWatts/scalar candidates and logs a safe, deduplicated recovery explanation.
 
