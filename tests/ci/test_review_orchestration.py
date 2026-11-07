@@ -1008,3 +1008,72 @@ def test_null_graphql_failure_does_not_starve_the_next_pr(tmp_path, monkeypatch,
     assert bad.provider_commands() == []
     assert good.provider_commands() == ["@coderabbitai rate limit"]
     assert "PRIVATE-NULL-SWEEP-SENTINEL" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("quota", ["stale", "fresh-limit", "none"])
+@pytest.mark.parametrize("minutes", [119, 120, 121])
+def test_active_review_always_respects_original_completion_deadline(quota, minutes):
+    """Quota early returns cannot extend an unfinished review beyond its two-hour completion budget."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.run()
+    client.checks.append(
+        {
+            "id": 20,
+            "name": "CodeRabbit",
+            "head_sha": HEAD,
+            "app": {"id": 347564},
+            "status": "in_progress",
+            "conclusion": None,
+        }
+    )
+    if quota == "stale":
+        client.reply(LIMITED)
+    elif quota == "fresh-limit":
+        client.now = NOW + timedelta(minutes=minutes)
+        client.reply(LIMITED)
+    client.run(minutes=minutes)
+    assert client.state()["phase"] == ("blocked" if minutes > 120 else "coderabbit")
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+    assert client.checks[-1]["status"] == "in_progress"
+    if minutes > 120:
+        assert "Inspect" in client.state()["message"]
+
+
+@pytest.mark.parametrize("quota", ["stale", "fresh-limit", "none"])
+def test_substantive_completion_has_priority_over_expired_review_budget(quota):
+    """A genuinely completed current-head review remains accepted before deadline failure handling."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.run()
+    if quota == "stale":
+        client.reply(LIMITED)
+    elif quota == "fresh-limit":
+        client.now = NOW + timedelta(minutes=121)
+        client.reply(LIMITED)
+    client.checks.append(
+        {
+            "id": 20,
+            "name": "CodeRabbit",
+            "head_sha": HEAD,
+            "app": {"id": 347564},
+            "status": "completed",
+            "conclusion": "success",
+            "output": {
+                "title": "Finished",
+                "summary": (
+                    "Result: Success - Review completed\n\n"
+                    "| Prepare review scope | Completed | 1s |\n"
+                    "| Prepare repository workspace | Completed | 1s |\n"
+                    "| Run analysis checks | Completed | 1s |\n"
+                    "| Generate review feedback | Completed | 1s |\n"
+                    "| Publish review results | Completed | 1s |\n"
+                ),
+            },
+        }
+    )
+    client.run(minutes=121)
+    assert client.state()["phase"] == "complete"
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]

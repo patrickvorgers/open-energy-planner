@@ -152,7 +152,9 @@ after fifteen minutes. A genuine but stale quota reply triggers a fresh bounded
 quota query only when no provider is active. Its old availability never authorizes
 a review. Generic review acknowledgements are not quota evidence and do not
 expire an active review. Reviews without an unambiguous completion block after
-two hours without starting an overlapping provider. Scheduled execution determines
+two hours without starting an overlapping provider. An unfinished CodeRabbit
+review reaches that deadline before quota handling can defer its resume.
+Substantive current-head completion is checked first. Scheduled execution determines
 when these limits are observed. A head/base change, a newer main, closure or a
 Ready transition supersedes pending work. Synchronize and validate an updated
 Draft, then explicitly request review of that revision.

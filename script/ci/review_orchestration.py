@@ -442,6 +442,8 @@ def advance(repository, number, state, comments, client, now):
         if len(matches) != 1:
             return block_request(state, subject, client, category="sending")
         record_publication(state, matches[0]["id"], matches[0]["created_at"], subject, client)
+    if state["phase"] == "coderabbit" and now - instant(state["sent"]) > REVIEW_TIMEOUT:
+        return block_request(state, subject, client, category="coderabbit")
     fresh = [
         row
         for row in comments
