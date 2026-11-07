@@ -8,12 +8,19 @@ export function retainInputs(render) {
     const previous = controls(), values = previous.map(input => input.value);
     const focused = document.activeElement, focusIndex = previous.indexOf(focused);
     const field = focused?.dataset.field, fieldIndex = field ? [...document.querySelectorAll("[data-field]")].filter(control => control.dataset.field === field).indexOf(focused) : -1;
-    render();
-    const replacement = controls();
-    replacement.forEach((input, index) => { if (index < values.length) input.value = values[index]; });
-    if (focused?.isConnected) focused.focus({preventScroll: true});
-    else if (focusIndex >= 0) replacement[focusIndex]?.focus({preventScroll: true});
-    else if (fieldIndex >= 0) [...document.querySelectorAll("[data-field]")].filter(control => control.dataset.field === field)[fieldIndex]?.focus({preventScroll: true});
+    const handlers = focusIndex >= 0 ? [focused.onfocus, focused.onblur] : null;
+    if (handlers) { focused.onfocus = null; focused.onblur = null; }
+    try {
+        render();
+        const replacement = controls();
+        // Keep the native input itself: incomplete numbers and their caret cannot be read through .value.
+        if (focusIndex >= 0 && replacement[focusIndex] && replacement[focusIndex] !== focused) replacement[focusIndex].replaceWith(focused);
+        replacement.forEach((input, index) => { if (index < values.length && index !== focusIndex) input.value = values[index]; });
+        if (focused?.isConnected) focused.focus({preventScroll: true});
+        else if (fieldIndex >= 0) [...document.querySelectorAll("[data-field]")].filter(control => control.dataset.field === field)[fieldIndex]?.focus({preventScroll: true});
+    } finally {
+        if (handlers) [focused.onfocus, focused.onblur] = handlers;
+    }
 }
 
 /** Wait for one deliberate HA read, retaining the last accepted choices on failure. */

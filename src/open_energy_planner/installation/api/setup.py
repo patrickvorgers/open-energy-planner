@@ -251,12 +251,12 @@ def register(
     async def source_choices(request):
         """Request finite editor scopes through admin authorization, retaining active membership."""
         try:
+            if request.method == "POST" and await request.json() != {}:
+                raise ValueError("Invalid source choice request")
             async with lock:
                 scope = request.match_info["scope"]
                 now = datetime.now(UTC)
                 if request.method == "POST":
-                    if await request.json() != {}:
-                        raise ValueError("Invalid source choice request")
                     catalogue.choices.request(scope, now)
                 return web.json_response(catalogue.choices.status(scope, catalogue.value, now))
         except (ValueError, TypeError, KeyError):

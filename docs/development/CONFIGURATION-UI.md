@@ -209,6 +209,11 @@ Expired replies cannot replace editor state. The refresh button becomes availabl
 for an independent explicit retry. Refresh errors use fixed recovery advice rather
 than arbitrary response bodies. A valid empty catalogue explains that no sources
 were returned instead of announcing success, while retaining the draft and actions.
+Source-option rendering retains the focused native number input, including
+incomplete text such as an exponent and its editing position. Programmatic focus
+restoration must not rerun precision-formatting or select-all handlers. Reading
+and validating a chooser POST body happens before acquiring the shared app lock.
+Only the resulting bounded request/status operations hold that lock.
 Temporary candidates expire after five minutes. Refresh them again if a previously
 unconfigured source is no longer available when saving. Large discoveries use the
 [complete snapshot protocol](ENERGY-DASHBOARD.md#complete-discovery-transfers).

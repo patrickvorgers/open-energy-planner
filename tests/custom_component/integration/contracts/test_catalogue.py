@@ -795,7 +795,8 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
                 """Retain the genuine authenticated app and exercise only the optional catalogue failure path."""
                 nonlocal attempts
                 if path == "/v1/ha/catalogue":
-                    attempts += 1
+                    if "refresh_failed" not in (body or {}):
+                        attempts += 1
                     raise ClientError("Discovery temporarily unavailable")
                 data = await request(method, path, body)
                 if path == "/v1/snapshot":
@@ -812,7 +813,7 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
             refresh = "setup-two"
             await coordinator.sync()
             assert attempts == 2
-            coordinator.catalogue_sent -= timedelta(minutes=6)
+            coordinator.catalogue_failed_at -= timedelta(minutes=6)
             await coordinator.sync()
             assert attempts == 3
 

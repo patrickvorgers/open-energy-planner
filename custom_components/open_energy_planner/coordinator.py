@@ -78,6 +78,7 @@ class PlanCoordinator:
         self.choice_requests = set()
         self.catalogue_failed_at = None
         self.catalogue_confirmed_at = None
+        self.catalogue_bindings_rejected = False
         self.solar_forecast_sent = None
         self.solar_forecast_attempted_at = None
         self.solar_forecast_generation = None
@@ -348,9 +349,26 @@ class PlanCoordinator:
                 if data.get("source") == "home_assistant":
                     from .source_choices import refresh_choices
 
-                    self.catalogue_discovery.configure(
-                        data.get("installation", {}).get("setup_source_entities", [])
-                    )
+                    try:
+                        self.catalogue_discovery.configure(
+                            data.get("installation", {}).get("setup_source_entities", [])
+                        )
+                    except (ValueError, TypeError):
+                        if not self.catalogue_bindings_rejected:
+                            self.catalogue_discovery.repair()
+                            _LOGGER.warning(
+                                "Home Assistant source bindings cannot be used for metadata refresh. "
+                                "Previous metadata is retained without freshness confirmation. "
+                                "Check the configured source identities in settings"
+                            )
+                        self.catalogue_bindings_rejected = True
+                    else:
+                        if self.catalogue_bindings_rejected:
+                            self.catalogue_failed_at = None
+                            _LOGGER.info(
+                                "Home Assistant source bindings accepted. Metadata refresh can resume"
+                            )
+                        self.catalogue_bindings_rejected = False
                     await refresh_choices(
                         self, data.get("installation", {}).get("source_choices_requested", [])
                     )
@@ -360,10 +378,15 @@ class PlanCoordinator:
                 forced_catalogue = self.catalogue_sent is None or (
                     catalogue_request and catalogue_request != self.catalogue_request
                 )
-                if data.get("source") == "home_assistant" and (
-                    forced_catalogue
-                    or self.catalogue_failed_at is None
-                    or now - self.catalogue_failed_at >= timedelta(minutes=CATALOGUE_RETRY_MINUTES)
+                if (
+                    data.get("source") == "home_assistant"
+                    and not self.catalogue_bindings_rejected
+                    and (
+                        forced_catalogue
+                        or self.catalogue_failed_at is None
+                        or now - self.catalogue_failed_at
+                        >= timedelta(minutes=CATALOGUE_RETRY_MINUTES)
+                    )
                 ):
                     from .catalogue_transfer import prepare_catalogue
 
