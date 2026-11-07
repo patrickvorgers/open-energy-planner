@@ -22,6 +22,7 @@ PROOF_FILES = (
     "check_main_ci_reuse.py",
     "check_suite_completion.py",
     "review_preflight.py",
+    "review_orchestration.py",
     "scope_report.py",
     "ci_scope.py",
     "ci_groups.py",
@@ -58,7 +59,14 @@ def test_execution_policy_and_unknown_ci_owners_remain_conservative(path):
     assert not performance_queries_path(PurePosixPath(path))
 
 
-@pytest.mark.parametrize("path", [".coderabbit.yaml", ".github/workflows/review-preflight.yaml"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".coderabbit.yaml",
+        ".github/workflows/review-preflight.yaml",
+        ".github/workflows/review-orchestration.yaml",
+    ],
+)
 @pytest.mark.parametrize("status", ["A", "M", "D"])
 def test_review_configuration_has_no_product_or_query_workload(monkeypatch, path, status):
     """Declared review configuration retains CI proof across additions, edits and removals."""
@@ -85,7 +93,12 @@ def test_review_metadata_does_not_capture_unknown_or_shared_execution(path):
 
 
 @pytest.mark.parametrize(
-    "metadata", [".coderabbit.yaml", ".github/workflows/review-preflight.yaml"]
+    "metadata",
+    [
+        ".coderabbit.yaml",
+        ".github/workflows/review-preflight.yaml",
+        ".github/workflows/review-orchestration.yaml",
+    ],
 )
 @pytest.mark.parametrize(
     "workload",

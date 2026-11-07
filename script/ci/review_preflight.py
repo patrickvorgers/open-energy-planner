@@ -18,6 +18,8 @@ from script.ci.check_commit_signatures import GitHub, VerificationError, sha
 from script.ci.pr_readiness import require_resolved_threads
 
 MAX_PAGES = 10
+GITHUB_ACTIONS_BOT_ID = 41898282
+GITHUB_ACTIONS_BOT_LOGIN = "github-actions[bot]"
 
 
 def require_pr_history(repository, number, current, client):
@@ -66,10 +68,16 @@ def require_no_request(repository, number, head, client):
                 raise VerificationError("Incomplete or duplicate review-request history")
             seen.add(row["id"])
             user = row.get("user")
-            trusted = (
-                isinstance(user, dict)
-                and user.get("type") == "User"
-                and row.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+            trusted = isinstance(user, dict) and (
+                (
+                    user.get("type") == "User"
+                    and row.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+                )
+                or (
+                    user.get("type") == "Bot"
+                    and user.get("login") == GITHUB_ACTIONS_BOT_LOGIN
+                    and user.get("id") == GITHUB_ACTIONS_BOT_ID
+                )
             )
             lines = [line.strip() for line in row["body"].splitlines()]
             if (
