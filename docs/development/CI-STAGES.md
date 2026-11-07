@@ -137,7 +137,9 @@ delay scheduled runs. Fifteen minutes is the intended polling interval, not a
 guaranteed retry deadline. A manual workflow dispatch resumes the same durable
 requests and does not independently authorize a review. The PR comment is also
 the durable inbox if Actions replaces a queued trigger. Repeated commands for
-active work do not duplicate it.
+active work do not duplicate it. Each acknowledged command is durably consumed
+independently of the original request identity. A later push cannot revive an
+older duplicate as a new request.
 
 Each request permits at most eight quota queries, two actual CodeRabbit requests
 and one Kody request. It expires after seven days. Missing quota replies block
@@ -146,12 +148,23 @@ two hours without starting an overlapping provider. Scheduled execution determin
 when these limits are observed. A head/base change, a newer main, closure or a
 Ready transition supersedes pending work. Synchronize and validate an updated
 Draft, then explicitly request review of that revision.
+If a confirmed quota limit supplies no usable retry time, Kody may still review.
+If Kody then fails technically, the request blocks instead of inventing a
+CodeRabbit retry deadline.
 
 The controller writes a durable intent before each provider command. If a worker
 loses the publication response, it recovers a uniquely marked command from the PR
 instead of sending it again. An uncertain outcome without that command blocks.
+Losing the subsequent status-confirmation response also preserves that outbox.
 Global workflow serialization protects these operations. A direct manual
 provider command can still race with the controller. Do not mix both routes.
+
+Public failure messages use fixed categories with an inspection action. They
+never copy exception values or provider payloads. A malformed, over-limit or
+unavailable PR does not prevent the scheduled sweep from checking other PRs.
+The workflow still reports failure if a PR cannot be processed or becomes blocked
+during that sweep.
+An unavailable or invalid global PR inventory also fails the workflow.
 
 For a **Blocked** status, inspect its explanation, the Actions run, actual provider
 checks and all findings. A new explicit request can reconsider failed prerequisites

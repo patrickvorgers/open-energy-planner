@@ -38,6 +38,15 @@ REVIEW_TIMEOUT = timedelta(hours=2)
 REQUEST_TIMEOUT = timedelta(days=7)
 TERMINAL = {"complete", "blocked", "superseded"}
 PHASES = TERMINAL | {"sending", "quota", "coderabbit", "kody", "waiting"}
+PUBLIC_FAILURE_MESSAGES = {
+    "blocked": "Review prerequisites could not be verified. Inspect the current checks and resolved findings before requesting review again.",
+    "sending": "Command publication could not be confirmed. Inspect the PR request markers before any retry.",
+    "quota": "CodeRabbit availability could not be verified. Inspect the quota reply and workflow before any retry.",
+    "coderabbit": "CodeRabbit completion could not be verified. Inspect its check and findings before any retry.",
+    "kody": "Kody completion could not be verified. Inspect its check and findings before any retry.",
+    "waiting": "CodeRabbit retry evidence could not be verified. Inspect the reported retry time before any retry.",
+    "retry": "CodeRabbit supplied no usable retry time. Inspect its quota reply before requesting another review.",
+}
 ADD_COMMENT = """
 mutation($subject: ID!, $body: String!, $key: String!) {
   addComment(input: {subjectId: $subject, body: $body, clientMutationId: $key}) {
@@ -111,6 +120,7 @@ def read_state(comments):
                 type(state.get(field)) is not int or state[field] < 0
                 for field in (
                     "request",
+                    "consumed",
                     "sequence",
                     "command",
                     "checks_after",
@@ -121,12 +131,15 @@ def read_state(comments):
             or type(state.get("kody_used")) is not bool
             or state["queries"] > MAX_QUOTA_QUERIES
             or state["reviews"] > MAX_CODERABBIT_REQUESTS
+            or state["consumed"] < state["request"]
         ):
             raise VerificationError("Invalid durable review state")
         sha(state["head"])
         sha(state["base"])
-        for field in ("started", "sent", "resume"):
+        for field in ("started", "sent"):
             instant(state[field])
+        if state["resume"] is not None:
+            instant(state["resume"])
         state["node_id"] = comment["node_id"]
         states.append((comment["id"], state))
     return max(states, key=lambda item: item[0])[1] if states else None
@@ -158,6 +171,29 @@ def save_state(state, subject, client):
     else:
         result = add_comment(subject, body, f"oep-review-state-{state['request']}", client)
         state["node_id"] = result["id"]
+
+
+def block_request(state, subject, client, category=None):
+    """Publish only an owned bounded failure category, never an exception's arbitrary value."""
+    message = PUBLIC_FAILURE_MESSAGES.get(
+        category or state["phase"], PUBLIC_FAILURE_MESSAGES["blocked"]
+    )
+    state.update(phase="blocked", message=message)
+    save_state(state, subject, client)
+    return False
+
+
+def record_publication(state, identifier, created, subject, client):
+    """Keep the in-memory outbox pending until its durable confirmation is acknowledged."""
+    confirmed = {
+        **state,
+        "phase": state["target"],
+        "command": identifier,
+        "sent": created,
+        "message": f"Waiting for {state['target']}. Request comment: {identifier}.",
+    }
+    save_state(confirmed, subject, client)
+    state.update(confirmed)
 
 
 def add_comment(subject, body, key, client):
@@ -265,23 +301,27 @@ def send_command(repository, number, state, target, subject, client, now):
     result = add_comment(
         subject, command + "\n" + command_marker(state), command_marker(state), client
     )
-    state.update(phase=target, command=result["databaseId"], sent=result["createdAt"])
-    state["message"] = f"Waiting for {target}. Request comment: {state['command']}."
-    save_state(state, subject, client)
+    record_publication(state, result["databaseId"], result["createdAt"], subject, client)
 
 
-def start_request(repository, number, command, client, now):
-    """Authorize a fresh exact command and reuse the existing frozen-review preflight."""
+def require_requester(repository, command, client):
+    """Check live repository write authority before accepting or consuming an explicit command."""
     user = command.get("user", {})
     if user.get("type") != "User" or not re.fullmatch(r"[A-Za-z0-9-]+", user.get("login", "")):
         raise VerificationError("Only an authorized repository participant can request review")
     permission = client.get(f"repos/{repository}/collaborators/{user['login']}/permission")
     if permission.get("permission") not in {"admin", "maintain", "write"}:
         raise VerificationError("Review request requires repository write permission")
+
+
+def start_request(repository, number, command, client, now):
+    """Authorize a fresh exact command and reuse the existing frozen-review preflight."""
+    require_requester(repository, command, client)
     current = client.get(f"repos/{repository}/pulls/{number}")
     head, base = sha(current["head"]["sha"]), sha(current["base"]["sha"])
     state = {
         "request": command["id"],
+        "consumed": command["id"],
         "head": head,
         "base": base,
         "phase": "blocked",
@@ -294,7 +334,7 @@ def start_request(repository, number, command, client, now):
         "kody_used": False,
         "started": now.isoformat(),
         "sent": now.isoformat(),
-        "resume": now.isoformat(),
+        "resume": None,
         "message": "Checking the explicit request prerequisites.",
     }
     save_state(state, current["node_id"], client)
@@ -314,10 +354,9 @@ def start_request(repository, number, command, client, now):
         ):
             raise VerificationError("Kody already has evidence for this revision. Inspect it first")
         send_command(repository, number, state, "quota", current["node_id"], client, now)
-    except VerificationError as error:
+    except VerificationError:
         if state["phase"] != "sending":
-            state.update(phase="blocked", message=str(error))
-            save_state(state, current["node_id"], client)
+            block_request(state, current["node_id"], client)
         raise
     return state
 
@@ -367,11 +406,8 @@ def advance(repository, number, state, comments, client, now):
             and command_marker(state) in row["body"].splitlines()
         ]
         if len(matches) != 1:
-            raise VerificationError(
-                "Publication outcome is uncertain. Inspect the PR before any retry"
-            )
-        state.update(phase=state["target"], command=matches[0]["id"], sent=matches[0]["created_at"])
-        save_state(state, subject, client)
+            return block_request(state, subject, client, category="sending")
+        record_publication(state, matches[0]["id"], matches[0]["created_at"], subject, client)
     fresh = [
         row
         for row in comments
@@ -386,6 +422,8 @@ def advance(repository, number, state, comments, client, now):
             "Another provider command makes this request ambiguous. Inspect the PR"
         )
     if state["phase"] == "waiting":
+        if state["resume"] is None:
+            return block_request(state, subject, client, category="retry")
         if now >= instant(state["resume"]):
             send_command(repository, number, state, "quota", subject, client, now)
         return
@@ -412,8 +450,7 @@ def advance(repository, number, state, comments, client, now):
                     for row in checks
                 ):
                     return
-                if resume is not None:
-                    state["resume"] = resume.isoformat()
+                state["resume"] = resume.isoformat() if resume is not None else None
                 if not state["kody_used"]:
                     send_command(repository, number, state, "kody", subject, client, now)
                 elif resume is not None:
@@ -467,6 +504,8 @@ def advance(repository, number, state, comments, client, now):
                 and output.get("title") == "Code Review Failed"
             )
         ):
+            if state["resume"] is None:
+                return block_request(state, subject, client, category="retry")
             state.update(
                 phase="waiting",
                 message=f"Kody failed technically. Recheck CodeRabbit at {state['resume']}.",
@@ -496,7 +535,7 @@ def process_pr(repository, number, client, now, command_id=None):
             if row["body"].strip() == "@oep review"
             and row.get("user", {}).get("type") == "User"
             and row.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
-            and row["id"] > (state["request"] if state else 0)
+            and row["id"] > (state["consumed"] if state else 0)
         ]
         if pending:
             command_id = max(row["id"] for row in pending)
@@ -508,25 +547,30 @@ def process_pr(repository, number, client, now, command_id=None):
         ]
         if len(commands) != 1:
             raise VerificationError("The original explicit review command is unavailable")
-        if state and command_id <= state["request"]:
-            return
+        if state and command_id <= state["consumed"]:
+            return True
         current = client.get(f"repos/{repository}/pulls/{number}")
         if (
             state
             and state["head"] == current.get("head", {}).get("sha")
             and state["phase"] not in {"blocked", "superseded"}
         ):
+            require_requester(repository, commands[0], client)
+            state["consumed"] = command_id
+            save_state(state, current["node_id"], client)
             command_id = None
         else:
             start_request(repository, number, commands[0], client, now)
-            return
+            return True
     if state:
         try:
-            advance(repository, number, state, comments, client, now)
-        except VerificationError as error:
-            state.update(phase="blocked", message=str(error))
+            return advance(repository, number, state, comments, client, now) is not False
+        except VerificationError:
+            if state["phase"] == "sending":
+                raise
             subject = client.get(f"repos/{repository}/pulls/{number}")["node_id"]
-            save_state(state, subject, client)
+            return block_request(state, subject, client)
+    return True
 
 
 def main():
@@ -550,23 +594,39 @@ def main():
             comment = event["comment"]
             number = event["issue"]["number"]
             explicit = comment.get("body", "").strip() == "@oep review"
-            if explicit or is_bot(comment, "coderabbitai[bot]") or is_bot(comment, "kody-ai[bot]"):
-                process_pr(repository, number, client, now, comment["id"] if explicit else None)
+            if (
+                explicit or is_bot(comment, "coderabbitai[bot]") or is_bot(comment, "kody-ai[bot]")
+            ) and process_pr(
+                repository, number, client, now, comment["id"] if explicit else None
+            ) is False:
+                return 1
         elif event_name in {"schedule", "workflow_dispatch", "check_run"}:
             if event_name == "check_run" and event.get("check_run", {}).get("app", {}).get(
                 "id"
             ) not in {CODERABBIT_APP_ID, KODY_APP_ID}:
                 return 0
+            failed = False
             for page in range(1, MAX_PAGES + 1):
                 pulls = client.get_list(
                     f"repos/{repository}/pulls?state=open&per_page=100&page={page}"
                 )
+                if len(pulls) > 100:
+                    raise VerificationError("Invalid open PR inventory")
                 for pull in pulls:
-                    process_pr(repository, pull["number"], client, now)
+                    try:
+                        if process_pr(repository, pull["number"], client, now) is False:
+                            failed = True
+                    except (VerificationError, KeyError, TypeError, ValueError, OSError):
+                        failed = True
+                        print(
+                            "A PR review could not be processed. Inspect its request and workflow. Other PRs will still be checked."
+                        )
                 if len(pulls) < 100:
                     break
             else:
                 raise VerificationError("Open PR inventory exceeds the page limit")
+            if failed:
+                return 1
         else:
             raise VerificationError("Unsupported review orchestration event")
     except (VerificationError, KeyError, TypeError, ValueError, OSError):

@@ -99,7 +99,7 @@ class GitHubEvidence:
             return {"object": {"sha": self.main}}
         if "/compare/" in path:
             return {"merge_base_commit": {"sha": BASE}, "status": "ahead"}
-        assert f"/commits/{HEAD}/check-runs?" in path
+        assert f"/commits/{self.current['head']['sha']}/check-runs?" in path
         return {"check_runs": deepcopy(self.checks), "total_count": len(self.checks)}
 
     def get_list(self, path):
@@ -111,7 +111,7 @@ class GitHubEvidence:
         if "/files?" in path:
             return [{"filename": "docs/development/example.md"}]
         if "/commits?" in path:
-            return [{"sha": HEAD}]
+            return [{"sha": self.current["head"]["sha"]}]
         assert "/pulls?state=open" in path
         return [deepcopy(self.current)]
 
@@ -573,3 +573,185 @@ def test_manual_kody_request_blocks_before_its_check_is_created():
     with pytest.raises(VerificationError, match="already exists"):
         client.run(explicit=True)
     assert client.provider_commands() == ["@kody start-review"]
+
+
+@pytest.mark.parametrize("site", ["preflight", "advance"])
+def test_imported_failure_values_never_enter_public_status(monkeypatch, site):
+    """Neither failure boundary may publish arbitrary exception text in its public PR comment."""
+    client = GitHubEvidence()
+    if site == "advance":
+        client.run(explicit=True)
+
+    def private_failure(*args, **kwargs):
+        """Inject a private sentinel where an imported verification dependency can fail."""
+        raise VerificationError("PRIVATE-REVIEW-SENTINEL-2030")
+
+    monkeypatch.setattr(review, site, private_failure)
+    try:
+        client.run(explicit=site == "preflight")
+    except VerificationError:
+        pass
+    assert client.state()["phase"] == "blocked"
+    assert "PRIVATE-REVIEW-SENTINEL-2030" not in json.dumps(client.comments)
+    assert "Inspect" in client.state()["message"]
+
+
+@pytest.mark.parametrize(
+    "failure", ["command-response", "confirmation-before-write", "confirmation-response"]
+)
+def test_advance_publication_failure_recovers_without_blocking_or_resending(monkeypatch, failure):
+    """A resumed send preserves its outbox when the command or confirmation response is lost."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    original_post = client.post
+
+    def interrupted_post(path, payload):
+        """Fail at a specific real mutation boundary before or after its durable write."""
+        body = payload["variables"].get("body", "")
+        confirming = "updateIssueComment" in payload["query"] and '"phase": "coderabbit"' in body
+        if confirming and failure == "confirmation-before-write":
+            raise VerificationError("PRIVATE-REVIEW-PUBLICATION-SENTINEL")
+        response = original_post(path, payload)
+        if (failure == "command-response" and body.startswith("@coderabbitai review")) or (
+            confirming and failure == "confirmation-response"
+        ):
+            raise VerificationError("PRIVATE-REVIEW-PUBLICATION-SENTINEL")
+        return response
+
+    monkeypatch.setattr(client, "post", interrupted_post)
+    try:
+        client.run()
+    except VerificationError:
+        pass
+    assert client.state()["phase"] in {"sending", "coderabbit"}
+    monkeypatch.setattr(client, "post", original_post)
+    client.run()
+    assert client.state()["phase"] == "coderabbit"
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+    assert "PRIVATE-REVIEW-PUBLICATION-SENTINEL" not in json.dumps(client.comments)
+
+
+@pytest.mark.parametrize("bad_evidence", ["malformed", "overlimit", "unavailable"])
+def test_sweep_records_failure_but_still_processes_the_next_pr(tmp_path, monkeypatch, bad_evidence):
+    """One invalid PR cannot starve a different eligible request or turn the overall sweep green."""
+    client = GitHubEvidence()
+    original_get_list = client.get_list
+
+    def multiple_prs(path):
+        """Place a broken PR before the valid independent request in the real sweep inventory."""
+        if "/pulls?state=open" in path:
+            return [{"number": 11}, deepcopy(client.current)]
+        if "/issues/11/comments?" in path:
+            if bad_evidence == "unavailable":
+                raise VerificationError("PRIVATE-SWEEP-SENTINEL")
+            if bad_evidence == "overlimit":
+                page = int(path.rsplit("=", 1)[1])
+                return [
+                    {"id": page * 100 + index, "body": "Ordinary comment"} for index in range(100)
+                ]
+            return [
+                {
+                    "id": 99,
+                    "node_id": "bad",
+                    "body": "<!-- oep-review-state:not-json -->\n",
+                    "user": {"login": "github-actions[bot]", "type": "Bot", "id": 41898282},
+                }
+            ]
+        return original_get_list(path)
+
+    monkeypatch.setattr(client, "get_list", multiple_prs)
+    event_file = tmp_path / "sweep.json"
+    event_file.write_text(
+        json.dumps({"repository": {"full_name": REPOSITORY, "default_branch": "main"}}),
+        encoding="utf-8",
+    )
+    for key, value in {
+        "GITHUB_EVENT_PATH": str(event_file),
+        "GITHUB_REPOSITORY": REPOSITORY,
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_TOKEN": "synthetic-not-a-token",
+        "GITHUB_EVENT_NAME": "schedule",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(review, "GitHub", lambda token: client)
+    assert review.main() == 1
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_consumed_duplicate_cannot_start_a_review_after_a_later_push():
+    """A duplicate command acknowledged on one revision is not a fresh request for a later revision."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.command = client.comment("@oep review", "developer", "User")
+    client.run(explicit=True)
+    changed_head = "3" * 40
+    client.current["head"]["sha"] = changed_head
+    for check in client.checks:
+        check["head_sha"] = changed_head
+    client.run()
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    assert client.state()["phase"] == "superseded"
+    client.command = client.comment("@oep review", "developer", "User")
+    client.run()
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai rate limit"]
+    assert client.state()["head"] == changed_head
+
+
+def test_missing_quota_retry_time_blocks_after_kody_technical_failure():
+    """A confirmed limit without a retry interval cannot invent a delayed CodeRabbit deadline."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED.replace(" Your next review will be available in 30 minutes.", ""))
+    client.run()
+    client.kody_result("failure", "Code Review Failed")
+    client.run(minutes=5)
+    client.run(minutes=60)
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "oversized"])
+def test_global_inventory_failure_still_fails_closed(tmp_path, monkeypatch, capsys, failure):
+    """Isolating per-PR errors does not hide a failed global inventory or process an invalid page."""
+    client = GitHubEvidence()
+    original_get_list = client.get_list
+
+    def invalid_inventory(path):
+        """Return an invalid global page or fail its API request with a private sentinel."""
+        if "/pulls?state=open" in path:
+            if failure == "unavailable":
+                raise VerificationError("PRIVATE-INVENTORY-SENTINEL")
+            return [deepcopy(client.current) for _ in range(101)]
+        return original_get_list(path)
+
+    monkeypatch.setattr(client, "get_list", invalid_inventory)
+    event_file = tmp_path / "inventory.json"
+    event_file.write_text(
+        json.dumps({"repository": {"full_name": REPOSITORY, "default_branch": "main"}}),
+        encoding="utf-8",
+    )
+    for key, value in {
+        "GITHUB_EVENT_PATH": str(event_file),
+        "GITHUB_REPOSITORY": REPOSITORY,
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_TOKEN": "synthetic-not-a-token",
+        "GITHUB_EVENT_NAME": "schedule",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(review, "GitHub", lambda token: client)
+    assert review.main() == 1
+    assert client.provider_commands() == []
+    assert "PRIVATE-INVENTORY-SENTINEL" not in capsys.readouterr().out
+
+
+def test_duplicate_command_consumption_requires_current_authority():
+    """Revoked write access cannot acknowledge a command into the durable inbox watermark."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.command = client.comment("@oep review", "developer", "User")
+    client.permission = "read"
+    with pytest.raises(VerificationError, match="permission"):
+        client.run(explicit=True)
+    assert client.state()["consumed"] < client.command["id"]
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
