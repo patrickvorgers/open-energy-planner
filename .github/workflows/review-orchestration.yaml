@@ -1,43 +1,69 @@
-name: OEP review orchestration
+name: Isolated provider quota diagnosis
 on:
-  issue_comment:
-    types: [created]
-  check_run:
-    types: [completed]
-  schedule:
-    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
 
 permissions:
-  contents: read
-  checks: read
-  pull-requests: write
   issues: write
 
-# Serialize durable intents and comment publication. Never cancel an active send.
-concurrency:
-  group: oep-review-orchestration
-  cancel-in-progress: false
-
 jobs:
-  review:
+  quota:
     if: >-
-      github.event.repository.default_branch == 'main' &&
-      (github.event_name != 'check_run' ||
-       github.event.check_run.app.id == 347564 || github.event.check_run.app.id == 413034) &&
-      (github.event_name != 'issue_comment' ||
-       (github.event.issue.pull_request &&
-        (github.event.comment.body == '@oep review' ||
-         github.event.comment.user.login == 'coderabbitai[bot]' ||
-         github.event.comment.user.login == 'kody-ai[bot]')))
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'patrickvorgers/open-energy-planner' &&
+      github.ref == 'refs/heads/ci/review-provider-diagnosis'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: refs/heads/main
-          persist-credentials: false
-      - name: Resume explicit review requests using trusted main metadata
+      - name: Publish one fixed bare quota question without checkout or retry
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 -m script.ci.review_orchestration
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from http.client import HTTPException
+          from urllib.error import HTTPError, URLError
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+          class NoRedirects(HTTPRedirectHandler):
+              """Keep the ephemeral credential on the fixed GitHub API endpoint."""
+
+              def redirect_request(self, request, response, code, message, headers, new_url):
+                  """Refuse redirects without issuing another authenticated request."""
+                  return None
+
+          request = Request(
+              'https://api.github.com/repos/patrickvorgers/open-energy-planner/issues/47/comments',
+              data=b'{"body":"@coderabbitai rate limit"}',
+              headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'Content-Type': 'application/json',
+              },
+              method='POST',
+          )
+          try:
+              with build_opener(NoRedirects()).open(request, timeout=20) as response:
+                  print('HTTP status:', response.status)
+                  if response.status != 201:
+                      raise ValueError
+                  payload = response.read(65537)
+                  if len(payload) > 65536:
+                      raise ValueError
+                  comment = json.loads(payload)
+                  if (
+                      type(comment.get('id')) is not int
+                      or comment.get('body') != '@coderabbitai rate limit'
+                      or comment.get('user', {}).get('id') != 41898282
+                      or comment.get('performed_via_github_app', {}).get('id') != 15368
+                  ):
+                      raise ValueError
+                  print('Comment ID:', comment['id'])
+          except HTTPError as error:
+              print('HTTP status:', error.code)
+              raise SystemExit(1) from None
+          except (URLError, HTTPException, OSError, ValueError, TypeError, AttributeError):
+              print('Publication not confirmed. Inspect the PR before any further action.')
+              raise SystemExit(1) from None
+          PY
