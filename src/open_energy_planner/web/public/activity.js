@@ -1,5 +1,5 @@
 /** Read-only activity history with installation-local dates and cursor-based live updates. */
-import {when, localDate, useHomeAssistantTimezone, planName} from "./display.js";
+import {when, localDate, useHomeAssistantTimezone, planName, planStrategy} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {connectEvents, observeEvents} from "./events.js";
 import {priceSourceName} from "./price-sources.js";
@@ -37,6 +37,9 @@ function activityTitle(row) {
     const [module, source] = row.owner.split(":");
     const provider = module === "prices" && source ? priceSourceName(source) : "";
     const context = row.context || {};
+    if (module === "planning" && context.plan_generated_at && context.start && context.end) {
+        return `${row.title}: Plan ${when(context.start)} to ${when(context.end)}: ${planStrategy(context.plan_strategy)}`;
+    }
     const subject = context.plan_generated_at ? `Plan ${planName({generated_at:context.plan_generated_at, strategy:context.plan_strategy})}` : context.label;
     const parts = [subject || (provider !== source ? provider : "")].filter(Boolean);
     if (context.start && context.end) parts.push(`${when(context.start)} to ${when(context.end)}`);
