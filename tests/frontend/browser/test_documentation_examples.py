@@ -146,7 +146,7 @@ def test_documentation_quality_shows_complete_nonconstant_hourly_comparison(app_
     )
     page.route("**/v1/forecast-quality/days/2026-11-04", lambda route: route.fulfill(json=document))
     authenticate(page, url, "/quality")
-    expect(page.locator("#quality-status")).to_contain_text("2026-11-04")
+    expect(page.locator("#quality-status")).to_contain_text("11/4/2026")
     data = page.locator("#quality-chart-0").evaluate(
         "canvas => Chart.getChart(canvas).data.datasets.slice(0,2).map(series => series.data.map(point => point.y))"
     )

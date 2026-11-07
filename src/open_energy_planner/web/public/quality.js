@@ -1,6 +1,6 @@
 import "./chart_theme.js";
 import {qualityChart} from "./quality-chart.js";
-import {when, percentage, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
+import {when, dateLabel, percentage, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {currentModelRows, renderCurrentModel} from "./quality-models.js";
 bindSettingsActions();
@@ -144,7 +144,7 @@ async function show() {
         find("quality-model-issue").textContent = selection.issue === "model_selection_archive_unreadable" ? "Model selection archive is unreadable. Baseline retained. Inspect application logs." : selection.issue || "";
         solarIds = new Set((data.current_models?.solar?.configuration?.sources || []).map(source => source.source_id));
         displayedDay = day ? data : null; devices({...data, series: data.series || []}); renderSources();
-        find("quality-status").textContent = day ? `Day ${data.day}: Midnight forecast: ${data.captured_at ? "Recorded" : "Unavailable"}: Evidence checked: ${when(data.as_of)}${data.issues.length ? `: ${data.issues.join(": ")}` : ""}` : currentRows.size ? "No daily forecasts available yet. Current model status is shown below." : "No daily forecasts or current model status available yet.";
+        find("quality-status").textContent = day ? `Day ${dateLabel(data.day)}: Midnight forecast: ${data.captured_at ? "Recorded" : "Unavailable"}: Evidence checked: ${when(data.as_of)}${data.issues.length ? `: ${data.issues.join(": ")}` : ""}` : currentRows.size ? "No daily forecasts available yet. Current model status is shown below." : "No daily forecasts or current model status available yet.";
         return true;
     } catch (error) { if (version === requestVersion) { clear(); find("quality-status").textContent = error.message; } return false; }
 }
@@ -159,7 +159,7 @@ async function load(older = false) {
         const previous = find("quality-day").value;
         const days = new Set([...page.days, ...(older ? [...find("quality-day").options].map((option) => option.value) : []), ...(previous ? [previous] : [])]);
         find("quality-day").replaceChildren();
-        for (const day of [...days].sort().reverse()) { const option = document.createElement("option"); option.value = day; option.textContent = day; find("quality-day").append(option); }
+        for (const day of [...days].sort().reverse()) { const option = document.createElement("option"); option.value = day; option.textContent = dateLabel(day); find("quality-day").append(option); }
         indexData = page;
         cursor = page.next_before; find("quality-older").disabled = !cursor; find("quality-older").hidden = !cursor; find("quality-day").disabled = !find("quality-day").options.length;
         if ([...find("quality-day").options].some((option) => option.value === previous)) find("quality-day").value = previous;

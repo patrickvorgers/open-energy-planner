@@ -342,7 +342,8 @@ def test_saved_rule_selector_shows_active_summary_and_edits_only_selected_rule(a
     expect(page.locator("#contract-summary")).to_be_visible()
     expect(page.locator("#price-rule-select")).to_have_value("1")
     saved_context = page.locator("#rule-context").inner_text()
-    dates = [start.astimezone(ZoneInfo("Europe/Amsterdam")).date().isoformat() for start in starts]
+    days = [start.astimezone(ZoneInfo("Europe/Amsterdam")).date() for start in starts]
+    dates = [f"{day.month}/{day.day}/{day.year}" for day in days]
     for index, status in enumerate(("Superseded", "Active", "Scheduled")):
         expect(rows.nth(index).locator(":scope > summary")).to_have_text(
             f"Price rule: {dates[index]}: {status}"
@@ -1566,7 +1567,7 @@ def test_contract_prototype_summary_combined_rates_and_annual_budget(app_page, t
     expect(page.locator("#bonus-budgets meter")).to_have_attribute("max", "100")
     expect(page.locator("#bonus-budgets meter")).to_have_attribute("value", "5")
     expect(page.locator(".budget-remaining strong")).to_have_text("95.00")
-    expect(page.locator(".budget-period")).to_have_text("Current annual period: 2026-01-01")
+    expect(page.locator(".budget-period")).to_have_text("Current annual period: 1/1/2026")
     page.get_by_role("button", name="Edit price rule", exact=True).click()
     expect(summary).to_be_hidden()
     start = page.get_by_label("Contract starts", exact=True).bounding_box()
@@ -1626,7 +1627,7 @@ def test_contract_selector_inserts_and_moves_rules_in_date_order_without_stale_l
     expect(page.get_by_role("button", name="Save contract", exact=True)).to_be_enabled()
     page.get_by_role("button", name="Save contract", exact=True).click()
     expect(page.locator("#contract-status")).to_contain_text("Contract saved")
-    expect(page.locator("#price-rule-select option:checked")).to_contain_text("2026-04-01")
+    expect(page.locator("#price-rule-select option:checked")).to_contain_text("4/1/2026")
     expect(page.locator("#price-rule-select option:checked")).not_to_contain_text("Unsaved")
     saved = page.request.get(url + "/v1/contracts", headers=headers).json()
     assert [period["import_formula"] for period in saved["periods"]] == [
@@ -1661,7 +1662,7 @@ def test_contract_selector_inserts_and_moves_rules_in_date_order_without_stale_l
         == saved["periods"][2]["effective_from"]
         == "2026-07-31T22:00:00+00:00"
     )
-    expect(page.locator("#price-rule-select option:checked")).to_contain_text("2026-08-01")
+    expect(page.locator("#price-rule-select option:checked")).to_contain_text("8/1/2026")
 
 
 @pytest.mark.parametrize(
