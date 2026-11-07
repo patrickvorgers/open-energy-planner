@@ -297,6 +297,31 @@ class HistoricalBonuses:
         Request versions prevent delayed reports from replacing a newer confirmation.
         A new live counter version or restart revalidates the historical checkpoint.
         Neither current planning counters nor original measurement frames are changed.
+
+        Args:
+            request: App-owned historical request with aware period bounds, export
+                meter identities and the expected current counter-book version.
+            channels: One normalized statistics series per requested export meter.
+                Cumulative sums and available physical meter readings are in kWh.
+            book: Current counter book whose version must match the request and
+                whose references and confirmed missing-period prefixes remain
+                authoritative for the derived historical endpoints.
+            now: Aware timestamp recorded on the historical archive book.
+
+        Raises:
+            PendingSettlement: A current or derived statistics seed lacks a known
+                prefix or physical endpoint, or requires reference revalidation.
+            ValueError: The book is missing or changed, a requested reference is
+                unavailable or changed, or endpoint/counter/archive validation fails.
+            OSError: Reading the archive or its transactional write fails.
+
+        Side effects:
+            The caller serializes this operation with the settlement mutation lock.
+            Requested seeds are validated before archival. CounterStore commits
+            the historical book, new origins and current pointer in one transaction.
+            After successful archival, this method updates statistics_sources in
+            process memory and clears pending and issue. It does not roll back a
+            committed archive if a subsequent process-memory update fails.
         """
         if book is None or book.version != request.counter_version:
             raise ValueError("Historical bonus counter changed")
