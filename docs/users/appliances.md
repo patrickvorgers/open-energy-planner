@@ -38,6 +38,9 @@ are not configured yet. **Refresh Home Assistant sources** updates the choices
 without discarding your draft. The same action is available for electric boilers.
 If the integration is disconnected, the previous choices and edits remain visible.
 Reconnect it and use the action again. Cancel restores the saved configuration.
+A refresh stops waiting after about a minute and allows you to retry. If Home
+Assistant returns no sources, the page says so and keeps your unsaved inputs.
+Check the integration and its exposed sources before refreshing again.
 
 Configure the vehicle's usable battery capacity, SoC source and charging limit separately from the charge point. The point needs its own consumption/power source, connection evidence, allowed vehicles and declared control capability.
 

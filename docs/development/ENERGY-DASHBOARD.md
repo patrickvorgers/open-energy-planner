@@ -107,7 +107,10 @@ history independently from entity metadata.
 There is no periodic full metadata audit. Initialisation, explicit refresh, failed
 capture recovery, changes during capture or a rejected revision confirmation can
 require a complete active snapshot. Failed metadata attempts use a five-minute
-backoff. A new explicit request bypasses it. While the watches are healthy and the
+backoff. Failed publication retains a complete repair request, so the next attempt
+after backoff does not depend on another metadata event. Unacknowledged data cannot
+authorize freshness confirmation or solar forecast uploads. A new explicit request
+bypasses the backoff. While the watches are healthy and the
 accepted snapshot is unchanged, the integration confirms its exact revision at
 most once per minute without reading source metadata. The app expires freshness
 after fifteen minutes without confirmation. A pending partial transfer cannot be
@@ -147,6 +150,9 @@ only. They never replace active membership, reconcile Energy, refresh active
 freshness or supply forecasts. After a configuration is saved, its explicit source
 bindings join the active discovery set on the next synchronization. Temporary
 candidate results expire without changing the saved configuration.
+An overlapping active record always takes precedence over a temporary candidate.
+Older chooser metadata cannot restore a source whose current active record is
+unavailable or has incompatible units.
 Ordinary EV and boiler status endpoints still return only active metadata. Pending
 chooser status omits candidate bodies. A large candidate list is returned only
 through the explicit completed chooser read, rather than on each monitoring poll.

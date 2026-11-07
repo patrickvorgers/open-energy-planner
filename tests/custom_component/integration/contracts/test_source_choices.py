@@ -130,7 +130,7 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
                         "expected_version": current["configuration_version"],
                     },
                 ) as response:
-                    assert response.status == 200, await response.text()
+                    assert response.status == 200, "EV configuration request failed"
                 async with session.get(url + "/v1/ev") as response:
                     just_saved = await response.json()
                 assert just_saved["vehicles"][0]["name"] == "Synthetic Zeekr battery"
@@ -151,6 +151,71 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
 
             with pytest.raises(AuthenticationError):
                 await coordinator.client.request("POST", "/v1/ha/source-choices/ev", {})
+
+    asyncio.run(scenario())
+
+
+def test_failed_publication_retries_after_backoff_without_another_metadata_event(monkeypatch):
+    """A failed forced publication retains repair work and resumes forecasts only after acceptance."""
+    from types import SimpleNamespace
+
+    from aiohttp import ClientConnectionError
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.open_energy_planner import coordinator as coordinator_module
+
+    async def scenario():
+        """Drive real authenticated publication and confirmation at fixed backoff boundaries."""
+        async with running_chain(live=True) as (_hass, entry, *_):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            await coordinator.sync()
+            assert coordinator.catalogue_discovery.healthy
+            clock = [dt_util.utcnow()]
+            monkeypatch.setattr(
+                coordinator_module, "dt_util", SimpleNamespace(utcnow=lambda: clock[0])
+            )
+            uploads, confirmations, forecasts = [], [], []
+            original_request = coordinator.client.request
+            original_capture = coordinator.solar_forecast_bridge.capture
+
+            async def request(method, path, body=None):
+                """Fail the first snapshot send, retaining the real receiver for retry and confirmation."""
+                if path == "/v1/ha/catalogue":
+                    if "confirmed_revision" in body:
+                        confirmations.append(body)
+                    else:
+                        uploads.append(body)
+                        if len(uploads) == 1:
+                            raise ClientConnectionError("Synthetic publication interruption")
+                return await original_request(method, path, body)
+
+            async def capture(suggestions, now):
+                """Count actual forecast capture only when acknowledged metadata authorizes it."""
+                forecasts.append(now)
+                return await original_capture(suggestions, now)
+
+            monkeypatch.setattr(coordinator.client, "request", request)
+            monkeypatch.setattr(coordinator.solar_forecast_bridge, "capture", capture)
+            coordinator.catalogue_sent = None
+            await coordinator.sync()
+            assert len(uploads) == 1
+            assert not coordinator.catalogue_discovery.healthy
+            assert confirmations == forecasts == []
+            clock[0] += timedelta(seconds=299)
+            await coordinator.sync()
+            assert len(uploads) == 1
+            assert confirmations == forecasts == []
+            clock[0] += timedelta(seconds=1)
+            await coordinator.sync()
+            assert len(uploads) == 2
+            assert coordinator.catalogue_discovery.healthy
+            assert len(forecasts) == 1
+            clock[0] += timedelta(seconds=60)
+            await coordinator.sync()
+            assert len(uploads) == 2
+            assert confirmations == [{"confirmed_revision": coordinator.catalogue_context.revision}]
 
     asyncio.run(scenario())
 

@@ -424,7 +424,6 @@ class PlanCoordinator:
                             except (AuthenticationError, ReleaseMismatchError):
                                 raise
                             except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                                self.catalogue_discovery.repair()
                                 confirmation_repair = True
                                 raise
                             self.catalogue_confirmed_at = now
@@ -432,6 +431,7 @@ class PlanCoordinator:
                     except (AuthenticationError, ReleaseMismatchError):
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                        self.catalogue_discovery.repair()
                         self.catalogue_failed_at = None if confirmation_repair else now
                         _LOGGER.debug("Setup catalogue refresh failed", exc_info=True)
                         if catalogue_request:

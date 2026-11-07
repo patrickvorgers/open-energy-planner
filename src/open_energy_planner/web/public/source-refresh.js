@@ -24,17 +24,22 @@ export function sourceRefresh(api, scope, button, status, apply) {
         busy = true; button.disabled = true;
         status.textContent = "Refreshing Home Assistant sources. Your edits are retained.";
         try {
+            const signal = AbortSignal.timeout(SOURCE_WAIT_MS);
             const path = scope ? `v1/ha/source-choices/${scope}` : "v1/ha/catalogue/refresh";
-            let result = await api(path, {});
-            const deadline = Date.now() + SOURCE_WAIT_MS;
-            while (result.pending && Date.now() < deadline) {
+            let result = await api(path, {}, signal);
+            while (result.pending) {
                 await new Promise(resolve => setTimeout(resolve, SOURCE_STATUS_MS));
-                result = await api(path);
+                signal.throwIfAborted();
+                result = await api(path, undefined, signal);
             }
-            if (result.pending || result.failed) throw new Error("Home Assistant sources could not be refreshed. Your edits are retained. Check the integration connection and choose Refresh Home Assistant sources to retry.");
-            await apply(result.catalogue);
-            status.textContent = "Home Assistant sources refreshed. Your edits are retained.";
-        } catch (error) { status.textContent = error.message; }
+            signal.throwIfAborted();
+            if (result.failed || (scope && !result.catalogue)) throw new Error();
+            const catalogue = await apply(result.catalogue, signal) ?? result.catalogue;
+            signal.throwIfAborted();
+            status.textContent = catalogue?.entities?.length
+                ? "Home Assistant sources refreshed. Your edits are retained."
+                : "Home Assistant returned no sources. Your edits are retained. Check the integration and configured sources.";
+        } catch { status.textContent = "Home Assistant sources could not be refreshed. Your edits are retained. Check the integration connection and choose Refresh Home Assistant sources to retry."; }
         finally { busy = false; button.disabled = false; }
     };
 }

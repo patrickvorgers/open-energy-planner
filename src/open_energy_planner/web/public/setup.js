@@ -78,7 +78,7 @@ const status = (message) => {
 };
 const identity = (prefix) =>
     `${prefix}_${Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join("")}`;
-async function api(path, method = "GET", body) {
+async function api(path, method = "GET", body, signal) {
     const response = await fetch(document.querySelector('meta[name="oep-api-base"]').content + path.replace(/^\//, ""), {
         method,
         headers: {
@@ -87,14 +87,18 @@ async function api(path, method = "GET", body) {
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         redirect: "error",
+        signal,
     });
+    if (!response.ok && signal) throw new Error("Home Assistant source request failed.");
     if (!response.ok)
         throw new Error(
             response.status === 401
                 ? "The installation token was rejected."
                 : `${response.status}: ${await response.text()}`,
         );
-    return response.json();
+    const value = await response.json();
+    signal?.throwIfAborted();
+    return value;
 }
 /** Build a validated editor. Minimum SoC rounds to one idle decimal without changing its precise draft. */
 function field(parent, title, key, value, options = {}) {
@@ -706,15 +710,15 @@ async function refreshPriceSources() {
     priceTimer = setTimeout(refreshPriceSources, PRICE_STATUS_REFRESH_MS);
 }
 /** Poll presentation metadata without reloading saved configuration or overwriting any draft. */
-async function refreshSourceNames() {
+async function refreshSourceNames(signal) {
     if (!installationReady) return;
     const previous = config;
-    const state = await api("/v1/setup");
+    const state = await api("/v1/setup", "GET", undefined, signal);
     if (!state.catalogue?.data || !installationReady || saveState.busy || previous !== config) return;
     const panelsChanged = state.solar?.version !== config.solar?.version;
     if (panelsChanged && !layout.editing && !installationDirty()) {
-        await load();
-        return;
+        await load(false, false, signal);
+        return state.catalogue.data;
     }
     config.catalogue = state.catalogue;
     config.devices = state.devices;
@@ -737,13 +741,15 @@ async function refreshSourceNames() {
         if (metadata) label.textContent = `${label.dataset.sourceTitle}: ${sourceName(metadata, "Sensor")} (${label.dataset.sourceEntity}): `;
     }
     layout.refreshNames(config);
+    return state.catalogue.data;
 }
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
-async function load(refresh = false, discard = false) {
-    config = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup");
+async function load(refresh = false, discard = false, signal) {
+    config = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
     installationReady = false;
-    try { await loadStrategy(requestedStrategy === null || refresh || discard); }
+    try { await loadStrategy(requestedStrategy === null || refresh || discard, signal); }
     catch {
+        signal?.throwIfAborted();
         $("strategy-settings").hidden = false;
         $("installation-save-bar").hidden = false;
         $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically.";
@@ -950,8 +956,8 @@ async function refreshPairing() {
 setInterval(() => refreshPairing().catch((error) => status(error.message)), 3000);
 /** Refresh read-only data or explicitly discard a draft. Failed reads retain the existing editor. */
 const refreshDraftSources = sourceRefresh(
-    (path, body) => api(path, body === undefined ? "GET" : "POST", body), null,
-    $("reload"), $("status"), async () => { await refreshSourceNames(); }
+    (path, body, signal) => api(path, body === undefined ? "GET" : "POST", body, signal), null,
+    $("reload"), $("status"), async (_catalogue, signal) => refreshSourceNames(signal)
 );
 async function refreshInstallation(discard) {
     if (saveState.busy) return;
@@ -972,7 +978,6 @@ async function refreshInstallation(discard) {
     if (saveState.dirty && !discard) {
         $("status").hidden = false;
         await refreshDraftSources();
-        await refreshPriceSources();
         saveState.update($("status").textContent);
         return;
     }
@@ -1076,8 +1081,8 @@ async function initializeIngress() {
 initializeIngress();
 
 /** Refresh acceptance status. Synchronize editable intent only on initial load, explicit reload or successful save. */
-async function loadStrategy(updateChoice = true) {
-    const state = await api("/v1/strategy");
+async function loadStrategy(updateChoice = true, signal) {
+    const state = await api("/v1/strategy", "GET", undefined, signal);
     if (updateChoice || requestedStrategy === null) {
         requestedStrategy = state.requested;
         $("strategy").value = state.requested;

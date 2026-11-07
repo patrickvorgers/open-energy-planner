@@ -203,6 +203,12 @@ requests complete compatible candidates for that editor without changing active
 membership. **Refresh Home Assistant sources** repeats this read while retaining
 numeric drafts, selected source IDs and keyboard focus. Failure keeps the previous
 choices and offers an explicit retry. Cancel still restores saved configuration.
+One native browser cancellation deadline bounds the complete 65-second operation,
+including request submission, progress reads and installation metadata reads.
+Expired replies cannot replace editor state. The refresh button becomes available
+for an independent explicit retry. Refresh errors use fixed recovery advice rather
+than arbitrary response bodies. A valid empty catalogue explains that no sources
+were returned instead of announcing success, while retaining the draft and actions.
 Temporary candidates expire after five minutes. Refresh them again if a previously
 unconfigured source is no longer available when saving. Large discoveries use the
 [complete snapshot protocol](ENERGY-DASHBOARD.md#complete-discovery-transfers).

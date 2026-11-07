@@ -104,7 +104,8 @@ class SourceChoices:
         if not active or scope not in self.results:
             return active
         entities = {row["entity_id"]: row for row in active["entities"]}
-        entities.update({row["entity_id"]: row for row in self.results[scope][1]["entities"]})
+        for row in self.results[scope][1]["entities"]:
+            entities.setdefault(row["entity_id"], row)
         return {**active, "entities": list(entities.values())}
 
     def status(self, scope, active, now):

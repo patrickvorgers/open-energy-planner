@@ -18,8 +18,9 @@ bindApplianceSettingsNavigation(saveState);
 find("cancel-thermal").textContent = "Cancel";
 
 /** Read or write through the existing token/HA-ingress authorization without retaining credentials. */
-async function api(path, body) {
-    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store"});
+async function api(path, body, signal) {
+    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal});
+    if (!response.ok && signal) throw new Error("Home Assistant source request failed.");
     if (!response.ok) throw new Error(await response.text());
     return response.json();
 }

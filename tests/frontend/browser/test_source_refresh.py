@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, connect, discover, read_settings
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    connect,
+    discover,
+    read_settings,
+    wait_for_product_reads,
+)
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
@@ -207,3 +213,198 @@ def test_installation_force_refresh_retains_unsaved_connection_limit(app_page):
     expect(page.locator("#installation-save-state")).to_contain_text("sources refreshed")
     expect(maximum).to_have_value("7.25")
     assert read_settings(page, url)["installation"] == before
+
+
+@pytest.mark.parametrize("outcome", ["empty", "error", "late"])
+def test_source_refresh_never_claims_unavailable_or_late_results_and_owns_errors(app_page, outcome):
+    """Empty, private-error and deadline-expired responses retain drafts and allow independent retry."""
+    page, url = app_page
+    page.goto(url + "/setup")
+    result = page.evaluate(
+        """async outcome => {
+            const {sourceRefresh} = await import('/setup/source-refresh.js');
+            const button = document.createElement('button'), status = document.createElement('p');
+            const input = document.createElement('input'); input.value = '7.25';
+            document.body.append(button, status, input);
+            const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+            const deadlines = [];
+            AbortSignal.timeout = milliseconds => { deadlines.push(milliseconds); return nativeTimeout(10); };
+            const applied = []; let attempt = 0, signal;
+            const catalogue = {entities:[{entity_id:'sensor.synthetic',unit:'W'}]};
+            const api = async (_path, _body, requestSignal) => {
+                signal = requestSignal;
+                if (++attempt > 1) return {catalogue};
+                if (outcome === 'error') throw new Error('PRIVATE-SENTINEL-' + 'x'.repeat(10000));
+                if (outcome === 'empty') return {catalogue:{entities:[]}};
+                await new Promise(resolve => setTimeout(resolve, 30));
+                return {catalogue};
+            };
+            const refresh = sourceRefresh(api, 'ev', button, status, value => { applied.push(value); });
+            await refresh();
+            const first = {message:status.textContent,applied:applied.length,disabled:button.disabled,
+                value:input.value,aborted:signal?.aborted ?? false};
+            await refresh();
+            AbortSignal.timeout = nativeTimeout;
+            return {first, final:status.textContent,attempt,deadlines,applied:applied.length};
+        }""",
+        outcome,
+    )
+    assert result["first"]["value"] == "7.25"
+    assert not result["first"]["disabled"]
+    assert "sources refreshed" not in result["first"]["message"]
+    assert "PRIVATE-SENTINEL" not in result["first"]["message"]
+    assert len(result["first"]["message"]) < 300
+    assert result["deadlines"] == [65000, 65000]
+    if outcome == "empty":
+        assert "no sources" in result["first"]["message"]
+        assert result["first"]["applied"] == 1
+    elif outcome == "late":
+        assert result["first"]["aborted"]
+        assert result["first"]["applied"] == 0
+    assert "sources refreshed" in result["final"]
+    assert result["attempt"] == 2
+
+
+def test_empty_accepted_sources_show_unavailability_with_retained_vehicle_draft(app_page):
+    """A genuine empty HA reply preserves numeric inputs and exposes recovery, Save and Cancel."""
+    page, url = app_page
+    body = discover(page, url)
+    empty = {
+        "entities": [],
+        "suggestions": {
+            "terms": [],
+            "soc": [],
+            "solar": False,
+            "solar_sources": [],
+            "grid_power": None,
+            "grid_power_entities": [],
+            "energy_status": "missing",
+            "batteries": [],
+            "grid_export": None,
+        },
+        "timezone": body["timezone"],
+        "history": [],
+    }
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=empty).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST" and response.url.endswith("/v1/ha/source-choices/ev")
+        )
+    ) as pending:
+        add_ev_appliance(page, "vehicle")
+    capacity = page.get_by_label("Usable battery capacity (kWh)", exact=True)
+    capacity.fill("64")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    assert page.request.post(
+        url + "/v1/ha/source-choices",
+        headers=headers,
+        data={"scope": "ev", "id": pending.value.json()["id"], "page": empty},
+    ).ok
+    expect(page.locator("#status")).to_contain_text("returned no sources")
+    expect(capacity).to_have_value("64")
+    expect(page.get_by_role("button", name="Cancel", exact=True)).to_be_visible()
+    expect(page.locator("#save")).to_be_visible()
+    expect(
+        page.get_by_role("button", name="Refresh Home Assistant sources", exact=True)
+    ).to_be_enabled()
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/source-choices-empty-ev-{page.viewport_size['width']}.png", full_page=True
+    )
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+
+
+@pytest.mark.parametrize(
+    ("editor", "scenario"),
+    [
+        (editor, scenario)
+        for editor in ("ev", "thermal", "installation")
+        for scenario in ("initial", "status", "error")
+    ]
+    + [("installation", "apply")],
+)
+def test_actual_source_refresh_clients_forward_abort_signal_and_retain_drafts(
+    app_page, editor, scenario
+):
+    """Every real source-refresh caller forwards cancellation and releases its button for explicit retry."""
+    page, url = app_page
+    discover(page, url)
+    if editor == "installation":
+        connect(page)
+        field = page.get_by_label("Maximum grid import (kW)", exact=True)
+        field.fill("7.25")
+        page.get_by_role("button", name="Home Assistant", exact=True).click()
+        button = page.get_by_role("button", name="Refresh Home Assistant data", exact=True)
+    else:
+        page.goto(url + "/appliance-settings/" + editor)
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+        button = page.get_by_role("button", name="Refresh Home Assistant sources", exact=True)
+    wait_for_product_reads(page)
+    page.evaluate(
+        """scenario => {
+            const nativeFetch = window.fetch, nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+            window.sourceReads = [];
+            window.errorBodyReads = 0;
+            AbortSignal.timeout = milliseconds => nativeTimeout(milliseconds === 65000 ? (scenario === 'status' ? 1200 : scenario === 'apply' ? 200 : 30) : milliseconds);
+            window.fetch = (path, options) => {
+                const refresh = String(path).includes('/ha/');
+                if (!refresh && !(scenario === 'apply' && String(path).endsWith('v1/setup'))) return nativeFetch(path, options);
+                window.sourceReads.push({hasSignal:options.signal instanceof AbortSignal,aborted:false,signal:options.signal});
+                const record = window.sourceReads.at(-1);
+                if (scenario === 'apply' && refresh)
+                    return Promise.resolve(new Response(JSON.stringify({pending:false}), {headers:{'Content-Type':'application/json'}}));
+                if (scenario === 'status' && options.method === 'POST')
+                    return Promise.resolve(new Response(JSON.stringify({pending:true}), {headers:{'Content-Type':'application/json'}}));
+                if (scenario === 'error') {
+                    const response = new Response('PRIVATE-HTTP-SENTINEL-' + 'x'.repeat(10000), {status:500});
+                    const text = response.text.bind(response);
+                    response.text = () => { ++window.errorBodyReads; return text(); };
+                    return Promise.resolve(response);
+                }
+                if (options.signal?.aborted) {
+                    record.aborted = true;
+                    return Promise.reject(new DOMException('PRIVATE-NETWORK-SENTINEL', 'AbortError'));
+                }
+                return new Promise((resolve, reject) => options.signal?.addEventListener('abort', () => {
+                    record.aborted = true;
+                    reject(new DOMException('PRIVATE-NETWORK-SENTINEL', 'AbortError'));
+                }, {once:true}));
+            };
+        }""",
+        scenario,
+    )
+    if editor == "ev":
+        add_ev_appliance(page, "vehicle")
+        field = page.get_by_label("Capacity (kWh)", exact=False)
+        field.fill("64")
+    elif editor == "thermal":
+        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        field = page.get_by_label("Water volume (litres)", exact=False)
+        field.fill("180")
+    else:
+        button.click()
+    expected = 2 if scenario in {"status", "apply"} else 1
+    page.wait_for_function("count => window.sourceReads.length === count", arg=expected)
+    assert page.evaluate("window.sourceReads[0].hasSignal")
+    if scenario != "error":
+        page.wait_for_function("() => window.sourceReads.at(-1).aborted")
+    if scenario in {"status", "apply"}:
+        assert page.evaluate("window.sourceReads[0].signal === window.sourceReads[1].signal")
+    expect(button).to_be_enabled()
+    status = page.locator("#installation-save-state" if editor == "installation" else "#status")
+    expect(status).to_contain_text("could not be refreshed")
+    expect(status).not_to_contain_text("PRIVATE-NETWORK-SENTINEL")
+    expect(status).not_to_contain_text("PRIVATE-HTTP-SENTINEL")
+    assert page.evaluate("window.errorBodyReads") == 0
+    expect(field).to_have_value({"installation": "7.25", "ev": "64", "thermal": "180"}[editor])
+    button.click()
+    page.wait_for_function("count => window.sourceReads.length === count", arg=2 * expected)
+    if scenario != "error":
+        page.wait_for_function("() => window.sourceReads.at(-1).aborted")
+    expect(button).to_be_enabled()

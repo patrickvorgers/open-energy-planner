@@ -30,6 +30,7 @@ from script.ci.review_preflight import (
 )
 
 REVIEW_COMMAND = "/oep-reviewer review"
+UPSTREAM_REPOSITORY = "patrickvorgers/open-energy-planner"
 STATE_PREFIX = "<!-- oep-review-state:"
 MAX_PAGES = 10
 MAX_QUOTA_QUERIES = 8
@@ -40,6 +41,7 @@ REQUEST_TIMEOUT = timedelta(days=7)
 TERMINAL = {"complete", "blocked", "superseded"}
 PHASES = TERMINAL | {"sending", "quota", "coderabbit", "kody", "waiting"}
 PUBLIC_FAILURE_MESSAGES = {
+    "requester": "The original review request or its requester authority could not be verified. Check the request comment and the requester's current PR authorship or repository write access, then request review again.",
     "publisher": "The provider command account could not be verified. Ask a repository administrator to check the OEP_REVIEW_COMMAND_TOKEN secret and its repository access before requesting review again.",
     "blocked": "Review prerequisites could not be verified. Inspect the current checks and resolved findings before requesting review again.",
     "sending": "Command publication could not be confirmed. Inspect the PR request markers before any retry.",
@@ -67,6 +69,10 @@ class CommandAccountError(VerificationError):
     """Reject an unavailable or unauthorized user credential without exposing its response."""
 
 
+class RequesterAuthorityError(VerificationError):
+    """Identify a missing or unverifiable original request without exposing API details."""
+
+
 def require_command_account(repository, state, client, publisher):
     """Verify a separate user credential and keep one account across a durable request."""
     try:
@@ -81,7 +87,7 @@ def require_command_account(repository, state, client, publisher):
             user.get("type") != "User"
             or type(user.get("id")) is not int
             or user["id"] <= 0
-            or not requester_authorized(repository, {"user": user}, client)
+            or not repository_writer(repository, user, client)
             or state.get("publisher_id", user["id"]) != user["id"]
         ):
             raise VerificationError("The command account is not authorized")
@@ -101,7 +107,7 @@ def instant(value):
 def is_bot(comment, login):
     """Trust provider identities from GitHub metadata rather than comment content."""
     user = comment.get("user", {})
-    return user.get("login") == login and user.get("type") == "Bot"
+    return isinstance(user, dict) and user.get("login") == login and user.get("type") == "Bot"
 
 
 def comments_for(repository, number, client):
@@ -333,6 +339,7 @@ def send_command(repository, number, state, target, subject, client, now, publis
     require_resolved_threads(repository, number, client)
     if provider_active(checks):
         raise VerificationError("A provider is still working on this revision")
+    require_original_requester(repository, number, state, client)
     publisher_id = require_command_account(repository, state, client, publisher)
     if target == "quota":
         if state["queries"] >= MAX_QUOTA_QUERIES:
@@ -361,6 +368,7 @@ def send_command(repository, number, state, target, subject, client, now, publis
     )
     save_state(state, subject, client)
     require_revision(repository, number, state, client)
+    require_original_requester(repository, number, state, client)
     require_command_account(repository, state, client, publisher)
     result = add_comment(
         subject, command + "\n" + command_marker(state), command_marker(state), publisher
@@ -368,10 +376,21 @@ def send_command(repository, number, state, target, subject, client, now, publis
     record_publication(state, result["databaseId"], result["createdAt"], subject, client)
 
 
-def requester_authorized(repository, command, client):
-    """Distinguish a live permission denial from unavailable or malformed authorization evidence."""
-    user = command.get("user", {})
-    if user.get("type") != "User" or not re.fullmatch(r"[A-Za-z0-9-]+", user.get("login", "")):
+def github_user(user):
+    """Admit a concrete GitHub user identity without trusting comment association labels."""
+    return (
+        isinstance(user, dict)
+        and user.get("type") == "User"
+        and type(user.get("id")) is int
+        and user["id"] > 0
+        and isinstance(user.get("login"), str)
+        and re.fullmatch(r"[A-Za-z0-9-]+", user["login"]) is not None
+    )
+
+
+def repository_writer(repository, user, client):
+    """Require live upstream write authority independently of PR authorship."""
+    if repository != UPSTREAM_REPOSITORY or not github_user(user):
         return False
     permission = client.get(f"repos/{repository}/collaborators/{user['login']}/permission")
     if permission.get("permission") in {"admin", "maintain", "write"}:
@@ -381,15 +400,67 @@ def requester_authorized(repository, command, client):
     raise VerificationError("Repository permission could not be verified")
 
 
-def require_requester(repository, command, client):
-    """Require live repository write authority for an explicitly handled review command."""
-    if not requester_authorized(repository, command, client):
-        raise VerificationError("Review request requires repository write permission")
+def requester_authorized(repository, number, command, client):
+    """Allow a user to review their own upstream PR or exercise live upstream write authority."""
+    user = command.get("user")
+    if (
+        repository != UPSTREAM_REPOSITORY
+        or type(number) is not int
+        or number <= 0
+        or not github_user(user)
+    ):
+        return False
+    current = client.get(f"repos/{repository}/pulls/{number}")
+    return requester_authorized_on_pr(repository, command, current, client)
+
+
+def requester_authorized_on_pr(repository, command, current, client):
+    """Check a concrete requester against one PR snapshot and live repository permissions."""
+    user = command.get("user")
+    if repository != UPSTREAM_REPOSITORY or not github_user(user):
+        return False
+    base = current.get("base")
+    if (
+        not isinstance(base, dict)
+        or not isinstance(base.get("repo"), dict)
+        or base["repo"].get("full_name") != UPSTREAM_REPOSITORY
+        or base.get("ref") != "main"
+    ):
+        return False
+    author = current.get("user")
+    return (github_user(author) and author["id"] == user["id"]) or repository_writer(
+        repository, user, client
+    )
+
+
+def require_requester(repository, number, command, client):
+    """Require authorship of this upstream PR or current repository write authority."""
+    if not requester_authorized(repository, number, command, client):
+        raise VerificationError(
+            "Review request requires this upstream PR's author or repository write permission"
+        )
+
+
+def require_original_requester(repository, number, state, client):
+    """Recheck the original explicit request before another credential publishes on its behalf."""
+    try:
+        commands = [
+            row
+            for row in comments_for(repository, number, client)
+            if row["id"] == state["request"] and row["body"].strip() == REVIEW_COMMAND
+        ]
+        if len(commands) != 1:
+            raise VerificationError("The original explicit review request is unavailable")
+        require_requester(repository, number, commands[0], client)
+    except VerificationError:
+        raise RequesterAuthorityError(
+            "Original requester authority could not be verified"
+        ) from None
 
 
 def start_request(repository, number, command, client, now, publisher=None):
     """Authorize a fresh exact command and reuse the existing frozen-review preflight."""
-    require_requester(repository, command, client)
+    require_requester(repository, number, command, client)
     current = client.get(f"repos/{repository}/pulls/{number}")
     head, base = sha(current["head"]["sha"]), sha(current["base"]["sha"])
     state = {
@@ -433,7 +504,13 @@ def start_request(repository, number, command, client, now, publisher=None):
                 state,
                 current["node_id"],
                 client,
-                category="publisher" if isinstance(error, CommandAccountError) else None,
+                category=(
+                    "publisher"
+                    if isinstance(error, CommandAccountError)
+                    else "requester"
+                    if isinstance(error, RequesterAuthorityError)
+                    else None
+                ),
             )
         raise
     return state
@@ -480,10 +557,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
             row
             for row in comments
             if (
-                (
-                    row.get("user", {}).get("type") == "User"
-                    and row["user"].get("id") == state["publisher_id"]
-                )
+                (github_user(row.get("user")) and row["user"].get("id") == state["publisher_id"])
                 if "publisher_id" in state
                 else (
                     is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
@@ -625,12 +699,19 @@ def process_pr(repository, number, client, now, command_id=None, publisher=None)
             row
             for row in comments
             if row["body"].strip() == REVIEW_COMMAND
-            and row.get("user", {}).get("type") == "User"
-            and row.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+            and github_user(row.get("user"))
             and row["id"] > (state["consumed"] if state else 0)
         ]
+        current = client.get(f"repos/{repository}/pulls/{number}") if pending else None
+        requester_permissions = {}
         for candidate in sorted(pending, key=lambda row: row["id"], reverse=True):
-            if requester_authorized(repository, candidate, client):
+            user = candidate["user"]
+            identity = (user["id"], user["login"])
+            if identity not in requester_permissions:
+                requester_permissions[identity] = requester_authorized_on_pr(
+                    repository, candidate, current, client
+                )
+            if requester_permissions[identity]:
                 command_id = candidate["id"]
                 break
     if command_id is not None:
@@ -649,7 +730,7 @@ def process_pr(repository, number, client, now, command_id=None, publisher=None)
             and state["head"] == current.get("head", {}).get("sha")
             and state["phase"] not in {"blocked", "superseded"}
         ):
-            require_requester(repository, commands[0], client)
+            require_requester(repository, number, commands[0], client)
             state["consumed"] = command_id
             save_state(state, current["node_id"], client)
             command_id = None
@@ -667,7 +748,13 @@ def process_pr(repository, number, client, now, command_id=None, publisher=None)
                 state,
                 subject,
                 client,
-                category="publisher" if isinstance(error, CommandAccountError) else None,
+                category=(
+                    "publisher"
+                    if isinstance(error, CommandAccountError)
+                    else "requester"
+                    if isinstance(error, RequesterAuthorityError)
+                    else None
+                ),
             )
     return True
 
@@ -681,6 +768,7 @@ def main():
             environ.get("GITHUB_REF") != "refs/heads/main"
             or event.get("repository", {}).get("default_branch") != "main"
             or event.get("repository", {}).get("full_name") != repository
+            or repository != UPSTREAM_REPOSITORY
             or not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repository)
         ):
             raise VerificationError("Review orchestration requires trusted main")
