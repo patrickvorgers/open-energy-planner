@@ -4,6 +4,7 @@ on:
 
 permissions:
   issues: write
+  pull-requests: write
 
 jobs:
   quota:
@@ -33,8 +34,20 @@ jobs:
                   return None
 
           request = Request(
-              'https://api.github.com/repos/patrickvorgers/open-energy-planner/issues/47/comments',
-              data=b'{"body":"@coderabbitai rate limit"}',
+              'https://api.github.com/graphql',
+              data=json.dumps({
+                  'query': '''mutation {
+                    addComment(input: {
+                      subjectId: "PR_kwDOVhLYNM8AAAABNbUijQ",
+                      body: "@coderabbitai rate limit"
+                    }) {
+                      commentEdge { node {
+                        id databaseId body
+                        author { __typename login ... on Bot { databaseId } }
+                      } }
+                    }
+                  }''',
+              }).encode('utf-8'),
               headers={
                   'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
                   'Accept': 'application/vnd.github+json',
@@ -46,24 +59,30 @@ jobs:
           try:
               with build_opener(NoRedirects()).open(request, timeout=20) as response:
                   print('HTTP status:', response.status)
-                  if response.status != 201:
+                  if response.status != 200:
                       raise ValueError
                   payload = response.read(65537)
                   if len(payload) > 65536:
                       raise ValueError
-                  comment = json.loads(payload)
+                  result = json.loads(payload)
+                  if result.get('errors'):
+                      raise ValueError
+                  comment = result['data']['addComment']['commentEdge']['node']
                   if (
-                      type(comment.get('id')) is not int
+                      not isinstance(comment.get('id'), str)
+                      or not comment['id']
+                      or type(comment.get('databaseId')) is not int
                       or comment.get('body') != '@coderabbitai rate limit'
-                      or comment.get('user', {}).get('id') != 41898282
-                      or comment.get('performed_via_github_app', {}).get('id') != 15368
+                      or comment.get('author', {}).get('__typename') != 'Bot'
+                      or comment.get('author', {}).get('login') != 'github-actions[bot]'
+                      or comment.get('author', {}).get('databaseId') != 41898282
                   ):
                       raise ValueError
-                  print('Comment ID:', comment['id'])
+                  print('Comment ID:', comment['databaseId'])
           except HTTPError as error:
               print('HTTP status:', error.code)
               raise SystemExit(1) from None
-          except (URLError, HTTPException, OSError, ValueError, TypeError, AttributeError):
+          except (URLError, HTTPException, OSError, ValueError, TypeError, AttributeError, KeyError):
               print('Publication not confirmed. Inspect the PR before any further action.')
               raise SystemExit(1) from None
           PY
