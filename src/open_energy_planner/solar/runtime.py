@@ -16,10 +16,11 @@ from .ha_forecasts import HA_REFRESH_MAX_AGE
 from .learning import learning_blocker
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
 from .source_selection import MIN_ACCURACY_DAYS, SOURCE_POLICY, choose_sources, ha_energies
+from .storage.history import HistoryContinuityError, SolarHistoryImport
 from .wire import configuration_document, document, forecast_document
 
-HISTORY_LOOKBACK_DAYS = 365
 HISTORY_RETRY_MINUTES = 15
+HARD_HISTORY_ISSUES = frozenset({"history_continuity_unavailable", "history_cache_unreadable"})
 EAST_WEST_ARRAY_SHARE = 0.5
 MODEL_RETRY_MINUTES = 5
 _LOGGER = logging.getLogger(__name__)
@@ -36,6 +37,14 @@ class SolarRuntime:
         self.weather_revision, self.history_revision = 0, 0
         self.histories, self.ranges, self.history_issues = {}, {}, {}
         self.history_retry_after = {}
+        self.history_import = SolarHistoryImport(store)
+        self.history_import.configure(self.configuration.sources if self.configuration else ())
+        self.histories = (
+            self.history_import.restore(source.entity_id for source in self.configuration.sources)
+            if self.configuration
+            else {}
+        )
+        self.history_issues.update(self.history_import.issues)
         self.forecast, self.candidate, self.calibrations = None, None, ()
         self.baseline = None
         self.last_key, self.failed_key, self.retry_after = None, None, None
@@ -48,7 +57,12 @@ class SolarRuntime:
         """Reset incompatible live state only after a changed definition has been persisted."""
         self.configuration, self.issue = configuration, None
         self.history_revision += 1
-        self.histories, self.ranges, self.history_issues = {}, {}, {}
+        self.ranges, self.history_issues = {}, {}
+        self.history_import.configure(configuration.sources)
+        self.histories = self.history_import.restore(
+            source.entity_id for source in configuration.sources
+        )
+        self.history_issues.update(self.history_import.issues)
         self.history_retry_after = {}
         self.forecast, self.candidate, self.calibrations, self.last_key = None, None, (), None
         self.baseline = None
@@ -81,49 +95,51 @@ class SolarRuntime:
         self.weather_revision += 1
 
     def request(self, now):
-        """Request one source's daily bounded history without requiring all inverters to succeed together."""
+        """Discover all available years and resume one bounded source transfer at a time."""
         if self.configuration is None or self.store.issue:
             return None
-        end = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)
-        start = end - timedelta(days=HISTORY_LOOKBACK_DAYS, hours=1)
         for source in self.configuration.sources:
-            if self.ranges.get(source.entity_id) != (start, end) or (
-                source.entity_id in self.history_issues
-                and now >= self.history_retry_after[source.entity_id]
-            ):
-                body = {
-                    "entity_id": source.entity_id,
-                    "start": start.isoformat(),
-                    "end": end.isoformat(),
-                    "configuration_version": self.configuration.version,
-                }
-                return {**body, "version": version(body)}
+            if now < self.history_retry_after.get(source.entity_id, now):
+                continue
+            pending = self.history_import.request(source.entity_id, self.configuration.version, now)
+            if pending is not None:
+                return pending
         return None
 
-    def receive(self, ref, history, now, *, error=None):
-        """Reject delayed source replies and advance failed channels so other sources can still learn."""
-        from datetime import datetime
+    def receive(self, ref, history, now, *, error=None, report=None):
+        """Persist a source-bound annual transfer before installing a multi-year aggregate.
 
+        Delayed replies cannot cross configuration changes. Recorder failures
+        advance to other sources until their bounded retry. Identity or overlap
+        changes retain the prior accepted cache and the original incoming evidence.
+        """
         pending = self.request(now)
         if pending is None or pending["version"] != ref:
             raise ValueError("Solar history request changed")
         entity = pending["entity_id"]
-        start, end = (datetime.fromisoformat(pending[key_item]) for key_item in ("start", "end"))
+        if not error:
+            try:
+                accepted = self.history_import.receive(pending, report, now)
+            except HistoryContinuityError:
+                error = "history_continuity_unavailable"
+            else:
+                if accepted:
+                    self.histories[entity] = accepted
+                self.history_revision += 1
+                self.history_issues.pop(entity, None)
+                self.history_retry_after.pop(entity, None)
         if error:
+            previous = self.history_issues.get(entity)
+            if previous in HARD_HISTORY_ISSUES and error not in HARD_HISTORY_ISSUES:
+                error = previous
+            if error in HARD_HISTORY_ISSUES and previous != error:
+                self.history_revision += 1
+                self.last_key = None
+                self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
+                self.source_selection, self.learning = {}, {}
             self.history_issues[entity] = error
             self.history_retry_after[entity] = now + timedelta(minutes=HISTORY_RETRY_MINUTES)
-        else:
-            if history.entity_id != entity or any(
-                not start <= hour.start < end for hour in history.hours
-            ):
-                raise ValueError("Solar history source/range mismatch")
-            self.histories[entity] = history
-            self.history_revision += 1
-            self.history_issues.pop(entity, None)
-            self.history_retry_after.pop(entity, None)
-        # A read failure does not loop on source one forever. Retry next daily
-        # cohort or after fifteen minutes. A failed channel is never zero production.
-        self.ranges[entity] = start, end
+        self.ranges[entity] = pending["start"], pending["end"]
 
     def key(self, now):
         """Coalesce input/version changes and quarter boundaries without fitting on every HA poll."""
@@ -173,7 +189,11 @@ class SolarRuntime:
             self.configuration,
             self.location,
             () if expired else self.weather,
-            tuple(self.histories.items()),
+            tuple(
+                (entity, history)
+                for entity, history in self.histories.items()
+                if self.history_issues.get(entity) not in HARD_HISTORY_ISSUES
+            ),
             now,
             self.ha_predictions,
         )
@@ -631,5 +651,11 @@ class SolarRuntime:
             else {},
             "issue": self.issue,
             "history_issues": dict(self.history_issues),
+            "history_import": self.history_import.status(
+                (source.entity_id for source in self.configuration.sources)
+                if self.configuration
+                else (),
+                self.histories,
+            ),
             "request": self.request(now),
         }

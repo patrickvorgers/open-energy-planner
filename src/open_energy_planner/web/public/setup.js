@@ -1,4 +1,4 @@
-import {money, when, percentage, percentageInput, inputNumber, useHomeAssistantTimezone, sourceName} from "./display.js";
+import {money, when, percentage, percentageInput, inputNumber, useHomeAssistantTimezone, sourceName, localDate, localInstant} from "./display.js";
 import {SaveBar} from "./save-bar.js";
 import {InstallationLayout} from "./installation-layout.js";
 import {PriceSourceSettings} from "./price-sources.js";
@@ -53,6 +53,8 @@ const help = {
     hybrid: "Solar and battery share this inverter and can exchange energy directly through DC.",
     can_curtail:
         "Allow proposed solar on/off commands. Your HA automation must implement them.",
+    learning_start:
+        "Optional. Choose a date after replacing panels, changing the meter or another fundamental installation change. Uses midnight in Home Assistant time. Older history is kept but does not train or validate this source.",
     soc_entity:
         "Battery state of charge in percent. Managed read-only in Home Assistant Energy.",
     power_entity:
@@ -369,6 +371,10 @@ function addSolar(old = {}) {
         old.can_curtail,
         { type: "checkbox" },
     );
+    const learningStart = field(node, "Learning data from", "learning_start", old.learning_start ? localDate(old.learning_start) : "", {type: "date"});
+    learningStart.closest("label").className = "solar-learning-start";
+    learningStart.max = localDate();
+    learningStart.addEventListener("input", () => { learningStart.max = localDate(); });
     const history = document.createElement("fieldset"), legend = document.createElement("legend");
     history.className = "solar-history-confirmation";
     legend.textContent = "Historical production for learning";
@@ -538,6 +544,7 @@ function definitions() {
     };
     const sources = solarRows.map(({ node, old }) => {
         const v = values(node);
+        if (v.learning_start && v.learning_start > localDate()) throw new Error("Choose a learning start date no later than today in Home Assistant time.");
         const originalPanels = editableSolarPanels(old);
         const panels = [...node.querySelectorAll(".solar-panel")].map(group => {
             const plane = values(group);
@@ -564,6 +571,7 @@ function definitions() {
             panels: unchangedManual ? [] : panels,
             can_curtail: v.can_curtail,
             forecast_source: v.forecast_source,
+            learning_start: v.learning_start ? old.learning_start && localDate(old.learning_start) === v.learning_start ? old.learning_start : localInstant(v.learning_start) : null,
             unrestricted_history_start: v.unrestricted_history_start ? `${v.unrestricted_history_start}:00+00:00` : null,
             unrestricted_history_end: v.unrestricted_history_end ? `${v.unrestricted_history_end}:00+00:00` : null,
         };

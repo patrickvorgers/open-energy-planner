@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from aiohttp import ClientSession
@@ -136,6 +136,96 @@ def test_solar_api_projects_two_sources_into_real_plan_and_retains_original_arch
     asyncio.run(scenario())
 
 
+def test_solar_history_api_discovers_years_and_commits_empty_and_gap_preserving_chunks(
+    tmp_path, monkeypatch
+):
+    """Authenticated availability and annual reports persist bounded imports without filling absent measurements."""
+    from open_energy_planner import app as app_module
+    from open_energy_planner.solar import api as solar_api
+
+    frozen = datetime.now(UTC)
+
+    class Clock(datetime):
+        """Keep the API and snapshot on one day even if a slow runner crosses UTC midnight."""
+
+        @classmethod
+        def now(cls, timezone=None):
+            """Return the same aware instant while preserving the standard naive-call behavior."""
+            return frozen.astimezone(timezone) if timezone else frozen.replace(tzinfo=None)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    monkeypatch.setattr(solar_api, "datetime", Clock)
+
+    async def scenario():
+        """Exercise the real route, current request identity and active database on synthetic solar history."""
+        async with running_forecasts(tmp_path, weather_factory=fixture_weather) as (session, url):
+            definition = configuration_document(plant())
+            definition.pop("version")
+            await configure_forecasts(session, url, solar_definition=definition)
+            async with session.get(url + "/v1/solar") as response:
+                pending = (await response.json())["request"]
+            target_year = datetime.fromisoformat(pending["end"]).year
+            first_year = target_year - 1
+            identity = {"metadata_id": 33, "source": "recorder", "unit": "kWh"}
+            assert pending["basis"] == "solar_history_range"
+            async with session.post(
+                url + "/v1/solar/history",
+                json={
+                    "request_version": pending["version"],
+                    "basis": "solar_history_range",
+                    "entity_id": "sensor.pv0",
+                    "statistics_identity": identity,
+                    "available_start": f"{first_year}-01-01T00:00:00+00:00",
+                },
+            ) as response:
+                assert response.status == 200
+                pending = (await response.json())["solar"]["request"]
+            assert pending["import_year"] == first_year
+            async with session.post(
+                url + "/v1/solar/history",
+                json={
+                    "request_version": pending["version"],
+                    "basis": "solar_history_chunk",
+                    "entity_id": "sensor.pv0",
+                    "statistics_identity": identity,
+                    "unit": "kWh",
+                    "hours": [],
+                },
+            ) as response:
+                assert response.status == 200
+                pending = (await response.json())["solar"]["request"]
+            assert pending["import_year"] == target_year
+            first = datetime.fromisoformat(pending["start"])
+            body = {
+                "request_version": pending["version"],
+                "basis": "solar_history_chunk",
+                "entity_id": "sensor.pv0",
+                "statistics_identity": identity,
+                "unit": "kWh",
+                "hours": [
+                    [(first + timedelta(hours=index)).timestamp(), 100 + index, 100 + index]
+                    for index in (0, 1, 3)
+                ],
+            }
+            async with session.post(
+                url + "/v1/solar/history", json={**body, "unit": "unsupported"}
+            ) as response:
+                assert response.status == 400
+            async with session.post(url + "/v1/solar/history", json=body) as response:
+                assert response.status == 200
+                state = (await response.json())["solar"]
+            assert state["request"] is None
+            assert state["history_import"]["sensor.pv0"]["loaded_years"] == [
+                first_year,
+                target_year,
+            ]
+            assert state["history_import"]["sensor.pv0"]["hours"] == 3
+            async with session.post(url + "/v1/solar/history", json=body) as response:
+                assert response.status == 409
+
+    asyncio.run(scenario())
+
+
 def test_unrestricted_history_confirmation_is_bounded_and_concurrency_protected(tmp_path):
     """Persist an explicit past declaration, rejecting future, partial and stale writes unchanged."""
 
@@ -172,6 +262,49 @@ def test_unrestricted_history_confirmation_is_bounded_and_concurrency_protected(
                     "sources": [{**body["sources"][0], "unrestricted_history_end": end}],
                 }
                 async with session.put(url + "/v1/solar", json=invalid) as response:
+                    assert response.status == 400
+            async with session.get(url + "/v1/solar") as response:
+                assert (await response.json())["configuration"] == saved
+
+    asyncio.run(scenario())
+
+
+def test_learning_start_is_saved_with_cas_and_rejects_future_and_malformed_dates(tmp_path):
+    """An explicit learning boundary survives reload and invalid edits cannot overwrite the saved configuration."""
+
+    async def scenario():
+        """Exercise the authenticated configuration route using independent past and future instants."""
+        async with running_forecasts(tmp_path, weather_factory=fixture_weather) as (session, url):
+            initial = configuration_document(plant())
+            initial.pop("version")
+            configured = await configure_forecasts(session, url, solar_definition=initial)
+            current = configured["solar"]["configuration"]
+            cutoff = datetime.now(UTC).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) - timedelta(days=30)
+            body = {
+                **current,
+                "expected_version": current["version"],
+                "sources": [{**current["sources"][0], "learning_start": cutoff.isoformat()}],
+            }
+            async with session.put(url + "/v1/solar", json=body) as response:
+                assert response.status == 200
+                saved = (await response.json())["configuration"]
+            assert saved["sources"][0]["learning_start"] == cutoff.isoformat()
+            assert saved["version"] != current["version"]
+            async with session.put(url + "/v1/solar", json=body) as response:
+                assert response.status == 409
+            for invalid in (
+                "invalid",
+                "2026-04-01",
+                (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            ):
+                rejected = {
+                    **body,
+                    "expected_version": saved["version"],
+                    "sources": [{**body["sources"][0], "learning_start": invalid}],
+                }
+                async with session.put(url + "/v1/solar", json=rejected) as response:
                     assert response.status == 400
             async with session.get(url + "/v1/solar") as response:
                 assert (await response.json())["configuration"] == saved

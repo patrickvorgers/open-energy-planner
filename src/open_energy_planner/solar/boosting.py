@@ -13,8 +13,6 @@ from math import cos, fsum, isfinite, pi, sin
 from statistics import median, quantiles
 
 import numpy as np
-import pandas as pd
-from pvlib import solarposition
 
 from open_energy_planner.core.units import MINUTES_PER_HOUR
 from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
@@ -29,9 +27,26 @@ from open_energy_planner.solar.learning import (
     MIN_CALIBRATION_SAMPLES,
     TrainingExclusion,
     learning_blocker,
+    learning_interval,
     unrestricted_interval,
 )
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
+from open_energy_planner.solar.trend import (
+    MIN_FOLD_DAYS,
+    MIN_FOLD_HOURS,
+    SOLAR_YEAR_DAYS,
+    TREND_POLICY,
+    TREND_SAFETY_ADVICE,
+    TREND_VALIDATION_FOLDS,
+    TrendAssessment,
+    TrendFold,
+    TrendRateOutOfRange,
+    TrendStatus,
+    YieldTrend,
+    assess_trend,
+    estimate_trend,
+    quarterly_windows,
+)
 
 MODEL_ID = "solar-xgboost-production-v2"
 TREE_ROUNDS = 96
@@ -48,7 +63,7 @@ MIN_OUTLIER_GROUP_SAMPLES = 8
 OUTLIER_SEASON_DAYS = 45
 OUTLIER_IQR_MULTIPLIER = 3.0
 MIN_OUTLIER_RATIO_DISTANCE = 0.15
-SOLAR_YEAR_DAYS = 365.2425
+TRAINING_POLICY = TREND_POLICY
 FEATURE_NAMES = (
     "utc_hour_sin",
     "utc_hour_cos",
@@ -102,6 +117,9 @@ class TrainingSummary:
     validation_days: int = 0
     diagnostic_counts: dict | None = None
     diagnostic_periods: tuple = ()
+    training_start: datetime | None = None
+    training_end: datetime | None = None
+    time_trend: TrendAssessment | None = None
 
 
 def solar_geometry(instants, location, duration_h=1):
@@ -110,6 +128,9 @@ def solar_geometry(instants, location, duration_h=1):
     Four midpoint samples per hour retain partially sunlit dawn and dusk hours.
     Values describe the UTC interval, not the provider's irradiance estimate.
     """
+    import pandas as pd
+    from pvlib import solarposition
+
     if not instants:
         return {}
     steps = max(1, round(duration_h * GEOMETRY_SUBSTEPS_PER_HOUR))
@@ -296,6 +317,8 @@ class SolarBoostedModel:
     model_json: str
     model_digest: str
     schema: str = MODEL_ID
+    training_policy: str = TRAINING_POLICY
+    time_trend: YieldTrend | None = None
 
     def __post_init__(self):
         """Validate archive metadata and the complete bounded tree structure before prediction."""
@@ -308,7 +331,16 @@ class SolarBoostedModel:
         object.__setattr__(self, "created_at", aware(self.created_at))
         if self.trained_until > self.created_at:
             raise ValueError("Solar training cutoff is after model creation")
-        if self.schema != MODEL_ID or self.library_version != "3.4.1":
+        if self.time_trend is not None and (
+            not isinstance(self.time_trend, YieldTrend)
+            or self.time_trend.reference >= self.trained_until
+        ):
+            raise ValueError("Invalid solar yield trend reference")
+        if (
+            self.schema != MODEL_ID
+            or self.library_version != "3.4.1"
+            or self.training_policy != TRAINING_POLICY
+        ):
             raise ValueError("Unsupported solar learning model")
         for reference in (
             self.configuration_version,
@@ -352,6 +384,8 @@ class SolarBoostedModel:
                 "ac_headroom": AC_METER_HEADROOM,
                 "dc_headroom": MAX_DC_CAPACITY_MULTIPLE,
                 "target": "measured_boundary_kwh_per_hour",
+                "training_policy": self.training_policy,
+                "sample_weights": "equal",
                 "daylight": "geometric-quarter-midpoints",
                 "admission": "physical-measurement-controls-v2",
             }
@@ -362,12 +396,22 @@ class SolarBoostedModel:
         """Decode only the known archive schema with explicit UTC training and knowledge times."""
         if not isinstance(body, dict):
             raise TypeError("Invalid solar model archive")
+        if body.get("training_policy") != TRAINING_POLICY:
+            raise ValueError("Unsupported solar training policy")
         try:
             return cls(
                 **{
                     **body,
                     "trained_until": datetime.fromisoformat(body["trained_until"]),
                     "created_at": datetime.fromisoformat(body["created_at"]),
+                    "time_trend": (
+                        YieldTrend(
+                            body["time_trend"]["log_rate"],
+                            datetime.fromisoformat(body["time_trend"]["reference"]),
+                        )
+                        if body.get("time_trend") is not None
+                        else None
+                    ),
                 }
             )
         except (AttributeError, KeyError, TypeError, ValueError) as error:
@@ -417,7 +461,19 @@ class SolarBoostedModel:
                 raise ValueError("Nonfinite solar learning output")
             result.update(
                 {
-                    row.start + offset: max(0.0, min(self.max_power_kw, float(value))) * duration_h
+                    row.start + offset: max(
+                        0.0,
+                        min(
+                            self.max_power_kw,
+                            float(value)
+                            * (
+                                self.time_trend.factor(row.start + offset)
+                                if self.time_trend
+                                else 1.0
+                            ),
+                        ),
+                    )
+                    * duration_h
                     for row, value in zip(daylight, values, strict=True)
                 }
             )
@@ -435,7 +491,7 @@ class TrainingResult:
 
 @lru_cache(maxsize=16)
 def _train(rows):
-    """Reuse unchanged daily training data instead of fitting again on every forecast quarter."""
+    """Fit all supplied outcomes with equal weight and reuse unchanged daily training data."""
     from xgboost import DMatrix, train
 
     features = np.array([row[3] for row in rows])
@@ -451,10 +507,101 @@ def _train(rows):
             "min_child_weight": TREE_MIN_CHILD_WEIGHT,
             "seed": 0,
         },
-        DMatrix(features, label=target, feature_names=list(FEATURE_NAMES), nthread=1),
+        DMatrix(
+            features,
+            label=target,
+            feature_names=list(FEATURE_NAMES),
+            nthread=1,
+        ),
         num_boost_round=TREE_ROUNDS,
     )
     return model.save_raw(raw_format="json").decode()
+
+
+def _predict_rows(model_json, rows, max_power_kw, trend=None):
+    """Use the production learner and identical physical bounds for historical comparisons."""
+    from xgboost import DMatrix
+
+    predictions = _booster(model_json).predict(
+        DMatrix(np.array([row[3] for row in rows]), feature_names=list(FEATURE_NAMES), nthread=1)
+    )
+    if not np.isfinite(predictions).all():
+        raise ValueError("Nonfinite solar learning validation")
+    return tuple(
+        max(0.0, min(max_power_kw, float(predicted) * (trend.factor(row[0]) if trend else 1.0)))
+        for row, predicted in zip(rows, predictions, strict=True)
+    )
+
+
+def _trend_model(rows, trend):
+    """Fit equal-weight measured targets translated to one common yield reference."""
+    return _train(tuple((row[0], None, row[2] / trend.factor(row[0]), row[3]) for row in rows))
+
+
+@lru_cache(maxsize=16)
+def _choose_trend(rows, max_power_kw):
+    """Keep trend estimation and eight seasonal tests entirely inside the training partition.
+
+    Each fold fits its own weather learner and trend exclusively before the
+    quarter it predicts. A missing quarter does not become zero production or
+    shorten the required two-year evidence. The final held-out week is untouched.
+    """
+    baseline_json = _train(rows)
+    folds = []
+    for start, end in quarterly_windows(rows):
+        earlier = tuple(row for row in rows if row[0] < start)
+        later = tuple(row for row in rows if start <= row[0] < end)
+        if (
+            not earlier
+            or len(later) < MIN_FOLD_HOURS
+            or len({row[0].date() for row in later}) < MIN_FOLD_DAYS
+        ):
+            break
+        earlier_json = _train(earlier)
+        try:
+            trend = estimate_trend(earlier, _predict_rows(earlier_json, earlier, max_power_kw))
+        except TrendRateOutOfRange:
+            return (
+                baseline_json,
+                None,
+                TrendAssessment(
+                    TrendStatus.UNSTABLE, folds=tuple(folds), reason=TREND_SAFETY_ADVICE
+                ),
+            )
+        if trend is None:
+            break
+        plain = _predict_rows(earlier_json, later, max_power_kw)
+        adjusted = _predict_rows(_trend_model(earlier, trend), later, max_power_kw, trend)
+        folds.append(
+            TrendFold(
+                earlier[-1][0] + timedelta(hours=1),
+                start,
+                end,
+                fsum(abs(value - row[2]) for row, value in zip(later, plain, strict=True))
+                / len(later),
+                fsum(abs(value - row[2]) for row, value in zip(later, adjusted, strict=True))
+                / len(later),
+                trend.annual_change,
+                len(later),
+                len({row[0].date() for row in later}),
+            )
+        )
+    try:
+        final_trend = (
+            estimate_trend(rows, _predict_rows(baseline_json, rows, max_power_kw))
+            if len(folds) == TREND_VALIDATION_FOLDS
+            else None
+        )
+    except TrendRateOutOfRange:
+        return (
+            baseline_json,
+            None,
+            TrendAssessment(TrendStatus.UNSTABLE, folds=tuple(folds), reason=TREND_SAFETY_ADVICE),
+        )
+    assessment = assess_trend(final_trend, folds)
+    if assessment.status == TrendStatus.ACTIVE:
+        return _trend_model(rows, final_trend), final_trend, assessment
+    return baseline_json, None, assessment
 
 
 def _periods(excluded):
@@ -506,6 +653,8 @@ def fit_boosted_model(source, inverter, location, history, physical_hours, weath
             if end > before
             else TrainingExclusion.METER_CORRECTION
             if observed < 0
+            else "before_learning_start"
+            if not learning_interval(source, instant, end)
             else "control_history_unconfirmed"
             if not unrestricted_interval(source, instant, end)
             else "outside_daylight"
@@ -573,6 +722,8 @@ def fit_boosted_model(source, inverter, location, history, physical_hours, weath
         validation_days=validation_days,
         diagnostic_counts=dict(Counter(reason for _instant, reason in diagnostics)),
         diagnostic_periods=_periods(diagnostics),
+        training_start=training[0][0] if training else None,
+        training_end=training[-1][0] + timedelta(hours=1) if training else None,
     )
     if len(training) < MIN_CALIBRATION_SAMPLES or training_days < MIN_TRAINING_DAYS:
         return TrainingResult(None, summary)
@@ -588,7 +739,7 @@ def fit_boosted_model(source, inverter, location, history, physical_hours, weath
             ),
         )
     baseline_error = fsum(abs(row[1] - row[2]) for row in validation) / len(validation)
-    model_json = _train(tuple(training))
+    model_json, time_trend, trend_assessment = _choose_trend(tuple(training), max_power_kw)
     model = SolarBoostedModel(
         source.source_id,
         version({"source": asdict(source), "inverter": asdict(inverter)}),
@@ -602,16 +753,9 @@ def fit_boosted_model(source, inverter, location, history, physical_hours, weath
         distribution_version("xgboost-cpu"),
         model_json,
         hashlib.sha256(model_json.encode()).hexdigest(),
+        time_trend=time_trend,
     )
-    from xgboost import DMatrix
-
-    predictions = _booster(model_json).predict(
-        DMatrix(
-            np.array([row[3] for row in validation]), feature_names=list(FEATURE_NAMES), nthread=1
-        )
-    )
-    if not np.isfinite(predictions).all():
-        raise ValueError("Nonfinite solar learning validation")
+    predictions = _predict_rows(model_json, validation, max_power_kw, time_trend)
     tree_error = fsum(
         abs(max(0.0, min(max_power_kw, float(predicted))) - row[2])
         for row, predicted in zip(validation, predictions, strict=True)
@@ -624,5 +768,6 @@ def fit_boosted_model(source, inverter, location, history, physical_hours, weath
         status=TrainingStatus.NONLINEAR_SHADOW if preferred else TrainingStatus.BASELINE_PREFERRED,
         baseline_mae_kwh=baseline_error,
         tree_mae_kwh=tree_error,
+        time_trend=trend_assessment,
     )
     return TrainingResult(model if preferred else None, summary)

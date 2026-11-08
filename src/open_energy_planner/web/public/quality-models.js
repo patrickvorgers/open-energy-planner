@@ -9,7 +9,7 @@ export function currentModelRows(current = {}, selection = {}) {
         const choice = solar.source_selection?.[source.source_id], training = solar.learning?.[source.source_id];
         const collecting = choice && choice.complete_days < choice.required_days && (choice.requested === "automatic" || choice.requested === "ml" && training?.status === "nonlinear_shadow");
         const readiness = choice ? collecting ? "collecting_accuracy_evidence" : choice.issue ? "comparison_unavailable" : "active" : solar.calibration_status?.[source.source_id];
-        rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], solarTraining: solar.learning?.[source.source_id], issue: solar.history_issues?.[source.entity_id] || solar.issue});
+        rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], solarTraining: solar.learning?.[source.source_id], solarHistory: solar.history_import?.[source.entity_id], solarLearningStart: source.learning_start, issue: solar.history_issues?.[source.entity_id] || solar.issue});
     }
     for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used, weatherLearning: device.weather_learning});
     for (const selected of consumers.selected || []) if (!rows.has(selected.entity_id)) rows.set(selected.entity_id, {id: selected.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === selected.entity_id)?.name || selected.entity_id, readiness: consumers.result?.status || "waiting_for_history", issue: consumers.history_issues?.[selected.entity_id] || consumers.result?.detail || consumers.issue || "Waiting for usable historical evidence"});
@@ -50,6 +50,11 @@ export function renderCurrentModel(parent, row, expanded = false) {
     const statuses = {training_history_required: "Collecting training history", learned_preferred: "Learned model has consistent decision benefit", collecting_decision_evidence: "Collecting realized decision evidence", no_consistent_decision_benefit: "Baseline retained: No consistent decision benefit"};
     const fields = document.createElement("dl"); fields.className = "model-selection-summary";
     const values = [[row.scope === "devices" ? "Component forecast model" : "Active forecast model", row.active || "Waiting for forecast"], ["Readiness", row.readiness ? optionLabel(row.readiness) : "Not known"]];
+    if (row.solarLearningStart) values.push(["Learning data from", when(row.solarLearningStart)]);
+    if (row.solarHistory) {
+        const history = row.solarHistory;
+        values.push(["Recorder availability", history.available_from_month ? `From month ${history.available_from_month.slice(0, 7)}` : "Not yet discovered"], ["Imported years", history.loaded_years?.length ? history.loaded_years.join(", ") : "None yet"], ["Received cumulative readings", history.hours == null ? "Not known" : history.hours.toLocaleString()], ["Import range ends", history.loaded_through ? `${when(history.loaded_through)} (exclusive)` : "Not yet received"]);
+    }
     if (model) values.push(["Selection preference", model.preferred === "learned" ? "Learned" : model.preferred === "baseline" ? "Baseline" : "Not known"], ["Completed comparisons", model.completed_windows == null || model.required_windows == null ? "Not known" : `${model.completed_windows} of ${model.required_windows} required`]);
     if (row.temperature != null) values.push(["Temperature features", row.temperature ? "Used" : "Not used"]);
     for (const [label, value] of values) {
@@ -57,6 +62,10 @@ export function renderCurrentModel(parent, row, expanded = false) {
         term.textContent = label; description.textContent = value; field.append(term, description); fields.append(field);
     }
     details.append(fields);
+    if (row.solarHistory) {
+        paragraph("Recorder availability is month-level evidence, not the first complete measured hour. Missing production or weather hours remain unknown.");
+        if (row.solarHistory.issue) paragraph(`History import: ${optionLabel(row.solarHistory.issue)}. Last accepted history is retained.`);
+    }
     if (row.weatherLearning) {
         const learning = row.weatherLearning;
         const reasons = {training_history_required: "Collecting at least 28 days of complete device and temperature history.", model_runtime_unavailable: "The candidate model is unavailable. The simpler forecast remains in use.", weather_forecast_unavailable: "The candidate needs a complete temperature forecast within its observed training range. The simpler forecast remains in use.", forward_archive_required: "Waiting for saved forward comparisons.", comparison_evidence_unreadable: "Saved comparison evidence is unavailable. The simpler forecast remains in use.", collecting_forward_accuracy: "Collecting later measurements for predictions saved before the measured day.", no_consistent_accuracy_benefit: "The simpler model is retained because the candidate did not consistently improve accuracy.", accuracy_validated: "The nonlinear candidate improved all required forward comparisons. Household activation still requires the existing decision comparison."};
@@ -97,7 +106,25 @@ export function renderCurrentModel(parent, row, expanded = false) {
         paragraph("Historical validation compares PVWatts and XGBoost using the same weather and measured daylight hours from a later period held out of training. It compares the models under equal weather inputs, not the weather source's accuracy.", controlled);
         const trainingDays = training.training_days == null ? "" : ` across ${training.training_days} days`, validationDays = training.validation_days == null ? "" : ` across ${training.validation_days} days`;
         paragraph(`Training: ${training.training_hours} daylight hours${trainingDays}. Historical validation: ${training.validation_hours} daylight hours${validationDays}.`, controlled);
+        if (training.training_start && training.training_end) paragraph(`Training period: ${when(training.training_start)} to ${when(training.training_end)} (end exclusive).`, controlled);
         if (training.validation_start && training.validation_end) paragraph(`Validation period: ${when(training.validation_start)} to ${when(training.validation_end)}`, controlled);
+        paragraph("Training and validation measurements all count equally. No fixed age discount is applied.", controlled);
+        if (training.time_trend) {
+            const trend = training.time_trend;
+            const states = {active: "Learned trend selected automatically for the candidate", insufficient_history: "No trend selected: More comparable seasonal history is needed", not_improved: "No trend selected: Seasonal comparisons did not improve enough", unstable: "No trend selected: The estimate did not meet the stability or safety checks"};
+            paragraph(`Time trend: ${states[trend.status] || "Waiting for trend evidence"}`, controlled);
+            if (trend.status === "active" && trend.annual_change != null) paragraph(`Selected change in yield: ${trend.annual_change > 0 ? "+" : ""}${percentage(trend.annual_change * 100)} per year.`, controlled);
+            if (trend.status !== "active" && trend.candidate_annual_change != null) paragraph(`Tested change in yield: ${trend.candidate_annual_change > 0 ? "+" : ""}${percentage(trend.candidate_annual_change * 100)} per year. This trend is not applied.`, controlled);
+            if (trend.reference) paragraph(`Trend reference: ${when(trend.reference)}`, controlled);
+            if (trend.reason) paragraph(trend.reason, controlled);
+            paragraph("A learned change in yield can include shading, soiling and weather bias. It does not establish physical panel degradation.", controlled);
+            if (trend.folds?.length) {
+                const backtests = document.createElement("details"), heading = document.createElement("summary");
+                heading.textContent = `Seasonal time-trend comparisons: ${trend.folds.length}`; backtests.append(heading);
+                for (const fold of trend.folds) paragraph(`Training ends: ${when(fold.training_end)}. Validation: ${when(fold.validation_start)} to ${when(fold.validation_end)}. Mean absolute error: Without trend ${fold.baseline_mae_kwh.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh/hour. With trend ${fold.trend_mae_kwh.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh/hour. Tested annual change: ${percentage(fold.annual_change * 100)}.`, backtests);
+                controlled.append(backtests);
+            }
+        }
         errors(controlled, [["PVWatts", training.baseline_mae_kwh], ["XGBoost", training.tree_mae_kwh]]);
         paragraph("Reliable daylight measurements remain included at zero, low or unexpectedly high production. Original measurements are retained.", controlled);
         for (const [reason, count] of Object.entries(training.excluded_counts || {})) paragraph(`Excluded from learning: ${optionLabel(reason)}: ${count} ${count === 1 ? "hour" : "hours"}.`, controlled);

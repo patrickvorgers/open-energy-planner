@@ -817,3 +817,37 @@ def test_solar_nonlinear_weights_and_training_reports_survive_backend_restart(ar
     choice = restored.documents.read("source-choice-" + runtime.forecast.version + ".json")
     assert choice["sources"]["pv0"]["active"] == "pvwatts"
     assert restored.documents.read("ml-training-" + reference + ".json") == report
+
+
+def test_solar_learning_boundary_and_time_trend_replay_after_backend_restart(archive):
+    """Each real backend preserves the explicit learning regime and continuous measured-yield correction."""
+    from open_energy_planner.solar.boosting import SolarBoostedModel
+    from open_energy_planner.solar.trend import YieldTrend
+    from open_energy_planner.solar.wire import document
+    from tests.app.solar.test_boosting import fit_case
+    from tests.app.solar.test_solar import SITE
+
+    engine, _root = archive
+    result, _history, _physical, weather, now = fit_case()
+    model = replace(result.model, time_trend=YieldTrend(-0.005, now - timedelta(days=30)))
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    configuration = plant()
+    configuration = replace(
+        configuration,
+        sources=(
+            replace(
+                configuration.sources[0], learning_start=(now - timedelta(days=40)).isoformat()
+            ),
+        ),
+    )
+    store.save(configuration)
+    store.archive("ml-training", model.version, document(model))
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    replay = SolarBoostedModel.restore(
+        restored.documents.read("ml-training-" + model.version + ".json")
+    )
+    assert restored.current == configuration
+    assert replay == model
+    assert replay.predict(weather[-24:], SITE, known_at=now) == model.predict(
+        weather[-24:], SITE, known_at=now
+    )

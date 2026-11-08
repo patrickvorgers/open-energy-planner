@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from functools import cached_property
 from math import isfinite
@@ -126,6 +126,7 @@ class SolarSource:
     forecast_source: ForecastSource = ForecastSource.AUTOMATIC
     unrestricted_history_start: str | None = None
     unrestricted_history_end: str | None = None
+    learning_start: str | None = None
 
     def __post_init__(self):
         """Validate minimum inputs and make default tilt and measurement boundary explicit."""
@@ -153,6 +154,12 @@ class SolarSource:
                 raise ValueError("Unrestricted history must have a positive duration")
             object.__setattr__(self, "unrestricted_history_start", start.isoformat())
             object.__setattr__(self, "unrestricted_history_end", end.isoformat())
+        if self.learning_start is not None:
+            try:
+                learning_start = aware(datetime.fromisoformat(self.learning_start)).astimezone(UTC)
+            except (TypeError, ValueError):
+                raise ValueError("Invalid solar learning start") from None
+            object.__setattr__(self, "learning_start", learning_start.isoformat())
         object.__setattr__(self, "forecast_source", ForecastSource(self.forecast_source))
         object.__setattr__(self, "capacity_w", float(self.capacity_w))
         object.__setattr__(self, "tilt", float(self.tilt))
@@ -249,6 +256,7 @@ class SolarConfiguration:
                 "ha_imports",
                 "unrestricted_history_start",
                 "unrestricted_history_end",
+                "learning_start",
             ):
                 if not source[field]:
                     source.pop(field)

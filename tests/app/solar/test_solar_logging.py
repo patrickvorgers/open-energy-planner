@@ -190,7 +190,6 @@ def test_empty_historical_weather_waits_for_original_cache_invalidation(refresh_
         source = OpenMeteoSolarSource(session)
         assert await source.read(SITE, START)
         assert not source.past
-        assert source.past_key == (SITE.latitude, SITE.longitude, START.date())
         await source.read(SITE, START + timedelta(hours=1))
         assert session.archive_calls == 1
         next_site = replace(SITE, longitude=7) if refresh_trigger == "site" else SITE

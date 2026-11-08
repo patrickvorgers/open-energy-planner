@@ -53,6 +53,50 @@ Home Assistant provider supplies its own forecast. **Automatic** chooses among
 eligible sources using predictions saved before the later measured production.
 Insufficient or unproven learning keeps PVWatts available.
 
+Solar learning imports the available production years from Home Assistant and
+pairs usable measurements with weather. The individual transfers are bounded,
+but the combined training history is not restricted to one year. Missing
+readings or weather still reduce the usable coverage. Existing history can
+already satisfy training requirements. Importing several years does not require
+waiting those years again.
+
+Training and validation measurements all count equally. No fixed age discount
+is applied. The ML candidate can learn a positive or negative change in yield
+over time, but uses it only after separate chronological comparisons show
+consistent improvement across two complete seasonal validation years. It chooses
+between a learned trend and no trend automatically. Insufficient or inconsistent
+evidence keeps ordinary XGBoost available. A change in yield can include shading,
+soiling or weather bias. It is not a measurement of physical panel degradation.
+The trend needs about four years of comparable history. Complete calendar-quarter
+alignment, the separate final test week and missing data can require more. The
+ordinary ML model can become usable much earlier without a trend.
+
+After replacing panels, changing the meter or another fundamental installation
+change, optionally set **Learning data from** for that solar source under
+**Settings > Installation > Solar production**. The selected date starts at
+midnight in Home Assistant time. Earlier history remains stored but no longer
+trains or validates that source. Future dates are not accepted. Leave it empty to
+use all otherwise eligible history. This is separate from confirming that a
+curtailable source produced without restriction during a historical period.
+Saving a different date starts a separate history import for that production
+regime. A replacement meter can establish its own statistics identity without
+rewriting earlier evidence. Clearing the date restores the original history
+selection, including any unresolved continuity issue. The first learning hour
+must start at or after the boundary.
+
+Under **Current model and learning**, the Recorder availability month, imported
+years and received reading count explain import progress. A monthly availability
+date does not identify the first complete measured hour. The separate training
+period and usable hour/day counts show what the model actually used. Historical
+weather is cached in the active database and reused after restart. Missing dates
+are retrieved without refetching complete cached months. A weather download time
+is not proof that the same weather forecast was available in the past.
+
+The same disclosure explains whether a time trend was selected within the ML
+candidate, its annual change and the seasonal comparison evidence. That internal
+choice does not mean ML is the current forecast. Read **Active forecast model**
+and the complete forecast comparison separately.
+
 Reliable daylight measurements remain useful when production is zero, unusually
 low or higher than PVWatts predicted. Daylight is determined from the sun's
 position, independently of the predicted output. Missing or incomplete meter

@@ -140,3 +140,14 @@ def unrestricted_interval(source, start, end):
     return datetime.fromisoformat(
         source.unrestricted_history_start
     ) <= start and end <= datetime.fromisoformat(source.unrestricted_history_end)
+
+
+def learning_interval(source, start, end):
+    """Use only complete intervals beginning at or after the explicitly selected learning boundary.
+
+    The preceding cumulative endpoint remains available for subtraction. Older
+    measurements stay archived and do not enter fitting or accuracy assessment.
+    """
+    return end > start and (
+        source.learning_start is None or start >= datetime.fromisoformat(source.learning_start)
+    )

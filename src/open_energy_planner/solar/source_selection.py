@@ -18,7 +18,7 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
-from open_energy_planner.solar.learning import unrestricted_interval
+from open_energy_planner.solar.learning import learning_interval, unrestricted_interval
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
 from open_energy_planner.solar.wire import document
 
@@ -132,6 +132,8 @@ def family(configuration, source, location, *, learned_policy=None):
     source_definition.pop("forecast_source")
     for field in ("unrestricted_history_start", "unrestricted_history_end"):
         source_definition.pop(field)
+    if source_definition["learning_start"] is None:
+        source_definition.pop("learning_start")
 
     for group in (source_definition, *source_definition["ha_imports"]):
         for panel in group["panels"]:
@@ -319,7 +321,11 @@ def choose_sources(
                 and record.get("ha_configuration_versions", []) != provider_revisions
             ):
                 continue
-            if not all(unrestricted_interval(source, instant, instant + HOUR) for instant in hours):
+            if not all(
+                learning_interval(source, instant, instant + HOUR)
+                and unrestricted_interval(source, instant, instant + HOUR)
+                for instant in hours
+            ):
                 continue
             values = [actual.get(instant) for instant in hours]
             if any(value is None for value in values):

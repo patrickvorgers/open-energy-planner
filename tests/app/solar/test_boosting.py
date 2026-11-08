@@ -11,10 +11,53 @@ import pytest
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
 from open_energy_planner.solar.boosting import SolarBoostedModel, fit_boosted_model
 from open_energy_planner.solar.calculation.model import SolarEnergy, SolarWeatherHour
+from open_energy_planner.solar.trend import YieldTrend
 from open_energy_planner.solar.wire import document
 from tests.app.solar.test_solar import SITE, plant
 
 START = datetime(2026, 4, 1, tzinfo=UTC)
+
+
+def test_trend_archive_replays_hourly_and_quarterly_forecasts_after_restart():
+    """Restored trend parameters scale native prediction identically at hourly and fine intervals."""
+    result, _history, _physical, _weather, before = fit_case()
+    trend = YieldTrend(-0.01, before - timedelta(days=365))
+    changed = replace(result.model, time_trend=trend)
+    restored = SolarBoostedModel.restore(document(changed))
+    weather = (SolarWeatherHour(before + timedelta(hours=12), 600, 500, 100, 20, 2, before),)
+    for duration, offset in ((1, 0), (0.25, 15)):
+        plain = result.model.predict(
+            weather, SITE, known_at=before, duration_h=duration, offset_minutes=offset
+        )
+        replay = restored.predict(
+            weather, SITE, known_at=before, duration_h=duration, offset_minutes=offset
+        )
+        assert replay == changed.predict(
+            weather, SITE, known_at=before, duration_h=duration, offset_minutes=offset
+        )
+        assert all(
+            replay[instant] == pytest.approx(value * trend.factor(instant))
+            for instant, value in plain.items()
+        )
+    assert restored.version != result.model.version
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"log_rate": -1},
+        {"log_rate": True},
+        {"reference": "2026-12-31T00:00:00+00:00"},
+        {"reference": "2024-01-01T00:00:00"},
+    ),
+)
+def test_invalid_trend_archives_do_not_reach_prediction(changes):
+    """Oversized rates, naive references and references beyond training are rejected on restart."""
+    result, *_ = fit_case()
+    body = document(result.model)
+    body["time_trend"] = {"log_rate": -0.01, "reference": "2024-01-01T00:00:00+00:00", **changes}
+    with pytest.raises(ValueError):
+        SolarBoostedModel.restore(body)
 
 
 def training_data(*, constant=None, corrupt=False, reverse_validation=False):
@@ -414,6 +457,7 @@ def test_final_week_cannot_change_native_training_rows(monkeypatch):
         return original_train(rows)
 
     monkeypatch.setattr(boosting, "_train", capture)
+    monkeypatch.setattr(boosting, "_choose_trend", boosting._choose_trend.__wrapped__)
     normal, *_ = fit_case()
     reversed_week, *_ = fit_case(reverse_validation=True)
     assert inputs[0] == inputs[1]

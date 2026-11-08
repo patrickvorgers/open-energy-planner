@@ -291,6 +291,8 @@
 .forecast-workspace .quality-model-errors th:last-child,.forecast-workspace .quality-model-errors td:last-child { text-align:right; }
 .solar-history-confirmation { grid-column:1/-1; min-width:0; }
 .solar-history-confirmation > p { grid-column:1/-1; max-width:75ch; }
+.solar-learning-start { grid-column:1/-1; max-width:75ch; }
+.solar-learning-start > input { max-width:260px; }
 .forecast-workspace .quality-evidence-controls label { min-height:44px; }
 @media(max-width:640px) { .forecast-workspace .toolbar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.forecast-workspace .toolbar button { width:100%; }.forecast-workspace .quality-summary { gap:16px; }.forecast-workspace .quality-summary div { flex:1 1 120px; } }
 
