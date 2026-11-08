@@ -1,10 +1,11 @@
 """Verify original-run weather and durable evidence without backdating retrieval or contacting providers."""
 
 import asyncio
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, asdict, replace
 from datetime import UTC, datetime, timedelta
 from threading import Event as ThreadEvent
 
@@ -863,3 +864,90 @@ def test_one_incomplete_original_run_cannot_block_older_training_or_current_fore
     assert any(run.initialized_at == missing for run in recovered)
     assert source.history_issues == {}
     assert len(ForecastWeatherCache(store).read(query).hours) == 95
+
+
+def test_frozen_run_version_is_computed_once_without_changing_its_original_digest(monkeypatch):
+    """Repeated source lookup serializes one immutable run once and retains its independently computed original identity."""
+    run = asyncio.run(
+        OpenMeteoSolarSource(FrozenRunSession()).read_run(SITE, INITIALIZED, None, RECEIVED)
+    )
+    original = asdict(run)
+    expected = hashlib.sha256(
+        json.dumps(original, default=str, sort_keys=True).encode()
+    ).hexdigest()
+    serialized = []
+
+    def serialize(value):
+        """Count actual recursive serialization while retaining the standard dataclass conversion."""
+        serialized.append(value)
+        return asdict(value)
+
+    monkeypatch.setattr("open_energy_planner.solar.forecast_weather.asdict", serialize)
+    assert run.version == expected
+    assert run.version == expected
+    assert run.version == expected
+    assert len(serialized) == 1
+    assert serialized[0] is run
+    assert asdict(run) == original
+    with pytest.raises(FrozenInstanceError):
+        run.received_at = RECEIVED + timedelta(hours=1)
+
+
+def test_replacing_frozen_run_clocks_or_values_computes_each_new_identity_once(monkeypatch):
+    """New origins, real receipt clocks and measured weather values receive independent caches without stale copied digests."""
+    run = asyncio.run(
+        OpenMeteoSolarSource(FrozenRunSession()).read_run(SITE, INITIALIZED, None, RECEIVED)
+    )
+    original_version = run.version
+    later = RECEIVED + timedelta(hours=1)
+    replacements = (
+        replace(run, forecast_origin=INITIALIZED),
+        replace(
+            run,
+            received_at=later,
+            hours=tuple(replace(row, received_at=later) for row in run.hours),
+        ),
+        replace(run, hours=(replace(run.hours[0], ghi=600), *run.hours[1:])),
+    )
+    expected = tuple(
+        hashlib.sha256(json.dumps(asdict(value), default=str, sort_keys=True).encode()).hexdigest()
+        for value in replacements
+    )
+    serialized = []
+
+    def serialize(value):
+        """Execute the original serialization and count only version work on the replaced instances."""
+        serialized.append(value)
+        return asdict(value)
+
+    monkeypatch.setattr("open_energy_planner.solar.forecast_weather.asdict", serialize)
+    for value, identity in zip(replacements, expected, strict=True):
+        assert value.version == identity
+        assert value.version == identity
+        assert identity != original_version
+    assert len(serialized) == 3
+    assert all(value is copied for value, copied in zip(serialized, replacements, strict=True))
+    assert run.version == original_version
+    assert len(serialized) == 3
+
+
+def test_memoized_run_version_preserves_frozen_cache_round_trip_and_original_archive(tmp_path):
+    """Populating the in-memory digest cache cannot add durable fields, alter original receipts or change reopened identities."""
+    store = make_store(tmp_path, SolarStore)
+    run = asyncio.run(
+        OpenMeteoSolarSource(FrozenRunSession(), store).read_run(SITE, INITIALIZED, None, RECEIVED)
+    )
+    original = asdict(run)
+    expected = hashlib.sha256(
+        json.dumps(original, default=str, sort_keys=True).encode()
+    ).hexdigest()
+    saved = snapshot(store, tmp_path)
+    assert run.version == expected
+    assert asdict(run) == original
+    reopened = ForecastWeatherCache(make_store(tmp_path, SolarStore)).read(
+        forecast_weather_query(SITE, INITIALIZED)
+    )
+    assert reopened == run
+    assert reopened.version == expected
+    assert asdict(reopened) == original
+    assert snapshot(store, tmp_path) == saved

@@ -164,6 +164,12 @@ less than 30 minutes old. Weather older than two hours cannot create a new one.
 These are implementation defaults to validate in practice, not field reliability
 guarantees. Existing planner cadence remains separate.
 
+Additional immutable original forecast runs do not invalidate a usable running
+model job. Removing or replacing a previously accepted run is a hard cohort
+change: it revokes the old ML state to the physical baseline and rejects workers
+started against the earlier cohort. Subsequent work uses the changed run set;
+an older completion cannot restore the revoked candidate.
+
 The solar module owns its forecast availability notification. It names the solar
 forecast explicitly and explains automatic weather retries and forecast refresh.
 The warning clears only when a forecast matches the current configuration and HA
@@ -433,6 +439,14 @@ checks bind this declaration to the source. Extending a confirmed past period
 does not rewrite original forward captures or change their physical comparison
 family. Current confirmed coverage determines which actual hours may score those
 original predictions. No hardware operation is issued.
+
+Disabling proposed solar commands makes the historical declaration editor
+inactive and excludes its hidden fields from form validation. Its local draft
+remains available if commands are enabled again before saving. Saving while the
+editor is inactive retains only the previously accepted declaration, or no
+declaration when none was saved; it does not serialize a hidden partial draft.
+Cancel reloads the accepted configuration and declaration. No retained history
+or original declaration archive is deleted by hiding this editor.
 
 A complete successful historical forecast assessment can admit ML without
 waiting for three new matched days. Historical training fit or the later held-out

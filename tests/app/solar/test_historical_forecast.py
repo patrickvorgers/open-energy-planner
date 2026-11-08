@@ -63,7 +63,8 @@ def configured_runtime(tmp_path, *, runs=None, history=None):
 def test_original_forecast_backtest_selects_ml_without_collecting_three_new_days(tmp_path):
     """Four old weekly runs prove both horizons and activate ML immediately with zero live captured days."""
     runtime = configured_runtime(tmp_path)
-    assert runtime.install(runtime.build(runtime.job(NOW)), NOW)
+    result = runtime.build(runtime.job(NOW))
+    assert runtime.install(result, NOW)
     report = runtime.learning["pv0"].summary.historical_assessment
     assert report is not None and report.status == "eligible"
     assert report.matched_pairs == 384 and report.unique_hours == 288
@@ -89,6 +90,15 @@ def test_original_forecast_backtest_selects_ml_without_collecting_three_new_days
         public["learning"]["pv0"]["training_samples"] > public["learning"]["pv0"]["training_hours"]
     )
     assert "model_json" not in str(public)
+    withdrawn = scheduled_runs(NOW)[0]
+    runtime.set_forecast_runs(
+        SITE, tuple(run for run in runtime.forecast_runs if run.initialized_at != withdrawn)
+    )
+    assert runtime.forecast == runtime.baseline
+    assert runtime.candidate is None
+    assert runtime.source_selection == runtime.learning == {}
+    assert runtime.active_model("pv0") == "pvwatts-v2"
+    assert not runtime.install(result, NOW)
 
 
 def test_observed_weather_cannot_substitute_for_missing_original_runs(tmp_path):
@@ -335,3 +345,84 @@ def test_historical_report_cannot_claim_a_different_active_learning_policy(tmp_p
             runtime.store,
             histories=runtime.histories,
         )
+
+
+@pytest.mark.parametrize("change", ["removed", "replaced"])
+def test_withdrawn_or_replaced_forecast_cohort_rejects_captured_worker(
+    tmp_path, monkeypatch, change
+):
+    """A delayed worker cannot publish after any of its original forecast evidence is withdrawn."""
+    runs, _history = original_forecasts(days=5)
+    runtime = configured_runtime(tmp_path, runs=runs[-2:])
+    monkeypatch.setattr(runtime, "_learned_candidates", lambda *arguments: {})
+    result = runtime.build(runtime.job(NOW))
+    assert runtime.install(result, NOW)
+    original = runtime.forecast
+    if change == "removed":
+        newer = runtime.forecast_runs[1:]
+    else:
+        replaced = runtime.forecast_runs[0]
+        newer = (
+            replace(replaced, hours=(replace(replaced.hours[0], celsius=21), *replaced.hours[1:])),
+            runtime.forecast_runs[1],
+        )
+    assert runtime.set_forecast_runs(SITE, newer)
+    assert not runtime.install(result, NOW)
+    assert runtime.forecast == runtime.baseline == original
+    assert runtime.last_key is None
+    assert runtime.source_selection == runtime.learning == {}
+    following = runtime.job(NOW)
+    assert following is not None and following[7] == runtime.forecast_runs
+    assert runtime.install(runtime.build(following), NOW)
+
+
+def test_additional_runs_preserve_a_worker_that_captured_a_nonempty_valid_cohort(
+    tmp_path, monkeypatch
+):
+    """Importing older immutable runs queues a later fit without starving the valid active worker."""
+    runs, _history = original_forecasts(days=5)
+    runtime = configured_runtime(tmp_path, runs=runs[-2:])
+    monkeypatch.setattr(runtime, "_learned_candidates", lambda *arguments: {})
+    queued = runtime.job(NOW)
+    result = runtime.build(queued)
+    assert runtime.set_forecast_runs(SITE, runs)
+    assert runtime.install(result, NOW)
+    assert runtime.last_key == queued[0]
+    assert runtime.job(NOW + timedelta(seconds=30)) is None
+    following = runtime.job(NOW + timedelta(seconds=60))
+    assert following is not None and following[7] == runtime.forecast_runs
+
+
+@pytest.mark.parametrize("missing", ["all", "one", "none"])
+def test_historical_projection_requires_coverage_but_keeps_explicit_zeros(missing):
+    """The real projection rejects absent weather hours while retaining a complete zero-yield horizon."""
+    from open_energy_planner.solar.calculation.projection import learned_forecast
+
+    class ZeroProductionModel:
+        """Supply explicit accepted zero production for every provided weather interval."""
+
+        version = "synthetic-zero-production"
+
+        def predict(self, weather, location, *, known_at, duration_h, offset_minutes):
+            """Keep missing weather absent and provide valid zeros for supplied hours, including night."""
+            return {
+                row.start + timedelta(minutes=offset_minutes): 0.0
+                for row in weather
+                if row.received_at <= known_at
+            }
+
+    hours = tuple(
+        SolarWeatherHour(NOW + timedelta(hours=index), 0, 0, 0, 10, 1, NOW) for index in range(49)
+    )
+    supplied = () if missing == "all" else hours[:17] + hours[18:] if missing == "one" else hours
+    if missing != "none":
+        with pytest.raises(ValueError, match="solar_weather_coverage_missing"):
+            learned_forecast(plant(), SITE, supplied, NOW, {"pv0": ZeroProductionModel()})
+    else:
+        forecast = learned_forecast(plant(), SITE, supplied, NOW, {"pv0": ZeroProductionModel()})
+        assert len(forecast.energies) == 120
+        assert sum(row.duration_h for row in forecast.energies) == 48
+        assert {row.start.replace(minute=0) for row in forecast.energies} == {
+            NOW + timedelta(hours=index) for index in range(48)
+        }
+        assert all(row.ac_kwh == row.dc_kwh == 0 for row in forecast.energies)

@@ -42,6 +42,7 @@ class SolarRuntime:
         self.location, self.weather = None, ()
         self.forecast_runs, self.weather_service = (), {}
         self.forecast_runs_revision, self.last_fit_at = 0, None
+        self.forecast_cohort_revision = 0
         self.weather_revision, self.history_revision = 0, 0
         self.histories, self.ranges, self.history_issues = {}, {}, {}
         self.history_retry_after = {}
@@ -106,7 +107,7 @@ class SolarRuntime:
         self.weather_revision += 1
 
     def set_forecast_runs(self, location, runs):
-        """Queue ordinary new original-run evidence without invalidating an already usable active calculation."""
+        """Coalesce added runs but revoke results when captured evidence is replaced or withdrawn."""
         if location != self.location:
             return False
         selected = tuple(runs)
@@ -121,6 +122,12 @@ class SolarRuntime:
         selected = tuple(replace(run, forecast_origin=None) for run in selected)
         if selected == self.forecast_runs:
             return False
+        incoming = {run.initialized_at: run.version for run in selected}
+        if any(incoming.get(run.initialized_at) != run.version for run in self.forecast_runs):
+            self.forecast_cohort_revision += 1
+            self.last_key = None
+            self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
+            self.source_selection, self.learning = {}, {}
         self.forecast_runs = selected
         self.forecast_runs_revision += 1
         return True
@@ -190,6 +197,7 @@ class SolarRuntime:
                     (entity, tuple(row.fresh(now) for row in providers))
                     for entity, providers in sorted(self.ha_predictions.items())
                 ),
+                self.forecast_cohort_revision,
                 self.forecast_runs_revision,
             )
             if self.configuration
@@ -652,7 +660,7 @@ class SolarRuntime:
         return learning
 
     def install(self, result, now):
-        """Never let a delayed worker replace forecasts for newer source definitions or weather."""
+        """Preserve every captured input guard except additive immutable forecast-history imports."""
         current_key = self.key(now)
         if current_key is None or result[0][:-1] != current_key[:-1]:
             return False

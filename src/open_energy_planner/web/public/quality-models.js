@@ -1,5 +1,13 @@
 import {money, when, optionLabel, percentage} from "./display.js";
 
+const HISTORY_IMPORT_MESSAGES = {
+    recorder_unavailable: "Home Assistant Recorder is unavailable. Check Recorder; the next background history check retries.",
+    history_unavailable: "Home Assistant production history is not available yet. The next background history check retries.",
+    unsupported_statistics: "The production meter does not provide supported energy statistics. Check its Home Assistant energy settings.",
+    history_continuity_unavailable: "The production meter identity or accepted readings changed. Earlier history is retained. Restore the original meter history or choose Learning data from for a new production regime.",
+    history_cache_unreadable: "Saved production history cannot be read. Check the saved database and restore a working backup if needed.",
+};
+
 /** Associate current readiness and selection with stable forecast IDs, never historical names. */
 export function currentModelRows(current = {}, selection = {}) {
     const rows = new Map();
@@ -64,7 +72,7 @@ export function renderCurrentModel(parent, row, expanded = false) {
     details.append(fields);
     if (row.solarHistory) {
         paragraph("Recorder availability is month-level evidence, not the first complete measured hour. Missing production or weather hours remain unknown.");
-        if (row.solarHistory.issue) paragraph(`History import: ${optionLabel(row.solarHistory.issue)}. Last accepted history is retained.`);
+        if (row.solarHistory.issue) paragraph(Object.hasOwn(HISTORY_IMPORT_MESSAGES, row.solarHistory.issue) ? HISTORY_IMPORT_MESSAGES[row.solarHistory.issue] : "History import is temporarily unavailable. Last accepted history is retained.");
     }
     if (row.solarWeatherService) {
         const weather = row.solarWeatherService, service = comparison("Current forecast weather");
@@ -161,7 +169,7 @@ export function renderCurrentModel(parent, row, expanded = false) {
         if (training.status === "nonlinear_shadow" && row.solarSelection?.active !== "ml" && training.historical_assessment?.status !== "eligible") paragraph("Historical training alone does not activate it. XGBoost also needs a successful historical forecast backtest or complete forecasts captured before later measurements.", controlled);
         if (training.issue) paragraph(training.issue, controlled);
     }
-    for (const issue of new Set([row.issue, model?.issue].filter(Boolean))) paragraph(issue === "Available PV needs uncurtailed, independent production evidence" ? "Model comparison needs independent evidence of available solar production, including production prevented by curtailment." : issue);
+    for (const issue of new Set([row.issue, model?.issue].filter(issue => issue && issue !== row.solarHistory?.issue))) paragraph(Object.hasOwn(HISTORY_IMPORT_MESSAGES, issue) ? HISTORY_IMPORT_MESSAGES[issue] : issue === "Available PV needs uncurtailed, independent production evidence" ? "Model comparison needs independent evidence of available solar production, including production prevented by curtailment." : issue);
     for (const [label, value] of [["Pending comparison ends", model?.pending_until], ["Last evaluated", model?.evaluated_at]]) if (value) paragraph(`${label}: ${when(value)}`);
     for (const window of model?.windows || []) paragraph(`${when(window.start)} to ${when(window.end)}: Simulated baseline cost: ${money(window.baseline.economic_cost)} ${model.currency}: Candidate: ${money(window.candidate.economic_cost)} ${model.currency}: Baseline grid import: ${window.baseline.corrected_import_kwh.toLocaleString()} kWh: Candidate: ${window.candidate.corrected_import_kwh.toLocaleString()} kWh, including the existing terminal-stock correction. These are simulated decisions, not measured savings.`);
     parent.append(details);

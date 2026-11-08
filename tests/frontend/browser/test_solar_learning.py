@@ -98,6 +98,14 @@ def solar_day(solar):
 def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(app_page):
     """Historical forecast accuracy admits ML on desktop/mobile without inventing new captured days."""
     page, url = app_page
+    private_issue = "https://private.invalid/?token=IMPORT_SENTINEL_74189"
+    rejected = page.request.post(
+        url + "/v1/solar/history",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"request_version": "unchanged", "error": private_issue},
+    )
+    assert rejected.status == 400
+    assert rejected.text() == "Invalid solar history"
     initialized = [datetime(2026, 5, 12, tzinfo=UTC) + timedelta(weeks=index) for index in range(4)]
     assessment = {
         "status": "insufficient_history",
@@ -156,7 +164,7 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
                 "loaded_years": [2021, 2022, 2023, 2024, 2025, 2026],
                 "loaded_through": "2026-06-16T00:00:00+00:00",
                 "hours": 44800,
-                "issue": None,
+                "issue": private_issue,
             }
         },
         "source_selection": {
@@ -201,6 +209,11 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
     expect(source).to_contain_text("2021, 2022, 2023, 2024, 2025, 2026")
     expect(source).to_contain_text("44,800")
     expect(source).to_contain_text("month-level evidence, not the first complete measured hour")
+    expect(source).to_contain_text(
+        "History import is temporarily unavailable. Last accepted history is retained."
+    )
+    expect(page.locator("body")).not_to_contain_text("private.invalid")
+    expect(page.locator("body")).not_to_contain_text("IMPORT_SENTINEL")
     controlled = source.get_by_role("region", name="Model comparison", exact=True)
     complete = source.get_by_role("region", name="Complete forecast comparison", exact=True)
     weather = source.get_by_role("region", name="Current forecast weather", exact=True)
@@ -287,9 +300,12 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
         mae_kwh={"pvwatts": 0.2, "ml": 0.02},
         issue=None,
     )
+    solar["history_import"]["sensor.synthetic_roof"]["issue"] = "history_continuity_unavailable"
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
     expect(source.locator(".quality-current-model")).to_have_attribute("open", "")
     expect(source).to_contain_text("Independent solar production (XGBoost CPU)")
+    expect(source).to_contain_text("The production meter identity or accepted readings changed")
+    expect(source).to_contain_text("choose Learning data from for a new production regime")
     expect(source).to_contain_text("Forecast source: ML model: Active: ML model")
     expect(complete).to_contain_text(
         "0 real captured days are available; no new three-day wait is required"

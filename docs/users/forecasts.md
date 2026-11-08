@@ -127,6 +127,13 @@ not an automatically detected state. Unconfirmed periods remain excluded for
 that source. Extending a confirmed historical range does not confirm future
 production or authorize a hardware command.
 
+If you turn off **Allow proposed solar on/off commands**, the historical
+confirmation fields become inactive. An unfinished draft no longer blocks
+Continue or Save. Turning the option back on before saving restores that draft.
+Saving with the option off keeps any previously saved confirmation; it does not
+save an unfinished hidden replacement. **Cancel** restores the saved settings
+and confirmation.
+
 ## Read Forecast quality
 
 Open **Insights > Forecast quality** and choose a day above the **Household**,

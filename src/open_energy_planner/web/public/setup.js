@@ -386,12 +386,13 @@ function addSolar(old = {}) {
     const historyEnd = field(history, "Confirmed unrestricted production until (UTC)", "unrestricted_history_end", old.unrestricted_history_end?.slice(0, 16), {type: "datetime-local"});
     const validateHistory = () => {
         history.hidden = !curtailment.checked;
-        historyStart.required = Boolean(historyEnd.value);
-        historyEnd.required = Boolean(historyStart.value);
+        history.disabled = !curtailment.checked;
+        historyStart.required = curtailment.checked && Boolean(historyEnd.value);
+        historyEnd.required = curtailment.checked && Boolean(historyStart.value);
         const now = new Date().toISOString().slice(0, 16);
         historyStart.max = now;
         historyEnd.max = now;
-        historyEnd.setCustomValidity(historyStart.value && historyEnd.value && historyEnd.value <= historyStart.value ? "The end must be after the start." : "");
+        historyEnd.setCustomValidity(curtailment.checked && historyStart.value && historyEnd.value && historyEnd.value <= historyStart.value ? "The end must be after the start." : "");
     };
     curtailment.addEventListener("change", validateHistory);
     historyStart.addEventListener("input", validateHistory);
@@ -572,8 +573,9 @@ function definitions() {
             can_curtail: v.can_curtail,
             forecast_source: v.forecast_source,
             learning_start: v.learning_start ? old.learning_start && localDate(old.learning_start) === v.learning_start ? old.learning_start : localInstant(v.learning_start) : null,
-            unrestricted_history_start: v.unrestricted_history_start ? `${v.unrestricted_history_start}:00+00:00` : null,
-            unrestricted_history_end: v.unrestricted_history_end ? `${v.unrestricted_history_end}:00+00:00` : null,
+            // Inactive declarations retain accepted history, never an incomplete hidden draft.
+            unrestricted_history_start: v.can_curtail ? v.unrestricted_history_start ? `${v.unrestricted_history_start}:00+00:00` : null : old.unrestricted_history_start ?? null,
+            unrestricted_history_end: v.can_curtail ? v.unrestricted_history_end ? `${v.unrestricted_history_end}:00+00:00` : null : old.unrestricted_history_end ?? null,
         };
     });
     const used = new Map();

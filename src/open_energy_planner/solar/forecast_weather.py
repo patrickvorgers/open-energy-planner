@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from functools import cached_property
 
 from open_energy_planner.planning_policy import PLANNING_HORIZON_HOURS
 from open_energy_planner.prices.model import aware
@@ -83,7 +84,7 @@ class ForecastWeatherRun:
         object.__setattr__(self, "available_at", available)
         object.__setattr__(self, "hours", hours)
 
-    @property
+    @cached_property
     def version(self):
         """Identify original values and all independent provenance clocks without mutable cache pointers."""
         return version(asdict(self))
