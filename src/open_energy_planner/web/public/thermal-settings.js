@@ -10,6 +10,7 @@ import {sourceRefresh, retainInputs} from "./source-refresh.js";
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
+const READ_TIMEOUT_MILLISECONDS = 30000;
 let token = "", current = null, draft = {stores: []}, savedVersion = null;
 let selectedId = null, editOriginId = null, editing = false, conflict = false, requestGeneration = 0;
 bindSettingsActions();
@@ -19,10 +20,15 @@ find("cancel-thermal").textContent = "Cancel";
 
 /** Read or write through the existing token/HA-ingress authorization without retaining credentials. */
 async function api(path, body, signal) {
-    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal});
-    if (!response.ok && signal) throw new Error("Home Assistant source request failed.");
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
+    signal ??= body ? undefined : AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS);
+    try {
+        const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal});
+        if (!response.ok) { if (signal) throw new Error(); throw new Error(await response.text()); }
+        const data = await response.json(); signal?.throwIfAborted(); return data;
+    } catch (error) {
+        if (signal) throw new Error("Home Assistant data could not be read. Check the connection and retry.");
+        throw error;
+    }
 }
 /** Treat every provider-supplied name and diagnostic as text, never HTML. */
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }

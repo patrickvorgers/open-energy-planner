@@ -13,6 +13,7 @@ const find = (id) => document.getElementById(id);
 const VEHICLE_FIELDS = ["id", "soc_entity", "soc_timestamp_attribute", "capacity_kwh", "maximum_w", "target_soc", "departure_time"];
 const POINT_FIELDS = ["id", "energy_entity", "power_entity", "connected_entity", "minimum_w", "maximum_w", "control", "vehicle_ids"];
 const WATTS_PER_KW = 1000;
+const READ_TIMEOUT_MILLISECONDS = 30000;
 let token = "", current, draft, editing = false, selectedId = null, editOriginId = null;
 const integrationSelections = new Map();
 const saveState = new SaveBar({form: "settings", bar: "ev-save-bar", save: "save", discard: "refresh", status: "dirty", read: () => draft, canSave: () => editing});
@@ -20,10 +21,15 @@ bindApplianceSettingsNavigation(saveState);
 find("refresh").textContent = "Cancel";
 find("settings").hidden = true;
 async function api(path, body, signal) {
-    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal});
-    if (!response.ok && signal) throw new Error("Home Assistant source request failed.");
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
+    signal ??= body ? undefined : AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS);
+    try {
+        const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal});
+        if (!response.ok) { if (signal) throw new Error(); throw new Error(await response.text()); }
+        const data = await response.json(); signal?.throwIfAborted(); return data;
+    } catch (error) {
+        if (signal) throw new Error("Home Assistant data could not be read. Check the connection and retry.");
+        throw error;
+    }
 }
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
 function changed() { saveState.update(); }

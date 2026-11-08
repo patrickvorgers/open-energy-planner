@@ -745,8 +745,9 @@ async function refreshSourceNames(signal) {
 }
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
 async function load(refresh = false, discard = false, signal) {
-    config = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
-    installationReady = false;
+    const nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
+    if (nextConfig.mode !== "home_assistant")
+        throw new Error("Installation setup requires Home Assistant mode.");
     try { await loadStrategy(requestedStrategy === null || refresh || discard, signal); }
     catch {
         signal?.throwIfAborted();
@@ -755,9 +756,9 @@ async function load(refresh = false, discard = false, signal) {
         $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically.";
         saveState.update("Strategy status unavailable. Retrying automatically.");
     }
+    config = nextConfig;
+    installationReady = false;
     refreshPriceSources();
-    if (config.mode !== "home_assistant")
-        throw new Error("Installation setup requires Home Assistant mode.");
     const catalogue = config.catalogue;
     if (
         catalogue.refresh_pending ||

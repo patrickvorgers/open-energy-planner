@@ -217,6 +217,12 @@ The boiler's hourly-demand disclosure retains its open state during rendering so
 that a focused hourly field stays visible and typing can continue.
 Reading and validating a chooser POST body happens before acquiring the shared app lock.
 Only the resulting bounded request/status operations hold that lock.
+Ordinary EV and boiler settings GETs use the existing 30-second read deadline,
+including response decoding. An explicitly supplied source-refresh deadline stays
+authoritative instead of being shortened. Read errors use owned recovery advice.
+Installation reloads stage their next configuration until the awaited strategy
+read completes. Cancellation retains the previous configuration, readiness and
+any input entered while the read was pending, so another source read can proceed.
 Temporary candidates expire after five minutes. Refresh them again if a previously
 unconfigured source is no longer available when saving. Large discoveries use the
 [complete snapshot protocol](ENERGY-DASHBOARD.md#complete-discovery-transfers).
