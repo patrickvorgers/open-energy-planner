@@ -46,6 +46,7 @@ from .frontend.assets import register as register_assets
 from .frontend.session import register as register_session
 from .home_assistant.catalogue import HACatalogue
 from .home_assistant.market_prices import price_request
+from .home_assistant.source_choices import configured_sources
 from .installation.api import catalogue as installation_catalogue
 from .installation.api import register as register_installation
 from .installation.api import warnings as installation_warnings
@@ -848,7 +849,13 @@ def create_app(
                         "issue": installation.issue,
                         "devices": devices,
                         "warnings": installation_warnings(installation, solar),
-                        "setup_discovery_requested": setup_catalogue.requested,
+                        "setup_discovery_requested": setup_catalogue.refresh_status()["id"],
+                        "setup_source_entities": configured_sources(
+                            live.configuration if live else None, ev.state, thermal.state
+                        ),
+                        "source_choices_requested": setup_catalogue.choices.pending(
+                            datetime.now(UTC)
+                        ),
                     },
                     "bonus_history": {
                         "request": {

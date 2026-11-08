@@ -13,6 +13,7 @@ from open_energy_planner.appliances.ev import api as ev_api
 from open_energy_planner.appliances.thermal import api as thermal_api
 from open_energy_planner.forecast_quality import api as forecast_quality_api
 from open_energy_planner.forecast_quality.history import HistoryArchive
+from open_energy_planner.home_assistant.catalogue import HACatalogue
 from open_energy_planner.prices import api as prices_api
 from open_energy_planner.savings import api as savings_api
 from open_energy_planner.savings.runtime import SavingsRuntime
@@ -36,7 +37,8 @@ def failure_route(kind, reject_operation, *, project_document=None):
     app = web.Application()
     lock = asyncio.Lock()
     repository = SimpleNamespace(state={"enabled": True, "plan": None})
-    catalogue = SimpleNamespace(value={"timezone": "Europe/Amsterdam"})
+    catalogue = HACatalogue()
+    catalogue.value = {"timezone": "Europe/Amsterdam"}
     service = SimpleNamespace(
         revision="retained-revision",
         configuration_version="retained-configuration",

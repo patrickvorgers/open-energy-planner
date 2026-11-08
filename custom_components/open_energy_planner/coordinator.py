@@ -17,6 +17,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .catalogue_discovery import CatalogueDiscovery
 from .client import AuthenticationError, ReleaseMismatchError
 from .const import DOMAIN, RELEASE
 from .history import HistoryBridge
@@ -27,7 +28,9 @@ from .settlement import SettlementBridge
 from .solar_forecasts import SolarForecastBridge
 from .wire_limits import MAX_SNAPSHOT_RESPONSE_BYTES, validate_projection_size
 
-CATALOGUE_REFRESH_MINUTES = 5
+CATALOGUE_RETRY_MINUTES = 5
+CATALOGUE_CONFIRM_SECONDS = 60
+SOLAR_FORECAST_REFRESH_MINUTES = 5
 POLL_INTERVAL_SECONDS = 5
 
 
@@ -70,6 +73,15 @@ class PlanCoordinator:
         self.grid_configuration = None
         self.catalogue_sent = None
         self.catalogue_request = None
+        self.catalogue_discovery = CatalogueDiscovery(hass)
+        self.catalogue_context = None
+        self.choice_requests = set()
+        self.catalogue_failed_at = None
+        self.catalogue_confirmed_at = None
+        self.catalogue_bindings_rejected = False
+        self.solar_forecast_sent = None
+        self.solar_forecast_attempted_at = None
+        self.solar_forecast_generation = None
         self.history_bridge = HistoryBridge(hass)
         self.settlement_bridge = SettlementBridge(hass)
         self.settlement_bonus_bridge = HistoryBridge(hass)
@@ -334,53 +346,158 @@ class PlanCoordinator:
                 if data.get("plan_invalidated") is True:
                     self.schedule.invalidate()
                 now = dt_util.utcnow()
-                catalogue_request = data.get("installation", {}).get("setup_discovery_requested")
-                if data.get("source") == "home_assistant" and (
-                    self.catalogue_sent is None
-                    or now - self.catalogue_sent > timedelta(minutes=CATALOGUE_REFRESH_MINUTES)
-                    or (catalogue_request and catalogue_request != self.catalogue_request)
-                ):
-                    from .catalogue import setup_catalogue
-                    from .catalogue_transfer import prepare_catalogue
+                if data.get("source") == "home_assistant":
+                    from .source_choices import refresh_choices
 
                     try:
-                        catalogue = await setup_catalogue(self.hass)
-                        if self.closed:
-                            return
-                        prepared = await self.hass.async_add_executor_job(
-                            prepare_catalogue, catalogue
+                        self.catalogue_discovery.configure(
+                            data.get("installation", {}).get("setup_source_entities", [])
                         )
-                        for page in prepared.pages:
-                            if self.closed:
-                                return
-                            membership = await self.client.request("POST", "/v1/ha/catalogue", page)
-                        if membership.get("accepted") is not True:
-                            raise ValueError("Catalogue snapshot was not accepted")
+                    except (ValueError, TypeError):
+                        if not self.catalogue_bindings_rejected:
+                            self.catalogue_discovery.repair()
+                            _LOGGER.warning(
+                                "Home Assistant source bindings cannot be used for metadata refresh. "
+                                "Previous metadata is retained without freshness confirmation. "
+                                "Check the configured source identities in settings"
+                            )
+                        self.catalogue_bindings_rejected = True
+                    else:
+                        if self.catalogue_bindings_rejected:
+                            self.catalogue_failed_at = None
+                            _LOGGER.info(
+                                "Home Assistant source bindings accepted. Metadata refresh can resume"
+                            )
+                        self.catalogue_bindings_rejected = False
+                    await refresh_choices(
+                        self, data.get("installation", {}).get("source_choices_requested", [])
+                    )
+                    if self.closed:
+                        return
+                catalogue_request = data.get("installation", {}).get("setup_discovery_requested")
+                forced_catalogue = self.catalogue_sent is None or (
+                    catalogue_request and catalogue_request != self.catalogue_request
+                )
+                if (
+                    data.get("source") == "home_assistant"
+                    and not self.catalogue_bindings_rejected
+                    and (
+                        forced_catalogue
+                        or self.catalogue_failed_at is None
+                        or now - self.catalogue_failed_at
+                        >= timedelta(minutes=CATALOGUE_RETRY_MINUTES)
+                    )
+                ):
+                    from .catalogue_transfer import prepare_catalogue
+
+                    confirmation_repair = False
+                    try:
+                        catalogue = await self.catalogue_discovery.capture(
+                            force=bool(forced_catalogue), now=now
+                        )
                         if self.closed:
                             return
-                        if membership.get("devices") is not None:
-                            data["installation"]["devices"] = membership["devices"]
-                        if membership.get("configuration_issue"):
-                            self.schedule.invalidate()
-                            data["plan"] = None
-                            data["planning"] = {
-                                "status": "not_ready",
-                                "reason": membership["configuration_issue"],
-                            }
+                        if catalogue is not None:
+                            generation = self.catalogue_discovery.captured_generation
+                            prepared = await self.hass.async_add_executor_job(
+                                prepare_catalogue, catalogue
+                            )
+                            if generation != self.catalogue_discovery.generation:
+                                prepared = None
+                            if prepared is not None:
+                                for page in prepared.pages:
+                                    if self.closed:
+                                        return
+                                    membership = await self.client.request(
+                                        "POST", "/v1/ha/catalogue", page
+                                    )
+                                if membership.get("accepted") is not True:
+                                    raise ValueError("Catalogue snapshot was not accepted")
+                                if self.closed:
+                                    return
+                                self.catalogue_discovery.acknowledge(catalogue)
+                                self.catalogue_context = prepared
+                                self.catalogue_confirmed_at = now
+                                self.solar_forecast_sent = None
+                                self.solar_forecast_attempted_at = None
+                                if membership.get("devices") is not None:
+                                    data["installation"]["devices"] = membership["devices"]
+                                if membership.get("configuration_issue"):
+                                    self.schedule.invalidate()
+                                    data["plan"] = None
+                                    data["planning"] = {
+                                        "status": "not_ready",
+                                        "reason": membership["configuration_issue"],
+                                    }
+                        elif (
+                            self.catalogue_context is not None
+                            and self.catalogue_discovery.healthy
+                            and (
+                                self.catalogue_confirmed_at is None
+                                or now - self.catalogue_confirmed_at
+                                >= timedelta(seconds=CATALOGUE_CONFIRM_SECONDS)
+                            )
+                        ):
+                            try:
+                                await self.client.request(
+                                    "POST",
+                                    "/v1/ha/catalogue",
+                                    {"confirmed_revision": self.catalogue_context.revision},
+                                )
+                            except (AuthenticationError, ReleaseMismatchError):
+                                raise
+                            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                                confirmation_repair = True
+                                raise
+                            self.catalogue_confirmed_at = now
+                        self.catalogue_failed_at = None
+                    except (AuthenticationError, ReleaseMismatchError):
+                        raise
+                    except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                        self.catalogue_discovery.repair()
+                        self.catalogue_failed_at = None if confirmation_repair else now
+                        _LOGGER.debug("Setup catalogue refresh failed", exc_info=True)
+                        if catalogue_request:
+                            try:
+                                await self.client.request(
+                                    "POST",
+                                    "/v1/ha/catalogue",
+                                    {"refresh_failed": catalogue_request},
+                                )
+                            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                                _LOGGER.debug("Source refresh outcome could not be confirmed")
+                    finally:
+                        self.catalogue_sent, self.catalogue_request = now, catalogue_request
+                if (
+                    self.catalogue_context is not None
+                    and self.catalogue_discovery.healthy
+                    and (
+                        self.solar_forecast_attempted_at is None
+                        or self.solar_forecast_generation != self.solar_forecast_bridge.generation
+                        or now - self.solar_forecast_attempted_at
+                        >= timedelta(minutes=SOLAR_FORECAST_REFRESH_MINUTES)
+                    )
+                ):
+                    self.solar_forecast_attempted_at = now
+                    self.solar_forecast_generation = self.solar_forecast_bridge.generation
+                    try:
+                        generation = self.solar_forecast_bridge.generation
                         predictions = await self.solar_forecast_bridge.capture(
-                            prepared.snapshot["suggestions"].get("solar_configurations", []), now
+                            self.catalogue_context.snapshot["suggestions"].get(
+                                "solar_configurations", []
+                            ),
+                            now,
                         )
                         if self.closed:
                             return
-                        await self.client.request("POST", "/v1/solar/ha-forecasts", predictions)
+                        if self.catalogue_discovery.healthy:
+                            await self.client.request("POST", "/v1/solar/ha-forecasts", predictions)
+                            self.solar_forecast_sent = now
+                            self.solar_forecast_generation = generation
                     except ReleaseMismatchError:
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                        # Optional setup discovery must not interrupt current-plan synchronization.
-                        _LOGGER.debug("Setup catalogue refresh failed", exc_info=True)
-                    finally:
-                        # Remember attempts too. Only a distinct UI request bypasses the failure backoff.
-                        self.catalogue_sent, self.catalogue_request = now, catalogue_request
+                        _LOGGER.debug("Solar forecast refresh failed", exc_info=True)
                 # App-side disable is immediate once observed. Resuming requires a new plan.
                 if not enabled and self.schedule.enabled:
                     self.schedule.pause(now)
@@ -790,6 +907,7 @@ class PlanCoordinator:
     async def close(self):
         """Reject new exchanges, drain active synchronization and release listeners before HA unload."""
         self.closed = True
+        self.catalogue_discovery.close()
         await self.market_prices.close()
         if self.appliance_history_task:
             self.appliance_history_task.cancel()

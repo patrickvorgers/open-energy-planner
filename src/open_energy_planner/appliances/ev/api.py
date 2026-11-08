@@ -76,10 +76,14 @@ def register(app, service, catalogue, repository, live, lock):
     async def state(_request):
         """Expose current evidence and the authoritative selection catalogue."""
         async with lock:
+            now = datetime.now(UTC)
             return web.json_response(
                 {
                     **service.document(
-                        datetime.now(UTC), timezone(), catalogue.value, repository.state["plan"]
+                        now,
+                        timezone(),
+                        catalogue.choices.catalogue("ev", catalogue.value, now),
+                        repository.state["plan"],
                     ),
                     "catalogue": catalogue.value,
                     "energy_consumers": list(service.consumers.options),
@@ -104,7 +108,10 @@ def register(app, service, catalogue, repository, live, lock):
                         raise ValueError("EV settings changed. Refresh before saving")
                     function, arguments = (
                         service.configure,
-                        (body["configuration"], catalogue.value),
+                        (
+                            body["configuration"],
+                            catalogue.choices.catalogue("ev", catalogue.value, now),
+                        ),
                     )
                 elif operation == "observations":
                     function, arguments = service.receive, (body, now)

@@ -258,6 +258,45 @@ def unchanged_ev_configuration(document):
     )
 
 
+async def ensure_source_choices(request, scope, required):
+    """Wait for complete scoped fixture choices without replacing active Energy metadata.
+
+    Reuse an in-flight request or usable result. A fresh request is needed after
+    candidate expiry, including when profile provisioning delayed the save.
+    Failed or incomplete results never authorize configuration writes.
+    """
+    path = "/v1/ha/source-choices/" + scope
+    status = await request("GET", path)
+
+    def missing_sources(status):
+        """Check only fixed simulator identities in the product's complete choice result."""
+        metadata = (status.get("catalogue") or {}).get("entities", [])
+        return required - {source["entity_id"] for source in metadata}
+
+    if (
+        status.get("pending") is False
+        and status.get("failed") is False
+        and not missing_sources(status)
+    ):
+        return
+    if status.get("pending") is not True:
+        await request("POST", path, {})
+    for attempt in range(FIXTURE_READY_ATTEMPTS):
+        status = await request("GET", path)
+        if status.get("failed") is True:
+            raise ValueError(
+                "Development example source choices failed or timed out. "
+                "Check the HA connection and fixture sources, then retry provisioning"
+            )
+        if status.get("pending") is False and status.get("failed") is False:
+            if missing_sources(status):
+                raise ValueError("Development example source choices lack required fixture sensors")
+            return
+        if attempt < FIXTURE_READY_ATTEMPTS - 1:
+            await asyncio.sleep(FIXTURE_POLL_SECONDS)
+    raise ValueError("Development example source choices did not complete. Check the HA connection")
+
+
 async def configure(request, journal, now=None):
     """Use normal product APIs to fill only unowned simulator examples and retain all existing work."""
     now = now or datetime.now(UTC)
@@ -301,20 +340,23 @@ async def configure(request, journal, now=None):
         "sensor.oep_test_wallbox_b_energy",
         "sensor.oep_test_boiler_energy",
     }
-    required_metadata_entity_ids = {
-        entity_id
-        for configurations in (*ev_configuration().values(), boiler_configuration()["stores"])
-        for configuration in configurations
-        for field, entity_id in configuration.items()
-        if field.endswith("_entity")
+    choice_sources = {
+        scope: {
+            entity_id
+            for configurations in configuration.values()
+            for device in configurations
+            for field, entity_id in device.items()
+            if field.endswith("_entity")
+        }
+        for scope, configuration in (
+            ("ev", ev_configuration()),
+            ("thermal", boiler_configuration()),
+        )
     }
     for attempt in range(FIXTURE_READY_ATTEMPTS):
         consumers = await request("GET", "/v1/consumers")
         setup = await request("GET", "/v1/setup")
-        metadata = (setup.get("catalogue", {}).get("data") or {}).get("entities", [])
-        missing = (required - {option["entity_id"] for option in consumers["options"]}) | (
-            required_metadata_entity_ids - {source["entity_id"] for source in metadata}
-        )
+        missing = required - {option["entity_id"] for option in consumers["options"]}
         if not missing:
             break
         if attempt < FIXTURE_READY_ATTEMPTS - 1:
@@ -326,6 +368,13 @@ async def configure(request, journal, now=None):
             "Development examples require the complete simulated Energy fixture. Missing: "
             + ", ".join(sorted(missing))
         )
+    for scope, sections in (("ev", ("vehicles", "points")), ("thermal", ("stores",))):
+        if scope in completed or "attempted:" + scope in completed:
+            continue
+        document = await request("GET", "/v1/" + scope)
+        configuration = document if scope == "ev" else document["configuration"]
+        if not any(configuration[section] for section in sections):
+            await ensure_source_choices(request, scope, choice_sources[scope])
     if "consumers" not in completed:
         # Empty state after an ambiguous write may be an intentional user removal.
         if not consumers["selected"] and "attempted:consumers" not in completed:
@@ -425,6 +474,7 @@ async def configure(request, journal, now=None):
     if "ev" not in completed:
         document = await request("GET", "/v1/ev")
         if not document["vehicles"] and not document["points"] and "attempted:ev" not in completed:
+            await ensure_source_choices(request, "ev", choice_sources["ev"])
             await initialize(
                 "ev",
                 "POST",
@@ -440,6 +490,7 @@ async def configure(request, journal, now=None):
     if "thermal" not in completed:
         document = await request("GET", "/v1/thermal")
         if not document["configuration"]["stores"] and "attempted:thermal" not in completed:
+            await ensure_source_choices(request, "thermal", choice_sources["thermal"])
             await initialize(
                 "thermal",
                 "POST",

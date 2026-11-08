@@ -144,6 +144,7 @@ class SolarForecastBridge:
         """Own entry-local listeners. Provider issuance is unknown and never inferred from polling."""
         self.hass = hass
         self.watches = {}
+        self.generation = 0
 
     def close(self):
         """Release listeners on unload and discard coordinator-specific freshness."""
@@ -175,6 +176,7 @@ class SolarForecastBridge:
 
         def updated():
             """Retain a successful HA refresh time, never relabel it as provider issuance."""
+            self.generation += 1
             if coordinator.last_update_success and _configuration_revision(entry) == revision:
                 watch.refreshed_at = dt_util.utcnow()
 

@@ -2,6 +2,7 @@ import {money, when, percentage, percentageInput, inputNumber, useHomeAssistantT
 import {SaveBar} from "./save-bar.js";
 import {InstallationLayout} from "./installation-layout.js";
 import {PriceSourceSettings} from "./price-sources.js";
+import {sourceRefresh} from "./source-refresh.js";
 import {azimuthLabel, DIRECTION_CHOICES, editableSolarPanels, DEFAULT_PANEL_TILT_DEGREES} from "./solar-geometry.js";
 // The browser collects settings. Domain validation, storage and planning stay in the app.
 const $ = (id) => document.getElementById(id);
@@ -12,6 +13,7 @@ let token = "", ingressSession = false,
     busy = false,
     discoveryTimer;
 let requestedStrategy = null, installationBaseline = null, installationReady = false;
+let configurationGeneration = 0;
 let pendingSolarSources = [];
 /** Include precise drafts and import provenance even when their visible controls are unchanged. */
 const installationValues = () => [[...$("wizard").elements]
@@ -29,6 +31,10 @@ const saveState = new SaveBar({form: "wizard", bar: "installation-save-bar", sav
     ...(priceSettings.dirty ? ["price-sources"] : []),
 ]});
 const layout = new InstallationLayout(saveState, value => { if (!busy) showStep(value); });
+$("edit-installation").addEventListener("click", () => { ++configurationGeneration; });
+for (const type of ["input", "change"]) $("wizard").addEventListener(type, event => {
+    if (!event.target.hasAttribute("data-view-control")) ++configurationGeneration;
+});
 const priceSettings = new PriceSourceSettings(() => { saveState.update(); layout.sync(); });
 const help = {
     energy_entity: "The cumulative battery meter configured in the Energy dashboard. It identifies which battery these measurements and ratings belong to.",
@@ -77,7 +83,7 @@ const status = (message) => {
 };
 const identity = (prefix) =>
     `${prefix}_${Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join("")}`;
-async function api(path, method = "GET", body) {
+async function api(path, method = "GET", body, signal) {
     const response = await fetch(document.querySelector('meta[name="oep-api-base"]').content + path.replace(/^\//, ""), {
         method,
         headers: {
@@ -86,14 +92,18 @@ async function api(path, method = "GET", body) {
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         redirect: "error",
+        signal,
     });
+    if (!response.ok && signal) throw new Error("Home Assistant source request failed.");
     if (!response.ok)
         throw new Error(
             response.status === 401
                 ? "The installation token was rejected."
                 : `${response.status}: ${await response.text()}`,
         );
-    return response.json();
+    const value = await response.json();
+    signal?.throwIfAborted();
+    return value;
 }
 /** Build a validated editor. Minimum SoC rounds to one idle decimal without changing its precise draft. */
 function field(parent, title, key, value, options = {}) {
@@ -705,15 +715,15 @@ async function refreshPriceSources() {
     priceTimer = setTimeout(refreshPriceSources, PRICE_STATUS_REFRESH_MS);
 }
 /** Poll presentation metadata without reloading saved configuration or overwriting any draft. */
-async function refreshSourceNames() {
+async function refreshSourceNames(signal) {
     if (!installationReady) return;
     const previous = config;
-    const state = await api("/v1/setup");
+    const state = await api("/v1/setup", "GET", undefined, signal);
     if (!state.catalogue?.data || !installationReady || saveState.busy || previous !== config) return;
     const panelsChanged = state.solar?.version !== config.solar?.version;
     if (panelsChanged && !layout.editing && !installationDirty()) {
-        await load();
-        return;
+        await load(false, false, signal);
+        return state.catalogue.data;
     }
     config.catalogue = state.catalogue;
     config.devices = state.devices;
@@ -736,21 +746,28 @@ async function refreshSourceNames() {
         if (metadata) label.textContent = `${label.dataset.sourceTitle}: ${sourceName(metadata, "Sensor")} (${label.dataset.sourceEntity}): `;
     }
     layout.refreshNames(config);
+    return state.catalogue.data;
 }
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
-async function load(refresh = false, discard = false) {
-    config = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup");
-    installationReady = false;
-    try { await loadStrategy(requestedStrategy === null || refresh || discard); }
+async function load(refresh = false, discard = false, signal) {
+    const generation = ++configurationGeneration;
+    const nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
+    if (generation !== configurationGeneration) return;
+    if (nextConfig.mode !== "home_assistant")
+        throw new Error("Installation setup requires Home Assistant mode.");
+    try { await loadStrategy(requestedStrategy === null || refresh || discard, signal, generation); }
     catch {
+        signal?.throwIfAborted();
+        if (generation !== configurationGeneration) return;
         $("strategy-settings").hidden = false;
         $("installation-save-bar").hidden = false;
         $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically.";
         saveState.update("Strategy status unavailable. Retrying automatically.");
     }
+    if (generation !== configurationGeneration) return;
+    config = nextConfig;
+    installationReady = false;
     refreshPriceSources();
-    if (config.mode !== "home_assistant")
-        throw new Error("Installation setup requires Home Assistant mode.");
     const catalogue = config.catalogue;
     if (
         catalogue.refresh_pending ||
@@ -948,6 +965,10 @@ async function refreshPairing() {
 }
 setInterval(() => refreshPairing().catch((error) => status(error.message)), 3000);
 /** Refresh read-only data or explicitly discard a draft. Failed reads retain the existing editor. */
+const refreshDraftSources = sourceRefresh(
+    (path, body, signal) => api(path, body === undefined ? "GET" : "POST", body, signal), null,
+    $("reload"), $("status"), async (_catalogue, signal) => refreshSourceNames(signal)
+);
 async function refreshInstallation(discard) {
     if (saveState.busy) return;
     if (discard && step === 5) {
@@ -965,8 +986,9 @@ async function refreshInstallation(discard) {
         return;
     }
     if (saveState.dirty && !discard) {
-        await refreshPriceSources();
-        saveState.update("Save or discard your changes before reloading settings.");
+        $("status").hidden = false;
+        await refreshDraftSources();
+        saveState.update($("status").textContent);
         return;
     }
     await saveState.refresh(() => load(!discard, discard), {discard});
@@ -999,6 +1021,7 @@ $("next").onclick = async () => {
 $("wizard").onsubmit = (event) => event.preventDefault();
 $("save").onclick = async () => {
     if (busy || !layout.editing || (layout.wizard && ![3, 4, 5].includes(step))) return;
+    ++configurationGeneration;
     busy = true;
     saveState.begin();
     layout.sync();
@@ -1069,8 +1092,9 @@ async function initializeIngress() {
 initializeIngress();
 
 /** Refresh acceptance status. Synchronize editable intent only on initial load, explicit reload or successful save. */
-async function loadStrategy(updateChoice = true) {
-    const state = await api("/v1/strategy");
+async function loadStrategy(updateChoice = true, signal, generation) {
+    const state = await api("/v1/strategy", "GET", undefined, signal);
+    if (generation !== undefined && generation !== configurationGeneration) return;
     if (updateChoice || requestedStrategy === null) {
         requestedStrategy = state.requested;
         $("strategy").value = state.requested;

@@ -478,7 +478,9 @@ def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(ap
         "90.0"
     )
     page.get_by_role("button", name="Save settings", exact=True).click()
-    expect(page.locator("#status")).to_contain_text("EV settings changed")
+    expect(page.locator("#status")).to_contain_text(
+        "Settings were rejected. Your edits are retained. Refresh before saving and review the selected sources and physical settings."
+    )
     assert (
         page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]["target_soc"]
         == 85.25

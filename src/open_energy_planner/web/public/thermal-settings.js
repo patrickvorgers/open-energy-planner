@@ -6,22 +6,19 @@ import {bindSettingsActions} from "./settings-actions.js";
 import {useHomeAssistantTimezone, sourceName} from "./display.js";
 import {settingsSummary} from "./appliance-settings-detail.js";
 import {identity} from "./identity.js";
+import {sourceRefresh, retainInputs} from "./source-refresh.js";
+import {applianceSettingsApi} from "./appliance-settings-api.js";
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
 let token = "", current = null, draft = {stores: []}, savedVersion = null;
+const api = applianceSettingsApi(base, () => token);
 let selectedId = null, editOriginId = null, editing = false, conflict = false, requestGeneration = 0;
 bindSettingsActions();
 const saveState = new SaveBar({form: "thermal-settings", bar: "thermal-save-bar", save: "save-thermal", discard: "cancel-thermal", status: "thermal-save-state", read: () => draft, canSave: () => editing && !conflict && validDraft()});
 bindApplianceSettingsNavigation(saveState);
 find("cancel-thermal").textContent = "Cancel";
 
-/** Read or write through the existing token/HA-ingress authorization without retaining credentials. */
-async function api(path, body) {
-    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store"});
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
-}
 /** Treat every provider-supplied name and diagnostic as text, never HTML. */
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
 /** Preserve unavailable evidence and format temperature with one decimal by default. */
@@ -82,6 +79,7 @@ function metadata(predicate) { return (current?.catalogue?.entities || []).filte
 
 /** Show a selected store without discarding edits made to any other store. */
 function renderEditor() {
+    const profileOpen = find("thermal-demand-profile")?.open ?? false;
     const selector = find("thermal-store-select"); selector.replaceChildren();
     for (const store of draft.stores) { const option = node("option", displayName(store)); option.value = store.id; selector.append(option); }
     if (!draft.stores.some(store => store.id === selectedId)) selectedId = draft.stores[0]?.id || null;
@@ -104,7 +102,7 @@ function renderEditor() {
     numberInput(physics, store, "ambient_c", "Tank surroundings temperature (°C)", "The temperature around the insulated tank. This non-freezing water model supports 0 to 60 °C, no higher than the maximum planning temperature.", {min: 0, max: 60, temperature: true});
     numberInput(physics, store, "loss_w_per_c", "Heat-loss coefficient (W/°C)", "Declare the tank's heat loss per degree of difference from its surroundings. This is a model assumption, not a measured value.", {max: 1000});
     editor.append(physics);
-    const profile = node("details"); profile.id = "thermal-demand-profile"; profile.append(node("summary", "Expected hot-water heat demand by hour"), node("p", "Enter expected thermal kWh drawn during each local clock hour. These declared rates are assumptions, not measured hot-water use. At least one hour must be positive before enabling planning."));
+    const profile = node("details"); profile.id = "thermal-demand-profile"; profile.open = profileOpen; profile.append(node("summary", "Expected hot-water heat demand by hour"), node("p", "Enter expected thermal kWh drawn during each local clock hour. These declared rates are assumptions, not measured hot-water use. At least one hour must be positive before enabling planning."));
     const hours = node("div"); hours.className = "workspace-grid";
     store.draw_profile_kwh.forEach((energy, hour) => {
         const label = node("label", `${String(hour).padStart(2, "0")}:00 to ${String(hour + 1).padStart(2, "0")}:00 (thermal kWh)`), input = node("input"); input.type = "number"; input.min = 0; input.max = 100; input.step = "any"; input.required = true; input.dataset.hour = String(hour); input.value = energy ?? "";
@@ -153,8 +151,15 @@ async function refreshEvidence() {
     } catch (error) { find("status").textContent = error.message; }
 }
 find("thermal-store-select").onchange = event => { selectedId = event.target.value; renderEditor(); };
-find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); };
-find("add-thermal").onclick = () => { if (saveState.busy) return; const store = {id: identity(), energy_entity: "", temperature_entity: "", power_entity: "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false}; editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); };
+const refreshSources = sourceRefresh(api, "thermal", find("refresh-thermal-sources"), find("status"), catalogue => {
+    if (saveState.busy || !current) return;
+    current.catalogue = catalogue;
+    retainInputs(renderEditor);
+    saveState.update();
+});
+find("refresh-thermal-sources").onclick = () => { if (!saveState.busy) return refreshSources(); };
+find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); };
+find("add-thermal").onclick = () => { if (saveState.busy) return; const store = {id: identity(), energy_entity: "", temperature_entity: "", power_entity: "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false}; editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); refreshSources(); };
 find("thermal-settings").onsubmit = async event => {
     event.preventDefault(); if (saveState.busy || !editing || conflict || !validDraft()) return;
     ++requestGeneration; saveState.begin(); syncEditor();

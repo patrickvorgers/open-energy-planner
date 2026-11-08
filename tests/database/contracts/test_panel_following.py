@@ -294,6 +294,14 @@ def test_unavailable_first_link_does_not_invent_panel_geometry(tmp_path, panel_d
             assert "Wait for complete Home Assistant panel settings" in await response.text()
             assert (await settings(client))["solar"] is None
             handler.catalogue.updated -= timedelta(minutes=16)
+            confirmed = await settings(client)
+            assert confirmed["catalogue"]["stale"] is False
+            assert confirmed["solar"] is None
+            assert confirmed["panel_settings"]["sensor.array"] == {
+                "state": "unavailable",
+                "managed": True,
+            }
+            handler.catalogue.confirmed -= timedelta(minutes=16)
             stale = await settings(client)
             assert stale["catalogue"]["stale"] is True
             assert stale["panel_settings"]["sensor.array"] == {
