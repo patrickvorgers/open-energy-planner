@@ -112,7 +112,7 @@ def configuration_document(value):
     if value is None:
         return None
     body = document(value)
-    # Preserve the content of immutable archives written before optional names existed.
+    # Omit absent optional dates and empty panel names from the canonical document.
     for source in body["sources"]:
         for field in ("unrestricted_history_start", "unrestricted_history_end", "learning_start"):
             if source[field] is None:

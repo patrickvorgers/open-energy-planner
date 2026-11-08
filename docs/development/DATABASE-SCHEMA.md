@@ -338,6 +338,11 @@ an explicit all-HA forecast was built without independent weather.
 The optional source `learning_start` is an aware UTC ISO instant. The UI edits a
 calendar date beginning at midnight in the Home Assistant installation timezone.
 Future cutoffs are rejected. An absent value is omitted from canonical hashing.
+Unset `learning_start`, `unrestricted_history_start` and
+`unrestricted_history_end` are omitted from the saved configuration document.
+Saving the same current configuration reuses its exact immutable document.
+Setting or clearing a learning date retains the other versions. No conversion of
+earlier development document layouts is provided.
 A present value participates in the configuration and comparison-family identity
 and limits admitted training, validation and accuracy cohorts. Earlier raw
 history, original plans, models and evidence remain stored. This setting is

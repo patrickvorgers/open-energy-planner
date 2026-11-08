@@ -18,9 +18,9 @@ from tests.app.solar.test_boosting import START, training_data
 from tests.database.support.archive import make_store
 
 
-def test_default_learning_boundary_preserves_original_configuration_hash_and_wire_shape():
-    """Leaving the new date empty does not create a new definition or add an empty archive field."""
-    original = {
+def test_default_learning_boundary_has_repeatable_configuration_hash_and_wire_shape(tmp_path):
+    """Empty optional dates have one current archive and identity across saves and restart."""
+    definition = {
         "sources": [
             {
                 "source_id": "pv0",
@@ -37,10 +37,31 @@ def test_default_learning_boundary_preserves_original_configuration_hash_and_wir
             {"inverter_id": "i0", "ac_limit_w": 5000.0, "efficiency": 0.96, "hybrid": False}
         ],
     }
-    expected = hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest()
+    expected = hashlib.sha256(json.dumps(definition, sort_keys=True).encode()).hexdigest()
     configuration = plant()
     assert configuration.version == expected
-    assert "learning_start" not in configuration_document(configuration)["sources"][0]
+    archived = {
+        **definition,
+        "sources": [
+            {
+                **definition["sources"][0],
+                "panels": [],
+                "ha_imports": [],
+                "forecast_source": "automatic",
+            }
+        ],
+        "version": expected,
+    }
+    store = make_store(tmp_path, SolarStore)
+    name = f"configuration-{expected}.json"
+    store.save(configuration)
+    assert store.documents.read(name) == archived
+    restored = SolarStore(store.documents)
+    assert restored.current == configuration
+    restored.save(configuration)
+    assert restored.documents.read(name) == archived
+    assert configuration_document(configuration) == archived
+    assert SolarStore(restored.documents).current == configuration
 
 
 def test_learning_boundary_uses_exact_utc_instant_and_round_trips_through_the_active_store(
@@ -54,8 +75,19 @@ def test_learning_boundary_uses_exact_utc_instant_and_round_trips_through_the_ac
     assert configured.version != configuration.version
     assert parse_configuration(configuration_document(configured)) == configured
     store = make_store(tmp_path, SolarStore)
+    store.save(configuration)
+    original_name = f"configuration-{configuration.version}.json"
+    original_archive = store.documents.read(original_name)
     store.save(configured)
     assert SolarStore(store.documents).current == configured
+    configured_name = f"configuration-{configured.version}.json"
+    configured_archive = store.documents.read(configured_name)
+    assert configured_archive["sources"][0]["learning_start"] == "2026-03-31T22:00:00+00:00"
+    assert store.documents.read(original_name) == original_archive
+    store.save(configuration)
+    assert SolarStore(store.documents).current == configuration
+    assert store.documents.read(original_name) == original_archive
+    assert store.documents.read(configured_name) == configured_archive
 
 
 @pytest.mark.parametrize(
