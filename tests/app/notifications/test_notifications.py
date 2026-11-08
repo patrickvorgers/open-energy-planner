@@ -89,6 +89,10 @@ def test_negative_export_notification_uses_real_accepted_endpoint_evidence(
                 async with session.get(url + "/v1/snapshot") as response:
                     request = (await response.json())["bonus_history"]["request"]
                 body["request_version"] = request["version"]
+                start = datetime.fromisoformat(request["start"]).timestamp()
+                end = datetime.fromisoformat(request["end"]).timestamp()
+                rows = body["statistics"][0]["hours"]
+                rows[:] = [row for row in rows if start <= row[0] < end]
             rows = body["statistics"][0]["hours"]
             rows[:] = [rows[0], rows[-1]]
             reference = rows[0][1]
