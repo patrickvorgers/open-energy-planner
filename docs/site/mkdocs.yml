@@ -33,6 +33,7 @@ nav:
       - Before you start: docs/users/before-you-start.md
       - Try your first plan: docs/users/first-plan.md
       - Connect Home Assistant: docs/users/home-assistant.md
+      - Virtual-device sensors: docs/users/virtual-device-sensors.md
       - Configure OEP: docs/users/configuration.md
       - Installation settings: docs/users/installation.md
       - Contract and prices: docs/users/contract.md
