@@ -1,8 +1,11 @@
 """Exercise authorized review orchestration, durable recovery and provider isolation without billing."""
 
 import json
+import re
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -566,11 +569,29 @@ def test_bounded_quota_rechecks_never_repeat_kody():
 
 
 @pytest.mark.parametrize(
-    "event_name", ["issue_comment", "schedule", "workflow_dispatch", "check_run"]
+    "event_name,body,permission,routed,requested",
+    [
+        ("schedule", "/oep-reviewer review", "write", True, True),
+        ("workflow_dispatch", "/oep-reviewer review", "write", True, True),
+        ("check_run", "/oep-reviewer review", "write", True, True),
+        ("issue_comment", "/oep-reviewer review", "write", True, True),
+        ("issue_comment", "/oep-reviewer review\n", "write", True, True),
+        ("issue_comment", "/oep-reviewer review\r\n", "write", True, True),
+        ("issue_comment", " \t\n/oep-reviewer review\r\n \t", "write", True, True),
+        ("issue_comment", "Please /oep-reviewer review", "write", True, False),
+        ("issue_comment", "/oep-reviewer review extra", "write", True, False),
+        ("issue_comment", "/OEP-reviewer review", "write", True, False),
+        ("issue_comment", "ordinary discussion", "write", False, False),
+        ("issue_comment", "/oep-reviewer review\r\n", "read", True, False),
+    ],
 )
-def test_real_entrypoint_runs_only_trusted_main_metadata(tmp_path, monkeypatch, event_name):
-    """The workflow entrypoint handles explicit requests and callbacks without executing PR code."""
+def test_real_entrypoint_runs_only_trusted_main_metadata(
+    tmp_path, monkeypatch, event_name, body, permission, routed, requested
+):
+    """The actual job filter routes whitespace commands to exact authorized, deduplicated parsing."""
     client = GitHubEvidence()
+    client.command["body"] = body
+    client.permission = permission
     event = {
         "repository": {"full_name": REPOSITORY, "default_branch": "main"},
         "action": "created",
@@ -590,11 +611,41 @@ def test_real_entrypoint_runs_only_trusted_main_metadata(tmp_path, monkeypatch, 
         "GitHub",
         lambda token: client.publisher if token == "synthetic-command-token" else client,
     )
-    assert review.main() == 0
-    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    workflow = Path(__file__).resolve().parents[2] / ".github/workflows/review-orchestration.yaml"
+    condition = re.search(r"    if: >-\n(.*?)    runs-on:", workflow.read_text(), re.DOTALL)[1]
+    # Evaluate this fixed boolean subset with GitHub's case-insensitive string contains semantics.
+    expression = " ".join(condition.split()).replace("&&", "and").replace("||", "or")
+    context = json.loads(
+        json.dumps(
+            {
+                "ref": "refs/heads/main",
+                "repository": REPOSITORY,
+                "event_name": event_name,
+                "event": event,
+            }
+        ),
+        object_hook=lambda fields: SimpleNamespace(**fields),
+    )
+    admitted = bool(
+        eval(
+            expression,
+            {"__builtins__": {}},
+            {
+                "github": context,
+                "contains": lambda body, command: command.casefold() in body.casefold(),
+            },
+        )
+    )
+    assert admitted is routed
+    expected_commands = ["@coderabbitai rate limit"] if requested else []
+    if admitted:
+        assert review.main() == (1 if permission == "read" else 0)
+        assert client.provider_commands() == expected_commands
+        assert review.main() == (1 if permission == "read" else 0)
+    assert client.provider_commands() == expected_commands
     monkeypatch.setenv("GITHUB_REF", "refs/heads/contributor")
     assert review.main() == 1
-    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    assert client.provider_commands() == expected_commands
 
 
 def test_manual_preflight_also_rejects_a_controller_authored_same_head_review():

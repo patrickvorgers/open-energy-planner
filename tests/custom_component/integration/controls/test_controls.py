@@ -29,6 +29,7 @@ from tests.ha_contract.support.commands import command_plan
 def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
     """Real HA selects car B, persists its target/departure and drives only a simulated wallbox. SoC/identity loss withdraw permission."""
     from homeassistant.components.energy.data import async_get_manager
+    from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
 
     from test_environment.oep_test_fixture.ev import DATA_KEY, setup_ev
@@ -149,8 +150,22 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             await coordinator.sync()
             await hass.async_block_till_done()
             assert hass.states.get(car_select).state == "Unknown"
-            car_a = f"{entry.title} ({fixture['cars'][0]['soc']})"
-            car_b = f"{entry.title} ({fixture['cars'][1]['soc']})"
+            assert hass.states.get(car_select).attributes["options"] == [
+                "Unknown",
+                "Test car A",
+                "Test car B",
+            ]
+            devices = dr.async_get(hass)
+            for car in fixture["cars"]:
+                registered = registry.async_get(car["soc"])
+                assert registered is not None and registered.device_id is not None
+                devices.async_update_device(registered.device_id, name_by_user="Shared car")
+            await hass.async_block_till_done()
+            await coordinator.sync()
+            await hass.async_block_till_done()
+            assert hass.states.get(car_select).state == "Unknown"
+            car_a = f"Shared car ({fixture['cars'][0]['soc']})"
+            car_b = f"Shared car ({fixture['cars'][1]['soc']})"
             assert car_a != car_b
             assert hass.states.get(car_select).attributes["options"] == ["Unknown", car_a, car_b]
             await hass.services.async_call(

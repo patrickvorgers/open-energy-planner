@@ -140,6 +140,40 @@ def test_publication_names_keep_stable_ids_and_independent_fallbacks():
     assert thermal == {"stores": [{"id": "tank", "energy_entity": "sensor.tank"}]}
 
 
+def test_vehicle_names_prefer_devices_over_shared_account_entries():
+    """Two cars in one account retain distinct names without changing their source identities."""
+    from open_energy_planner.home_assistant.names import vehicle_source_names
+
+    catalogue = {
+        "entities": [
+            {
+                "entity_id": "sensor.car_a",
+                "device_name": "Family car",
+                "integration_name": "Account",
+            },
+            {
+                "entity_id": "sensor.car_b",
+                "device_name": "Second car",
+                "integration_name": "Account",
+            },
+            {"entity_id": "sensor.helper", "integration_name": "Helper entry"},
+            {"entity_id": "sensor.legacy", "name": "Legacy battery"},
+            {
+                "entity_id": "sensor.opaque",
+                "device_name": "sensor.opaque",
+                "integration_name": "Fallback",
+            },
+        ]
+    }
+    assert vehicle_source_names(catalogue) == {
+        "sensor.car_a": "Family car",
+        "sensor.car_b": "Second car",
+        "sensor.helper": "Helper entry",
+        "sensor.legacy": "Legacy battery",
+        "sensor.opaque": "Fallback",
+    }
+
+
 def test_incomplete_balance_does_not_hide_current_battery_name():
     """Incomplete Energy setup cannot turn valid presentation metadata into an archived label."""
     metadata, _settings = energy_installation()

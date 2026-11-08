@@ -44,16 +44,23 @@ Check the integration and its exposed sources before refreshing again.
 
 Configure the vehicle's usable battery capacity, SoC source and charging limit separately from the charge point. The point needs its own consumption/power source, connection evidence, allowed vehicles and declared control capability.
 
-When adding a vehicle, first choose the Home Assistant integration that manages
-the car. Then choose its state-of-charge sensor. It must report `%`. Its battery
+When adding a vehicle, first choose its **Home Assistant device**. OEP selects
+the integration automatically when the device has one integration. If several
+integrations supply its sensors, choose the relevant one explicitly. Then choose
+its state-of-charge sensor. It must report `%`. Its battery
 device class may be absent, but a humidity sensor is not a car SoC source. The
-integration's configured title supplies the vehicle name.
+device name supplies the vehicle name. Without a device name, OEP uses the
+integration's configured title.
 
-For a charge point, choose the integration that supplies power and connection
-status. Its consumption meter is selected separately from Home Assistant Energy,
+For helpers without a registered device, keep **All devices / choose an integration**
+and choose the integration before the sensor. Device and integration choices only
+filter the sensor list. They do not select a sensor or change saved settings.
+
+For a charge point, choose its device, then the integration that supplies power
+and connection status. Its consumption meter is selected separately from Home Assistant Energy,
 so a utility-meter integration can own it. Use **Find connection sensor** to
 search by device name, sensor name or entity ID. Changing the integration keeps
-your selected power and connection sources visible, so you can explicitly pair
+your selected power and connection sources visible. Switch back to **All devices / choose an integration** to explicitly pair
 a charger's power sensor with a connection helper from another integration.
 **Vehicle connected** must be On
 while physically plugged in, including when charging is paused. Charging-active,
