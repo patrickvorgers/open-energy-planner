@@ -31,6 +31,12 @@ from tests.frontend.browser.helpers import (
 def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(app_page, correction):
     """Desktop/mobile lead with the optimizer, retain both references and keep .1/.3/0 original price inputs."""
     page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    original = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0]
+    document = page.request.get(url + f"/v1/plans/{original['plan_id']}", headers=headers).json()
+    page.clock.set_fixed_time(
+        datetime.fromisoformat(document["input_snapshot"]["problem"]["intervals"][0]["start"])
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

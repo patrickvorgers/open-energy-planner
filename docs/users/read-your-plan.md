@@ -30,7 +30,7 @@ Above zero is supply to the modeled balance: used solar, grid import and battery
 
 The series together should balance around zero. Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
-Use **Next 6 hours**, **Next 24 hours** or **Full horizon**. Day bands and date labels identify calendar boundaries in the installation timezone. On a phone, the legend sits below the chart. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
+Use **Next 6 hours**, **Next 24 hours** or **Full period** (with its available duration). Day bands and date labels identify calendar boundaries in the installation timezone. On a phone, the legend sits below the chart. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
 
 [Open the mobile chart example](../assets/planning-mobile.png) to see the stacked cost cards and legend below the same synthetic two-day plan. Open any guide figure at full size when its labels are too small on your screen.
 
@@ -40,7 +40,9 @@ Every scenario starts with **Expected economic cost**. Both battery scenarios th
 
 Open **Cost breakdown** to see **Import cost**, **Export income** and **Bonus income** separately for each scenario. Net electricity cost is import cost minus export income minus bonus income. A negative income increases net costs. Missing amounts remain unavailable rather than becoming zero. The same breakdown shows battery wear and stored-energy value change. Economic cost includes wear and subtracts the value change. Stored-energy value is not cash received.
 
-These amounts cover the complete original plan even when you zoom into fewer hours. They are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
+These amounts and their cost breakdown follow the selected chart period. The latest plan starts at the current quarter. Historical plans start at their original beginning. **Full period** shows the available duration, normally 48 hours for a new plan and less when part has elapsed or coverage is shorter. The caption gives the exact covered period. Empty or unavailable periods do not show a zero cost.
+
+Battery value change uses the stored energy at both ends of that period and the original plan's fixed valuation basis. It retains reserves, conversion losses, future wear and the useful-energy cap. Changing the view does not fetch new prices or optimize another plan. Earlier export still consumes bonus room even when it is outside the selected period. These are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
 
 ## Understand the forecast and price charts
 
