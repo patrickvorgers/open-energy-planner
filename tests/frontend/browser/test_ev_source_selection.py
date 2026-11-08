@@ -9,6 +9,45 @@ from tests.frontend.browser.helpers import TOKEN, discover
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
+def test_selecting_matching_device_retains_current_soc_source_and_saves(app_page):
+    """A sensor selected after rendering remains selected when its own device is chosen."""
+    page, url = app_page
+    body = discover(page, url)
+    body["entities"].append(
+        {
+            "entity_id": "sensor.synthetic_family_soc",
+            "device_id": "family-car",
+            "device_name": "Family car",
+            "name": "Battery level",
+            "unit": "%",
+            "device_class": "battery",
+            "state_class": "measurement",
+            "integration_id": "car-account",
+            "integration_name": "Car account",
+        }
+    )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    choose_integration(page, "car-account")
+    soc = page.get_by_label("Vehicle state of charge", exact=True)
+    soc.select_option("sensor.synthetic_family_soc")
+    page.get_by_role("combobox", name="Home Assistant device", exact=True).select_option(
+        "family-car"
+    )
+    expect(soc).to_have_value("sensor.synthetic_family_soc")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("75")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert saved["name"] == "Family car"
+    assert saved["soc_entity"] == "sensor.synthetic_family_soc"
+
+
 def test_device_first_selects_integration_but_never_guesses_the_sensor(app_page):
     """Account-named entries resolve through devices, with explicit ambiguity and template fallbacks."""
     page, url = app_page

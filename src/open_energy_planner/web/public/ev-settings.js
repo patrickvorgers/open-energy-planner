@@ -83,7 +83,10 @@ function sourcePicker(card, row, vehicle) {
     deviceControl.onchange = () => {
         deviceSelections.set(row.id, deviceControl.value);
         integrationSelections.delete(row.id);
-        if (vehicle && deviceControl.value && source?.device_id !== deviceControl.value) row.soc_entity = "";
+        if (vehicle && deviceControl.value) {
+            const selectedSource = current.catalogue.entities.find(entity => entity.entity_id === row.soc_entity);
+            if (selectedSource?.device_id !== deviceControl.value) row.soc_entity = "";
+        }
         render(); changed();
     };
     const candidates = current.catalogue.entities.filter(entity => device ? entity.device_id === device : vehicle ? isVehicleSoc(entity) : entity.entity_id.startsWith("binary_sensor.") || entity.device_class === "power" && ["W", "kW"].includes(entity.unit));
