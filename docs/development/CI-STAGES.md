@@ -127,7 +127,12 @@ The separate user credential must retain upstream write access, even if that
 account also owns the PR. Shared provider quotas and the existing cheap checks,
 frozen revision, findings, candidate CI and merge gates still apply.
 
-This exact standalone comment is the manual trigger and the operator's
+The standalone command accepts surrounding whitespace, including a trailing LF
+or CRLF. Additional text is not a command. The workflow wake-up filter admits
+comments containing the command, but the trusted parser still requires the exact
+command after trimming whitespace and verifies the requester's authority.
+
+This standalone comment is the manual trigger and the operator's
 attestation that existing findings have been dispositioned. It authorizes review
 of the live Draft revision accepted by the workflow. Do not push while the
 request is being accepted. Pushes, Ready transitions, labels and check completion
