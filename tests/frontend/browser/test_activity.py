@@ -363,6 +363,11 @@ def test_activity_data_links_open_the_named_read_only_page(
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+@pytest.mark.parametrize(
+    "app_page",
+    [{"width": 1440, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
+    indirect=True,
+)
 def test_module_status_hierarchy_preserves_collapsed_groups_and_live_states(app_page):
     """Prices hide the single market, and keyboard groups retain collapse and focus through live recovery."""
     page, url = app_page
@@ -380,6 +385,13 @@ def test_module_status_hierarchy_preserves_collapsed_groups_and_live_states(app_
     weather = page.get_by_role("region", name="Weather", exact=True)
     for name in ("Overview: Available", "Solar: Degraded", "Temperature: Available"):
         expect(weather.get_by_text(name, exact=True)).to_be_visible()
+    for group in (prices, weather):
+        summary = group.locator(":scope > details > summary")
+        heading_box = summary.locator("h3").bounding_box()
+        summary_box = summary.bounding_box()
+        child_box = group.locator(":scope > details > ul summary").first.bounding_box()
+        assert heading_box["x"] - summary_box["x"] >= 12
+        assert abs(heading_box["x"] - child_box["x"]) <= 1
     weather_heading = weather.locator(":scope > details[data-module-group] > summary")
     weather_heading.click()
     expect(weather.get_by_text("Solar: Degraded", exact=True)).not_to_be_visible()

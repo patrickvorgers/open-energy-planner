@@ -26,6 +26,7 @@
 .activity-next .activity-row { margin:0; padding:8px 0; border-bottom:1px solid var(--oep-line); }
 .activity-next details.activity-row { padding:0; }
 .activity-next .activity-row > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:40px; padding:6px 0; box-sizing:border-box; font-weight:400; }
+.activity-next .activity-group-toggle > summary { padding-inline:12px; }
 .activity-next h2:not(:first-child) { margin-top:1.5rem; }
 .activity-health-group > :is(h3,h4,h5,h6) { margin:12px 0 4px; font-size:14px; font-weight:600; }
 .activity-group-toggle > summary > h3 { margin:0; font-size:14px; font-weight:600; }
