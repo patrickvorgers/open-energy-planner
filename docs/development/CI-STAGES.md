@@ -146,6 +146,8 @@ base and progress in an **OEP review** PR comment. It applies this order:
 2. If included capacity is available, request one CodeRabbit review of the frozen head.
 3. If CodeRabbit explicitly reports no included capacity, request Kody-ai once
    using `@kody start-review` with `<!-- oep-kody-head:<current-head-sha> -->`.
+   The exact merge-only skip instead selects `@kody review --force`, as described
+   in [Kody-ai alternative](#kody-ai-alternative).
    A positive availability check does not reserve capacity. If the subsequent
    CodeRabbit request is explicitly rate-limited, switch to the same Kody route
    without immediately retrying CodeRabbit.
@@ -359,6 +361,14 @@ skipped, warning, failed, unknown and older-head results do not qualify. The
 latest substantive Kody attempt supersedes earlier Kody evidence on that head.
 An existing automatic-disabled Kody skip does not prevent an explicit orchestrated
 request. It remains metadata only and never supplies substantive review evidence.
+The exact completed current-head Kody skip `Only Merge Commits (All new commits
+identified as merge commits)` also permits the initial CodeRabbit quota check.
+Available CodeRabbit capacity still selects CodeRabbit. Only a confirmed quota
+limit permits one `@kody review --force` request backed by that exact Kody skip.
+The controller rechecks this evidence before publication and retains its one-Kody
+request limit and durable publication recovery. Unknown skips, active work and
+failed checks cannot authorize force. A skipped check never supplies a missing
+substantive review for candidate admission.
 A completed `Code Review Skipped` check whose summary is exactly
 `No New Commits (No changes detected since last review)` is metadata from the
 unchanged revision. It preserves an earlier substantive success on that same

@@ -616,6 +616,112 @@ def test_automatic_disabled_kody_metadata_does_not_block_an_explicit_review():
     assert client.provider_commands() == ["@coderabbitai rate limit"]
 
 
+@pytest.mark.parametrize("availability", [AVAILABLE, LIMITED])
+def test_merge_only_skip_allows_quota_then_one_appropriate_review(availability):
+    """Merge-only metadata prefers available CodeRabbit or permits one forced Kody fallback."""
+    client = GitHubEvidence()
+    client.kody_result("skipped", "Code Review Skipped")
+    client.checks[-1]["output"]["summary"] = (
+        "Only Merge Commits (All new commits identified as merge commits)"
+    )
+    client.run(explicit=True)
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    client.reply(availability)
+    client.run()
+    expected = "@coderabbitai review" if availability == AVAILABLE else "@kody review --force"
+    assert client.provider_commands() == ["@coderabbitai rate limit", expected]
+    client.run(explicit=True)
+    client.run()
+    assert client.provider_commands() == ["@coderabbitai rate limit", expected]
+    if availability == LIMITED:
+        client.kody_result()
+        client.checks[-1]["id"] = 21
+        client.run()
+        assert client.state()["phase"] == "complete"
+
+
+@pytest.mark.parametrize(
+    "mutation", ["unknown", "pending", "failed", "wrong-head", "wrong-app", "wrong-name"]
+)
+def test_merge_only_force_requires_concrete_current_provider_evidence(mutation):
+    """Similar text from incomplete, failed or unrelated checks cannot justify forced review."""
+    client = GitHubEvidence()
+    client.kody_result("skipped", "Code Review Skipped")
+    check = client.checks[-1]
+    check["output"]["summary"] = "Only Merge Commits (All new commits identified as merge commits)"
+    if mutation == "unknown":
+        check["output"]["summary"] += " unknown"
+    elif mutation == "pending":
+        check["status"] = "in_progress"
+    elif mutation == "failed":
+        check["conclusion"] = "failure"
+    elif mutation == "wrong-head":
+        check["head_sha"] = "3" * 40
+    elif mutation == "wrong-app":
+        check["app"]["id"] = 999
+    else:
+        check["name"] = "Unrelated check"
+    if mutation == "wrong-app":
+        client.run(explicit=True)
+        client.reply(LIMITED)
+        client.run()
+        assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    else:
+        with pytest.raises(VerificationError):
+            client.run(explicit=True)
+        assert client.provider_commands() == []
+
+
+@pytest.mark.parametrize(
+    "change", ["before-quota-reply", "before-publication", "before-publication-valid-command"]
+)
+def test_merge_only_force_rechecks_provider_evidence_before_sending(monkeypatch, change):
+    """Changed Kody evidence, including a different valid command, blocks stale force publication."""
+    client = GitHubEvidence()
+    client.kody_result("skipped", "Code Review Skipped")
+    client.checks[-1]["output"]["summary"] = (
+        "Only Merge Commits (All new commits identified as merge commits)"
+    )
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    if change == "before-quota-reply":
+        client.checks[-1]["output"]["summary"] = "Unknown provider state"
+        client.run()
+        assert client.state()["phase"] == "blocked"
+    else:
+        original_post = client.post
+
+        def change_after_intent(path, payload):
+            """Remove force evidence after persisting the one-shot publication intent."""
+            result = original_post(path, payload)
+            if client.state()["phase"] == "sending" and client.state()["target"] == "kody":
+                client.checks[-1]["output"]["summary"] = (
+                    "Automated Review is disabled — Enable 'Automated Code Review' in General Settings"
+                    if change == "before-publication-valid-command"
+                    else "Unknown provider state"
+                )
+            return result
+
+        monkeypatch.setattr(client, "post", change_after_intent)
+        with pytest.raises(VerificationError):
+            client.run()
+        assert client.state()["phase"] == "sending"
+        client.run()
+        assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_external_force_command_prevents_a_second_fallback():
+    """A participant's forced Kody request is ambiguous existing work rather than fallback capacity."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.comment("@kody review --force", "developer", "User")
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody review --force"]
+
+
 def test_manual_kody_request_blocks_before_its_check_is_created():
     """A genuine same-head Kody command is existing work even before a provider check appears."""
     client = GitHubEvidence()
