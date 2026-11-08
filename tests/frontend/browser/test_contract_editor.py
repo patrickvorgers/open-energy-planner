@@ -674,7 +674,7 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     reference = page.get_by_role("button", name="Household", exact=True).evaluate(tab_style)
     inactive_reference = page.get_by_role("button", name="Solar", exact=True).evaluate(tab_style)
 
-    def check_tabs(dialog, active, kind):
+    def check_tabs(dialog, active, kind, keyboard=False):
         """Supplier tabs match the forecast row and keep normal selection separate from keyboard focus."""
         assert active.evaluate(tab_style) == reference
         for tab in dialog.get_by_role("tab").all():
@@ -682,7 +682,9 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
                 reference if tab.get_attribute("aria-selected") == "true" else inactive_reference
             )
             assert tab.evaluate(tab_style) == expected
-        assert active.evaluate("element => getComputedStyle(element).outlineStyle") == "none"
+        assert (
+            active.evaluate("element => getComputedStyle(element).outlineStyle") != "none"
+        ) is keyboard
         assert active.evaluate("element => element.getBoundingClientRect().height") >= 44
         assert dialog.get_by_role("tablist").evaluate(
             "element => {const style = getComputedStyle(element); return style.borderTopWidth === '0px' && style.borderRightWidth === '0px' && style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.columnGap === '24px';}"
@@ -775,6 +777,21 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     check_layout(panel)
     check_tabs(dialog, nextenergy, "bonus")
     nextenergy.press("ArrowRight")
+    budget = dialog.get_by_role("tab", name="Budget Energie", exact=True)
+    expect(budget).to_be_focused()
+    budget_panel = dialog.get_by_role("tabpanel", name="Budget Energie", exact=True)
+    expect(budget_panel).to_be_visible()
+    expect(budget_panel).to_contain_text("0.30 * min(max(market, 0), 0.20)")
+    expect(budget_panel).to_contain_text("Contract anniversary")
+    expect(budget_panel).to_contain_text("2027-01-01")
+    expect(budget_panel.get_by_role("row")).to_have_count(13)
+    check_layout(budget_panel)
+    check_tabs(dialog, budget, "budget", keyboard=True)
+    budget_panel.get_by_role("table").scroll_into_view_if_needed()
+    page.screenshot(
+        path=str(Path("results/ci") / f"budget-monthly-windows-{page.viewport_size['width']}.png")
+    )
+    budget.press("ArrowRight")
     expect(dialog.get_by_role("tab", name="Zonneplan", exact=True)).to_be_focused()
     assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
     assert dialog.evaluate("element => element.getBoundingClientRect().width <= innerWidth")
@@ -1744,3 +1761,45 @@ def test_monthly_bonus_editor_saves_reloads_and_switches_strategy(app_page):
         url + "/v1/contracts", headers={"Authorization": "Bearer " + TOKEN}
     ).json()
     assert "monthly_schedule" not in saved["bonuses"][0]
+
+
+def test_bonus_battery_export_option_round_trips_without_creating_a_second_date(app_page):
+    """Desktop/mobile save and reload the generic export restriction while retaining the supplier anniversary."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/contract")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_price_rule(page)
+    page.get_by_label("Contract starts", exact=True).fill("2026-06-01")
+    page.get_by_label("Price rule starts", exact=True).fill("2027-01-01")
+    page.get_by_role("checkbox", name="Include export bonus", exact=True).check()
+    page.get_by_label("Extra export rate", exact=True).fill("0.30 * min(max(market, 0), 0.20)")
+    page.get_by_label("Annual export cap (kWh)", exact=True).fill("5000")
+    page.get_by_label("Annual reset", exact=True).select_option("contract_anniversary")
+    restriction = page.get_by_role(
+        "checkbox", name="Prevent battery export during paid window", exact=True
+    )
+    restriction.check()
+    save = page.get_by_role("button", name="Save contract", exact=True)
+    expect(save).to_be_enabled()
+    save.click()
+    expect(page.locator("#contract-summary")).to_contain_text("Prevented in planning")
+    response = page.request.get(url + "/v1/contracts", headers={"Authorization": "Bearer " + TOKEN})
+    bonus = response.json()["bonuses"][0]
+    assert bonus["prevent_battery_export"] is True
+    assert (bonus["reset_month"], bonus["reset_day"]) == (6, 1)
+    assert "count_from" not in bonus
+    page.reload()
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_price_rule(page)
+    expect(
+        page.get_by_role("checkbox", name="Prevent battery export during paid window", exact=True)
+    ).to_be_checked()
+    directory = Path("results/ci")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(directory / f"bonus-export-protection-{page.viewport_size['width']}.png"),
+        full_page=True,
+    )

@@ -630,6 +630,11 @@ class ApplianceService:
                         rates=tuple(rule.rates[index] for index in parents),
                         caps_kwh=tuple(rule.caps_kwh[index] for index in parents),
                         periods=tuple(rule.periods[index] for index in parents),
+                        prevent_battery_export=tuple(
+                            rule.prevent_battery_export[index] for index in parents
+                        )
+                        if rule.prevent_battery_export
+                        else (),
                     )
                     for rule in problem.export_bonuses
                 ),

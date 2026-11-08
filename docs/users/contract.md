@@ -37,6 +37,33 @@ Home Assistant history normally establishes the opening volume. If complete hist
 
 Planned export does not consume the measured annual allowance. OEP evaluates proposed scenarios with separate counters. Changing a rule does not reset actual exported energy or create a new allowance automatically.
 
+### Battery export protection
+
+Enable **Prevent battery export during paid window** when your terms prohibit
+using a battery to increase the bonus. During those hours, the planner allows
+batteries to cover residual local demand but prevents discharge while the
+installation exports. The restriction applies to all installation batteries,
+even when the bonus rate is zero or the annual allowance is exhausted.
+Your inverter or Home Assistant automation must enforce the same rule using
+live measurements. This setting plans the restriction. It does not configure
+or verify your physical equipment.
+
+### Budget Energie example
+
+Open **Bonus examples > Budget Energie** for the terms dated 20 October 2026.
+Use `market` as the base export formula and
+`0.30 * min(max(market, 0), 0.20)` as the separate extra rate. The twelve monthly
+clock windows, 5,000 kWh allowance and battery restriction are listed there.
+Copy your import formula from your signed terms. No 2027 import tariff is assumed.
+
+For a contract that started on 1 June 2026, keep that **Contract starts** date
+and add a price rule starting on 1 January 2027 with the bonus enabled.
+The June rule has no bonus. Choose **Contract anniversary** for the annual reset.
+The first allowance runs from 1 January to 1 June 2027. The next runs until
+1 June 2028. Later versions within the same contract do not reset used volume.
+There is no separate date for counting exports. The first bonus date starts it.
+Check eligibility and subsequent supplier changes against your own terms.
+
 ## Inspect price sources
 
 Open **Settings > Installation > Price sources**. Review source availability and the selected preference for each forecast lead bucket. **Automatic** is a source-selection choice. It does not mean a price forecast is guaranteed correct.

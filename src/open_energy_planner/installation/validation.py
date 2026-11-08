@@ -76,7 +76,7 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
     }
     purchase = sale = wear = 0
     groups = {}
-    for step, flow in zip(problem.intervals, plan.flows, strict=True):
+    for interval_index, (step, flow) in enumerate(zip(problem.intervals, plan.flows, strict=True)):
         duration_hours = step.duration_h
         battery_flows = {battery_entry.device_id: battery_entry for battery_entry in flow.batteries}
         inverter_flows = {
@@ -105,6 +105,15 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
         ):
             require(isfinite(value) and -tolerance <= value <= limit + tolerance, "Grid bound")
         require(min(flow.grid_import, flow.grid_export) <= tolerance, "Grid direction")
+        if any(
+            bonus.prevent_battery_export and bonus.prevent_battery_export[interval_index]
+            for bonus in problem.export_bonuses
+        ):
+            require(
+                min(flow.grid_export, sum(battery.discharge_kwh for battery in flow.batteries))
+                <= tolerance,
+                "Battery export during protected bonus window",
+            )
         require(
             close(
                 flow.grid_import

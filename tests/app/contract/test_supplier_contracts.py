@@ -140,7 +140,7 @@ def test_history_after_supplier_switch_does_not_require_the_retired_suppliers_ex
 
 
 def test_retired_legacy_bonus_without_contract_metadata_cannot_block_current_history():
-    """Only the active legacy ID needs a seed, even when both retired/current definitions predate supplier metadata."""
+    """Only the active ID needs a seed from its first activation, even without supplier-start metadata."""
     now = datetime(2027, 3, 3, 12, tzinfo=UTC)
     document = supplier_terms()
     for period in document["periods"]:
@@ -150,7 +150,7 @@ def test_retired_legacy_bonus_without_contract_metadata_cannot_block_current_his
     contract = parse_contract(document, now)
     config, _report, _book = measured_inputs(now=now)
     request = BonusHistory().request(contract, config, None, now)
-    assert request.periods == (("current", datetime(2027, 1, 1, tzinfo=UTC)),)
+    assert request.periods == (("current", datetime(2027, 3, 1, tzinfo=UTC)),)
 
 
 def test_new_actual_supplier_requires_evidence_instead_of_assuming_zero_from_a_late_reading():

@@ -1,9 +1,10 @@
 # Aggregate-export bonuses
 
 Base import cost, base export revenue and bonus income are separate financial
-components. Bonuses apply to total grid export, including battery export. A
-contract requiring source-dependent exclusions is not represented exactly by this
-model. The Dutch examples are not complete supplier presets.
+components. Bonuses apply to total grid export. Optional battery-export protection
+prevents planned battery discharge together with grid export during a paid window.
+It does not attribute measured export to a source. The Dutch examples are not
+complete supplier presets.
 
 ## Modules and ownership
 
@@ -98,9 +99,36 @@ negative, zero and positive market prices. The scope is explicitly
 `rate_and_price_condition_only`. These samples do not pretend to evaluate time
 windows, available quota or actual energy.
 
+## Prevent battery export during paid windows
+
+Set `prevent_battery_export` to true to prohibit planned grid export together
+with discharge from any installation battery while this rule's payment window
+is open. The default is false. This is independent of the price condition and
+remaining annual cap. Disabling the bonus also disables this restriction.
+Batteries can cover residual local demand when the connection does not export.
+PV export and battery charging remain available. All batteries share the same
+connection restriction. Billing refinements retain it and original control groups
+still use equal battery power.
+
+The native solver reuses the grid-direction selector. Independent validation
+rejects a conflicting discharge/export plan before publication. Original input
+snapshots retain the per-segment restriction for replay and forecasting.
+Physical enforcement remains in the user's inverter or HA automation, using
+live measurements. Fixed forecast commands alone cannot guarantee no export
+when consumption or sunlight changes. This setting is not proof of supplier
+eligibility and does not reproduce supplier estimates or penalties.
+
 ## Actual counters versus candidate plans
 
-All exported kWh advance the period counter, including exports outside a payment
+The first allowance starts at the first bonus version's effective date or the
+current annual boundary, whichever is later. An existing supplier start remains
+the annual-reset anchor. Later versions of the same bonus retain that first
+activation and current counter. There is no separate counter-start setting.
+For a supplier contract starting on 1 June 2026, add the first bonus on
+1 January 2027 and select a 1 June reset. Export from 2026 is excluded. The next
+full allowance starts on 1 June 2027.
+
+All exported kWh after bonus activation advance the period counter, including exports outside a payment
 window or at a zero bonus rate. Quota is consumed chronologically, never freely
 allocated to a more profitable later interval. Counters remain uncapped so later
 cap increases retain previously exported volume. A new future contractual period

@@ -14,6 +14,9 @@ class ExportBonus:
     Period keys are absolute reset instants. Initial volume is measured/confirmed
     before the first segment. A new future period starts at zero. Rule changes
     inside one period may change the cap/rate but never reset actual volume.
+    Optional aligned protection flags forbid simultaneous battery discharge and
+    grid export. Empty flags retain unrestricted planning. Settlement still
+    counts aggregate export and does not infer measured energy provenance.
     """
 
     rule_id: str
@@ -21,6 +24,7 @@ class ExportBonus:
     caps_kwh: tuple[float, ...]
     periods: tuple[str, ...]
     initial_kwh: float
+    prevent_battery_export: tuple[bool, ...] = ()
 
     def __post_init__(self):
         """Require bounded immutable aligned arrays and nonnegative finite monetary/energy inputs."""
@@ -39,6 +43,12 @@ class ExportBonus:
             for value in (*self.rates, *self.caps_kwh, self.initial_kwh)
         ):
             raise ValueError("Bonus amounts must be finite and nonnegative")
+        if (
+            not isinstance(self.prevent_battery_export, tuple)
+            or (self.prevent_battery_export and len(self.prevent_battery_export) != len(self.rates))
+            or any(type(value) is not bool for value in self.prevent_battery_export)
+        ):
+            raise ValueError("Battery export protection requires aligned booleans")
         if not all(isinstance(key, str) and key for key in self.periods):
             raise ValueError("Bonus periods must be explicit")
 

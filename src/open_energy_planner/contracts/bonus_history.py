@@ -75,7 +75,8 @@ class BonusHistory:
         active_periods = tuple(
             (identity, versions[0].period_start(now))
             for identity, versions in BonusCompiler().families(contract).items()
-            if versions[0].contract_start is None or versions[0].contract_start <= now
+            if versions[0].effective_from <= now
+            and (versions[0].contract_start is None or versions[0].contract_start <= now)
         )
         periods = tuple(
             (identity, start) for identity, start in active_periods if identity in relevant

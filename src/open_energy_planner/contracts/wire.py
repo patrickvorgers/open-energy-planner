@@ -247,6 +247,7 @@ def parse_bonuses(values, *, installation_timezone=None, periods=(), contract_id
         "start_time",
         "end_time",
         "monthly_schedule",
+        "prevent_battery_export",
     }
     for raw in values:
         if not isinstance(raw, dict) or set(raw) - allowed:

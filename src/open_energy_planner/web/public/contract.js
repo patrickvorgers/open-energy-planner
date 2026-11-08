@@ -256,6 +256,11 @@ function addBonusEditor(parent, period, value, isEnabled) {
     const rates = document.createElement("div"); rates.className = "settings-fields"; box.append(rates);
     inputs.rate_formula = field(rates, "Extra export rate", value.rate_formula ?? "0", "Extra income per kWh. Set eligibility separately with Price condition.");
     inputs.cap_kwh = field(rates, "Annual export cap (kWh)", value.cap_kwh, "All exported kWh count towards this cap, including unpaid export. A new price rule does not reset used volume.");
+    const protectionLabel = document.createElement("label"), protection = document.createElement("input");
+    protection.type = "checkbox"; protection.checked = value.prevent_battery_export === true;
+    protectionLabel.append(protection, document.createTextNode("Prevent battery export during paid window")); box.append(protectionLabel);
+    const protectionHelp = document.createElement("p"); protectionHelp.textContent = "Allows planned battery self-consumption, but never battery discharge together with grid export during this window. Applies even at zero bonus or after the allowance is used. Physical enforcement requires your own inverter or Home Assistant control."; box.append(protectionHelp);
+    inputs.prevent_battery_export = protection;
     conditionEditors.set(inputs, comparisonEditor(box, value.price_condition));
 
     const zone = document.createElement("p"); zone.textContent = `Timezone: ${timezone}: Change it in Home Assistant installation settings.`; box.append(zone);
@@ -285,6 +290,7 @@ function addBonusEditor(parent, period, value, isEnabled) {
 
 function readBonus(inputs, validate = true) {
     const value = Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value.trim()]));
+    value.prevent_battery_export = inputs.prevent_battery_export.checked;
     value.price_condition = conditionEditors.get(inputs)(); value.effective_from = dateValue(inputs.effective_from); value.timezone = timezone;
     const reset = value.reset_basis === "calendar_year" ? "01-01" : value.reset_basis === "existing" ? inputs.reset_basis.dataset.savedDay : inputs.contract_start.value.slice(5);
     if (!value.rule_id || inputs.rule_id.dataset.contractStart !== inputs.contract_start.value) delete value.rule_id;
@@ -308,7 +314,7 @@ function payload() {
     for (const period of periods) {
         const editor = bonusEditors.get(period);
         if (editor.enabled.checked) previous = readBonus(editor.inputs);
-        else if (previous) previous = {...previous, effective_from: dateValue(period.effective_from), rate_formula: "0", price_condition: null, window: "always", start_time: null, end_time: null};
+        else if (previous) previous = {...previous, effective_from: dateValue(period.effective_from), rate_formula: "0", prevent_battery_export: false, price_condition: null, window: "always", start_time: null, end_time: null};
         if (previous && previous.window !== "monthly_schedule") delete previous.monthly_schedule;
         if (!editor.enabled.checked && previous && previousContract !== period.contract_start.value) delete previous.rule_id;
         if (previous) bonusRules.push(previous);
@@ -644,7 +650,7 @@ function renderContractSummary() {
     if (editor.enabled.checked) {
         const condition = conditionEditors.get(bonus)();
         const comparison = comparisonChoices.find(([key]) => key === condition?.operator)?.[1];
-        for (const [label, value] of [["Extra rate", bonus.rate_formula.value], ["Price condition", condition ? `${condition.expression}: ${comparison} ${condition.threshold}` : "None"], ["Paid window", bonus.window.value === "clock" ? `${bonus.start_time.value}–${bonus.end_time.value}` : optionLabel(bonus.window.value)], ["Annual cap", bonus.cap_kwh.value ? `${money(Number(bonus.cap_kwh.value))} kWh` : "Not configured"], ["Annual reset", bonus.reset_basis.selectedOptions[0].textContent]]) contractFact(summary, label, value);
+        for (const [label, value] of [["Extra rate", bonus.rate_formula.value], ["Price condition", condition ? `${condition.expression}: ${comparison} ${condition.threshold}` : "None"], ["Paid window", bonus.window.value === "clock" ? `${bonus.start_time.value}–${bonus.end_time.value}` : optionLabel(bonus.window.value)], ["Annual cap", bonus.cap_kwh.value ? `${money(Number(bonus.cap_kwh.value))} kWh` : "Not configured"], ["Annual reset", bonus.reset_basis.selectedOptions[0].textContent], ["Battery export during paid window", bonus.prevent_battery_export.checked ? "Prevented in planning" : "Allowed"]]) contractFact(summary, label, value);
     }
     const selectedEnd = periods[selectedPeriod + 1]?.effective_from.value;
     find("selected-rule-until").textContent = selectedEnd ? `Until ${dateLabel(selectedEnd)} (exclusive)` : "No end date";

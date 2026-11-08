@@ -286,6 +286,13 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
 | `savings` | `SavingsRuntime` and `PlanValuations`: capture cursor, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
 
+Bonus rule JSON includes optional boolean `prevent_battery_export` (default false).
+Compiled `export_bonuses` retain an aligned boolean tuple under the same name in
+immutable plan input snapshots. True forbids simultaneous battery discharge and
+grid export for that billing segment. It does not change settlement source
+attribution. The first dated bonus activation starts the first counter period.
+Later revisions preserve that activation and the configured annual reset.
+
 These are module-owned JSON contracts, not additional SQL columns. Follow the
 typed stores and wire models for nested fields: the database adapter does not
 interpret devices, formulas or model coefficients. Database URLs, tokens,

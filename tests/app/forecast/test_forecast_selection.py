@@ -864,3 +864,37 @@ def test_child_replay_timeout_is_pending_evidence(monkeypatch):
         sender,
     )
     assert sender.result == {"status": "pending", "issue": "Replay native time limit"}
+
+
+def test_shadow_capture_decodes_and_slices_original_export_protection():
+    """An archived three-slot mask remains aligned when both shadow plans start after the first slot."""
+    from open_energy_planner.savings.context import physical_context
+
+    original, _capture, _terms, _markets, _bindings = shadow_fixture()
+    original["input_snapshot"]["problem"]["export_bonuses"] = [
+        {
+            "rule_id": "protected",
+            "rates": [0, 0, 0],
+            "caps_kwh": [5000, 5000, 5000],
+            "periods": ["year", "year", "year"],
+            "initial_kwh": 0,
+            "prevent_battery_export": [False, True, False],
+        }
+    ]
+    physical = physical_context(original)
+    forecast = DemandForecast(
+        "demand",
+        "history",
+        START,
+        "baseline",
+        tuple(ForecastStep(row.start, 0.25, row.load_kwh) for row in physical.intervals),
+        (),
+    )
+    capture = capture_pair(
+        original,
+        {"family_id": "family", "kind": "demand", "baseline": forecast, "candidate": forecast},
+        START,
+    )
+    assert capture["start_stored"] == {"battery": 0}
+    assert capture["baseline"]["steps"] == capture["candidate"]["steps"]
+    assert capture["baseline"]["steps"][0]["start"] == (START + timedelta(minutes=15)).isoformat()
