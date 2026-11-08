@@ -88,12 +88,39 @@ class ProductBoundary:
                 "sensor.oep_test_boiler_temperature",
             )
         )
+        self.candidates = deepcopy(self.catalogue)
+        self.catalogue["entities"] = [
+            entity
+            for entity in self.catalogue["entities"]
+            if entity["entity_id"].endswith("_energy")
+        ]
         self.setup["catalogue"]["data"]["entities"] = self.catalogue["entities"]
+        self.choice_results = {}
 
     async def request(self, method, path, body=None):
         """Run domain validation at writes and optionally lose the successful HTTP response."""
         self.calls.append((method, path, deepcopy(body)))
         result = None
+        if path.startswith("/v1/ha/source-choices/"):
+            scope = path.rsplit("/", 1)[1]
+            assert scope in ("ev", "thermal")
+            if method == "POST":
+                assert body == {}
+                self.choice_results[scope] = {
+                    **deepcopy(self.catalogue),
+                    "entities": [
+                        deepcopy(entity)
+                        for entity in self.candidates["entities"]
+                        if ("boiler" in entity["entity_id"]) == (scope == "thermal")
+                    ],
+                }
+                return {"pending": True, "failed": False, "catalogue": None}
+            assert method == "GET"
+            return {
+                "pending": False,
+                "failed": False,
+                "catalogue": deepcopy(self.choice_results.get(scope, self.catalogue)),
+            }
         if method == "GET":
             result = {
                 "/v1/setup": self.setup,
@@ -150,7 +177,7 @@ class ProductBoundary:
             assert body["expected_version"] == "ev-version"
             self.ev, selected = configuration(
                 body["configuration"],
-                self.catalogue,
+                self.choice_results.get("ev", self.catalogue),
                 SimpleNamespace(selected=self.selected, options=self.options),
                 SimpleNamespace(state={"devices": self.devices}),
             )
@@ -175,6 +202,24 @@ class ProductBoundary:
 def provision(boundary, path):
     """Restart the actual journal on every invocation, including interruption recovery."""
     asyncio.run(examples.configure(boundary.request, examples.ExampleJournal(path), NOW))
+
+
+def test_energy_only_active_catalogue_uses_scoped_device_choices(tmp_path, monkeypatch):
+    """Unconfigured cars and boiler sources are obtained through choices without enlarging active metadata."""
+    boundary = ProductBoundary()
+    active = deepcopy(boundary.setup["catalogue"])
+    monkeypatch.setattr(examples, "FIXTURE_READY_ATTEMPTS", 1)
+    provision(boundary, tmp_path / "examples.json")
+    assert boundary.setup["catalogue"] == active
+    assert [
+        path
+        for method, path, _ in boundary.calls
+        if method == "POST" and "/source-choices/" in path
+    ] == [
+        "/v1/ha/source-choices/ev",
+        "/v1/ha/source-choices/thermal",
+    ]
+    assert len(boundary.ev["vehicles"]) == 2 and len(boundary.thermal["stores"]) == 1
 
 
 def test_first_start_configures_all_device_types_without_submitting_tasks(tmp_path):
@@ -470,30 +515,152 @@ def test_cached_partial_catalogue_requires_explicit_refresh(tmp_path, monkeypatc
 def test_energy_membership_does_not_admit_missing_device_metadata(tmp_path, monkeypatch, entity):
     """All Energy meters can precede their states. No settings may be written until both arrive."""
     boundary = ProductBoundary()
-    metadata = boundary.setup["catalogue"]["data"]["entities"]
+    metadata = boundary.candidates["entities"]
     delayed = next(row for row in metadata if row["entity_id"] == entity)
     metadata.remove(delayed)
     refreshed = False
+    ready = False
+    scope = "thermal" if "boiler" in entity else "ev"
+    choice_path = "/v1/ha/source-choices/" + scope
 
     async def request(method, path, body=None):
         """Register a refresh request without immediately completing the integration poll."""
         nonlocal refreshed
-        if path == "/v1/setup?refresh=1":
+        if method == "POST" and path == choice_path:
             refreshed = True
-        return await boundary.request(method, path, body)
+        result = await boundary.request(method, path, body)
+        if method == "GET" and path == choice_path and refreshed and not ready:
+            return {"pending": True, "failed": False, "catalogue": None}
+        return result
 
     async def sleep(_seconds):
         """Publish late metadata only after refresh and prove no earlier configuration mutation."""
+        nonlocal ready
         assert refreshed
-        assert all(method == "GET" for method, _, _ in boundary.calls)
+        assert all(
+            method == "GET" or path.startswith("/v1/ha/source-choices/")
+            for method, path, _ in boundary.calls
+        )
         metadata.append(delayed)
+        boundary.choice_results[scope]["entities"].append(deepcopy(delayed))
+        ready = True
 
     monkeypatch.setattr(examples.asyncio, "sleep", sleep)
     asyncio.run(
         examples.configure(request, examples.ExampleJournal(tmp_path / "examples.json"), NOW)
     )
     assert refreshed
+    assert sum(method == "POST" and path == choice_path for method, path, _ in boundary.calls) == 1
     assert len(boundary.devices) == 3 and len(boundary.ev["vehicles"]) == 2
+
+
+@pytest.mark.parametrize("scope", ["ev", "thermal"])
+@pytest.mark.parametrize("outcome", ["failed", "pending", "incomplete", "malformed"])
+def test_choice_failure_never_writes_settings_or_claims_examples(
+    tmp_path, monkeypatch, scope, outcome
+):
+    """One bounded query rejects failed, missing or ambiguous results before any product settings change."""
+    boundary = ProductBoundary()
+    journal_path = tmp_path / "examples.json"
+    choice_path = "/v1/ha/source-choices/" + scope
+    requested = False
+    delays = []
+    monkeypatch.setattr(examples, "FIXTURE_READY_ATTEMPTS", 3)
+
+    async def request(method, path, body=None):
+        """Expose only the chosen failed boundary after the explicit request was accepted."""
+        nonlocal requested
+        result = await boundary.request(method, path, body)
+        if method == "POST" and path == choice_path:
+            requested = True
+        if method == "GET" and path == choice_path and requested:
+            return (
+                {
+                    "pending": outcome == "pending",
+                    "failed": outcome == "failed",
+                    "catalogue": None,
+                }
+                if outcome != "malformed"
+                else {}
+            )
+        return result
+
+    async def sleep(seconds):
+        """Record finite waiting without delaying the suite or permitting settings writes."""
+        delays.append(seconds)
+        assert not boundary.devices and not boundary.selected
+
+    monkeypatch.setattr(examples.asyncio, "sleep", sleep)
+    with pytest.raises(ValueError, match="Development example source choices"):
+        asyncio.run(examples.configure(request, examples.ExampleJournal(journal_path), NOW))
+    assert not journal_path.exists()
+    assert not boundary.devices and not boundary.selected and not boundary.ev["vehicles"]
+    assert not boundary.thermal["stores"]
+    assert all(
+        method == "GET" or path.startswith("/v1/ha/source-choices/")
+        for method, path, _ in boundary.calls
+    )
+    assert sum(method == "POST" and path == choice_path for method, path, _ in boundary.calls) == 1
+    assert delays == ([2, 2] if outcome in ("pending", "malformed") else [])
+
+
+def test_choices_expired_during_profile_work_are_refreshed_before_save(tmp_path):
+    """Long example learning cannot save against expired editor choices or enlarge active metadata."""
+    boundary = ProductBoundary()
+    expired = False
+
+    async def request(method, path, body=None):
+        """Expire both accepted results once while actual profile validation continues."""
+        nonlocal expired
+        result = await boundary.request(method, path, body)
+        if path == "/v1/appliances/history" and not expired:
+            boundary.choice_results.clear()
+            expired = True
+        return result
+
+    asyncio.run(
+        examples.configure(request, examples.ExampleJournal(tmp_path / "examples.json"), NOW)
+    )
+    assert expired
+    for scope in ("ev", "thermal"):
+        assert (
+            sum(
+                method == "POST" and path == "/v1/ha/source-choices/" + scope
+                for method, path, _ in boundary.calls
+            )
+            == 2
+        )
+    assert len(boundary.ev["vehicles"]) == 2 and len(boundary.thermal["stores"]) == 1
+
+
+@pytest.mark.parametrize("scope", ["ev", "thermal"])
+def test_existing_pending_choice_is_reused(scope):
+    """A prior in-flight query completes without another POST or nonce replacement."""
+    boundary = ProductBoundary()
+    choice_path = "/v1/ha/source-choices/" + scope
+
+    async def scenario():
+        """Reuse the accepted request across a fresh caller while observing genuine completion."""
+        await boundary.request("POST", choice_path, {})
+        boundary.calls.clear()
+        reads = 0
+
+        async def request(method, path, body=None):
+            """Expose an existing pending response once before its complete result."""
+            nonlocal reads
+            result = await boundary.request(method, path, body)
+            if method == "GET" and path == choice_path:
+                reads += 1
+                if reads == 1:
+                    return {"pending": True, "failed": False, "catalogue": None}
+            return result
+
+        required = {entity["entity_id"] for entity in boundary.choice_results[scope]["entities"]}
+        await examples.ensure_source_choices(request, scope, required)
+        assert reads == 2
+        assert all(method == "GET" for method, _, _ in boundary.calls)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
