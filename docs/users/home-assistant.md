@@ -87,6 +87,11 @@ Then open **Energy > Planning**. A usable plan requires coherent source configur
 
 OEP publishes virtual advice. Your own HA automation/controller must implement physical actions and preserve manufacturer and electrical safeguards. Integration receipt is not execution confirmation.
 
+Use the [virtual-device sensor reference](virtual-device-sensors.md) for every
+non-diagnostic sensor by device type, its values and units, and how to use it in
+an automation. It also explains command attributes and the differences between
+measurements, forecasts, zero, unknown and unavailable.
+
 Battery fixed-power targets use whole DC watts, positive for discharge and negative for charge. Zero is a real idle target. Unknown and unavailable have different meanings. Follow the [virtual-device contract](../development/VIRTUAL-DEVICES.md) before connecting physical equipment, and the relevant [appliance execution contract](appliances.md) for readiness, claims and feedback.
 
 **Next:** [Configure OEP](configuration.md), then [read the plan](read-your-plan.md).
