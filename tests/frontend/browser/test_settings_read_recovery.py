@@ -78,7 +78,7 @@ def test_cancelled_strategy_read_retains_installation_and_allows_source_retry(ap
 
 
 @pytest.mark.parametrize("flow", ["ev-connect", "thermal-connect", "thermal-evidence"])
-@pytest.mark.parametrize("outcome", ["stall", "error"])
+@pytest.mark.parametrize("outcome", ["stall", "error", "token", "network"])
 def test_ordinary_settings_reads_are_bounded_safe_and_independently_retryable(
     app_page, flow, outcome
 ):
@@ -119,11 +119,12 @@ def test_ordinary_settings_reads_are_bounded_safe_and_independently_retryable(
             if(!String(path).endsWith('v1/'+editor)) return fetchOriginal(path,options);
             window.readSignals.push(Boolean(options.signal));
             window.readTimeouts.push(options.signal ? budgets.get(options.signal) : null);
-            if(outcome==='error'){
-                const response=new Response('PRIVATE-SETTINGS-SENTINEL-'+ 'x'.repeat(10000),{status:500});
+            if(outcome==='error'||outcome==='token'){
+                const response=new Response('PRIVATE-SETTINGS-SENTINEL-'+ 'x'.repeat(10000),{status:outcome==='token'?401:500});
                 response.text=()=>{++window.bodyReads;return Promise.resolve('PRIVATE-SETTINGS-SENTINEL');};
                 return Promise.resolve(response);
             }
+            if(outcome==='network') return Promise.reject(new TypeError('PRIVATE-NETWORK-SENTINEL'));
             return new Promise((resolve,reject)=>options.signal?.addEventListener('abort',()=>reject(new DOMException('PRIVATE-TIMEOUT-SENTINEL','AbortError')),{once:true}));
         };
         window.restoreRead=()=>{window.fetch=fetchOriginal;AbortSignal.timeout=nativeTimeout;};
@@ -134,7 +135,12 @@ def test_ordinary_settings_reads_are_bounded_safe_and_independently_retryable(
     page.wait_for_function("() => window.readSignals.length>0")
     assert page.evaluate("window.readSignals[0]")
     assert page.evaluate("window.readTimeouts") == [30000]
-    expect(page.locator("#status")).to_contain_text("Check the connection and retry")
+    expected = (
+        "The installation token was rejected."
+        if outcome == "token"
+        else "Check the connection and retry"
+    )
+    expect(page.locator("#status")).to_contain_text(expected)
     expect(page.locator("#status")).not_to_contain_text("PRIVATE-")
     assert page.evaluate("window.bodyReads") == 0
     page.evaluate("window.restoreRead()")
@@ -150,3 +156,24 @@ def test_ordinary_settings_reads_are_bounded_safe_and_independently_retryable(
                 exact=True,
             )
         ).to_be_visible()
+
+
+@pytest.mark.parametrize("editor", ["ev", "thermal"])
+def test_rejected_installation_token_explains_recovery_and_accepts_correct_token(app_page, editor):
+    """A real rejected Connect request explains the token failure and permits a corrected retry."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/appliance-settings/" + editor)
+    token = page.get_by_label("Installation API token", exact=True)
+    token.fill("wrong-installation-token")
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#status")).to_have_text("The installation token was rejected.")
+    token.fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(
+        page.get_by_role(
+            "button",
+            name="Add vehicle or charge point" if editor == "ev" else "Add electric boiler",
+            exact=True,
+        )
+    ).to_be_visible()

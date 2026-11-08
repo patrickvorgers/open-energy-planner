@@ -351,7 +351,15 @@ def test_actual_source_refresh_clients_forward_abort_signal_and_retain_drafts(
             const nativeFetch = window.fetch, nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
             window.sourceReads = [];
             window.errorBodyReads = 0;
-            AbortSignal.timeout = milliseconds => nativeTimeout(milliseconds === 65000 ? (scenario === 'status' ? 1200 : scenario === 'apply' ? 200 : 30) : milliseconds);
+            window.sourceBudgets = [];
+            const controllers = new WeakMap();
+            AbortSignal.timeout = milliseconds => {
+                if (milliseconds !== 65000) return nativeTimeout(milliseconds);
+                window.sourceBudgets.push(milliseconds);
+                const controller = new AbortController();
+                controllers.set(controller.signal, controller);
+                return controller.signal;
+            };
             window.fetch = (path, options) => {
                 const refresh = String(path).includes('/ha/');
                 if (!refresh && !(scenario === 'apply' && String(path).endsWith('v1/setup'))) return nativeFetch(path, options);
@@ -371,10 +379,14 @@ def test_actual_source_refresh_clients_forward_abort_signal_and_retain_drafts(
                     record.aborted = true;
                     return Promise.reject(new DOMException('PRIVATE-NETWORK-SENTINEL', 'AbortError'));
                 }
-                return new Promise((resolve, reject) => options.signal?.addEventListener('abort', () => {
-                    record.aborted = true;
-                    reject(new DOMException('PRIVATE-NETWORK-SENTINEL', 'AbortError'));
-                }, {once:true}));
+                return new Promise((resolve, reject) => {
+                    options.signal?.addEventListener('abort', () => {
+                        record.aborted = true;
+                        reject(new DOMException('PRIVATE-NETWORK-SENTINEL', 'AbortError'));
+                    }, {once:true});
+                    // Cancel only after the intended hanging read has installed its listener.
+                    queueMicrotask(() => controllers.get(options.signal).abort());
+                });
             };
         }""",
         scenario,
@@ -391,6 +403,7 @@ def test_actual_source_refresh_clients_forward_abort_signal_and_retain_drafts(
         button.click()
     expected = 2 if scenario in {"status", "apply"} else 1
     page.wait_for_function("count => window.sourceReads.length === count", arg=expected)
+    assert page.evaluate("window.sourceBudgets") == [65000]
     assert page.evaluate("window.sourceReads[0].hasSignal")
     if scenario != "error":
         page.wait_for_function("() => window.sourceReads.at(-1).aborted")
@@ -405,6 +418,7 @@ def test_actual_source_refresh_clients_forward_abort_signal_and_retain_drafts(
     expect(field).to_have_value({"installation": "7.25", "ev": "64", "thermal": "180"}[editor])
     button.click()
     page.wait_for_function("count => window.sourceReads.length === count", arg=2 * expected)
+    assert page.evaluate("window.sourceBudgets") == [65000, 65000]
     if scenario != "error":
         page.wait_for_function("() => window.sourceReads.at(-1).aborted")
     expect(button).to_be_enabled()

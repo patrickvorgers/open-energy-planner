@@ -220,6 +220,9 @@ Only the resulting bounded request/status operations hold that lock.
 Ordinary EV and boiler settings GETs use the existing 30-second read deadline,
 including response decoding. An explicitly supplied source-refresh deadline stays
 authoritative instead of being shortened. Read errors use owned recovery advice.
+EV and boiler editors share one authenticated request helper. HTTP 401 reports
+that the installation token was rejected, independently of connection errors,
+without consuming the rejected response body. Correcting the token permits retry.
 Installation reloads stage their next configuration until the awaited strategy
 read completes. Cancellation retains the previous configuration, readiness and
 any input entered while the read was pending, so another source read can proceed.

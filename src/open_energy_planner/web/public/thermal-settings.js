@@ -7,29 +7,18 @@ import {useHomeAssistantTimezone, sourceName} from "./display.js";
 import {settingsSummary} from "./appliance-settings-detail.js";
 import {identity} from "./identity.js";
 import {sourceRefresh, retainInputs} from "./source-refresh.js";
+import {applianceSettingsApi} from "./appliance-settings-api.js";
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
-const READ_TIMEOUT_MILLISECONDS = 30000;
 let token = "", current = null, draft = {stores: []}, savedVersion = null;
+const api = applianceSettingsApi(base, () => token);
 let selectedId = null, editOriginId = null, editing = false, conflict = false, requestGeneration = 0;
 bindSettingsActions();
 const saveState = new SaveBar({form: "thermal-settings", bar: "thermal-save-bar", save: "save-thermal", discard: "cancel-thermal", status: "thermal-save-state", read: () => draft, canSave: () => editing && !conflict && validDraft()});
 bindApplianceSettingsNavigation(saveState);
 find("cancel-thermal").textContent = "Cancel";
 
-/** Read or write through the existing token/HA-ingress authorization without retaining credentials. */
-async function api(path, body, signal) {
-    signal ??= body ? undefined : AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS);
-    try {
-        const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal});
-        if (!response.ok) { if (signal) throw new Error(); throw new Error(await response.text()); }
-        const data = await response.json(); signal?.throwIfAborted(); return data;
-    } catch (error) {
-        if (signal) throw new Error("Home Assistant data could not be read. Check the connection and retry.");
-        throw error;
-    }
-}
 /** Treat every provider-supplied name and diagnostic as text, never HTML. */
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
 /** Preserve unavailable evidence and format temperature with one decimal by default. */

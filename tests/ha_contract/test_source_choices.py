@@ -31,12 +31,13 @@ def test_candidate_acceptance_never_changes_active_sources_and_expires():
     nonce = owner.choices.request("ev", now)
     assert owner.choices.request("ev", now) == nonce
     assert owner.choices.status("ev", active, now)["catalogue"] is None
-    assert owner.choices.receive({"scope": "ev", "id": nonce, "page": candidates}, now)
+    received = now + timedelta(seconds=30)
+    assert owner.choices.receive({"scope": "ev", "id": nonce, "page": candidates}, received)
     assert owner.value is active
     assert owner.confirmed == now
-    assert len(owner.choices.catalogue("ev", active, now)["entities"]) == 3
-    assert len(owner.choices.catalogue("thermal", active, now)["entities"]) == 2
-    assert owner.choices.catalogue("ev", active, now + timedelta(minutes=5)) is active
+    assert len(owner.choices.catalogue("ev", active, received)["entities"]) == 3
+    assert len(owner.choices.catalogue("thermal", active, received)["entities"]) == 2
+    assert owner.choices.catalogue("ev", active, received + timedelta(minutes=5)) is active
     assert owner.choices.results == {}
 
 
@@ -231,9 +232,23 @@ def test_configured_extra_bindings_are_explicit_and_include_disabled_appliances(
 
 
 @pytest.mark.parametrize("corrupt", [False, True])
-def test_partial_or_corrupt_chooser_pages_retain_previous_complete_choices(corrupt):
+def test_partial_or_corrupt_chooser_pages_retain_previous_complete_choices(corrupt, monkeypatch):
     """Fragment receipt cannot expose a partial list or erase the previous complete choices."""
+    from open_energy_planner.home_assistant.catalogue_transfer import CatalogueTransfer
     from tests.ha_contract.test_catalogue_transfer import snapshot_pages
+
+    transfer_errors = []
+    receive = CatalogueTransfer._receive
+
+    def observe_transfer(self, body, received):
+        """Observe the internal rejection without changing the public fixed diagnostic."""
+        try:
+            return receive(self, body, received)
+        except ValueError as error:
+            transfer_errors.append(str(error))
+            raise
+
+    monkeypatch.setattr(CatalogueTransfer, "_receive", observe_transfer)
 
     now = datetime(2026, 11, 7, tzinfo=UTC)
     owner = HACatalogue()
@@ -247,16 +262,21 @@ def test_partial_or_corrupt_chooser_pages_retain_previous_complete_choices(corru
     replacement["entities"][0]["name"] = "New candidate name"
     replacement["entities"][0]["entity_id"] = "sensor.new_candidate"
     pages = snapshot_pages(replacement, now)
+    if corrupt:
+        # Tamper after hashing while preserving every page identity and revision.
+        pages[1]["items"][0]["name"] = "Tampered candidate name"
     for page in pages[:-1]:
         assert not choices.receive({"scope": "ev", "id": second, "page": page}, now)
         assert choices.catalogue("ev", active, now)["entities"][0]["name"] == "Grid"
     final = pages[-1]
     if corrupt:
-        final["transfer"]["revision"] = "0" * 64
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="^Invalid catalogue transfer$"):
             choices.receive({"scope": "ev", "id": second, "page": final}, now)
+        assert transfer_errors == ["Discovery content mismatch"]
+        assert choices.requests["ev"]["transfer"].pending is None
         assert choices.catalogue("ev", active, now)["entities"][0]["name"] == "Grid"
     else:
+        assert transfer_errors == []
         assert choices.receive({"scope": "ev", "id": second, "page": final}, now)
         records = {
             row["entity_id"]: row for row in choices.catalogue("ev", active, now)["entities"]

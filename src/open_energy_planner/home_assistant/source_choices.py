@@ -67,7 +67,21 @@ class SourceChoices:
         return [{"scope": scope, "id": request["id"]} for scope, request in self.requests.items()]
 
     def receive(self, body, now):
-        """Accept only the requested complete result, never reconciling active source membership."""
+        """Accept chooser pages without changing active source membership or freshness.
+
+        Returns:
+            True when a complete validated result replaces the scope's choices;
+            False for incomplete pages or a reported failure. Completion and
+            reported failure remove the request; incomplete pages retain it.
+
+        Raises:
+            ValueError: The body, scope, nonce, transfer or catalogue is invalid.
+                Expired requests are removed before validation. Other invalid
+                responses retain the request until expiry, failure or acceptance;
+                invalid transfers discard their partial assembly. Previously
+                accepted choices remain available until their own expiry.
+        """
+        # catalogue.py imports SourceChoices, so defer the validator import.
         from open_energy_planner.home_assistant.catalogue import HACatalogue
 
         self._expire(now)
