@@ -18,7 +18,7 @@ from open_energy_planner.solar.calculation.model import (
 from open_energy_planner.solar.calculation.predictor import PVWattsPredictor
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import document, parse_configuration
-from tests.app.solar.test_solar import SITE, plant, weather
+from tests.app.solar.support import SITE, plant, weather
 from tests.database.support.archive import make_store
 
 

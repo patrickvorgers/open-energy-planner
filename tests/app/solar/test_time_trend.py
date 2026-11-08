@@ -183,7 +183,7 @@ def test_production_fit_retains_the_selected_trend_and_does_not_tune_on_its_fina
     from open_energy_planner.solar.boosting import SolarBoostedModel, fit_boosted_model
     from open_energy_planner.solar.calculation.model import SolarEnergy, SolarWeatherHour
     from open_energy_planner.solar.wire import document
-    from tests.app.solar.test_solar import SITE, plant
+    from tests.app.solar.support import SITE, plant
 
     start = datetime(2020, 1, 1, tzinfo=UTC)
     before = datetime(2025, 1, 15, tzinfo=UTC)

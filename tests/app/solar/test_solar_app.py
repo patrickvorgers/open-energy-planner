@@ -1,7 +1,6 @@
 """Authenticated solar configuration, weather and real-solver planning integration."""
 
 import asyncio
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,23 +11,8 @@ from tests.app.contract.support.settings import settings
 from tests.app.demand.test_demand_app import definition
 from tests.app.forecast.support.http import configure_forecasts, running_forecasts
 from tests.app.planning.test_live_app import wait_ready
-from tests.app.solar.test_solar import SITE, plant, weather
+from tests.app.solar.support import fixture_weather, plant
 from tests.database.support.archive import read_document
-
-
-@asynccontextmanager
-async def fixture_weather():
-    """Supply complete normalized solar weather locally, without provider URLs or production HA access."""
-
-    class Source:
-        """Implement the solar-weather port with deterministic physical inputs."""
-
-        async def read(self, location, now):
-            """Return weather at the actual requested site/time, keeping knowledge timestamps consistent."""
-            assert location == SITE
-            return weather(now)
-
-    yield Source()
 
 
 def test_solar_api_projects_two_sources_into_real_plan_and_retains_original_archive(tmp_path):

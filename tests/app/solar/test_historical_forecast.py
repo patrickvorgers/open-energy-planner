@@ -12,7 +12,7 @@ from open_energy_planner.solar.forecast_weather import ForecastWeatherRun
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import document
-from tests.app.solar.test_solar import SITE, plant
+from tests.app.solar.support import SITE, plant
 from tests.database.support.archive import make_store
 
 NOW = datetime(2026, 8, 20, tzinfo=UTC)

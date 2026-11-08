@@ -13,8 +13,8 @@ from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.source_selection import family
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import configuration_document, parse_configuration
+from tests.app.solar.support import SITE, plant, weather
 from tests.app.solar.test_boosting import START, training_data
-from tests.app.solar.test_solar import SITE, plant, weather
 from tests.database.support.archive import make_store
 
 

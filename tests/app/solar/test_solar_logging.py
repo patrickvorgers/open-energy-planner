@@ -16,7 +16,7 @@ from open_energy_planner.solar import api as solar_api
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.weather import OpenMeteoSolarSource
-from tests.app.solar.test_solar import SITE, START, plant, weather
+from tests.app.solar.support import SITE, START, plant, weather
 from tests.app.solar.test_solar_weather import Session
 from tests.database.support.archive import make_store
 

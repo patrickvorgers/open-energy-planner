@@ -10,9 +10,9 @@ import pytest
 from open_energy_planner.solar.wire import configuration_document
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from tests.app.forecast.support.http import configure_forecasts, running_forecasts
-from tests.app.solar.test_history_import import NOW, chunk_report, discover, finish, runtime_case
-from tests.app.solar.test_solar import SITE, weather
-from tests.app.solar.test_solar_app import fixture_weather
+from tests.app.solar.history_support import HISTORY_NOW as NOW
+from tests.app.solar.history_support import chunk_report, discover, finish, runtime_case
+from tests.app.solar.support import SITE, fixture_weather, weather
 
 
 def test_http_settings_save_reuses_validated_years_without_event_loop_chunk_reads(

@@ -18,7 +18,7 @@ from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
 from open_energy_planner.solar.weather import OpenMeteoSolarSource, forecast_weather_query
 from tests.app.demand.test_demand_weather import Response
-from tests.app.solar.test_solar import SITE
+from tests.app.solar.support import SITE
 from tests.database.support.archive import list_documents, make_store
 
 INITIALIZED = datetime(2026, 4, 1, 12, tzinfo=UTC)
@@ -457,7 +457,7 @@ def test_slow_historical_provider_does_not_block_current_forecast():
 def test_new_background_runs_do_not_discard_usable_jobs_and_remain_coalesced(tmp_path, monkeypatch):
     """A worker publishes its captured valid result when only new ordinary training evidence arrives."""
     from open_energy_planner.solar.runtime import SolarRuntime
-    from tests.app.solar.test_solar import plant
+    from tests.app.solar.support import plant
 
     now = INITIALIZED + timedelta(hours=8)
     source = OpenMeteoSolarSource(LatestRunSession())
@@ -502,7 +502,7 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
     from open_energy_planner.solar.runtime import SolarRuntime
     from open_energy_planner.solar.wire import configuration_document
     from tests.app.forecast.support.http import configure_forecasts, running_forecasts
-    from tests.app.solar.test_solar import plant, weather
+    from tests.app.solar.support import plant, weather
 
     monkeypatch.setattr("open_energy_planner.solar.api.SOLAR_WORKER_POLL_SECONDS", 0.01)
     monkeypatch.setattr(SolarRuntime, "_learned_candidates", lambda *_arguments: {})
@@ -675,7 +675,7 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
     """Immutable baseline and candidate provenance uses the captured old service even when live weather changes mid-worker."""
     from open_energy_planner.solar.calculation.predictor import PVWattsPredictor
     from open_energy_planner.solar.runtime import SolarRuntime
-    from tests.app.solar.test_solar import plant
+    from tests.app.solar.support import plant
 
     now = INITIALIZED + timedelta(hours=8)
     source = OpenMeteoSolarSource(LatestRunSession())
@@ -745,7 +745,7 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
 def test_live_49_hour_guard_covers_the_final_partial_planning_hour(tmp_path, monkeypatch, minute):
     """Exactly 49 normalized hours cover every quarter-origin horizon and expiry rejects the next missing boundary."""
     from open_energy_planner.solar.runtime import SolarRuntime
-    from tests.app.solar.test_solar import plant
+    from tests.app.solar.support import plant
 
     received = INITIALIZED + timedelta(hours=8)
     source = OpenMeteoSolarSource(LatestRunSession())

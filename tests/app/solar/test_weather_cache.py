@@ -11,7 +11,7 @@ from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.storage.weather import HistoricalWeatherCache
 from open_energy_planner.solar.weather import ARCHIVE_URL, OpenMeteoSolarSource
 from tests.app.demand.test_demand_weather import Response
-from tests.app.solar.test_solar import SITE
+from tests.app.solar.support import SITE
 from tests.database.support.archive import list_documents, make_store
 
 NOW = datetime(2026, 6, 20, 12, tzinfo=UTC)

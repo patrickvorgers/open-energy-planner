@@ -10,7 +10,10 @@ from open_energy_planner.history.wire import parse_history
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.storage.history import parse_report
-from tests.app.solar.test_solar import plant
+from tests.app.solar.history_support import HISTORY_IDENTITY as IDENTITY
+from tests.app.solar.history_support import HISTORY_NOW as NOW
+from tests.app.solar.history_support import chunk_report, discover, finish, runtime_case
+from tests.app.solar.support import plant
 from tests.database.support.archive import make_store
 
 
@@ -23,68 +26,6 @@ def test_solar_discovers_oldest_statistics_before_requesting_bounded_years(tmp_p
     assert request["basis"] == "solar_history_range"
     assert request["start"] == "1970-01-01T00:00:00+00:00"
     assert request["entity_id"] == "sensor.pv0"
-
-
-NOW = datetime(2026, 1, 10, 12, tzinfo=UTC)
-IDENTITY = {"metadata_id": 7, "source": "recorder", "unit": "kWh"}
-
-
-def runtime_case(tmp_path, *, count=1):
-    """Build synthetic source identities with an actual active-database solar namespace."""
-    store = make_store(tmp_path, SolarStore)
-    store.save(plant(count=count))
-    return SolarRuntime(store)
-
-
-def discover(runtime, now=NOW, *, first="2023-01-01T00:00:00+00:00"):
-    """Install one source's explicit oldest monthly bucket without transporting its hourly years."""
-    pending = runtime.request(now)
-    body = {
-        "basis": "solar_history_range",
-        "request_version": pending["version"],
-        "entity_id": pending["entity_id"],
-        "statistics_identity": IDENTITY,
-        "available_start": first,
-    }
-    report = parse_report(body)
-    runtime.receive(pending["version"], None, now, report=report)
-    return pending
-
-
-def chunk_report(pending, *, gaps=(), empty=False, identity=None, changed_overlap=False):
-    """Generate independent one-kWh hourly increments, preserving requested gaps and the closing overlap."""
-    start, end = (datetime.fromisoformat(pending[key]) for key in ("start", "end"))
-    rows = []
-    instant = start
-    while instant < end and not empty:
-        if instant not in gaps:
-            total = instant.timestamp() / 3600
-            if changed_overlap and instant == start:
-                total += 5
-            rows.append([instant.timestamp(), total, total])
-        instant += timedelta(hours=1)
-    return parse_report(
-        {
-            "request_version": pending["version"],
-            "basis": "solar_history_chunk",
-            "entity_id": pending["entity_id"],
-            "statistics_identity": identity or IDENTITY,
-            "unit": "kWh",
-            "hours": rows,
-        }
-    )
-
-
-def finish(runtime, now=NOW, *, gaps=(), empty_years=()):
-    """Follow explicit annual requests to completion without interpreting empty years as the end."""
-    requests = []
-    while pending := runtime.request(now):
-        assert pending["basis"] == "solar_history_chunk"
-        requests.append(pending)
-        assert len(requests) <= 5
-        report = chunk_report(pending, gaps=gaps, empty=pending["import_year"] in empty_years)
-        runtime.receive(pending["version"], report.history, now, report=report)
-    return requests
 
 
 def test_multiple_years_resume_across_restart_and_refresh_only_the_current_year(tmp_path):
@@ -396,7 +337,7 @@ def test_aggregate_history_can_span_years_while_each_wire_transfer_remains_bound
 
 def test_persistent_quarantine_revokes_old_worker_and_preserves_other_meter_history(tmp_path):
     """A changed source cannot train after restart, while its original rows and an unaffected meter remain available."""
-    from tests.app.solar.test_solar import SITE, weather
+    from tests.app.solar.support import SITE, weather
 
     runtime = runtime_case(tmp_path, count=2)
     discover(runtime)

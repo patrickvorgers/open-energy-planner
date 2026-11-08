@@ -30,7 +30,7 @@ from tests.app.contract.support.settings import settings
 from tests.app.contract.test_contract_bonuses import measured_inputs
 from tests.app.contract.test_contract_prices import NOW, contract, price_series
 from tests.app.demand.test_demand import config
-from tests.app.solar.test_solar import plant
+from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
@@ -39,7 +39,7 @@ def test_solar_import_forecast_and_accuracy_contracts_survive_restart(archive):
     from open_energy_planner.solar.calculation.model import SolarImport, SolarPanel
     from open_energy_planner.solar.runtime import SolarRuntime
     from open_energy_planner.solar.source_selection import choose_sources
-    from tests.app.solar.test_solar import START
+    from tests.app.solar.support import START
     from tests.app.solar.test_source_selection import prediction, provider
 
     engine, _root = archive
@@ -824,8 +824,8 @@ def test_solar_learning_boundary_and_time_trend_replay_after_backend_restart(arc
     from open_energy_planner.solar.boosting import SolarBoostedModel
     from open_energy_planner.solar.trend import YieldTrend
     from open_energy_planner.solar.wire import document
+    from tests.app.solar.support import SITE
     from tests.app.solar.test_boosting import fit_case
-    from tests.app.solar.test_solar import SITE
 
     engine, _root = archive
     result, _history, _physical, weather, now = fit_case()

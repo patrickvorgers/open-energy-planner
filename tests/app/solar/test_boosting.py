@@ -13,7 +13,7 @@ from open_energy_planner.solar.boosting import SolarBoostedModel, fit_boosted_mo
 from open_energy_planner.solar.calculation.model import SolarEnergy, SolarWeatherHour
 from open_energy_planner.solar.trend import YieldTrend
 from open_energy_planner.solar.wire import document
-from tests.app.solar.test_solar import SITE, plant
+from tests.app.solar.support import SITE, plant
 
 START = datetime(2026, 4, 1, tzinfo=UTC)
 
@@ -255,8 +255,8 @@ def runtime_case(tmp_path, *, store=None):
     from open_energy_planner.solar.calculation.predictor import PVWattsPredictor
     from open_energy_planner.solar.runtime import SolarRuntime
     from open_energy_planner.solar.storage import SolarStore
-    from tests.app.solar.test_solar import START as NOW
-    from tests.app.solar.test_solar import weather
+    from tests.app.solar.support import START as NOW
+    from tests.app.solar.support import weather
     from tests.database.support.archive import make_store
 
     configuration = plant(count=2)
@@ -411,8 +411,8 @@ def test_independent_sources_share_one_inverter_cap_without_borrowing_missing_mo
 ):
     """One 0.5 kW converter caps direct source outputs once while absent model sources stay absent."""
     from open_energy_planner.solar.calculation.projection import learned_forecast
-    from tests.app.solar.test_solar import START as NOW
-    from tests.app.solar.test_solar import weather
+    from tests.app.solar.support import START as NOW
+    from tests.app.solar.support import weather
 
     class BoundaryModel:
         """Produce an independently fixed 0.8 kW daytime estimate at the metered boundary."""

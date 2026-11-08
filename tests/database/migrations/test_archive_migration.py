@@ -756,7 +756,7 @@ def test_nonlinear_solar_archive_migrates_and_replays_without_source_database(ro
 
     (source, target), root = route
     SqlPlanRepository(root / "source", engine=source)
-    from tests.app.solar.test_solar import SITE
+    from tests.app.solar.support import SITE
 
     result, history, _physical, weather, now = fit_case(corrupt=True)
     result = replace(

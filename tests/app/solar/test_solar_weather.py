@@ -7,7 +7,7 @@ import pytest
 
 from open_energy_planner.solar.weather import FIELDS, OpenMeteoSolarSource
 from tests.app.demand.test_demand_weather import Response
-from tests.app.solar.test_solar import SITE, START
+from tests.app.solar.support import SITE, START
 
 
 class Session:

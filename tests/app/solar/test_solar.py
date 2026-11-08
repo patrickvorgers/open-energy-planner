@@ -15,8 +15,6 @@ from open_energy_planner.optimization.adapters.highs import HighsSolver
 from open_energy_planner.solar.calculation.model import (
     SolarConfiguration,
     SolarEnergy,
-    SolarInverter,
-    SolarSource,
     SolarWeatherHour,
     horizon,
     version,
@@ -27,44 +25,13 @@ from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import document
 from tests.app.forecast.support.basis import forecast_basis
+from tests.app.solar.support import SITE, START, plant, weather
 from tests.database.support.archive import (
     corrupt_document,
     list_documents,
     make_store,
     read_document,
 )
-
-START = datetime(2026, 6, 20, 0, tzinfo=UTC)
-SITE = SiteLocation(52, 6, "Europe/Amsterdam")
-
-
-def plant(*, count=1, shared=False, limit=5000, tilt=0, orientation="south"):
-    """Declare disjoint 1 kWp sources with explicit standalone or shared inverter ratings."""
-    return SolarConfiguration(
-        tuple(
-            SolarSource(
-                f"pv{index_item}",
-                f"sensor.pv{index_item}",
-                "shared" if shared else f"i{index_item}",
-                1000,
-                orientation,
-                tilt=tilt,
-            )
-            for index_item in range(count)
-        ),
-        (SolarInverter("shared", limit),)
-        if shared
-        else tuple(SolarInverter(f"i{index_item}", limit) for index_item in range(count)),
-    )
-
-
-def weather(now=START, *, days=3, ghi=600):
-    """Provide complete independently fixed hourly radiation and temperature, never external weather."""
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return tuple(
-        SolarWeatherHour(start + timedelta(hours=index_item), ghi, 500, 100, 20, 1, now)
-        for index_item in range(days * 24)
-    )
 
 
 def test_horizontal_noon_power_matches_independent_pvwatts_temperature_arithmetic():

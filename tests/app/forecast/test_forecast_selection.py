@@ -637,7 +637,7 @@ def test_model_family_identity_tracks_location_contract_strategy_and_feature_mod
     from open_energy_planner.storage.adapters.documents import SqlDocuments
     from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
     from tests.app.demand.test_demand import config
-    from tests.app.solar.test_solar import SITE, plant
+    from tests.app.solar.support import SITE, plant
 
     repository = SqlPlanRepository(tmp_path)
     try:
