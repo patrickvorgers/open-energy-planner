@@ -47,7 +47,17 @@ Older plans without frozen source bindings and days without a recorded midnight 
 
 The primary daily error is total predicted minus total measured kWh. Absolute daily error is its magnitude. Relative daily error divides that magnitude by the measured day total. A complete zero-energy day remains measured zero, with no relative percentage. MAE is the average absolute hourly error in kWh. Bias is predicted minus measured kWh per hour. RMSE is the square root of the mean squared hourly error. WAPE is the sum of absolute hourly errors divided by total measured energy. It exposes timing errors that cancel in the daily total. All accuracy metrics are withheld until the entire day is eligible. Coverage separately reports measured hours and comparable hourly pairs.
 
-These descriptive errors do not change the existing automatic model-selection policy. The page reuses its current model, candidate status, completed windows and rejection or waiting reasons. Candidate results show simulated decision costs and grid import with the existing terminal-stock correction. They are not measured savings and are labeled accordingly. The Savings page remains responsible for actually measured savings. Controlled EV and appliance workloads keep the existing financial replay guard because that replay cannot reproduce their changed consumption boundary.
+These daily descriptive errors do not change the existing household decision-selection policy. The page reuses its current model, candidate status, completed windows and rejection or waiting reasons. Candidate results show simulated decision costs and grid import with the existing terminal-stock correction. They are not measured savings and are labeled accordingly. The Savings page remains responsible for actually measured savings. Controlled EV and appliance workloads keep the existing financial replay guard because that replay cannot reproduce their changed consumption boundary.
+
+For selected weather-sensitive devices, Current model and learning additionally
+shows the nonlinear CPU candidate's independent forward-accuracy admission.
+Three saved, disjoint complete days must each improve both simpler alternatives
+by more than 5.0% and 0.001 kWh per hour. The pending day, per-model hourly MAE
+and latest excluded comparison remain visible. This does not replace the
+household financial composition gate. The component's model can remain a shadow
+prediction after passing its accuracy gate. Missing weather, unsupported
+temperature ranges or unusable evidence retain the simpler model. The fixed
+midnight graph continues to use its original forecast.
 
 ## Verification
 
@@ -70,8 +80,8 @@ Independent fixtures prove midnight immutability, intraday replacement rejection
 Device forecasts live on Forecast quality. The shared navigation has one
 forecast destination. The retained `/consumers` link opens this same page with
 the Forecast quality navigation item active. Device selection and weather
-sensitivity remain under Settings > Appliances. The consumer API and forecasting
-models do not change.
+sensitivity remain under Settings > Appliances. Existing consumer configuration
+and forecasting endpoints remain available.
 
 Choose a day above the Household, Solar and Devices section navigation. The date
 applies to every section. Each section displays one selected source at a time.
