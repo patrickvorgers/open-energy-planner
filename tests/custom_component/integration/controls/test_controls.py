@@ -67,15 +67,19 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             )
             await setup_ev(hass, entry)
             coordinator = entry.runtime_data
-            from custom_components.open_energy_planner.catalogue import setup_catalogue
-
-            await coordinator.client.request(
-                "POST", "/v1/ha/catalogue", await setup_catalogue(hass)
-            )
-            coordinator.catalogue_sent = None
-            await coordinator.sync()
             fixture = hass.data[DATA_KEY]
             async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session:
+                async with session.post(url + "/v1/ha/source-choices/ev", json={}) as response:
+                    assert response.status == 200
+                    assert (await response.json())["pending"]
+                await coordinator.sync()
+                async with session.get(url + "/v1/ha/source-choices/ev") as response:
+                    assert response.status == 200
+                    choices = await response.json()
+                assert not choices["pending"] and not choices["failed"]
+                assert {car["soc"] for car in fixture["cars"]} <= {
+                    entity["entity_id"] for entity in choices["catalogue"]["entities"]
+                }
                 async with session.get(url + "/v1/ev") as response:
                     state = await response.json()
                 configuration = {
