@@ -62,12 +62,6 @@ def automatic_plan_overview(app_page, request):
         "current_buy_price": 0.3,
     }
 
-    def comparison_is_held():
-        """Observe route arrival independently of status text rendered before the request."""
-        return bool(state["held_comparisons"])
-
-    page.expose_function("__oepComparisonHeld", comparison_is_held)
-
     def plan_listing(route):
         """Expose a publication only when the controlled archive makes it available."""
         if "limit=1" in route.request.url and "limit=20" not in route.request.url:
@@ -85,6 +79,7 @@ def automatic_plan_overview(app_page, request):
         state["comparison_reads"].append(plan_id)
         if state["hold_comparison"]:
             state["held_comparisons"].append(route)
+            page.evaluate("window.__oepComparisonHeld = true")
         elif plan_id in state["failed_plans"]:
             route.fulfill(status=503, body="Temporary archive failure")
         else:
@@ -139,6 +134,7 @@ def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
     costs = page.locator("#ems-costs").inner_text()
     evidence = page.locator("#plan-evidence").inner_text()
     description = page.locator("#plan-description").inner_text()
+    page.evaluate("window.__oepComparisonHeld = false")
     state["hold_comparison"] = True
     if refresh == "publication":
         state["plans"].insert(0, state["newer"])
@@ -147,7 +143,7 @@ def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#ems-costs [data-benefit-state] dd")).to_have_text(benefit)
     expect(page.locator("#overview-status")).to_contain_text("Showing the previously loaded plan")
-    page.wait_for_function("async () => await window.__oepComparisonHeld()")
+    page.wait_for_function("() => window.__oepComparisonHeld === true")
     assert state["held_comparisons"]
     assert page.locator("#ems-costs").inner_text() == costs
     assert page.locator("#plan-evidence").inner_text() == evidence
