@@ -146,6 +146,8 @@ base and progress in an **OEP review** PR comment. It applies this order:
 2. If included capacity is available, request one CodeRabbit review of the frozen head.
 3. If CodeRabbit explicitly reports no included capacity, request Kody-ai once
    using `@kody start-review` with `<!-- oep-kody-head:<current-head-sha> -->`.
+   The exact merge-only skip instead selects `@kody review --force`, as described
+   in [Kody-ai alternative](#kody-ai-alternative).
    A positive availability check does not reserve capacity. If the subsequent
    CodeRabbit request is explicitly rate-limited, switch to the same Kody route
    without immediately retrying CodeRabbit.

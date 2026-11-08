@@ -672,9 +672,11 @@ def test_merge_only_force_requires_concrete_current_provider_evidence(mutation):
         assert client.provider_commands() == []
 
 
-@pytest.mark.parametrize("change", ["before-quota-reply", "before-publication"])
+@pytest.mark.parametrize(
+    "change", ["before-quota-reply", "before-publication", "before-publication-valid-command"]
+)
 def test_merge_only_force_rechecks_provider_evidence_before_sending(monkeypatch, change):
-    """Changed Kody evidence after discovery or after outbox intent cannot authorize force."""
+    """Changed Kody evidence, including a different valid command, blocks stale force publication."""
     client = GitHubEvidence()
     client.kody_result("skipped", "Code Review Skipped")
     client.checks[-1]["output"]["summary"] = (
@@ -693,7 +695,11 @@ def test_merge_only_force_rechecks_provider_evidence_before_sending(monkeypatch,
             """Remove force evidence after persisting the one-shot publication intent."""
             result = original_post(path, payload)
             if client.state()["phase"] == "sending" and client.state()["target"] == "kody":
-                client.checks[-1]["output"]["summary"] = "Unknown provider state"
+                client.checks[-1]["output"]["summary"] = (
+                    "Automated Review is disabled — Enable 'Automated Code Review' in General Settings"
+                    if change == "before-publication-valid-command"
+                    else "Unknown provider state"
+                )
             return result
 
         monkeypatch.setattr(client, "post", change_after_intent)

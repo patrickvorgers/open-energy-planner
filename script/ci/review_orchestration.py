@@ -307,7 +307,17 @@ def provider_active(checks):
 
 
 def kody_request_command(checks):
-    """Permit one force request only for exact merge-only metadata from the current Kody app."""
+    """Select a Kody command from validated current-head provider checks.
+
+    Returns:
+        The default ``@kody start-review`` command when Kody has no evidence or
+        only automatic-disabled skips. Exact merge-only skips select
+        ``@kody review --force``.
+
+    Raises:
+        VerificationError: Kody has active, completed review or unrecognized
+            skip evidence that requires inspection before another request.
+    """
     command = "@kody start-review"
     for check in checks:
         if check.get("app", {}).get("id") != KODY_APP_ID:
