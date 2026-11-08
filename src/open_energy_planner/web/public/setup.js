@@ -13,6 +13,7 @@ let token = "", ingressSession = false,
     busy = false,
     discoveryTimer;
 let requestedStrategy = null, installationBaseline = null, installationReady = false;
+let configurationGeneration = 0;
 let pendingSolarSources = [];
 /** Include precise drafts and import provenance even when their visible controls are unchanged. */
 const installationValues = () => [[...$("wizard").elements]
@@ -30,6 +31,10 @@ const saveState = new SaveBar({form: "wizard", bar: "installation-save-bar", sav
     ...(priceSettings.dirty ? ["price-sources"] : []),
 ]});
 const layout = new InstallationLayout(saveState, value => { if (!busy) showStep(value); });
+$("edit-installation").addEventListener("click", () => { ++configurationGeneration; });
+for (const type of ["input", "change"]) $("wizard").addEventListener(type, event => {
+    if (!event.target.hasAttribute("data-view-control")) ++configurationGeneration;
+});
 const priceSettings = new PriceSourceSettings(() => { saveState.update(); layout.sync(); });
 const help = {
     energy_entity: "The cumulative battery meter configured in the Energy dashboard. It identifies which battery these measurements and ratings belong to.",
@@ -745,17 +750,21 @@ async function refreshSourceNames(signal) {
 }
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
 async function load(refresh = false, discard = false, signal) {
+    const generation = ++configurationGeneration;
     const nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
+    if (generation !== configurationGeneration) return;
     if (nextConfig.mode !== "home_assistant")
         throw new Error("Installation setup requires Home Assistant mode.");
-    try { await loadStrategy(requestedStrategy === null || refresh || discard, signal); }
+    try { await loadStrategy(requestedStrategy === null || refresh || discard, signal, generation); }
     catch {
         signal?.throwIfAborted();
+        if (generation !== configurationGeneration) return;
         $("strategy-settings").hidden = false;
         $("installation-save-bar").hidden = false;
         $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically.";
         saveState.update("Strategy status unavailable. Retrying automatically.");
     }
+    if (generation !== configurationGeneration) return;
     config = nextConfig;
     installationReady = false;
     refreshPriceSources();
@@ -1012,6 +1021,7 @@ $("next").onclick = async () => {
 $("wizard").onsubmit = (event) => event.preventDefault();
 $("save").onclick = async () => {
     if (busy || !layout.editing || (layout.wizard && ![3, 4, 5].includes(step))) return;
+    ++configurationGeneration;
     busy = true;
     saveState.begin();
     layout.sync();
@@ -1082,8 +1092,9 @@ async function initializeIngress() {
 initializeIngress();
 
 /** Refresh acceptance status. Synchronize editable intent only on initial load, explicit reload or successful save. */
-async function loadStrategy(updateChoice = true, signal) {
+async function loadStrategy(updateChoice = true, signal, generation) {
     const state = await api("/v1/strategy", "GET", undefined, signal);
+    if (generation !== undefined && generation !== configurationGeneration) return;
     if (updateChoice || requestedStrategy === null) {
         requestedStrategy = state.requested;
         $("strategy").value = state.requested;

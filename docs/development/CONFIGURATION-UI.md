@@ -223,9 +223,17 @@ authoritative instead of being shortened. Read errors use owned recovery advice.
 EV and boiler editors share one authenticated request helper. HTTP 401 reports
 that the installation token was rejected, independently of connection errors,
 without consuming the rejected response body. Correcting the token permits retry.
+Write failures never render response bodies, JSON parser errors or transport
+diagnostics. Rejected settings retain the draft and ask for a refresh and review
+before saving. If acknowledgement is lost or unreadable, settings may already be
+saved: reload before retrying rather than assuming the write failed.
 Installation reloads stage their next configuration until the awaited strategy
 read completes. Cancellation retains the previous configuration, readiness and
 any input entered while the read was pending, so another source read can proceed.
+Reloads also retain ownership across awaited reads. Starting another reload,
+entering Edit, changing an installation draft or starting Save supersedes the
+older staged snapshot and strategy read. Late replies cannot replace newer
+settings, revision guards or editable intent; explicit discard starts a new load.
 Temporary candidates expire after five minutes. Refresh them again if a previously
 unconfigured source is no longer available when saving. Large discoveries use the
 [complete snapshot protocol](ENERGY-DASHBOARD.md#complete-discovery-transfers).
