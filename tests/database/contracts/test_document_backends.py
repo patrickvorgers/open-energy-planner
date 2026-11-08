@@ -789,3 +789,31 @@ def test_calculation_index_and_progress_rollback_as_one_write(archive, monkeypat
     monkeypatch.setattr(documents, "read", observe_read)
     assert len(history.day("2026-10-25", "Europe/Amsterdam")) == 1
     assert not any(name.startswith("calculation-") for name in reads)
+
+
+def test_solar_nonlinear_weights_and_training_reports_survive_backend_restart(archive):
+    """Every real backend retains source-bound native weights, immutable cleaning evidence and baseline selection."""
+    from open_energy_planner.solar.boosting import SolarBoostedModel
+    from tests.app.solar.test_boosting import runtime_case
+
+    engine, root = archive
+    runtime, now = runtime_case(root, store=SolarStore(SqlDocuments(engine, "solar")))
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    reference = runtime.learning["pv0"].archive_reference
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    report = restored.documents.read("ml-training-" + reference + ".json")
+    model = report["model"]
+    weights = restored.documents.read("ml-weights-" + model["weights_reference"] + ".json")
+    replay = SolarBoostedModel.restore(
+        {
+            **{key: value for key, value in model.items() if key != "weights_reference"},
+            "model_json": weights["model_json"],
+        }
+    )
+    assert replay == runtime.learning["pv0"].model
+    assert report["summary"]["status"] == "nonlinear_shadow"
+    assert report["summary"]["validation_hours"] >= 28
+    assert restored.current == runtime.configuration
+    choice = restored.documents.read("source-choice-" + runtime.forecast.version + ".json")
+    assert choice["sources"]["pv0"]["active"] == "pvwatts"
+    assert restored.documents.read("ml-training-" + reference + ".json") == report

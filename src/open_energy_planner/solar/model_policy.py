@@ -7,3 +7,7 @@ DEFAULT_GROUND_ALBEDO is the dimensionless ground-reflectance fraction.
 
 DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE = 0.004
 DEFAULT_GROUND_ALBEDO = 0.2
+
+# Hourly MAE gains must exceed both meter-scale noise and a relative improvement.
+MIN_ABSOLUTE_GAIN_KWH = 0.005
+MIN_RELATIVE_GAIN = 0.05
