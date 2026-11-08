@@ -11,6 +11,7 @@ PEER_ROUTES = {
     ("POST", "/v1/settlement"),
     ("POST", "/v1/settlement/bonus-history"),
     ("POST", "/v1/ha/catalogue"),
+    ("POST", "/v1/ha/source-choices"),
     ("POST", "/v1/ha/market-prices"),
     ("PUT", "/v1/enabled"),
     ("POST", "/v1/ack"),

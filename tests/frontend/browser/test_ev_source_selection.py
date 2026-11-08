@@ -158,10 +158,10 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     page.get_by_role("button", name="Edit settings", exact=True).click()
     page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("61")
-    page.get_by_role("button", name="Save settings", exact=True).click()
     assert page.get_by_role("combobox", name="Home Assistant integration", exact=True).evaluate(
         "control => control.validity.valid"
     ), "Integration filter blocked saving a valid explicit SoC source"
+    page.get_by_role("button", name="Save settings", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     saved_vehicle = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
     assert saved_vehicle["soc_entity"] == "sensor.car_charge"

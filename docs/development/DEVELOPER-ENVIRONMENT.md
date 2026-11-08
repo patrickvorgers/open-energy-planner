@@ -151,13 +151,25 @@ For the sidebar, only known pre-dispatch rejections or failures before sending
 allow a corrected retry. Supervisor `unknown_error` responses can represent a
 timeout after applying the option, so they remain ambiguous like unexpected
 response IDs or a lost connection during dispatch.
-Fixture discovery waits for delayed Energy consumers for up to 60 polls, two seconds apart, then fails
-without configuration writes if the required simulator sources remain missing.
-Incomplete discovery requests a catalogue refresh through the existing setup API, which coalesces
-pending requests. This avoids waiting for the integration's five-minute periodic refresh when device
-fixtures finish after the initial Energy discovery. A timeout lists the missing fixture entity IDs.
-Readiness requires both Energy membership and every EV/boiler configuration sensor in the catalogue
-before any example settings are written.
+Fixture discovery waits for delayed Energy consumers for up to 60 polls, two
+seconds apart. An explicit setup refresh requests missing Energy metadata.
+Energy membership remains authoritative for the example consumption meters.
+Unconfigured car and boiler sensors are obtained through separate EV and thermal
+source-choice requests. These choices do not enlarge the active catalogue until
+their configuration is saved. Existing pending queries and usable results are
+reused. The server expires a pending choice request 60 seconds after its creation
+and reports it as failed. A reused pending request may therefore have less time
+remaining. The script's separate outer guard allows at most 60 polls, two seconds
+apart, but stops when the server reports failure or expiry. Failed, incomplete or
+timed-out results stop provisioning before example settings are written. Check
+the HA connection and simulator sources before retrying provisioning.
+
+Choices are checked again immediately before each version-guarded device save,
+so a result that expired during profile learning is refreshed first. Completed
+journal sections and existing user device settings need no new chooser request.
+After resolving a source or connection problem, run the normal developer start
+again. The journal resumes accepted work while preserving user edits and removed
+examples.
 
 The contract uses the documented 2026 Zonneplan example, including the daylight
 export bonus, positive-price condition and 7,500 kWh annual cap. Its initial

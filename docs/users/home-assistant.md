@@ -60,6 +60,21 @@ Check source ownership in Energy, then confirm connection limits, household scal
 
 Choose **Save installation** only after inspecting the review. Wait for confirmation and read the saved summary. A refresh does not save a draft. The [installation guide](installation.md) explains the fields and the strategy choice.
 
+## How sources stay current
+
+After startup, the integration listens for relevant Home Assistant configuration
+changes. It keeps the Energy sources and additional sensors you have configured,
+including EV and boiler measurements. Energy-selected Forecast.Solar installations
+and their panel settings belong to that same selection. Other forecast providers
+are currently unsupported.
+
+Ordinary measurement updates do not reload the source list. There is no periodic
+full scan of every entity. Add/Edit in the appliance settings fetches matching
+choices on demand. Use **Refresh Home Assistant sources** when a new sensor is
+missing. Your unsaved inputs remain intact. If refreshing fails, check that the
+integration is connected and try that action again. A refresh does not save edits
+or change the configured Energy membership.
+
 ## Confirm prices and a plan
 
 Open **Settings > Contract** to check the effective tariff rules. Inspect **Settings > Installation > Price sources** for availability and source preference. The [contract guide](contract.md) explains the distinction between market prices, effective rates and bonuses.

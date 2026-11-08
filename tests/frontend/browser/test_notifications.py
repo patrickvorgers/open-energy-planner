@@ -1,7 +1,7 @@
 """Verify shared actionable notices, authentication, recovery and stale-data handling."""
 
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from playwright.sync_api import expect
@@ -690,6 +690,9 @@ def test_workspace_navigation_does_not_turn_notification_loading_into_a_warning(
 ):
     """Keep the center stable while a new page reads status, then show recovery or a genuine failure."""
     page, url = app_page
+    beginning = datetime(2026, 11, 8, tzinfo=UTC)
+    page.clock.install(time=beginning)
+    page.clock.pause_at(beginning + timedelta(minutes=1))
     held_reads = []
     reading_next_page = False
 
@@ -747,3 +750,86 @@ def test_workspace_navigation_does_not_turn_notification_loading_into_a_warning(
         )
     else:
         expect(center).to_be_hidden()
+
+
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+@pytest.mark.parametrize("previous_active", [False, True])
+def test_workspace_notification_read_deadline_replaces_loading_with_private_safe_recovery(
+    app_page, previous_active
+):
+    """Keep loading at 4,999 ms and withdraw private prior notices at 5,000 ms.
+
+    The literal expectations independently verify the client's native read
+    deadline, NOTIFICATION_READ_TIMEOUT_MILLISECONDS, without importing that
+    production constant as the expected value.
+    """
+    page, url = app_page
+    beginning = datetime(2026, 11, 8, tzinfo=UTC)
+    page.clock.install(time=beginning)
+    page.clock.pause_at(beginning + timedelta(minutes=1))
+    page.add_init_script("""(() => {
+        const nativeFetch=window.fetch;
+        window.fetch=(requestTarget,fetchOptions)=>{
+            if(String(requestTarget).includes('/v1/notifications'))
+                window.notificationDeadlineRead={started:Date.now(),signal:fetchOptions?.signal};
+            return nativeFetch(requestTarget,fetchOptions);
+        };
+    })();""")
+    held_reads = []
+    reading_next_page = False
+
+    def notifications(route):
+        """Hold only the new document's actual read, preserving the supplied native deadline."""
+        if reading_next_page:
+            held_reads.append(route)
+            page.evaluate("window.notificationReadPending = true")
+        else:
+            route.fulfill(json=blocked() if previous_active else {"notifications": []})
+
+    page.route("**/v1/notifications", notifications)
+    with page.expect_response("**/v1/notifications"):
+        page.goto(url + "/workspace?page=/overview")
+    center = page.locator(".notification-center")
+    content = page.frame_locator("#workspace-content")
+    expect(content.locator("#planning-notifications")).to_be_attached()
+    if previous_active:
+        expect(
+            page.get_by_role("button", name="Notifications: 1 active", exact=True)
+        ).to_be_visible()
+    else:
+        expect(center).to_be_hidden()
+    reading_next_page = True
+    open_primary_navigation(page)
+    page.get_by_role("navigation", name="Primary navigation").get_by_role(
+        "link", name="Contract", exact=True
+    ).click()
+    page.wait_for_function("window.notificationReadPending === true")
+    page.wait_for_function("""() => {
+        const content=document.querySelector('#workspace-content').contentDocument;
+        return new URL(content.URL).pathname.endsWith('/contract')&&content.readyState==='complete';
+    }""")
+    read = content.locator("body")
+    assert read.evaluate("() => Date.now()-window.notificationDeadlineRead.started") == 0
+    page.clock.fast_forward(4999)
+    assert read.evaluate("() => Date.now()-window.notificationDeadlineRead.started") == 4999
+    assert read.evaluate("() => window.notificationDeadlineRead.signal.aborted") is False
+    if previous_active:
+        expect(
+            page.get_by_role("button", name="Notifications: 1 active", exact=True)
+        ).to_be_visible()
+    else:
+        expect(center).to_be_hidden()
+    page.clock.fast_forward(1)
+    assert read.evaluate("() => Date.now()-window.notificationDeadlineRead.started") == 5000
+    assert read.evaluate("() => window.notificationDeadlineRead.signal.aborted") is True
+    assert (
+        read.evaluate("() => window.notificationDeadlineRead.signal.reason.name") == "TimeoutError"
+    )
+    page.get_by_role("button", name="Notifications: Status unavailable", exact=True).click()
+    popup = page.get_by_role("dialog", name="Notifications", exact=True)
+    expect(popup).to_contain_text("Notification status is unavailable")
+    expect(popup).not_to_contain_text("Export bonus needs attention")
+    assert popup.get_by_role("link").count() == 0
+    expect(content.get_by_role("region", name="Notifications")).to_be_hidden()
+    for route in held_reads:
+        route.abort()

@@ -9,6 +9,7 @@ from tests.frontend.browser.helpers import (
     discover,
     read_settings,
     show_installation_sources,
+    wait_for_product_reads,
 )
 
 
@@ -195,15 +196,17 @@ def test_late_price_status_cannot_replace_a_confirmed_manual_save(app_page):
 def test_price_status_failure_clears_old_active_claims_and_reports_automatic_retry(app_page):
     """A failed status read must not keep stale source rows labelled active. Retry remains visible on desktop/mobile."""
     page, url = app_page
+    page.clock.install()
     discover(page, url)
     connect(page)
     expect(page.locator("#price-source-list li")).to_have_count(3)
     expect(page.locator("#price-source-availability summary").first).to_have_text(
         "Forecast availability"
     )
+    wait_for_product_reads(page)
     page.route("**/v1/prices", lambda route: route.abort())
-    page.get_by_role("button", name="Home Assistant", exact=True).click()
-    page.get_by_role("button", name="Refresh Home Assistant data").click()
+    with page.expect_request(lambda request: request.url.endswith("/v1/prices")):
+        page.clock.fast_forward(31000)
     show_installation_sources(page)
     expect(page.locator("#price-market")).to_have_text(
         "Price source status unavailable. Retrying automatically."

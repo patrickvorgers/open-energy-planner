@@ -1,8 +1,11 @@
 """Validate bounded app-side HA metadata and Energy source membership without HA drivers."""
 
+import hashlib
+import json
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from math import isfinite
+from uuid import uuid4
 
 from open_energy_planner.demand.calculation.model import EnergyTerm
 from open_energy_planner.home_assistant.catalogue_transfer import (
@@ -11,6 +14,7 @@ from open_energy_planner.home_assistant.catalogue_transfer import (
 )
 from open_energy_planner.home_assistant.names import display_devices
 from open_energy_planner.home_assistant.solar_panels import validate_panel_settings
+from open_energy_planner.home_assistant.source_choices import SourceChoices
 from open_energy_planner.installation.calculation.annual_estimate import annual_estimate
 from open_energy_planner.solar.wire import validate_configuration_suggestions
 
@@ -25,6 +29,7 @@ GENERATED_DEVICE_ID_HEX_LENGTH = 16
 MAX_ENTITY_ID_LENGTH = 127
 MAX_CATALOGUE_FIELD_LENGTH = 160
 CATALOGUE_MAX_AGE_MINUTES = 15
+CATALOGUE_REFRESH_REQUEST_SECONDS = 60
 COUNTRY_BIDDING_AREA_HINTS = {
     "NL": "NL",
     "BE": "BE",
@@ -55,8 +60,13 @@ class HACatalogue:
         """Start explicitly without HA discovery rather than inventing entities."""
         self.value = None
         self.updated = None
+        self.confirmed = None
+        self.revision = None
         self.requested = None
+        self._refresh_started = None
+        self.refresh_failed = False
         self.transfer = CatalogueTransfer()
+        self.choices = SourceChoices()
 
     def receive_page(self, body, now):
         """Keep bounded discovery fragments private until their complete snapshot is assembled."""
@@ -260,14 +270,82 @@ class HACatalogue:
             hints.get("solar_configurations", []), hints["solar_sources"]
         )
         self.value, self.updated = body, now
+        self.confirmed = now
+        self.revision = hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
         self.requested = None
+        self._refresh_started = None
+        self.refresh_failed = False
+
+    def confirm(self, revision, now):
+        """Confirm an unchanged published revision without relabelling its original publication time.
+
+        Only the authenticated HA peer calls this while its event watch is
+        healthy and unchanged. Unknown revisions or pending partial
+        transfers cannot extend freshness. This performs no reconciliation.
+        """
+        if (
+            self.value is None
+            or not isinstance(revision, str)
+            or revision != self.revision
+            or self.transfer.pending is not None
+        ):
+            raise ValueError("Catalogue confirmation does not match published sources")
+        self.confirmed = now
+
+    def _expire_refresh(self, now):
+        """Permit a new explicit retry if an offline peer or lost failure reply leaves a request pending."""
+        if (
+            self.requested is not None
+            and self._refresh_started is not None
+            and now - self._refresh_started >= timedelta(seconds=CATALOGUE_REFRESH_REQUEST_SECONDS)
+        ):
+            self.requested = None
+            self._refresh_started = None
+            self.refresh_failed = True
+
+    def request_refresh(self, now=None):
+        """Coalesce pending requests and permit a fresh explicit retry after a reported failure."""
+        now = now or datetime.now(UTC)
+        self._expire_refresh(now)
+        if self.requested is None:
+            self.requested = str(uuid4())
+            self._refresh_started = now
+            self.refresh_failed = False
+        return self.requested
+
+    def fail_refresh(self, identifier):
+        """Mark only the still-current explicit request unconfirmed, preserving all usable data."""
+        if (
+            not isinstance(identifier, str)
+            or self.requested is None
+            or identifier != self.requested
+        ):
+            raise ValueError("Source refresh request no longer matches")
+        self.requested = None
+        self._refresh_started = None
+        self.refresh_failed = True
+
+    def refresh_status(self, now=None):
+        """Expose compact request progress and publication provenance without returning the catalogue."""
+        self._expire_refresh(now or datetime.now(UTC))
+        return {
+            "id": self.requested,
+            "pending": self.requested is not None,
+            "failed": self.refresh_failed,
+            "revision": self.revision,
+            "published_at": self.updated.isoformat() if self.updated else None,
+            "confirmed_at": self.confirmed.isoformat() if self.confirmed else None,
+        }
 
     def current(self, now):
         """Expose missing/stale discovery explicitly so setup cannot silently use an unknown HA configuration."""
+        self._expire_refresh(now)
         return {
             "data": self.value,
-            "stale": self.updated is None
-            or now - self.updated > timedelta(minutes=CATALOGUE_MAX_AGE_MINUTES),
+            "stale": self.confirmed is None
+            or now - self.confirmed > timedelta(minutes=CATALOGUE_MAX_AGE_MINUTES),
             "refresh_pending": self.requested is not None,
         }
 

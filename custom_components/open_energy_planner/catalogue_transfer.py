@@ -16,6 +16,7 @@ class PreparedCatalogue:
 
     snapshot: dict
     pages: tuple[dict, ...]
+    revision: str
 
 
 def prepare_catalogue(body):
@@ -45,7 +46,10 @@ def prepare_catalogue(body):
     encoded = json.dumps(body, allow_nan=False).encode()
     if len(encoded) <= CATALOGUE_PAGE_BYTES:
         snapshot = deepcopy(body)
-        return PreparedCatalogue(snapshot, (snapshot,))
+        revision = hashlib.sha256(
+            json.dumps(snapshot, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+        return PreparedCatalogue(snapshot, (snapshot,), revision)
     transfer = {
         "id": uuid4().hex,
         "revision": hashlib.sha256(b"").hexdigest(),
@@ -130,7 +134,7 @@ def prepare_catalogue(body):
     ).hexdigest()
     for page in pages:
         page["transfer"]["revision"] = revision
-    return PreparedCatalogue(snapshot, tuple(pages))
+    return PreparedCatalogue(snapshot, tuple(pages), revision)
 
 
 def catalogue_pages(body):

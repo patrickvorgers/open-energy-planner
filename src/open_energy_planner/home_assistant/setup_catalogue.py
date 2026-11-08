@@ -290,6 +290,12 @@ class SetupDiscovery:
         try:
             body = await request.clone(client_max_size=MAX_CATALOGUE_REQUEST_BYTES).json()
             async with self.lock:
+                if isinstance(body, dict) and set(body) == {"confirmed_revision"}:
+                    self.catalogue.confirm(body["confirmed_revision"], datetime.now(UTC))
+                    return web.json_response({"accepted": True})
+                if isinstance(body, dict) and set(body) == {"refresh_failed"}:
+                    self.catalogue.fail_refresh(body["refresh_failed"])
+                    return web.json_response({"accepted": True})
                 body = self.catalogue.receive_page(body, datetime.now(UTC))
                 if body is None:
                     return web.json_response({"accepted": False})
