@@ -363,6 +363,71 @@ def test_activity_data_links_open_the_named_read_only_page(
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_module_details_keep_keyboard_focus_and_open_state_during_live_updates(app_page):
+    """Unrelated live health updates preserve a focused producer and its expanded explanation."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    prices = page.get_by_role("region", name="Prices", exact=True)
+    source = prices.get_by_text("EpexPredictor: Unavailable", exact=True)
+    expect(source).to_be_visible()
+    source.focus()
+    for marker in ("Update before keyboard expansion", "Update after keyboard expansion"):
+        assert page.request.post(
+            url + "/_test/activity-health",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            data={"owner": "models", "state": "available", "detail": marker},
+        ).ok
+        expect(page.locator("#activity-health")).to_contain_text(marker)
+        expect(source).to_be_focused()
+        if marker == "Update before keyboard expansion":
+            source.press("Enter")
+        expect(
+            prices.get_by_text(
+                "NL forecast unavailable. Published prices remain usable.", exact=True
+            )
+        ).to_be_visible()
+    source.press("Enter")
+    detail = prices.get_by_text(
+        "NL forecast unavailable. Published prices remain usable.", exact=True
+    )
+    expect(detail).not_to_be_visible()
+    day = page.get_by_label("Day", exact=True)
+    day.focus()
+    assert page.request.post(
+        url + "/_test/activity-health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"owner": "models", "state": "available", "detail": "Focus stays outside modules"},
+    ).ok
+    expect(page.locator("#activity-health")).to_contain_text("Focus stays outside modules")
+    expect(day).to_be_focused()
+    expect(detail).not_to_be_visible()
+    source.focus()
+    source.press("Enter")
+    expect(detail).to_be_visible()
+    assert page.request.post(
+        url + "/_test/activity-health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={"owner": "prices:epex_predictor:NL"},
+    ).ok
+    expect(source).to_have_count(0)
+    assert page.request.post(
+        url + "/_test/activity-health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        data={
+            "owner": "prices:epex_predictor:NL",
+            "state": "unavailable",
+            "detail": "New producer starts collapsed",
+        },
+    ).ok
+    expect(source).to_be_visible()
+    expect(source).not_to_be_focused()
+    expect(prices.get_by_text("New producer starts collapsed", exact=True)).not_to_be_visible()
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
 @pytest.mark.parametrize(
     "app_page",
     [{"width": 1440, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
@@ -421,13 +486,11 @@ def test_module_status_hierarchy_preserves_collapsed_groups_and_live_states(app_
     expect(price_group).not_to_have_attribute("open", "")
     expect(price_heading).to_be_focused()
     price_heading.press("Enter")
-    prices.get_by_text("EpexPredictor: Available", exact=True).click()
     expect(prices.get_by_text("NL forecast recovered.", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.get_by_label("Activity type").select_option("training")
     expect(page.locator("#activity-list .activity-row")).to_have_count(1)
     expect(page.locator("#activity-status")).to_have_text("")
-    prices.get_by_text("EpexPredictor: Available", exact=True).click()
     expect(prices.get_by_text("NL forecast recovered.", exact=True)).to_be_visible()
     # Switch the one configured market only after withdrawing all previous-area producers.
     for adapter in ("nord_pool", "epex_predictor", "jeroen_nl"):
