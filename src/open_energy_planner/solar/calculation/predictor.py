@@ -58,10 +58,10 @@ class PVWattsPredictor:
             for hour_index, weather_hour in enumerate(weather)
         )
 
-    def quarters(self, configuration, location, weather, *, factors=None):
+    def quarters(self, configuration, location, weather, *, factors=None, hourly_factors=None):
         """Integrate quarter kW arrays into kWh only for callers requiring detailed intervals."""
         dc_power_kw, ac_power_kw = self._power_series(
-            configuration, location, weather, factors=factors
+            configuration, location, weather, factors=factors, hourly_factors=hourly_factors
         )
         return tuple(
             SolarEnergy(
@@ -82,7 +82,7 @@ class PVWattsPredictor:
             for quarter_index in range(SOLAR_STEPS_PER_HOUR)
         )
 
-    def _power_series(self, configuration, location, weather, *, factors=None):
+    def _power_series(self, configuration, location, weather, *, factors=None, hourly_factors=None):
         """Keep quarter kW arrays inside pvlib's adapter. Hourly history avoids temporary energy objects."""
         if not weather:
             return {}, {}
@@ -143,9 +143,15 @@ class PVWattsPredictor:
                 )
             if not np.isfinite(powers).all():
                 raise ValueError("Nonfinite solar model output")
-            dc_power_kw[source.source_id] = (
-                powers / WATTS_PER_KW * (factors or {}).get(source.source_id, 1)
-            )
+            correction = (factors or {}).get(source.source_id, 1)
+            if hourly_factors:
+                correction = np.array(
+                    [
+                        hourly_factors.get((source.source_id, row.start), correction)
+                        for row, _quarter in samples
+                    ]
+                )
+            dc_power_kw[source.source_id] = powers / WATTS_PER_KW * correction
         ac_power_kw = {}
         for inverter in configuration.inverters:
             sources = [
@@ -170,7 +176,9 @@ class PVWattsPredictor:
                 )
         return dc_power_kw, ac_power_kw
 
-    def forecast(self, configuration, location, weather, now, *, calibrations=()):
+    def forecast(
+        self, configuration, location, weather, now, *, calibrations=(), hourly_factors=None
+    ):
         """Integrate physical quarter estimates onto the complete mixed grid without inventing finer weather."""
         usable = tuple(weather_item for weather_item in weather if weather_item.received_at <= now)
         grid = horizon(now)
@@ -185,6 +193,7 @@ class PVWattsPredictor:
             location,
             prediction_weather,
             factors={calibration.source_id: calibration.factor for calibration in calibrations},
+            hourly_factors=hourly_factors,
         )
         by_source = {
             source_item.source_id: tuple(

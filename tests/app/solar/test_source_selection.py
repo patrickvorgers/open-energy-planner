@@ -457,3 +457,142 @@ def test_provider_expiry_is_enforced_between_quarters(tmp_path):
     now = START + timedelta(minutes=7)
     assert runtime.install(runtime.build(runtime.job(now)), now)
     assert runtime.active_model("pv0") == "pvwatts-v2"
+
+
+@pytest.mark.parametrize("requested", ["automatic", "ml"])
+@pytest.mark.parametrize(
+    "challenger_kwh,expected", [(0.4, "ml"), (0.497, "pvwatts"), (0.7, "pvwatts")]
+)
+def test_tree_activation_needs_its_own_forward_days_and_material_gain(
+    tmp_path, requested, challenger_kwh, expected
+):
+    """Three frozen future days admit 0.4 kWh against 0.4 actual, but reject weak/worse alternatives."""
+    store = make_store(tmp_path, SolarStore)
+    configuration = plant()
+    configuration = replace(
+        configuration, sources=(replace(configuration.sources[0], forecast_source=requested),)
+    )
+    fitted = (SimpleNamespace(source_id="pv0"),)
+    history = EnergyHistory(
+        "sensor.pv0",
+        tuple(
+            EnergyHour(START + timedelta(hours=index), index * 0.4, index * 0.4)
+            for index in range(97)
+        ),
+    )
+    for day in range(3):
+        now = START + timedelta(days=day)
+        choose_sources(
+            store, configuration, prediction(now, 0.5), prediction(now, 0.4), fitted, {}, {}, now
+        )
+    now = START + timedelta(days=4, hours=1)
+    policies = {"pv0": "tree-policy-a"}
+    chosen, status = choose_sources(
+        store,
+        configuration,
+        prediction(now, 0.5),
+        prediction(now, challenger_kwh),
+        fitted,
+        {},
+        {"sensor.pv0": history},
+        now,
+        ml_policies=policies,
+    )
+    assert chosen["pv0"][0] == "pvwatts"
+    assert status["pv0"]["complete_days"] == 0
+    assert "collecting" in status["pv0"]["issue"]
+    for day in range(3):
+        captured_at = START + timedelta(days=day)
+        choose_sources(
+            store,
+            configuration,
+            prediction(captured_at, 0.5),
+            prediction(captured_at, challenger_kwh),
+            fitted,
+            {},
+            {},
+            captured_at,
+            ml_policies=policies,
+        )
+    chosen, status = choose_sources(
+        store,
+        configuration,
+        prediction(now, 0.5),
+        prediction(now, challenger_kwh),
+        fitted,
+        {},
+        {"sensor.pv0": history},
+        now,
+        ml_policies=policies,
+    )
+    assert chosen["pv0"][0] == expected
+    assert status["pv0"]["complete_days"] == 3
+    assert status["pv0"]["mae_kwh"]["ml"] == pytest.approx(abs(challenger_kwh - 0.4))
+    changed, changed_status = choose_sources(
+        store,
+        configuration,
+        prediction(now, 0.5),
+        prediction(now, challenger_kwh),
+        fitted,
+        {},
+        {"sensor.pv0": history},
+        now,
+        ml_policies={"pv0": "tree-policy-b"},
+    )
+    assert changed["pv0"][0] == "pvwatts"
+    assert changed_status["pv0"]["complete_days"] == 0
+
+
+@pytest.mark.parametrize(
+    "requested,include_ha,expected",
+    [("automatic", True, "ha"), ("ml", True, "pvwatts"), ("automatic", False, "pvwatts")],
+)
+def test_eligible_ha_when_tree_fails_material_gain(tmp_path, requested, include_ha, expected):
+    """On the same 72 hours, Automatic retains HA at .098 MAE when ML at .096 fails the .005 gain."""
+    store = make_store(tmp_path, SolarStore)
+    configuration = plant()
+    configuration = replace(
+        configuration, sources=(replace(configuration.sources[0], forecast_source=requested),)
+    )
+    fitted = (SimpleNamespace(source_id="pv0"),)
+    policies = {"pv0": "tree-policy-a"}
+    for day in range(3):
+        now = START + timedelta(days=day)
+        choose_sources(
+            store,
+            configuration,
+            prediction(now, 0.5),
+            prediction(now, 0.496),
+            fitted,
+            {"pv0": prediction(now, 0.498).energies} if include_ha else {},
+            {},
+            now,
+            ml_policies=policies,
+        )
+    now = START + timedelta(days=4, hours=1)
+    history = EnergyHistory(
+        "sensor.pv0",
+        tuple(
+            EnergyHour(START + timedelta(hours=index), index * 0.4, index * 0.4)
+            for index in range(97)
+        ),
+    )
+    chosen, status = choose_sources(
+        store,
+        configuration,
+        prediction(now, 0.5),
+        prediction(now, 0.496),
+        fitted,
+        {"pv0": prediction(now, 0.498).energies} if include_ha else {},
+        {"sensor.pv0": history},
+        now,
+        ml_policies=policies,
+    )
+    assert chosen["pv0"][0] == expected
+    assert status["pv0"]["complete_days"] == 3
+    assert status["pv0"]["mae_kwh"]["pvwatts"] == pytest.approx(0.100)
+    assert status["pv0"]["mae_kwh"]["ml"] == pytest.approx(0.096)
+    if include_ha:
+        assert status["pv0"]["mae_kwh"]["ha"] == pytest.approx(0.098)
+    if expected == "ha":
+        assert status["pv0"]["issue"] is None

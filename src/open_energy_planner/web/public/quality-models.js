@@ -6,9 +6,10 @@ export function currentModelRows(current = {}, selection = {}) {
     if (current.household) rows.set("household", {id: "household", scope: "household", label: "Household consumption", active: current.household.model, readiness: current.household.status, issue: current.household.issue});
     const solar = current.solar || {}, consumers = current.consumers || {};
     for (const [index, source] of (solar.configuration?.sources || []).entries()) {
-        const choice = solar.source_selection?.[source.source_id];
-        const readiness = choice ? choice.issue ? "comparison_unavailable" : choice.requested === "automatic" && choice.complete_days < choice.required_days ? "collecting_accuracy_evidence" : "active" : solar.calibration_status?.[source.source_id];
-        rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], issue: solar.history_issues?.[source.entity_id] || solar.issue});
+        const choice = solar.source_selection?.[source.source_id], training = solar.learning?.[source.source_id];
+        const collecting = choice && choice.complete_days < choice.required_days && (choice.requested === "automatic" || choice.requested === "ml" && training?.status === "nonlinear_shadow");
+        const readiness = choice ? collecting ? "collecting_accuracy_evidence" : choice.issue ? "comparison_unavailable" : "active" : solar.calibration_status?.[source.source_id];
+        rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], solarTraining: solar.learning?.[source.source_id], issue: solar.history_issues?.[source.entity_id] || solar.issue});
     }
     for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used, weatherLearning: device.weather_learning});
     for (const selected of consumers.selected || []) if (!rows.has(selected.entity_id)) rows.set(selected.entity_id, {id: selected.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === selected.entity_id)?.name || selected.entity_id, readiness: consumers.result?.status || "waiting_for_history", issue: consumers.history_issues?.[selected.entity_id] || consumers.result?.detail || consumers.issue || "Waiting for usable historical evidence"});
@@ -64,7 +65,17 @@ export function renderCurrentModel(parent, row, expanded = false) {
         paragraph(`Accuracy comparison: ${solar.complete_days} of ${solar.required_days} complete days. Candidates use the same previously forecast hours. Lower mean absolute error is better.`);
         for (const [source, error] of Object.entries(solar.mae_kwh || {})) paragraph(`${names[source]}: Mean absolute error: ${error.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh per hour`);
         if (solar.issue) paragraph(solar.issue);
-        if (row.solarLearning) paragraph(`ML learning: ${optionLabel(row.solarLearning)}`);
+        if (row.solarLearning && !row.solarTraining) paragraph(`ML learning: ${optionLabel(row.solarLearning)}`);
+    }
+    if (row.solarTraining) {
+        const training = row.solarTraining;
+        const names = {nonlinear_shadow: row.solarSelection?.active === "ml" ? "Nonlinear model is active" : "Nonlinear candidate is learning in shadow mode", linear_preferred: "Simpler correction retained", insufficient_clean_history: "Collecting usable training history", training_failed: "Training temporarily unavailable", blocked: "Independent production evidence required"};
+        paragraph(`Solar learning: ${names[training.status] || "Waiting for usable history"}`);
+        paragraph(`Training: ${training.training_hours} daylight hours. Historical validation: ${training.validation_hours} hours from a later, separate week.`);
+        for (const [label, error] of [["PVWatts", training.baseline_mae_kwh], ["Simple correction", training.linear_mae_kwh], ["Nonlinear candidate", training.tree_mae_kwh]]) if (error != null) paragraph(`${label}: Historical mean absolute error: ${error.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh per hour`);
+        for (const [reason, count] of Object.entries(training.excluded_counts || {})) paragraph(`Excluded from learning: ${optionLabel(reason)}: ${count} ${count === 1 ? "hour" : "hours"}. Original measurements are retained.`);
+        if (training.status === "nonlinear_shadow" && row.solarSelection?.active !== "ml") paragraph("The nonlinear candidate must also improve forecasts issued before later measurements. Historical training alone does not activate it.");
+        if (training.issue) paragraph(training.issue);
     }
     for (const issue of new Set([row.issue, model?.issue].filter(Boolean))) paragraph(issue === "Available PV needs uncurtailed, independent production evidence" ? "Model comparison needs independent evidence of available solar production, including production prevented by curtailment." : issue);
     for (const [label, value] of [["Pending comparison ends", model?.pending_until], ["Last evaluated", model?.evaluated_at]]) if (value) paragraph(`${label}: ${when(value)}`);

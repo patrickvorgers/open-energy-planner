@@ -333,7 +333,9 @@ The `solar` namespace additionally owns these JSON contracts:
 | --- | --- |
 | `ha-first-<version>.json` | First normalized observation of exact provider configuration and native AC `steps` with aware `start`, `duration_h` in elapsed hours and `kwh`. Partial sunrise/sunset and native quarter intervals are retained. Contains `observed_at`, nullable `provider_issued_at` and nullable `provider_refreshed_at`. Content identity excludes observation and refresh times. The first record is never rewritten by cache reads. |
 | `ha-receipt-<hash>.json` | Immutable meter `entity_id` and normalized prediction including actual observation/refresh times. Credentials and raw provider payloads are excluded. New real refreshes retain separate provenance. |
-| `source-day-<family>-<local-date>.json` | First forward capture for one measured source/local day. Retains exact UTC `hours`, HA timezone, original configuration/baseline/ML references, original `ha_versions` and per-model hourly kWh values. The family scopes physical source/inverter definitions and location, excluding requested source preference. |
+| `source-day-<family>-<local-date>.json` | First forward capture for one measured source/local day. Retains exact UTC `hours`, HA timezone, original configuration/baseline/ML references, original `ha_versions` and per-model hourly kWh values. The family scopes physical source/inverter definitions and location, excluding requested source preference. Nonlinear model families additionally bind the learning policy, including library/features, cleaning, fitting and gain thresholds. Earlier scalar captures cannot admit a tree candidate. |
+| `ml-weights-<hash>.json` | Immutable nonlinear solar `schema` and bounded native XGBoost CPU `model_json`. The model metadata retains its SHA-256 checksum. Native JSON is structurally validated before loading. No pickle or executable Python objects are stored. |
+| `ml-training-<hash>.json` | Per-source training report with original configuration/location, weather/history references, optional model metadata and `weights_reference`. Metadata binds source/inverter/site, capacity in kWp, training cutoff, actual creation time, library/policy/features, training digest and model checksum. The summary retains daylight training/validation counts, UTC validation bounds, baseline/scalar/tree MAE in hourly kWh, status, excluded reason counts and coalesced UTC exclusion intervals. Raw history/weather are unchanged. |
 | `source-choice-<forecast-version>.json` | Original source-selection statuses, requested/active source, matched comparison days, common-cohort per-model MAE in kWh per hour, required/completed day counts, measurement history version, policy and HA observation references. Choices do not rewrite earlier forecasts or selections when Recorder history changes. |
 
 Selected forecast documents also retain their source selection and HA observation
@@ -352,7 +354,9 @@ require the current revisions, even when predicted values happen to be unchanged
 Source-day captures are written only once every currently usable model covers the
 whole comparison window. Malformed or unreadable optional comparison records
 disable automatic promotion and remain retained. They do not block valid physical
-forecast publication or force a manually selected source to use accuracy evidence.
+forecast publication. Manual HA and legacy scalar choices keep their existing
+accuracy semantics. Nonlinear candidates always require their own complete forward
+evidence and material gain before activation.
 
 Thermal storage uses the existing `planning` namespace. `thermal-state.json`
 selects the complete configuration. Immutable `thermal-state-<digest>.json`
