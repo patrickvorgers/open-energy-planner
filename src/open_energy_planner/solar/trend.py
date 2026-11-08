@@ -117,8 +117,17 @@ def estimate_trend(rows, predictions):
     if (rows[-1][0] - rows[0][0]).total_seconds() / SECONDS_PER_DAY < MIN_TREND_TRAINING_DAYS:
         return None
     months = defaultdict(list)
+    hourly = defaultdict(list)
     for row, predicted in zip(rows, predictions, strict=True):
-        months[(row[0].year, row[0].month)].append((row[0], row[2], max(0.0, float(predicted))))
+        hourly[row[0]].append((row[2], max(0.0, float(predicted))))
+    for instant, forecasts in sorted(hourly.items()):
+        months[(instant.year, instant.month)].append(
+            (
+                instant,
+                sum(value[0] for value in forecasts) / len(forecasts),
+                sum(value[1] for value in forecasts) / len(forecasts),
+            )
+        )
     ratios = defaultdict(list)
     for (year, month), samples in sorted(months.items()):
         actual = sum(sample[1] for sample in samples)

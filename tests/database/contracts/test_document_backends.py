@@ -851,3 +851,51 @@ def test_solar_learning_boundary_and_time_trend_replay_after_backend_restart(arc
     assert replay.predict(weather[-24:], SITE, known_at=now) == model.predict(
         weather[-24:], SITE, known_at=now
     )
+
+
+def test_shared_solar_writers_preserve_one_immutable_content_and_release_transactions(archive):
+    """Concurrent model and forecast-cache writers safely reuse identical content on every backend."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    payload = {"synthetic": True, "values": [0.0, 1.5, 3.0]}
+
+    def write_same_content(_):
+        """Exercise the public immutable write path from independent worker threads."""
+        for _ in range(5):
+            store.archive("concurrent-proof", "same", payload)
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        list(workers.map(write_same_content, range(8)))
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    assert restored.documents.read("concurrent-proof-same.json") == payload
+    with pytest.raises(ValueError, match="Solar evidence archive mismatch"):
+        store.archive("concurrent-proof", "same", {"synthetic": False})
+    store.archive("other-source", "after-conflict", {"retained": True})
+    assert restored.documents.read("other-source-after-conflict.json") == {"retained": True}
+
+
+def test_historical_forecast_assessment_and_original_run_cache_survive_restart(archive):
+    """All backends retain both original forecast receipts and derived admission without new downloads."""
+    from open_energy_planner.solar.backtest import HistoricalForecastAssessment
+    from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
+    from open_energy_planner.solar.weather import forecast_weather_query
+    from open_energy_planner.solar.wire import document
+    from tests.database.support.solar import forecast_evidence
+
+    engine, _root = archive
+    site, run, report = forecast_evidence()
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    store.archive("historical-assessment", "synthetic", document(report))
+    query = forecast_weather_query(site, run.initialized_at)
+    ForecastWeatherCache(store).write(query, run)
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    replay = HistoricalForecastAssessment.restore(
+        restored.documents.read("historical-assessment-synthetic.json")
+    )
+    assert (
+        replay.status == "eligible" and replay.matched_pairs == 384 and replay.unique_hours == 288
+    )
+    assert replay == report
+    assert ForecastWeatherCache(restored).read(query) == run

@@ -273,6 +273,9 @@ def runtime_case(tmp_path, *, store=None):
     store.save(configuration)
     runtime = SolarRuntime(store)
     runtime.set_weather(SITE, conditions)
+    from tests.app.solar.support import frozen_runs
+
+    runtime.set_forecast_runs(SITE, frozen_runs(conditions, SITE, NOW))
     runtime.histories["sensor.pv0"] = EnergyHistory("sensor.pv0", tuple(readings))
     return runtime, NOW
 

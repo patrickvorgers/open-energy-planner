@@ -21,6 +21,7 @@ from open_energy_planner.storage.writes import complete_write
 from .basis import forecast_usable
 from .ha_forecasts import parse_ha_predictions
 from .notifications import explain_solar_problem, solar_forecast_notifications
+from .weather import OpenMeteoSolarSource
 from .weather import solar_weather_factory as default_solar_weather_factory
 from .wire import parse_configuration
 
@@ -397,7 +398,17 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                         and runtime.configuration
                                         and runtime.configuration.sources
                                     ):
-                                        runtime.set_weather(location, weather)
+                                        runtime.set_weather(
+                                            location,
+                                            weather,
+                                            service=source.service
+                                            if isinstance(source, OpenMeteoSolarSource)
+                                            else None,
+                                        )
+                                        if isinstance(source, OpenMeteoSolarSource):
+                                            runtime.set_forecast_runs(
+                                                location, source.forecast_runs
+                                            )
                                         installed = True
                                         if weather:
                                             weather_logger.success(
@@ -468,13 +479,54 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                 events.withdraw("solar-weather")
                         await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
+                async def update_original_runs():
+                    """Import small historical original-run batches independently of current forecast publication."""
+                    history_logger = BackgroundLog(_LOGGER, "Historical solar forecast refresh")
+                    while True:
+                        now = datetime.now(UTC)
+                        async with lock:
+                            location = live.report.location if live.report else None
+                            configured = bool(
+                                runtime.configuration and runtime.configuration.sources
+                            )
+                        if configured and location:
+                            try:
+                                runs = await source.import_runs(location, now)
+                                async with lock:
+                                    if (
+                                        live.report
+                                        and live.report.location == location
+                                        and runtime.configuration
+                                        and runtime.configuration.sources
+                                    ):
+                                        runtime.set_forecast_runs(location, runs)
+                            except Exception as error:
+                                history_logger.exception(
+                                    "Current solar forecasts remain available. Missing historical original forecasts are retried after the import backoff.",
+                                    expected=isinstance(error, ValueError),
+                                    reason="invalid original forecast data"
+                                    if isinstance(error, ValueError)
+                                    else None,
+                                )
+                        await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
+
                 task = asyncio.create_task(update_weather())
+                history_task = (
+                    asyncio.create_task(update_original_runs())
+                    if isinstance(source, OpenMeteoSolarSource)
+                    else None
+                )
                 try:
                     yield
                 finally:
                     task.cancel()
+                    if history_task is not None:
+                        history_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
+                    if history_task is not None:
+                        with suppress(asyncio.CancelledError):
+                            await history_task
 
         app.cleanup_ctx.append(weather_lifecycle)
     app.router.add_get("/v1/solar", settings)

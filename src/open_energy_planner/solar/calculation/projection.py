@@ -50,17 +50,20 @@ def integrate_intervals(rows, now, source_ids):
     return tuple(energies)
 
 
-def learned_forecast(configuration, location, weather, now, models):
+def learned_forecast(configuration, location, weather, now, models, *, planning_origin=None):
     """Predict boundary production without PVWatts, then apply declared converter limits.
 
     AC predictions imply standalone-equivalent DC through declared efficiency.
     This does not reconstruct curtailed/clipped panel potential or hybrid routes.
     A shared inverter receives one common cap after every source prediction.
     Missing model or weather coverage never borrows another model's production.
+    Historical replay may supply a separate simulated planning origin. The
+    forecast creation and provider knowledge times remain the actual ``now``.
     """
     if not models:
         return None
-    grid = horizon(now)
+    origin = planning_origin if planning_origin is not None else now
+    grid = horizon(origin)
     first, end = grid[0][0], grid[-1][0] + timedelta(hours=grid[-1][1])
     usable = tuple(row for row in weather if row.received_at <= now)
     future = tuple(
@@ -117,7 +120,7 @@ def learned_forecast(configuration, location, weather, now, models):
         location,
         now,
         version([row.__dict__ for row in usable]),
-        integrate_intervals(rows, now, tuple(models)),
+        integrate_intervals(rows, origin, tuple(models)),
         model="solar-xgboost-production-v2",
         quality="shadow",
         calibration_versions=tuple(model.version for model in models.values()),

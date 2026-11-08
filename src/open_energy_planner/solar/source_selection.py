@@ -9,6 +9,12 @@ from zoneinfo import ZoneInfo
 from open_energy_planner.forecast_quality.calculation.metrics import integral
 from open_energy_planner.forecast_quality.daily import day_window
 from open_energy_planner.prices.model import aware
+from open_energy_planner.solar.backtest import (
+    BacktestStatus,
+    HistoricalForecastAssessment,
+    evidence_family,
+    scheduled_runs,
+)
 from open_energy_planner.solar.calculation.model import (
     MAX_SOLAR_ENERGY_KWH,
     ForecastSource,
@@ -18,6 +24,7 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
+from open_energy_planner.solar.forecast_weather import FORECAST_WEATHER_POLICY
 from open_energy_planner.solar.learning import learning_interval, unrestricted_interval
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
 from open_energy_planner.solar.wire import document
@@ -144,6 +151,7 @@ def family(configuration, source, location, *, learned_policy=None):
             "source": source_definition,
             "inverter": asdict(inverter),
             "location": asdict(location),
+            "weather_policy": FORECAST_WEATHER_POLICY,
             **({"learned_policy": learned_policy} if learned_policy else {}),
         }
     )
@@ -195,6 +203,7 @@ def choose_sources(
     ha_references=None,
     ha_configuration_versions=None,
     ml_policies=None,
+    historical_assessments=None,
 ):
     """Freeze next-day forecasts before outcomes, then rank identical completed days by hourly MAE.
 
@@ -334,6 +343,7 @@ def choose_sources(
             if len(cohorts) == MIN_ACCURACY_DAYS:
                 break
         scores = {}
+        admission_basis = "captured_forecasts"
         eligibility_issue = eligibility(configuration, source)
         issue = eligibility_issue or evidence_issue
         if len(cohorts) == MIN_ACCURACY_DAYS and issue is None:
@@ -346,6 +356,30 @@ def choose_sources(
                 / sum(len(values) for _record, values in cohorts)
                 for model in models
             }
+        assessment = (historical_assessments or {}).get(source_id)
+        if (
+            not scores
+            and issue is None
+            and ForecastSource.ML in models
+            and isinstance(assessment, HistoricalForecastAssessment)
+            and assessment.status == BacktestStatus.ELIGIBLE
+            and assessment.created_at <= now
+            and assessment.run_initializations == scheduled_runs(now)
+            and assessment.source_family
+            == evidence_family(
+                configuration, source, baseline.location, (ml_policies or {}).get(source_id)
+            )
+            and assessment.model_policy == (ml_policies or {}).get(source_id)
+        ):
+            scores = {
+                ForecastSource.PVWATTS: fsum(
+                    score.baseline_mae_kwh for score in assessment.per_origin
+                )
+                / len(assessment.per_origin),
+                ForecastSource.ML: fsum(score.service_mae_kwh for score in assessment.per_origin)
+                / len(assessment.per_origin),
+            }
+            admission_basis = "historical_forecast_backtest"
         preference = source.forecast_source
         chosen = (
             min(scores, key=scores.get)
@@ -390,7 +424,10 @@ def choose_sources(
             "active": chosen,
             "mae_kwh": scores,
             "complete_days": len(cohorts),
-            "required_days": MIN_ACCURACY_DAYS,
+            "required_days": 0
+            if admission_basis == "historical_forecast_backtest"
+            else MIN_ACCURACY_DAYS,
+            "admission_basis": admission_basis,
             "comparison_days": [record["day"] for record, _values in cohorts],
             "history_version": version(document(history)) if history else None,
             "issue": issue

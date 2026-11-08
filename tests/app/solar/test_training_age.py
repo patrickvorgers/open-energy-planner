@@ -45,6 +45,16 @@ def test_training_age_does_not_change_equal_condition_influence():
     assert predict_rows(_train(reversed_yield), rows) == pytest.approx([0.5] * len(rows), abs=0.001)
 
 
+def test_multiple_forecast_realizations_share_one_measurements_training_weight():
+    """Ten forecasts paired to one low reading cannot outweigh one high reading at another hour."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    features = sample(start, 0.5)[3]
+    rows = ((start, None, 0.2, features),) * 10 + (
+        (start + timedelta(hours=1), None, 0.8, features),
+    )
+    assert predict_rows(_train(rows), rows) == pytest.approx([0.5] * 11, abs=0.001)
+
+
 def test_multiyear_history_recovers_a_season_missing_from_the_latest_year():
     """Earlier winters teach low winter yield that a latest-year summer-only sample cannot reveal."""
     start = datetime(2022, 1, 1, 12, tzinfo=UTC)

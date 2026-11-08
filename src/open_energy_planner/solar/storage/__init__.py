@@ -5,6 +5,9 @@ per receipt. Retention remains indefinite. Capacity monitoring and storage sizin
 remain release work, and no SD-card capacity guarantee is implied.
 """
 
+from contextlib import contextmanager
+from threading import RLock
+
 from open_energy_planner.solar.calculation.model import version
 from open_energy_planner.solar.wire import configuration_document, parse_configuration
 
@@ -18,6 +21,7 @@ class SolarStore:
     def __init__(self, documents):
         """Restore validated settings. Corrupt retained settings are an explicit fault, not absent PV."""
         self.documents = documents
+        self._writes = RLock()
         self.current, self.issue = None, None
         try:
             pointer = "current.json"
@@ -37,22 +41,40 @@ class SolarStore:
 
     def archive(self, kind, ref, value):
         """Reuse exact immutable evidence. Never overwrite a conflicting saved version."""
-        target = f"{kind}-{ref}.json"
-        if self.documents.exists(target):
-            if self.documents.read(target) != value:
-                raise ValueError("Solar evidence archive mismatch")
-        else:
-            self.documents.write(target, value)
+        with self.transaction():
+            target = f"{kind}-{ref}.json"
+            if self.documents.exists(target):
+                if self.documents.read(target) != value:
+                    raise ValueError("Solar evidence archive mismatch")
+            else:
+                self.documents.write(target, value)
+
+    @contextmanager
+    def transaction(self):
+        """Serialize weather-cache and model-worker writes before starting their shared SQL transaction."""
+        with self._writes, self.documents.transaction():
+            yield
 
     def save(self, configuration):
         """Archive configuration before atomically installing its active pointer."""
-        with self.documents.transaction():
+        with self.transaction():
             self.archive(
                 "configuration", configuration.version, configuration_document(configuration)
             )
             self.documents.write("current.json", configuration.version)
 
         self.current, self.issue = configuration, None
+
+    def archive_model(self, model):
+        """Retain validated native weights once and return detached source-bound model metadata."""
+        from open_energy_planner.solar.wire import document
+
+        metadata = document(model)
+        weights = {"schema": model.schema, "model_json": metadata.pop("model_json")}
+        reference = version(weights)
+        self.archive("ml-weights", reference, weights)
+        metadata["weights_reference"] = reference
+        return metadata
 
     def archive_series(self, kind, ref, rows, *, entity=None):
         """Reuse unchanged daily evidence blocks instead of copying an annual history on each refresh.

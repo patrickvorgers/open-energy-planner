@@ -145,7 +145,7 @@ class SolarHistoryImport:
             "incoming_reference": reference,
         }
         fault_reference = version(fault)
-        with self.store.documents.transaction():
+        with self.store.transaction():
             self.store.archive("history-import-fault", fault_reference, fault)
             self.store.documents.write(
                 "history-import-quarantine-" + self._cohort_key(entity) + ".json", fault_reference
@@ -445,7 +445,7 @@ class SolarHistoryImport:
                 self._quarantine(entity, "history-import-chunk", reference)
                 raise
         reference = version(proposed)
-        with self.store.documents.transaction():
+        with self.store.transaction():
             self.store.archive("history-import", reference, proposed)
             self.store.documents.write(
                 "history-import-current-" + self._cohort_key(entity) + ".json", reference

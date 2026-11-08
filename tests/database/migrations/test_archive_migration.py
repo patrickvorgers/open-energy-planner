@@ -743,12 +743,16 @@ def test_finite_calculation_progress_transfers_without_source_dependency(route):
 
 def test_nonlinear_solar_archive_migrates_and_replays_without_source_database(route):
     """Every backend route preserves native trees and raw validation/exclusion evidence for source-independent replay."""
+    from open_energy_planner.solar.backtest import HistoricalForecastAssessment
     from open_energy_planner.solar.boosting import SolarBoostedModel
     from open_energy_planner.solar.calculation.model import version
     from open_energy_planner.solar.storage import SolarStore
+    from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
     from open_energy_planner.solar.trend import YieldTrend
+    from open_energy_planner.solar.weather import forecast_weather_query
     from open_energy_planner.solar.wire import document
     from tests.app.solar.test_boosting import fit_case
+    from tests.database.support.solar import forecast_evidence
 
     (source, target), root = route
     SqlPlanRepository(root / "source", engine=source)
@@ -767,9 +771,20 @@ def test_nonlinear_solar_archive_migrates_and_replays_without_source_database(ro
     report = {"model": model, "summary": document(result.summary)}
     store.archive("ml-training", result.model.version, report)
     store.archive("history", "original", document(history))
+    forecast_site, original_run, assessment = forecast_evidence()
+    forecast_query = forecast_weather_query(forecast_site, original_run.initialized_at)
+    ForecastWeatherCache(store).write(forecast_query, original_run)
+    store.archive("historical-assessment", "synthetic", document(assessment))
     migrate_archive(source, target, overwrite_target=True)
     source.dispose()
     restored = SolarStore(SqlDocuments(target, "solar"))
+    assert ForecastWeatherCache(restored).read(forecast_query) == original_run
+    assert (
+        HistoricalForecastAssessment.restore(
+            restored.documents.read("historical-assessment-synthetic.json")
+        )
+        == assessment
+    )
     copied = restored.documents.read("ml-training-" + result.model.version + ".json")
     assert copied == report
     assert restored.documents.read("history-original.json") == document(history)

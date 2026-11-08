@@ -345,6 +345,40 @@ independent of the source's confirmed unrestricted production interval.
 
 The `solar` namespace additionally owns these JSON contracts:
 
+Original forecast runs under `forecast-weather-*` supply historical forecast
+training and assessment. Retained `weather-cache-*` reanalysis is diagnostic
+evidence only; its receipt is not a forecast issue or publication time.
+
+The public learning report distinguishes `training_hours` (unique physical
+production hours) from `training_samples` (forecast/measurement pairs). Pairs
+sharing a measured hour share that hour's total training weight of one.
+Its `historical_assessment` retains status (`eligible`, `insufficient_history`
+or `not_improved`), policy, weather model, predetermined run
+initializations, per-origin scores, simulated windows, matched-pair and unique-hour
+counts, actual creation time and owned issue. Each window binds run initialization,
+simulated origin/exclusive end, origin delay, matched hours and baseline/model/
+served-forecast MAE in kWh per hour, training end, actual model creation time,
+training reference and original weather-run reference. `per_origin` retains the same errors and
+matched-pair count for each delay group. Simulated origins are not publication
+timestamps. A complete assessment has 384 pairs over 288 unique production hours.
+For a shared inverter, evidence identity also binds the neighboring source
+definitions and relevant production histories because their predictions share a
+conversion limit. A source on an independent inverter does not reset this proof.
+
+`source_selection.admission_basis` distinguishes `historical_forecast_backtest`
+from `captured_forecasts`. Historical admission has `required_days` zero;
+`complete_days` still counts only actual captured days. The current
+`weather_service` exposes model, newest-available selection, nullable run
+initialization, actual receipt, nullable provider publication and policy without
+inventing missing provider metadata.
+
+`SolarStore.transaction()` acquires the shared store instance's reentrant write
+lock before opening the SQL document transaction. Weather-cache, history-import,
+configuration, model and assessment writes use that ordering. Nested immutable
+archive writes reuse the lock and transaction. This serializes those workers in
+one app instance; it is not a distributed lock between app processes. Provider
+HTTP requests and native fitting run outside the write lock.
+
 | Document name | Contents and semantics |
 | --- | --- |
 | `ha-first-<version>.json` | First normalized observation of exact provider configuration and native AC `steps` with aware `start`, `duration_h` in elapsed hours and `kwh`. Partial sunrise/sunset and native quarter intervals are retained. Contains `observed_at`, nullable `provider_issued_at` and nullable `provider_refreshed_at`. Content identity excludes observation and refresh times. The first record is never rewritten by cache reads. |
@@ -359,6 +393,12 @@ The `solar` namespace additionally owns these JSON contracts:
 | `weather-cache-data-<hash>.json` | Complete normalized historical weather month prefix in the existing daily-block manifest format. Values omit receipt timestamps and reuse immutable daily `block-<hash>.json` documents. The reference binds the complete logical query and normalized values. A month contains at most 744 hours and may require 32 daily blocks because end-labelled radiation normalizes to the preceding hour. Missing or malformed hours cannot establish complete cache coverage. |
 | `weather-cache-receipt-<hash>.json` | Immutable historical weather cache provenance with logical prefix `query`, `data_reference` and ordered actual `requests`. Every actual request retains its exact endpoint/query dates/parameters, normalization revision, normalized units and original `received_at`. A suffix-only extension remains a separate actual fetch. Old normalized values and receipt times do not change when a prefix extends. Receipt time is actual retrieval, not historical issuance. |
 | `weather-cache-index-<family-hash>.json` | Atomically advanced pointer for one provider, site, parameter, normalization and calendar-month family. A valid complete prefix can extend only through missing calendar dates. Complete closed months are reused across restart. Endpoint, model/run metadata when present, field, unit, timezone or site changes select a different family. Failed, partial, conflicting or corrupt input cannot advance coverage. Current forecast transport is separate. |
+| `forecast-weather-data-<hash>.json` | Original normalized ECMWF IFS Single Runs weather in the shared immutable daily-block manifest format. Content identity binds the complete normalized query and original hourly values. Values omit receipt times; the separate receipt restores them. Complete runs can be reused by different simulated origins without duplicating the physical weather. Reanalysis is not substituted. |
+| `forecast-weather-receipt-<hash>.json` | Immutable exact `query`, `data_reference`, model, `initialized_at`, actual `received_at`, nullable `available_at`, location version and forecast policy version. Historical publication can be unknown. Simulated origins never replace initialization or real receipt times. Model creation also retains its actual timestamp. |
+| `forecast-weather-index-<query-hash>.json` | Atomic first-accepted pointer for the full endpoint/model/site/run/query/normalization identity. Retraining and restart reuse original accepted data and receipt. Read/write validates original values, complete coverage and query agreement. Incomplete or changed responses cannot silently replace accepted evidence. |
+| `historical-fit-<hash>.json` | Immutable chronological replay fit with actual model metadata, separate `weights_reference`, training summary, simulated-origin cutoff and original forecast-run references. Model creation retains its actual clock. The original fit and weights are not relabelled as a model created in the past. |
+| `historical-assessment-<hash>.json` | Immutable typed assessment for one source/model-policy family and predetermined run schedule. Retains original windows, training/model/run references, actual creation time and issue. Restore validates the checksum and rederives status, matched-pair/unique-hour counts and per-origin scores from the window evidence. A stored eligibility flag cannot independently admit a model. Invalid retained evidence causes learning failure and physical fallback, rather than publishing a fourth assessment status or overwriting the original. |
+| `historical-assessment-current-<input-digest>.json` | Atomic pointer to an assessment, keyed by source/configuration/site/model-policy family, deterministic origins, relevant earlier production history and original run references. Changes after the last test horizon do not alter the assessment's input identity. Restart can reuse matching immutable evidence; changed inputs select another identity. |
 | `source-choice-<forecast-version>.json` | Original source-selection statuses, requested/active source, matched comparison days, common-cohort per-model MAE in kWh per hour, required/completed day counts, measurement history version, policy and HA observation references. Choices do not rewrite earlier forecasts or selections when Recorder history changes. |
 
 Selected forecast documents also retain their source selection and HA observation

@@ -155,7 +155,7 @@ class HistoricalWeatherCache:
             body.pop("received_at")
             values.append(body)
         data_ref = version({"query": query, "hours": values})
-        with self.store.documents.transaction():
+        with self.store.transaction():
             previous, covered = self.read(url, params, first)
             if previous and tuple(rows[: len(previous)]) != previous:
                 raise ValueError("Historical weather cache prefix changed")

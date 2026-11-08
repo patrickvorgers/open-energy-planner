@@ -520,6 +520,8 @@ def test_runtime_uses_existing_history_for_an_independent_candidate_only_on_the_
     tmp_path,
 ):
     """A measured roof trains a direct model while its neighbor and selected baseline remain independent."""
+    from tests.app.solar.support import frozen_runs
+
     config = plant(count=2)
     values = tuple(
         replace(row, received_at=START) for row in weather(START - timedelta(days=56), days=59)
@@ -534,6 +536,7 @@ def test_runtime_uses_existing_history_for_an_independent_candidate_only_on_the_
     store.save(config)
     runtime = SolarRuntime(store)
     runtime.set_weather(SITE, values)
+    runtime.set_forecast_runs(SITE, frozen_runs(values, SITE, START))
     runtime.histories["sensor.pv0"] = EnergyHistory("sensor.pv0", tuple(rows))
     assert runtime.install(runtime.build(runtime.job(START)), START)
     assert runtime.forecast.model == "pvwatts-v2"

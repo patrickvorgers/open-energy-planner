@@ -188,16 +188,16 @@ def test_empty_historical_weather_waits_for_original_cache_invalidation(refresh_
         """Observe the real parser, cache reuse and UTC/site invalidation without provider access."""
         session = ArchiveSession()
         source = OpenMeteoSolarSource(session)
-        assert await source.read(SITE, START)
+        assert await source.read_observed(SITE, START)
         assert not source.past
-        await source.read(SITE, START + timedelta(hours=1))
+        await source.read_observed(SITE, START + timedelta(hours=1))
         assert session.archive_calls == 1
         next_site = replace(SITE, longitude=7) if refresh_trigger == "site" else SITE
         next_time = START if refresh_trigger == "site" else START + timedelta(days=1)
-        assert await source.read(next_site, next_time)
+        assert await source.read_observed(next_site, next_time)
         assert source.past
         assert session.archive_calls == 2
-        await source.read(next_site, next_time + timedelta(hours=1))
+        await source.read_observed(next_site, next_time + timedelta(hours=1))
         assert session.archive_calls == 2
 
     with caplog.at_level(logging.DEBUG, logger="open_energy_planner.solar.weather"):
