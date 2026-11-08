@@ -294,7 +294,7 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     page.locator("figure").filter(has=page.locator("#plan-chart")).screenshot(
         path=f"results/ci/planning-auto-refresh-{page.viewport_size['width']}.png"
     )
-    page.get_by_role("button", name="Full horizon", exact=True).click()
+    page.locator('[data-hours="0"]').click()
     price_figure = page.locator("figure").filter(has=page.locator("#price-chart"))
     price_figure.scroll_into_view_if_needed()
     page.evaluate(
@@ -994,7 +994,7 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
     expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
     assert rendered_intervals("price-chart") == expected
     if kinds == ("published", "forecast"):
-        page.get_by_role("button", name="Full horizon", exact=True).click()
+        page.locator('[data-hours="0"]').click()
         page.locator("#price-chart").scroll_into_view_if_needed()
         page.screenshot(path=f"results/ci/forecast-price-lines-{page.viewport_size['width']}.png")
 

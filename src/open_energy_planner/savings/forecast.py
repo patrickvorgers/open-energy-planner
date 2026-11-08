@@ -88,6 +88,7 @@ def comparison(plan, reference_start=None, *, without_battery=False):
             "sale": sale,
             "bonus": bonus,
             "wear": wear,
+            "electricity_cost": purchase - sale - bonus,
             "inventory_change": end_value - start_value,
             "economic_cost": ref_cost,
         },
@@ -96,6 +97,9 @@ def comparison(plan, reference_start=None, *, without_battery=False):
             "sale": actual["export_income"],
             "bonus": actual["bonus_income"],
             "wear": actual["wear_cost"],
+            "electricity_cost": actual["import_cost"]
+            - actual["export_income"]
+            - actual["bonus_income"],
             "inventory_change": actual["terminal_value"] - actual_start_value,
             "economic_cost": ems_cost,
         },

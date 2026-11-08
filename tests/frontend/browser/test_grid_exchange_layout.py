@@ -16,7 +16,7 @@ def test_grid_exchange_uses_full_planning_width(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    page.get_by_role("button", name="Full horizon", exact=True).click()
+    page.locator('[data-hours="0"]').click()
     forecast = page.locator("figure:has(#forecast-chart)").bounding_box()
     comparison = page.locator("figure:has(#energy-chart)")
     bounds = comparison.bounding_box()

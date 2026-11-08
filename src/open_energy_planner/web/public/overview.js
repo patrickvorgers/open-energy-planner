@@ -16,6 +16,7 @@ let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, pe
 let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
 let planReadPending = false;
 let priceRefreshPending = false;
+let periodCostPlan = null, periodCostKey = "", periodCostRequest = 0;
 const evaluationVersions = new Map();
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
@@ -259,6 +260,51 @@ function applyRange() {
     }
     // Set all windows before synchronizing comparison axes from their joint visible data.
     for (const instance of charts.values()) instance.update();
+    if (first != null && end != null && start != null) {
+        document.querySelector('[data-hours="0"]').textContent = `Full period: ${number(Math.max(0, end - Math.max(first, start)) / MILLISECONDS_PER_HOUR)} hours`;
+        showPeriodCosts(start, planningHours ? start + planningHours * MILLISECONDS_PER_HOUR : Math.max(end, start + QUARTER_MILLISECONDS));
+    }
+}
+/** Render server-owned period amounts, clearing old totals while another period is pending. */
+function renderPeriodCosts(period, scenarios, currency, message) {
+    for (const [name, host] of [["optimizer", "ems-costs"], ["self_consumption", "self-consumption-costs"], ["without_battery", "reference-costs"]]) {
+        const entry = scenarios?.[name];
+        renderScenarioCosts(host, entry?.costs, currency, entry?.benefit_vs_without_battery, name !== "without_battery");
+    }
+    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}: ${number(period.duration_h)} hours: Expected, not measured. Battery value uses the original plan's valuation basis.` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
+}
+/** Request financial slices from their owning module. Late responses cannot replace another plan or range. */
+async function showPeriodCosts(start, end) {
+    const plan = periodCostPlan;
+    if (!plan) return;
+    const key = `${plan.id}:${start}:${end}`;
+    if (periodCostKey === key) return;
+    periodCostKey = key;
+    const request = ++periodCostRequest;
+    if (start <= plan.start && end >= plan.end) {
+        const baseline = plan.scenarios?.without_battery?.comparison, self = plan.scenarios?.self_consumption?.comparison;
+        renderPeriodCosts(plan.period, {
+            optimizer: {costs: baseline?.ems_costs || self?.ems_costs, benefit_vs_without_battery: baseline?.expected_savings},
+            self_consumption: {costs: self?.reference_costs, benefit_vs_without_battery: plan.scenarios?.self_consumption?.expected_savings_vs_without_battery},
+            without_battery: {costs: baseline?.reference_costs}
+        }, plan.currency);
+        return;
+    }
+    renderPeriodCosts(null, null, plan.currency, "Loading expected costs for the selected period…");
+    try {
+        const query = new URLSearchParams({start: new Date(start).toISOString(), end: new Date(end).toISOString()});
+        const data = await api(`v1/plans/${encodeURIComponent(plan.id)}/comparison?${query}`, AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
+        if (request !== periodCostRequest || periodCostPlan !== plan) return;
+        renderPeriodCosts(data.period, data.scenarios, plan.currency);
+        for (const [name, host] of [["optimizer", "ems-costs"], ["self_consumption", "self-consumption-costs"], ["without_battery", "reference-costs"]]) {
+            const issue = data.scenarios?.[name]?.issue;
+            if (issue) document.getElementById(host).closest("figcaption").querySelector(".scenario-period").textContent += ` ${issue}`;
+        }
+    } catch (error) {
+        if (request !== periodCostRequest || periodCostPlan !== plan) return;
+        periodCostKey = "";
+        renderPeriodCosts(null, null, plan.currency, `Expected costs for the selected period are unavailable. ${error.message} Use Refresh overview to retry.`);
+    }
 }
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
 function inspect() {
@@ -310,11 +356,10 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
     }
     const details = document.createElement("details"), summary = document.createElement("summary"), breakdown = document.createElement("dl");
     summary.textContent = "Cost breakdown"; details.open = expanded;
-    const cash = costs && [costs.purchase, costs.sale, costs.bonus].every(value => typeof value === "number" && Number.isFinite(value)) ? costs.purchase - costs.sale - costs.bonus : null;
     metric(breakdown, "Import cost", costs?.purchase);
     metric(breakdown, "Export income", costs?.sale);
     metric(breakdown, "Bonus income", costs?.bonus);
-    metric(breakdown, "Net electricity cost", cash);
+    metric(breakdown, "Net electricity cost", costs?.electricity_cost);
     metric(breakdown, "Wear", costs?.wear);
     metric(breakdown, "Battery value change (not cash)", costs?.inventory_change);
     const cashExplanation = document.createElement("p"), explanation = document.createElement("p");
@@ -344,6 +389,7 @@ async function showPlan(signal, background = false) {
     if (retainDisplayedPlan) {
         $("overview-status").textContent = "Loading plan update. Showing the previously loaded plan until the update is available.";
     } else {
+        periodCostPlan = null; periodCostKey = ""; periodCostRequest++;
         const clearPrices = Boolean(id || priceInputPlanId);
         if (clearPrices) {
             priceInputPlanId = currentPriceWindow = null;
@@ -380,6 +426,7 @@ async function showPlan(signal, background = false) {
     try {
         const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison`, signal);
         if (request !== selectionRequest) return false;
+        periodCostPlan = null; periodCostRequest++;
         const plan = data.plan;
         const selectedOption = [...$("plan-version").options].find(option => option.value === id);
         if (selectedOption) selectedOption.textContent = planName(plan);
@@ -406,11 +453,7 @@ async function showPlan(signal, background = false) {
         for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
         const baseline = withoutBattery?.comparison;
         const self = selfConsumption?.comparison;
-        renderScenarioCosts("reference-costs", baseline?.reference_costs, currency);
-        renderScenarioCosts("self-consumption-costs", self?.reference_costs, currency, selfConsumption?.expected_savings_vs_without_battery, true);
-        renderScenarioCosts("ems-costs", baseline?.ems_costs || self?.ems_costs, currency, baseline?.expected_savings, true);
         const period = planEvidence?.period;
-        for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = period ? `From ${when(period.start)} to ${when(period.end)}: Whole original plan. Expected, not measured.` : "Whole original plan. Expected, not measured.";
         let message = "Benefits versus no battery include storage and smart planning. Excludes investment costs.";
         if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. Expected benefits include the difference in remaining battery value. " + message;
         if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
@@ -541,6 +584,8 @@ async function showPlan(signal, background = false) {
         chart("price-chart", priceSeries, {unit: `${currency}/kWh`});
         const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
+        periodCostPlan = {id, currency, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
+        periodCostKey = ""; periodCostRequest++;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
         $("overview-status").textContent = CONNECTED_MESSAGE;
         renderedPlanId = id;

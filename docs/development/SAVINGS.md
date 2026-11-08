@@ -4,6 +4,31 @@ The savings service implements UI-01–18 and the associated storage/benefit bou
 It does not change the selected planning strategy, enable another optimizer, or
 claim that a counterfactual is measured or that every saving was caused by OEP.
 
+## Planning period costs
+
+`savings/windows.py` owns read-only costs for arbitrary timezone-aware subperiods
+of an original plan. `GET /v1/plans/{plan_id}/comparison?start=...&end=...` returns
+only the covered period, scenario amounts and issues. The authenticated route
+performs no writes or optimization and runs financial replay off the event loop.
+The original comparison without query parameters retains its whole-plan contract.
+
+Import, export and wear follow original interval mean flows. Interior battery
+endpoints are linearly interpolated in stored kWh. Both endpoints use the same
+original terminal valuation curves, including their reserves and useful-volume
+caps. No new tariffs or valuation curves are derived for a different view.
+Chronological bonus settlement includes all earlier original export. A cap
+reached within a partially selected interval credits its earliest exported energy.
+Independent missing scenarios remain unavailable and cannot fabricate a benefit.
+A window outside the plan has no coverage, rather than a zero economic cost.
+
+The frontend chooses a time range and formats server-owned amounts. Its latest
+plan starts at the current UTC quarter, while linked or historical plans retain
+their original start. Captions state actual covered boundaries. The full-period
+button states available hours instead of assuming that every retained or expired
+plan has 48 remaining hours. Versioned range reads clear stale totals and cannot
+replace a newer selection. Whole-plan evidence and corrected-contract tables keep
+their explicitly separate original-plan scope.
+
 ## Ownership and flow
 
 ```mermaid
