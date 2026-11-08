@@ -22,9 +22,13 @@ def source_names(catalogue):
 
 
 def vehicle_source_names(catalogue):
-    """Use the configured HA integration title for cars, retaining source labels without an entry."""
+    """Prefer the car's device name over an integration title that may identify an account."""
     return {
-        row["entity_id"]: row.get("integration_name", "").strip() or source_name(row, "Vehicle")
+        row["entity_id"]: source_name(
+            {"entity_id": row["entity_id"], "device_name": row.get("device_name")}, None
+        )
+        or row.get("integration_name", "").strip()
+        or source_name(row, "Vehicle")
         for row in (catalogue or {}).get("entities", ())
     }
 

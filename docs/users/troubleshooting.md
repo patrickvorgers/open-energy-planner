@@ -44,8 +44,13 @@ An unsuccessful new round does not overwrite the original accepted plan or prolo
 
 ## No vehicle or connection sensor appears
 
-In Settings > Appliances > EV charging, choose the Home Assistant integration
-before choosing its sensors. The car's state-of-charge sensor must report `%`.
+In Settings > Appliances > EV charging, choose the **Home Assistant device**
+before its sensors. An integration's configured title can identify an account
+instead of the car. Find the car by its device name. OEP selects the integration
+automatically when the device has one integration. Choose explicitly when several
+integrations supply its sensors. For a source without a device, keep
+**All devices / choose an integration** and select the integration directly.
+The car's state-of-charge sensor must report `%`.
 A sensor with an unrelated device class, such as humidity, is not a vehicle SoC
 source.
 
@@ -53,8 +58,8 @@ For a charge point, search its integration's binary sensors by name or entity ID
 Use a sensor that stays On while plugged in, including when charging is paused.
 A charging-active sensor is not equivalent. Check the sensor in Home Assistant
 if its purpose is unclear. Choose the charge point's Energy consumption meter
-separately. After correcting HA configuration, save or cancel pending edits and
-use Check saved settings to reload available metadata. Large catalogues are
+separately. After correcting HA configuration, use **Refresh Home Assistant sources**
+to reload available choices without discarding pending edits. Large catalogues are
 transferred in bounded parts. Sources are not omitted because their names sort
 late or the installation contains many sensors. A new list becomes available
 only when its complete transfer has been validated. An interruption before

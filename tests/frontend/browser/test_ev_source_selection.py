@@ -9,6 +9,145 @@ from tests.frontend.browser.helpers import TOKEN, discover
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
+def test_selecting_matching_device_retains_current_soc_source_and_saves(app_page):
+    """A sensor selected after rendering remains selected when its own device is chosen."""
+    page, url = app_page
+    body = discover(page, url)
+    body["entities"].append(
+        {
+            "entity_id": "sensor.synthetic_family_soc",
+            "device_id": "family-car",
+            "device_name": "Family car",
+            "name": "Battery level",
+            "unit": "%",
+            "device_class": "battery",
+            "state_class": "measurement",
+            "integration_id": "car-account",
+            "integration_name": "Car account",
+        }
+    )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    choose_integration(page, "car-account")
+    soc = page.get_by_label("Vehicle state of charge", exact=True)
+    soc.select_option("sensor.synthetic_family_soc")
+    page.get_by_role("combobox", name="Home Assistant device", exact=True).select_option(
+        "family-car"
+    )
+    expect(soc).to_have_value("sensor.synthetic_family_soc")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("75")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert saved["name"] == "Family car"
+    assert saved["soc_entity"] == "sensor.synthetic_family_soc"
+
+
+def test_device_first_selects_integration_but_never_guesses_the_sensor(app_page):
+    """Account-named entries resolve through devices, with explicit ambiguity and template fallbacks."""
+    page, url = app_page
+    body = discover(page, url)
+    for entity_id, device_id, device_name, entry_id, unit, kind in (
+        ("sensor.synthetic_zeekr_soc", "zeekr", "Zeekr GT", "account", "%", "battery"),
+        ("sensor.synthetic_other_car_soc", "other-car", "Other car", "account", "%", "battery"),
+        ("sensor.synthetic_zeekr_humidity", "zeekr", "Zeekr GT", "account", "%", "humidity"),
+        ("sensor.synthetic_multi_soc", "multi", "Multi-source car", "first", "%", "battery"),
+        ("sensor.synthetic_multi_other_soc", "multi", "Multi-source car", "second", "%", "battery"),
+        ("sensor.synthetic_template_soc", "", "", "template", "%", ""),
+        ("sensor.synthetic_no_soc", "no-soc", "Car without SoC", "no-soc", "km", "distance"),
+    ):
+        body["entities"].append(
+            {
+                "entity_id": entity_id,
+                "device_id": device_id,
+                "device_name": device_name,
+                "name": "Synthetic battery" if kind != "humidity" else "Humidity",
+                "unit": unit,
+                "device_class": kind,
+                "state_class": "measurement",
+                "integration_id": entry_id,
+                "integration_name": "Account entry" if entry_id == "account" else entry_id,
+            }
+        )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    body["entities"].append(
+        {
+            "entity_id": "sensor.synthetic_manual_soc",
+            "device_id": "manual",
+            "device_name": "Car without an entry",
+            "name": "Battery",
+            "unit": "%",
+            "device_class": "battery",
+            "state_class": "measurement",
+        }
+    )
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    device = page.get_by_role("combobox", name="Home Assistant device", exact=True)
+    integration = page.get_by_role("combobox", name="Home Assistant integration", exact=True)
+    soc = page.get_by_label("Vehicle state of charge", exact=True)
+    device.select_option("zeekr")
+    expect(integration).to_have_value("account")
+    expect(soc).to_have_value("")
+    expect(soc.locator("option")).to_have_count(2)
+    soc.select_option("sensor.synthetic_zeekr_soc")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("75")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/ev-device-first-{page.viewport_size['width']}.png", full_page=True
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert saved["name"] == "Zeekr GT"
+    assert saved["soc_entity"] == "sensor.synthetic_zeekr_soc"
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    expect(device).to_have_value("zeekr")
+    device.select_option("other-car")
+    expect(integration).to_have_value("account")
+    expect(soc).to_have_value("")
+    expect(soc.locator("option")).to_have_count(2)
+    device.select_option("multi")
+    expect(integration).to_have_value("")
+    expect(soc.locator("option")).to_have_count(1)
+    integration.select_option("second")
+    expect(soc.locator("option")).to_have_count(2)
+    soc.select_option("sensor.synthetic_multi_other_soc")
+    device.select_option("no-soc")
+    expect(integration).to_have_value("no-soc")
+    expect(soc.locator("option")).to_have_count(1)
+    expect(
+        page.get_by_text("No matching Home Assistant sources were discovered.", exact=False)
+    ).to_be_visible()
+    choose_integration(page, "template")
+    soc.select_option("sensor.synthetic_template_soc")
+    device.select_option("manual")
+    expect(integration).to_have_count(0)
+    expect(soc).to_have_value("")
+    soc.select_option("sensor.synthetic_manual_soc")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0] == saved
+
+
+def choose_integration(page, integration):
+    """Use the integration fallback without a physical-device filter."""
+    page.get_by_role("combobox", name="Home Assistant device", exact=True).select_option("")
+    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
+        integration
+    )
+
+
 def test_large_catalogue_tail_vehicle_is_selectable_and_saved(app_page):
     """A vehicle beyond 2,000 ordinary sources remains selectable on desktop and mobile."""
     import json
@@ -48,9 +187,7 @@ def test_large_catalogue_tail_vehicle_is_selectable_and_saved(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     add_ev_appliance(page, "vehicle")
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "synthetic-car-entry"
-    )
+    choose_integration(page, "synthetic-car-entry")
     page.get_by_label("Vehicle state of charge", exact=True).select_option(
         "sensor.zzz_family_vehicle_soc"
     )
@@ -118,21 +255,19 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
         page.get_by_role("button", name="Connect", exact=True).click()
     add_ev_appliance(page, "vehicle")
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("car")
+    choose_integration(page, "car")
     soc = page.get_by_label("Vehicle state of charge", exact=True)
     expect(soc.locator("option")).to_have_count(2)
     expect(soc).to_have_value("")
     assert soc.evaluate("control => control.required && !control.validity.valid")
     soc.select_option("sensor.car_charge")
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
+    choose_integration(page, "")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
         "sensor.car_charge"
     )
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "car2"
-    )
+    choose_integration(page, "car2")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value("")
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("car")
+    choose_integration(page, "car")
     page.get_by_label("Vehicle state of charge", exact=True).select_option("sensor.car_charge")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
     page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
@@ -143,20 +278,18 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     assert saved["vehicles"][0]["name"] == "Family car"
     assert saved["vehicles"][0]["soc_entity"] == "sensor.car_charge"
     page.get_by_role("button", name="Edit settings", exact=True).click()
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
+    choose_integration(page, "")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
         "sensor.car_charge"
     )
     assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "car2"
-    )
+    choose_integration(page, "car2")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value("")
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]
     page.get_by_role("button", name="Edit settings", exact=True).click()
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option("")
+    choose_integration(page, "")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("61")
     assert page.get_by_role("combobox", name="Home Assistant integration", exact=True).evaluate(
         "control => control.validity.valid"
@@ -167,16 +300,12 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     assert saved_vehicle["soc_entity"] == "sensor.car_charge"
     assert saved_vehicle["capacity_kwh"] == 61
     add_ev_appliance(page, "point")
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "empty"
-    )
+    choose_integration(page, "empty")
     expect(page.get_by_label("Vehicle connected", exact=True).locator("option")).to_have_count(1)
     expect(
         page.get_by_text("No matching Home Assistant sources were discovered.", exact=False)
     ).to_be_visible()
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "charger"
-    )
+    choose_integration(page, "charger")
     page.get_by_label("Charging consumption meter", exact=True).select_option("sensor.charge_meter")
     page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.charge_power")
     connected = page.get_by_label("Vehicle connected", exact=True)
@@ -214,9 +343,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     assert saved["points"][0]["connected_entity"] == "binary_sensor.charge_plug"
     assert saved["points"][0]["energy_entity"] == "sensor.charge_meter"
     page.get_by_role("button", name="Edit settings", exact=True).click()
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "empty"
-    )
+    choose_integration(page, "empty")
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.charge_plug"
     )
@@ -240,16 +367,12 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.charge_plug"
     )
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "helper"
-    )
+    choose_integration(page, "helper")
     page.get_by_label("Vehicle connected", exact=True).select_option("binary_sensor.helper_plug")
     expect(page.get_by_label("Measured AC charging power", exact=True)).to_have_value(
         "sensor.charge_power"
     )
-    page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
-        "empty"
-    )
+    choose_integration(page, "empty")
     page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.empty_power")
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.helper_plug"
