@@ -63,16 +63,57 @@ class SolarRuntime:
         self.learning_log = BackgroundLog(_LOGGER, "Solar ML candidate update")
 
     def configure(self, configuration):
-        """Reset incompatible live state only after a changed definition has been persisted."""
+        """Reset model state after persistence, retaining validated unchanged meter cohorts.
+
+        This install callback runs under the app lock on the event loop. Geometry,
+        control declarations and forecast preferences do not change immutable
+        meter history. Only unchanged source/entity/learning-date bindings with
+        an accepted importer state may reuse their already validated aggregate.
+        New bindings and selected learning cohorts use the full restore path.
+        """
+        previous = (
+            {source.source_id: source for source in self.configuration.sources}
+            if self.configuration
+            else {}
+        )
+        unchanged = {
+            source.entity_id: source.learning_start
+            for source in configuration.sources
+            if source.source_id in previous
+            and (previous[source.source_id].entity_id, previous[source.source_id].learning_start)
+            == (source.entity_id, source.learning_start)
+        }
+        retained = {
+            entity: history
+            for entity, history in self.histories.items()
+            if entity in unchanged
+            and (state := self.history_import.states.get(entity))
+            and state["entity_id"] == entity
+            and state.get("learning_start") == unchanged[entity]
+            and self.history_import.learning_starts.get(entity) == unchanged[entity]
+        }
+        issues = {
+            entity: issue for entity, issue in self.history_issues.items() if entity in unchanged
+        }
+        retries = {
+            entity: retry
+            for entity, retry in self.history_retry_after.items()
+            if entity in unchanged
+        }
         self.configuration, self.issue = configuration, None
         self.history_revision += 1
-        self.ranges, self.history_issues = {}, {}
+        self.ranges, self.history_issues = {}, issues
         self.history_import.configure(configuration.sources)
-        self.histories = self.history_import.restore(
-            source.entity_id for source in configuration.sources
-        )
+        self.histories = {
+            **retained,
+            **self.history_import.restore(
+                source.entity_id
+                for source in configuration.sources
+                if source.entity_id not in retained
+            ),
+        }
         self.history_issues.update(self.history_import.issues)
-        self.history_retry_after = {}
+        self.history_retry_after = retries
         self.forecast, self.candidate, self.calibrations, self.last_key = None, None, (), None
         self.baseline = None
         self.failed_key, self.retry_after = None, None

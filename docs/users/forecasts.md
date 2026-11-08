@@ -105,6 +105,12 @@ after restart. Each run retains its model, site, initialization, query and actua
 download time. A historical run's publication time can be unknown; the download
 time is never presented as proof of past publication.
 
+Unavailable archived forecast runs retry in the background, with increasing
+intervals up to one day for a persistent gap. Other available runs keep importing,
+and a gap does not stop a usable current forecast. Changing unrelated solar
+settings reuses already validated meter history rather than reloading every
+stored year.
+
 The same disclosure explains whether a time trend was selected within the ML
 candidate, its annual change and the seasonal comparison evidence. That internal
 choice does not mean ML is the current forecast. Read **Active forecast model**

@@ -7,7 +7,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
-from math import ceil, isfinite
+from math import ceil, isfinite, log2
 
 from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout
 
@@ -48,6 +48,13 @@ LATEST_RUN_METADATA_URL = "https://api.open-meteo.com/data/ecmwf_ifs/static/meta
 MAX_METADATA_RESPONSE_BYTES = 16 * BYTES_PER_KIB
 HISTORICAL_RUN_BATCH_SIZE = 4
 HISTORICAL_RUN_RETRY_MINUTES = 15
+MAX_HISTORICAL_RUN_RETRY_HOURS = 24
+MAX_HISTORICAL_RUN_RETRY_ATTEMPTS = 1 + ceil(
+    log2(
+        timedelta(hours=MAX_HISTORICAL_RUN_RETRY_HOURS)
+        / timedelta(minutes=HISTORICAL_RUN_RETRY_MINUTES)
+    )
+)
 HISTORICAL_RUN_COMPLETE_DELAY_HOURS = 72
 IFS_HISTORY_FIRST_DATE = datetime(2024, 3, 14, tzinfo=UTC).date()
 HISTORICAL_RUN_INITIALIZATION_HOUR = 12
@@ -111,6 +118,7 @@ class OpenMeteoSolarSource:
         self._history_updates = deque()
         self.history_retry_after = None
         self._missing_run_retries, self.history_issues = {}, {}
+        self._missing_run_attempts = {}
 
     def _select_site(self, location):
         """Keep in-memory accepted runs and importer cursors isolated across installation locations."""
@@ -122,6 +130,7 @@ class OpenMeteoSolarSource:
             self._history_updates.clear()
             self.history_retry_after = None
             self._missing_run_retries, self.history_issues = {}, {}
+            self._missing_run_attempts = {}
         return site
 
     @property
@@ -183,8 +192,10 @@ class OpenMeteoSolarSource:
 
         Complete active-database caches are reused once per source lifetime.
         Network failures stop the batch and back off for fifteen minutes. A
-        known missing or unusable run retains its own retry and does not block
-        older runs. Original corrupt cache evidence is never replaced.
+        known missing or unusable run doubles its own retry from fifteen minutes
+        to at most one day without blocking older runs. Attempt counts saturate
+        at the cap and reset on success or site change. Original corrupt cache
+        evidence is never replaced.
         Discovery of older measurements extends the descending cursor without a
         year cap. This import never downloads observed/reanalysis weather.
         """
@@ -233,20 +244,32 @@ class OpenMeteoSolarSource:
                         return self.forecast_runs
                     self._runs[initialized] = run
                 self._missing_run_retries.pop(initialized, None)
+                self._missing_run_attempts.pop(initialized, None)
                 self.history_issues.pop(initialized, None)
             except (ClientResponseError, ValueError) as error:
+                if site != self._run_site:
+                    return self.forecast_runs
                 if isinstance(error, ClientResponseError) and error.status != 404:
                     self.history_retry_after = now + timedelta(minutes=HISTORICAL_RUN_RETRY_MINUTES)
                     raise
-                self._missing_run_retries[initialized] = now + timedelta(
-                    minutes=HISTORICAL_RUN_RETRY_MINUTES
+                attempts = min(
+                    self._missing_run_attempts.get(initialized, 0) + 1,
+                    MAX_HISTORICAL_RUN_RETRY_ATTEMPTS,
                 )
+                self._missing_run_attempts[initialized] = attempts
+                delay = min(
+                    timedelta(minutes=HISTORICAL_RUN_RETRY_MINUTES) * (1 << (attempts - 1)),
+                    timedelta(hours=MAX_HISTORICAL_RUN_RETRY_HOURS),
+                )
+                self._missing_run_retries[initialized] = now + delay
                 self.history_issues[initialized] = (
                     "forecast_run_missing"
                     if isinstance(error, ClientResponseError)
                     else "forecast_run_unusable"
                 )
             except (ClientError, OSError, TimeoutError):
+                if site != self._run_site:
+                    return self.forecast_runs
                 self.history_retry_after = now + timedelta(minutes=HISTORICAL_RUN_RETRY_MINUTES)
                 raise
             if retrying is not None:

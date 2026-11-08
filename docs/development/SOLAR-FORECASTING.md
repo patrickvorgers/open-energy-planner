@@ -170,6 +170,14 @@ change: it revokes the old ML state to the physical baseline and rejects workers
 started against the earlier cohort. Subsequent work uses the changed run set;
 an older completion cannot restore the revoked candidate.
 
+Saving geometry, control declarations or forecast preferences reuses already
+validated production history only for the exact same source, meter and learning
+start. This avoids rereading every annual chunk in the event-loop install
+callback. Existing source issues, retry deadlines and quarantines remain intact.
+Startup and new, changed or cleared learning cohorts retain the complete restore
+and integrity checks. An unrelated settings save is not an additional reread of
+all previously accepted immutable chunks.
+
 The solar module owns its forecast availability notification. It names the solar
 forecast explicitly and explains automatic weather retries and forecast refresh.
 The warning clears only when a forecast matches the current configuration and HA
@@ -228,6 +236,14 @@ The original-run policy is `ecmwf-ifs-frozen-original-runs-v1`; simulated-origin
 delays belong to the separate backtest policy rather than the physical weather
 cache identity.
 
+Each missing or unusable original initialization has an independent retry delay.
+It starts at 15 minutes and doubles to a maximum of 24 hours, with a bounded
+attempt counter. Actual success or a site change clears that run's retry state.
+Other initializations continue importing, and cached/current forecasts remain
+independent. Transport failures and non-404 provider errors retain the separate
+15-minute global history backoff. A delayed old-site failure cannot install retry
+state for the new site. Restart resets these in-memory retry counters.
+
 ### Direct production model and learned time trend
 
 The production candidate is an independent CPU XGBoost model per independently
@@ -237,6 +253,12 @@ and solar position. Neither PVWatts output
 nor a measured-to-PVWatts ratio enters the learned features or target. The fixed
 CPU model uses 96 trees of depth three and one native thread. The shared CPU
 runtime does not share model policies with other learning domains.
+
+Training geometry reuses a separate cache of at most eight immutable history,
+site and interval-duration combinations. Results are read-only mappings of
+tuples. Short future prediction queries do not occupy this history cache.
+This changes repeated astronomical work, not admitted measurements, training
+weights, model features or numerical output.
 
 All admitted training and validation measurements have equal weight. Older years
 do not receive an arbitrary age discount. Multiple archived forecast/target
@@ -603,6 +625,13 @@ on source count, available history and changing weather. Final storage must add
 capacity monitoring, deployment sizing and lossless compaction before SD-card
 deployment. Automatic retention/pruning would contradict the agreed permanent
 historical evidence requirement.
+Series publication validates the expected manifest and its daily bodies in one
+transaction, with at most 128 block identities per read batch. Repeated and
+reopened series retain full block equality checks instead of opening one
+transaction per day. Manifest presence alone is never sufficient: conflicting
+or missing published blocks fail closed. A missing manifest can be completed
+from previously accepted matching partial blocks. New blocks and their manifest
+roll back together if publication fails.
 SQLite, PostgreSQL, MariaDB and MySQL use the shared database contract and backend
 transfer. See the [database dictionary](DATABASE-SCHEMA.md). Production volume
 sizing and complete deployment backup/restore verification remain separate gates.

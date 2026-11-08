@@ -11,6 +11,7 @@ from importlib.metadata import version as distribution_version
 from itertools import pairwise
 from math import cos, fsum, isfinite, pi, sin
 from statistics import median, quantiles
+from types import MappingProxyType
 
 import numpy as np
 
@@ -91,6 +92,7 @@ GEOMETRY_SUBSTEPS_PER_HOUR = MINUTES_PER_HOUR // FINE_INTERVAL_MINUTES
 PREDICTION_QUARTER_HOURS = FINE_INTERVAL_MINUTES / MINUTES_PER_HOUR
 HIGH_IRRADIANCE_W_M2 = 600
 MIN_DIAGNOSTIC_IRRADIANCE_W_M2 = 50
+MAX_CACHED_HISTORY_GEOMETRIES = 8
 
 
 class TrainingStatus(StrEnum):
@@ -165,6 +167,12 @@ def solar_geometry(instants, location, duration_h=1):
         )
         for index, instant in enumerate(instants)
     }
+
+
+@lru_cache(maxsize=MAX_CACHED_HISTORY_GEOMETRIES)
+def _history_geometry(instants, location, duration_h=1):
+    """Reuse immutable geometry for unchanged history without admitting prediction queries into this cache."""
+    return MappingProxyType(solar_geometry(instants, location, duration_h))
 
 
 def _features(instant, weather, geometry, duration_h=1):
@@ -715,7 +723,7 @@ def fit_boosted_model(
         source, location, weather, physical_hours, forecast_runs, forecast_physical
     )
     instants = tuple(following.start for following in history.hours[1:]) if history else ()
-    geometry = solar_geometry(instants, location)
+    geometry = _history_geometry(instants, location)
     max_power_kw = (
         inverter.ac_limit_w / 1000
         if source.measurement_boundary == "ac"

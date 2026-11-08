@@ -345,6 +345,14 @@ independent of the source's confirmed unrestricted production interval.
 
 The `solar` namespace additionally owns these JSON contracts:
 
+Solar daily-series writers compare the expected manifest and every referenced
+block in one active-database transaction. Reads use batches of at most 128 block
+identities. Reusing an existing manifest does not bypass immutable-content or
+missing-block checks. Valid matching blocks from an earlier incomplete write may
+complete an absent manifest. New blocks and the new manifest commit or roll back
+together. Document names, payloads and cross-backend transfer contracts remain
+unchanged.
+
 Original forecast runs under `forecast-weather-*` supply historical forecast
 training and assessment. Retained `weather-cache-*` reanalysis is diagnostic
 evidence only; its receipt is not a forecast issue or publication time.

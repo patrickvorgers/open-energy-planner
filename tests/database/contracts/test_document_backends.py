@@ -899,3 +899,115 @@ def test_historical_forecast_assessment_and_original_run_cache_survive_restart(a
     )
     assert replay == report
     assert ForecastWeatherCache(restored).read(query) == run
+
+
+def solar_series_rows():
+    """Use three distinct daily raw evidence blocks without claiming complete learning coverage."""
+    return [
+        {
+            "start": f"2026-01-0{index + 1}T00:00:00+00:00",
+            "total_kwh": float(index),
+            "meter_kwh": float(index),
+        }
+        for index in range(3)
+    ]
+
+
+def solar_documents_snapshot(engine):
+    """Detach every solar payload to detect overwritten evidence or stray partial inserts."""
+    with engine.connect() as connection:
+        return dict(
+            connection.execute(
+                select(DOCUMENTS.c.name, DOCUMENTS.c.payload).where(
+                    DOCUMENTS.c.namespace == "solar"
+                )
+            ).all()
+        )
+
+
+@pytest.mark.parametrize("damage", ["manifest", "block", "missing", "input"])
+def test_existing_solar_series_rejects_conflicting_or_incomplete_evidence(archive, damage):
+    """Manifest presence cannot hide corrupt, missing or differently supplied immutable blocks."""
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    rows = solar_series_rows()
+    store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    manifest = store.documents.read("history-synthetic-series.json")
+    block = "block-" + manifest["blocks"][1]["block"] + ".json"
+    if damage == "manifest":
+        store.documents.write("history-synthetic-series.json", {"entity_id": "other"})
+    elif damage == "block":
+        store.documents.write(block, {"entity_id": "sensor.synthetic", "hours": []})
+    elif damage == "missing":
+        with engine.begin() as connection:
+            connection.execute(
+                DOCUMENTS.delete().where(
+                    DOCUMENTS.c.namespace == "solar", DOCUMENTS.c.name == block
+                )
+            )
+    else:
+        rows[1] = {**rows[1], "total_kwh": 99.0}
+    before = solar_documents_snapshot(engine)
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    with pytest.raises(ValueError, match="Solar evidence archive mismatch"):
+        restored.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    assert solar_documents_snapshot(engine) == before
+
+
+def test_solar_series_finishes_prior_partial_blocks_and_rolls_back_failed_manifest(
+    archive, monkeypatch
+):
+    """A failed new publication adds no blocks, while an accepted legacy partial block remains recoverable."""
+    from open_energy_planner.solar.calculation.model import version
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    rows = solar_series_rows()
+    body = {"entity_id": "sensor.synthetic", "hours": rows[:1]}
+    store.archive("block", version(body), body)
+    before = solar_documents_snapshot(engine)
+    original_write = store.documents.write
+
+    def failed_manifest(name, payload):
+        """Fail after the new blocks are staged but before the public series manifest commits."""
+        if name == "history-synthetic-series.json":
+            raise OSError("Synthetic manifest write failure")
+        return original_write(name, payload)
+
+    monkeypatch.setattr(store.documents, "write", failed_manifest)
+    with pytest.raises(OSError, match="Synthetic manifest write failure"):
+        store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    assert solar_documents_snapshot(engine) == before
+    monkeypatch.setattr(store.documents, "write", original_write)
+    store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    manifest = restored.documents.read("history-synthetic-series.json")
+    replay = [
+        row
+        for item in manifest["blocks"]
+        for row in restored.documents.read("block-" + item["block"] + ".json")["hours"]
+    ]
+    assert replay == rows
+
+
+def test_concurrent_solar_series_writers_publish_one_complete_manifest(archive):
+    """Independent model/cache threads atomically reuse identical complete series evidence."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    rows = solar_series_rows()
+
+    def write(_index):
+        """Publish the same original evidence through the actual shared domain writer lock."""
+        store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        list(workers.map(write, range(8)))
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    manifest = restored.documents.read("history-synthetic-series.json")
+    assert len(manifest["blocks"]) == 3
+    assert all(
+        restored.documents.read("block-" + item["block"] + ".json")["hours"] == [row]
+        for item, row in zip(manifest["blocks"], rows, strict=True)
+    )

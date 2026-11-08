@@ -856,3 +856,125 @@ def test_optional_inference_failure_preserves_the_physical_forecast(tmp_path, mo
     assert runtime.document(now)["learning"]["pv0"]["status"] == "training_failed"
     assert "private-inference-source-and-token" not in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+def multiyear_geometry_case():
+    """Retain 44,800 measured intervals while only the latest eight weeks have downloaded forecast weather."""
+    _history, physical, weather, before = training_data()
+    first = before - timedelta(hours=44801)
+    total, readings = 100.0, []
+    for index in range(44801):
+        instant = first + timedelta(hours=index)
+        total += 0.24 if 8 <= instant.hour < 11 else 0.864 if 11 <= instant.hour < 16 else 0
+        readings.append(EnergyHour(instant, total, total % 20))
+    return EnergyHistory("sensor.pv0", tuple(readings)), physical, weather, before
+
+
+def test_repeated_multiyear_fits_reuse_history_geometry_without_prediction_eviction(monkeypatch):
+    """Three real native fits share 179,200 history midpoint calculations while independent prediction queries keep their own geometry."""
+    from pvlib import solarposition
+
+    configuration = plant()
+    history, physical, weather, before = multiyear_geometry_case()
+    get_solarposition = solarposition.get_solarposition
+    computed = []
+
+    def calculate(times, latitude, longitude, **options):
+        """Count actual pvlib sample work without replacing astronomy or the native learner."""
+        computed.append((len(times), latitude, longitude))
+        return get_solarposition(times, latitude, longitude, **options)
+
+    monkeypatch.setattr(solarposition, "get_solarposition", calculate)
+    arguments = (
+        configuration.sources[0],
+        configuration.inverters[0],
+        SITE,
+        history,
+        physical,
+        weather,
+    )
+    first = fit_boosted_model(*arguments, before)
+    repeated = fit_boosted_model(*arguments, before)
+    earlier = fit_boosted_model(*arguments, before - timedelta(days=7), known_at=before)
+    assert first == repeated
+    assert first.model is not None and earlier.challenger is not None
+    assert earlier.challenger.trained_until < first.challenger.trained_until
+    assert len(computed) == 1
+    assert computed == [(179200, 52, 6)]
+    for day in range(12):
+        instant = before + timedelta(days=day, hours=12)
+        conditions = (SolarWeatherHour(instant, 600, 500, 100, 20, 2, before),)
+        assert first.model.predict(
+            conditions, SITE, known_at=before, duration_h=0.25, offset_minutes=15
+        )
+    assert fit_boosted_model(*arguments, before) == first
+    assert len(computed) == 13
+    assert [count for count, _latitude, _longitude in computed].count(179200) == 1
+
+
+def test_history_geometry_cache_keeps_exact_outputs_and_separates_all_query_inputs(monkeypatch):
+    """Location, timestamp sequence and duration changes recompute geometry while retained tuples cannot be mutated."""
+    from pvlib import solarposition
+
+    from open_energy_planner.solar import boosting
+
+    instants = (
+        datetime(2024, 2, 29, 6, tzinfo=UTC),
+        datetime(2024, 6, 21, 3, tzinfo=UTC),
+        datetime(2024, 12, 21, 16, tzinfo=UTC),
+    )
+    queries = (
+        (instants, SITE, 1),
+        (instants, replace(SITE, latitude=53), 1),
+        (instants, replace(SITE, longitude=7), 1),
+        (instants, replace(SITE, timezone="UTC"), 1),
+        (instants[:-1], SITE, 1),
+        (instants, SITE, 0.25),
+    )
+    expected = tuple(boosting.solar_geometry(*query) for query in queries)
+    get_solarposition = solarposition.get_solarposition
+    computed = []
+
+    def calculate(times, latitude, longitude, **options):
+        """Execute the original pvlib query and record each independent cache miss."""
+        computed.append((len(times), latitude, longitude))
+        return get_solarposition(times, latitude, longitude, **options)
+
+    monkeypatch.setattr(solarposition, "get_solarposition", calculate)
+    boosting._history_geometry.cache_clear()
+    for query, original in zip(queries, expected, strict=True):
+        result = boosting._history_geometry(*query)
+        assert result == original
+        assert boosting._history_geometry(*query) is result
+        with pytest.raises(TypeError):
+            result[instants[0]] = (0, 0, 0, 0)
+        with pytest.raises(TypeError):
+            result[instants[0]][0] = 0
+        assert boosting._history_geometry(*query) == original
+    assert len(computed) == 6
+    assert [count for count, _latitude, _longitude in computed] == [12, 12, 12, 12, 8, 3]
+
+
+def test_history_geometry_cache_evicts_old_queries_instead_of_growing_without_bound(monkeypatch):
+    """Nine independent history cohorts exceed the eight-entry budget and revisiting the first computes again."""
+    from pvlib import solarposition
+
+    from open_energy_planner.solar import boosting
+
+    get_solarposition = solarposition.get_solarposition
+    computed = []
+
+    def calculate(times, latitude, longitude, **options):
+        """Retain real astronomical outputs while counting bounded-cache eviction behavior."""
+        computed.append(len(times))
+        return get_solarposition(times, latitude, longitude, **options)
+
+    monkeypatch.setattr(solarposition, "get_solarposition", calculate)
+    boosting._history_geometry.cache_clear()
+    queries = tuple((START + timedelta(days=day, hours=12),) for day in range(9))
+    original = boosting._history_geometry(queries[0], SITE)
+    for query in queries[1:]:
+        boosting._history_geometry(query, SITE)
+    assert boosting._history_geometry.cache_info().currsize == 8
+    assert boosting._history_geometry(queries[0], SITE) == original
+    assert computed == [4] * 10

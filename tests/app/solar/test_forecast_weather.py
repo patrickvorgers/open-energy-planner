@@ -12,6 +12,7 @@ from threading import Event as ThreadEvent
 import pytest
 from aiohttp import ClientResponseError
 
+from open_energy_planner.solar.calculation.model import version
 from open_energy_planner.solar.forecast_weather import ForecastWeatherRun
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
@@ -596,7 +597,7 @@ def test_a_known_missing_run_does_not_block_older_training_and_is_retried_indepe
     assert len(asyncio.run(source.import_runs(SITE, now + timedelta(minutes=15)))) == 10
     assert sum(options["params"]["run"] == "2026-03-29T12:00" for _, options in session.calls) == 2
     session.missing = False
-    recovered = asyncio.run(source.import_runs(SITE, now + timedelta(minutes=30)))
+    recovered = asyncio.run(source.import_runs(SITE, now + timedelta(minutes=45)))
     assert any(run.initialized_at == missing for run in recovered)
     assert source.history_issues == {}
 
@@ -860,7 +861,7 @@ def test_one_incomplete_original_run_cannot_block_older_training_or_current_fore
     )
     assert ForecastWeatherCache(store).read(query) is None
     session.incomplete = False
-    recovered = asyncio.run(source.import_runs(SITE, now + timedelta(minutes=30)))
+    recovered = asyncio.run(source.import_runs(SITE, now + timedelta(minutes=45)))
     assert any(run.initialized_at == missing for run in recovered)
     assert source.history_issues == {}
     assert len(ForecastWeatherCache(store).read(query).hours) == 95
@@ -951,3 +952,86 @@ def test_memoized_run_version_preserves_frozen_cache_round_trip_and_original_arc
     assert reopened.version == expected
     assert asdict(reopened) == original
     assert snapshot(store, tmp_path) == saved
+
+
+@pytest.mark.parametrize("unusable", [False, True])
+def test_missing_run_retries_grow_to_one_day_without_stopping_other_originals(unusable):
+    """Repeated gaps wait 15, 30, 60 minutes up to one day, while other runs progress independently."""
+    missing = datetime(2026, 3, 29, 12, tzinfo=UTC)
+
+    class MissingSession(FrozenRunSession):
+        """Keep one known initialization missing or incomplete while serving every other request."""
+
+        def __init__(self):
+            """Start with an unresolved gap and allow an actual later provider recovery."""
+            super().__init__()
+            self.missing = True
+
+        def get(self, url, **kwargs):
+            """Return the missing run's failure independently of older and newer complete runs."""
+            failed = self.missing and kwargs["params"]["run"] == "2026-03-29T12:00"
+            if failed and not unusable:
+                self.calls.append((url, kwargs))
+                raise ClientResponseError(None, (), status=404)
+            self.damage = "required_gap" if failed else None
+            return super().get(url, **kwargs)
+
+    session = MissingSession()
+    source = OpenMeteoSolarSource(session, history_start=lambda: missing - timedelta(days=5))
+    instant = INITIALIZED + timedelta(hours=8)
+    for attempts, minutes in enumerate((15, 30, 60, 120, 240, 480, 960, 1440, 1440, 1440), start=1):
+        asyncio.run(source.import_runs(SITE, instant))
+        assert (
+            sum(options["params"]["run"] == "2026-03-29T12:00" for _, options in session.calls)
+            == attempts
+        )
+        deadline = instant + timedelta(minutes=minutes)
+        assert source._missing_run_retries[missing] == deadline
+        assert source.history_retry_after is None
+        assert len(source.forecast_runs) > 0
+        asyncio.run(source.import_runs(SITE, deadline - timedelta(seconds=1)))
+        assert (
+            sum(options["params"]["run"] == "2026-03-29T12:00" for _, options in session.calls)
+            == attempts
+        )
+        instant = deadline
+    assert source._missing_run_attempts[missing] == 8
+    session.missing = False
+    asyncio.run(source.import_runs(SITE, instant))
+    assert any(run.initialized_at == missing for run in source.forecast_runs)
+    assert missing not in source._missing_run_retries
+    assert missing not in source._missing_run_attempts
+    assert source.history_issues == {}
+    source = OpenMeteoSolarSource(MissingSession(), history_start=lambda: missing)
+    asyncio.run(source.import_runs(SITE, INITIALIZED + timedelta(hours=8)))
+    assert source._missing_run_attempts[missing] == 1
+    source._select_site(replace(SITE, longitude=SITE.longitude + 1))
+    assert source._missing_run_retries == source._missing_run_attempts == {}
+
+
+@pytest.mark.parametrize("failure", ["404", "503", "unusable", "transport"])
+def test_old_site_import_failure_cannot_set_retry_state_for_a_new_site(failure):
+    """A site change during an awaited run read keeps the new site's retry state clean."""
+    changed = replace(SITE, longitude=SITE.longitude + 1)
+
+    class SwitchingSource(OpenMeteoSolarSource):
+        """Complete an old request with a controlled failure after installing the new site."""
+
+        async def read_run(self, location, run_init, origin, now):
+            """Represent a delayed provider/cache error without backdating the new site's state."""
+            self._select_site(changed)
+            if failure in ("404", "503"):
+                raise ClientResponseError(None, (), status=int(failure))
+            if failure == "unusable":
+                raise ValueError("Synthetic old cache failure")
+            raise OSError("Synthetic old transport failure")
+
+    source = SwitchingSource(
+        FrozenRunSession(), history_start=lambda: INITIALIZED - timedelta(days=5)
+    )
+    assert asyncio.run(source.import_runs(SITE, INITIALIZED + timedelta(hours=8))) == ()
+    assert source._run_site == version(asdict(changed))
+    assert (
+        source._missing_run_attempts == source._missing_run_retries == source.history_issues == {}
+    )
+    assert source.history_retry_after is None

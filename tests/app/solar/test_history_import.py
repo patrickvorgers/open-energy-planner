@@ -194,6 +194,7 @@ def test_configuration_change_rejects_an_old_reply_without_discarding_cached_met
 
 def test_explicit_learning_date_opens_a_new_meter_cohort_and_preserves_original_quarantine(
     tmp_path,
+    monkeypatch,
 ):
     """A deliberate post-replacement start binds new identity while date removal restores the original blocked cohort."""
     from open_energy_planner.solar.calculation.model import version
@@ -273,8 +274,18 @@ def test_explicit_learning_date_opens_a_new_meter_cohort_and_preserves_original_
         configuration,
         sources=(replace(configuration.sources[0], learning_start=None), configuration.sources[1]),
     )
+    revalidated = []
+    chunk = restored.history_import._chunk
+
+    def record(state, descriptor):
+        """Revalidate the selected original cohort while the unchanged second source reuses its accepted aggregate."""
+        revalidated.append((state["entity_id"], state.get("learning_start")))
+        return chunk(state, descriptor)
+
+    monkeypatch.setattr(restored.history_import, "_chunk", record)
     restored.store.save(cleared)
     restored.configure(cleared)
+    assert revalidated == [("sensor.pv0", None)] * len(original_chunks)
     assert restored.histories == original_histories
     assert restored.history_issues["sensor.pv0"] == "history_continuity_unavailable"
     again = SolarRuntime(SolarStore(documents))
