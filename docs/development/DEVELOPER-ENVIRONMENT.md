@@ -157,8 +157,12 @@ Energy membership remains authoritative for the example consumption meters.
 Unconfigured car and boiler sensors are obtained through separate EV and thermal
 source-choice requests. These choices do not enlarge the active catalogue until
 their configuration is saved. Existing pending queries and usable results are
-reused. Each query has at most 60 polls, two seconds apart. Failed, incomplete or
-timed-out results stop provisioning before example settings are written.
+reused. The server expires a pending choice request 60 seconds after its creation
+and reports it as failed. A reused pending request may therefore have less time
+remaining. The script's separate outer guard allows at most 60 polls, two seconds
+apart, but stops when the server reports failure or expiry. Failed, incomplete or
+timed-out results stop provisioning before example settings are written. Check
+the HA connection and simulator sources before retrying provisioning.
 
 Choices are checked again immediately before each version-guarded device save,
 so a result that expired during profile learning is refreshed first. Completed

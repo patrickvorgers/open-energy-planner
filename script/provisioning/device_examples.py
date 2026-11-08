@@ -285,7 +285,8 @@ async def ensure_source_choices(request, scope, required):
         status = await request("GET", path)
         if status.get("failed") is True:
             raise ValueError(
-                "Development example source choices failed. Refresh the fixture sources"
+                "Development example source choices failed or timed out. "
+                "Check the HA connection and fixture sources, then retry provisioning"
             )
         if status.get("pending") is False and status.get("failed") is False:
             if missing_sources(status):

@@ -591,8 +591,13 @@ def test_choice_failure_never_writes_settings_or_claims_examples(
         assert not boundary.devices and not boundary.selected
 
     monkeypatch.setattr(examples.asyncio, "sleep", sleep)
-    with pytest.raises(ValueError, match="Development example source choices"):
+    with pytest.raises(ValueError, match="Development example source choices") as failure:
         asyncio.run(examples.configure(request, examples.ExampleJournal(journal_path), NOW))
+    if outcome == "failed":
+        assert str(failure.value) == (
+            "Development example source choices failed or timed out. "
+            "Check the HA connection and fixture sources, then retry provisioning"
+        )
     assert not journal_path.exists()
     assert not boundary.devices and not boundary.selected and not boundary.ev["vehicles"]
     assert not boundary.thermal["stores"]
