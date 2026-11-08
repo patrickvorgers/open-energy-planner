@@ -7,6 +7,7 @@ from homeassistant.const import STATE_UNKNOWN
 from homeassistant.core import State
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.loader import IntegrationNotLoaded, async_get_loaded_integration
 
 from .solar_adapters import solar_configuration_suggestion
 
@@ -302,6 +303,25 @@ def ordered_entities(hass, entities, suggestions):
     )
 
 
+def integration_metadata(hass, entry, integration):
+    """Project the loaded integration's public name separately from its configured account title.
+
+    Registry-only helpers may lack a loaded manifest. Their platform remains an
+    explicit type identity, without loading integrations or exposing provider data.
+    """
+    if entry is None:
+        return {}
+    domain = integration.domain if integration else entry.platform
+    try:
+        name = async_get_loaded_integration(hass, domain).name
+    except (IntegrationNotLoaded, KeyError):
+        name = domain.replace("_", " ").capitalize()
+    return {
+        "integration_domain": domain[:MAX_CATALOGUE_TEXT_LENGTH],
+        "integration_display_name": name[:MAX_CATALOGUE_TEXT_LENGTH],
+    }
+
+
 def catalogue_entity(hass, state, energy_names):
     """Read one sanitized metadata projection on HA's event loop, excluding owned virtual devices."""
     if len(state.entity_id) > MAX_ENTITY_ID_LENGTH:
@@ -338,6 +358,12 @@ def catalogue_entity(hass, state, energy_names):
         )[:MAX_CATALOGUE_TEXT_LENGTH],
         "state_class": str(state.attributes.get("state_class", ""))[:MAX_CATALOGUE_TEXT_LENGTH],
         "device_id": entry.device_id if entry and entry.device_id else "",
+        **(
+            {"device_entry_type": physical.entry_type.value}
+            if physical and physical.entry_type is not None
+            else {}
+        ),
+        **integration_metadata(hass, entry, integration),
         **(
             {
                 "integration_id": integration.entry_id,

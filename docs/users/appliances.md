@@ -44,17 +44,23 @@ Check the integration and its exposed sources before refreshing again.
 
 Configure the vehicle's usable battery capacity, SoC source and charging limit separately from the charge point. The point needs its own consumption/power source, connection evidence, allowed vehicles and declared control capability.
 
-When adding a vehicle, first choose its **Home Assistant device**. OEP selects
-the integration automatically when the device has one integration. If several
-integrations supply its sensors, choose the relevant one explicitly. Then choose
-its state-of-charge sensor. It must report `%`. Its battery
-device class may be absent, but a humidity sensor is not a car SoC source. The
-device name supplies the vehicle name. Without a device name, OEP uses the
-integration's configured title.
+When adding a vehicle, choose its **Home Assistant integration**, then its
+**Home Assistant device**, then **Vehicle state of charge**. The integration
+uses its recognizable Home Assistant name, rather than an account title. If
+several accounts or instances belong to that integration, an extra
+**Home Assistant integration instance** choice appears before the device.
+After choosing the integration, one suitable device or sensor is selected automatically. Multiple
+suitable choices require an explicit selection. Nothing is saved until **Save**.
 
-For helpers without a registered device, keep **All devices / choose an integration**
-and choose the integration before the sensor. Device and integration choices only
-filter the sensor list. They do not select a sensor or change saved settings.
+Only devices with a compatible SoC sensor are offered. Service/API devices and
+humidity sensors are excluded. The sensor must report `%`. Its battery device
+class may be absent. Helpers without a registered device remain available under
+**Sources without a Home Assistant device**. The selected device supplies the
+vehicle name, with the configured integration title as fallback when needed.
+Changing to another integration, account or device clears an incompatible draft
+sensor and selects its replacement only when exactly one suitable sensor remains.
+Cancel restores the saved configuration. Refresh retains numeric edits and an
+explicit sensor choice.
 
 For a charge point, choose its device, then the integration that supplies power
 and connection status. Its consumption meter is selected separately from Home Assistant Energy,

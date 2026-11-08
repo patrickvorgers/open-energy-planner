@@ -36,12 +36,25 @@ The bounded first implementation supports sixteen vehicle records and four point
 may use one point. Stable opaque IDs identify records. The HA device name names
 a vehicle. Without a device name, the integration title supplies the name, with
 the source name retained when no config entry exists. Charge points retain their
-Energy source names. The source picker starts with the device, then narrows by
-config-entry identity without forwarding provider configuration or credentials.
-It automatically selects an integration only when the device's entity metadata
-has one unambiguous integration. The user always selects the sensor explicitly.
-Sources without a device retain an integration-first fallback. Device and
-integration filters are temporary editor state, not persisted source identities.
+Energy source names. Vehicle selection starts with the integration type, then an
+optional account/config-entry choice when several instances exist, then the
+eligible device and percentage SoC source. Exactly one suitable choice is
+automatic. Ambiguity remains explicit at every level. Service devices and devices
+without a compatible SoC source are excluded. Sources without a registered device
+use an explicit no-device group. Automatic choices are drafts until Save. Parent
+changes clear incompatible draft sources, while matching choices, metadata refresh
+and Cancel retain their existing boundaries. Charge-point power and connection
+selectors keep their independent device/integration filters and separate Energy meter.
+
+The thin HA catalogue adapter projects `integration_domain` and the loaded
+manifest's `integration_display_name` separately from `integration_id` and its
+configured `integration_name`. A registry-only platform can supply its explicit
+type when no manifest is loaded. `device_entry_type: service` carries HA's actual
+service classification. These optional, bounded string fields are validated at
+catalogue admission and transferred through the existing complete chooser path.
+Provider options, credentials and current measurements are not forwarded. The
+catalogue is temporary memory. This adds no storage format or migration layer.
+Device, type and account filters remain editor state, never saved source identities.
 Each vehicle links its own percentage SoC sensor, usable capacity
 in kWh and maximum AC power in W. Capacity is usable energy, not gross pack size.
 It also has a desired SoC and daily departure clock.

@@ -44,12 +44,13 @@ An unsuccessful new round does not overwrite the original accepted plan or prolo
 
 ## No vehicle or connection sensor appears
 
-In Settings > Appliances > EV charging, choose the **Home Assistant device**
-before its sensors. An integration's configured title can identify an account
-instead of the car. Find the car by its device name. OEP selects the integration
-automatically when the device has one integration. Choose explicitly when several
-integrations supply its sensors. For a source without a device, keep
-**All devices / choose an integration** and select the integration directly.
+In Settings > Appliances > EV charging, choose the vehicle's **Home Assistant
+integration**, then its device and SoC source. Integration names are distinct
+from configured accounts. When several instances exist, choose the account first.
+One suitable device or sensor is selected automatically, while multiple choices
+require your selection. Service devices and devices without a compatible SoC
+source are not offered as vehicles. For a helper without a device, choose
+**Sources without a Home Assistant device** under its integration.
 The car's state-of-charge sensor must report `%`.
 A sensor with an unrelated device class, such as humidity, is not a vehicle SoC
 source.
