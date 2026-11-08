@@ -775,6 +775,34 @@ not serialized. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
 
 `consumer-forecast-<forecast-version>.json` stores the complete composite household forecast and its `components`: source identities, per-device forecast intervals (UTC start, duration in hours, kWh), residual forecast, settings version and fitted profile/Ridge parameters. Forecasts and parameters retain their original issue/training identities. No executable estimator pickle is stored. The composite has no excluded devices because residual plus device demand is already recombined. A missing component cannot be archived as zero. Selection/evaluation references stay in the existing planning documents. History streams are transient training inputs. The archived forecasts/parameters are the evidence used for planning. All these rows join existing all-table database transfer and backup procedures automatically and must be covered by the four-backend document contracts.
 
+Weather-sensitive component records additionally expose `weather_learning` with
+policy, candidate and selected model IDs, readiness status, completed/required
+windows, absolute/relative improvement thresholds, per-window MAE in kWh/hour,
+pending UTC end, training coverage and excluded training periods with their
+unavailable-input reasons, and an optional excluded comparison with its reason. Other
+consumers retain null weather learning. The component's existing `status` still
+describes household-composition activation separately from accuracy admission.
+
+The same `demand` namespace owns these weather-learning JSON contracts through
+the existing `oep_documents` namespace/name primary key. No new SQL table,
+column, index or database engine is introduced:
+
+| Name | Immutable content or pointer contract |
+|---|---|
+| `consumer-weather-model-<digest>.json` | Configuration and measurement-training versions, timezone, UTC training cutoff, preceding-day mean in kWh/hour, observed Celsius support, ordered feature names, schema, source/training hour counts, excluded UTC periods/reasons, native non-executable XGBoost JSON and its digest. Native JSON is bounded to 2 MiB and checked before native parsing. |
+| `consumer-weather-window-<digest>.json` | Family, configuration/training/model archive identities, model digest, known-at-issue weather digest, UTC issue/start/exclusive end, and 24 hourly kWh predictions from candidate, simpler model and weekday profile. Issue precedes the first forecast hour and training does not extend past issue. |
+| `consumer-weather-assessment-<digest>.json` | Original window identity and UTC bounds, original issue time, later actual kWh values and their timestamp/value digest, each model's hourly MAE and the derived improvement result. Source corrections append different assessments without replacing original predictions or earlier assessments. |
+| `consumer-weather-selection-<family>.json` | Mutable bounded pointer to at most three disjoint completed window digests and one pending digest, plus the latest excluded interval/reason. Family binds meter configuration, selection policy, feature schema and simpler algorithm. No stored promotion boolean grants activation. Reads validate referenced immutable evidence and recompute scores against available actual history. |
+
+Missing interior measurements exclude the comparison instead of fabricating
+zeros. Delayed final measurements remain pending. Scores require complete
+24-hour windows within 90 days and a benefit above both 5.0% and 0.001 kWh/hour
+against each simpler alternative in all three windows. The existing financial
+composition comparison remains required. Immutable source/model evidence is
+not statistically trimmed. These documents participate in the existing four-backend
+restart and cross-backend transfer contracts without depending on the old source
+engine afterward.
+
 The component JSON additionally retains `baseline_forecast` per consumer and
 `residual_baseline`, using the existing historical weekday/hour algorithm. These
 are frozen inputs for a changed measurement boundary when explicit cycle work

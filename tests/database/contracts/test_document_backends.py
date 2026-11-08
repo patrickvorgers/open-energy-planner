@@ -427,6 +427,26 @@ def test_individual_consumer_choices_share_the_active_database(archive):
     assert reopened.documents.read("consumer-settings.json") == list(selected)
 
 
+def test_weather_learning_resumes_from_original_forward_evidence(archive):
+    """Every backend reopens real native JSON and completes earlier unseen days before promoting."""
+    from tests.app.forecast.support.weather_learning import forecast_day
+
+    engine, _root = archive
+    documents = SqlDocuments(engine, "demand")
+    for day in (42, 43):
+        forecast_day(documents, day)
+    original = list(documents.iter_prefix("consumer-weather-window-"))
+    reopened = SqlDocuments(engine, "demand")
+    assert list(reopened.iter_prefix("consumer-weather-window-")) == original
+    for day in (44, 45):
+        model, _, evidence = forecast_day(reopened, day)
+    assert model.model_id == "xgboost-weather-v1"
+    assert evidence["completed_windows"] == 3
+    assert all(
+        window in list(reopened.iter_prefix("consumer-weather-window-")) for window in original
+    )
+
+
 def test_appliance_work_profiles_attempts_and_rollback_share_active_backend(archive, monkeypatch):
     """All four backends retain claimed/unknown work and cycle evidence. Failed state commit cannot advance live state."""
     from copy import deepcopy

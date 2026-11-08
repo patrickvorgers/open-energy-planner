@@ -13,6 +13,7 @@ FORECAST_MODELS = {
     "startup-v2": "Start profile (estimated bounded quarter projection)",
     "weekday-hour-v2": "Learned weekday/hour profile (bounded quarter projection)",
     "ridge-v2": "ML regression (bounded quarter projection)",
+    "xgboost-weather-v1": "Learned nonlinear weather model (bounded quarter projection)",
     "pvwatts-calibrated-v2": "PVWatts quarter geometry with learned corrections",
     "pvwatts-v2": "Physical solar model (PVWatts quarter geometry)",
     "ha-production-v1": "Home Assistant solar production forecast",
