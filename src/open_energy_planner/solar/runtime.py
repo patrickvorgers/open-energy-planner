@@ -1,7 +1,7 @@
 """Versioned solar orchestration. Background workers own model calculation and immutable writes."""
 
 import logging
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import timedelta
 from importlib.metadata import version as distribution_version
 
@@ -11,8 +11,9 @@ from open_energy_planner.solar.calculation.model import ForecastSource, SolarFor
 
 from ..planning_policy import FINE_INTERVAL_MINUTES
 from .boosting import TrainingResult, TrainingStatus, TrainingSummary, fit_boosted_model
+from .calculation.projection import learned_forecast
 from .ha_forecasts import HA_REFRESH_MAX_AGE
-from .learning import calibration_blocker, fit
+from .learning import learning_blocker
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
 from .source_selection import MIN_ACCURACY_DAYS, SOURCE_POLICY, choose_sources, ha_energies
 from .wire import configuration_document, document, forecast_document
@@ -250,72 +251,55 @@ class SolarRuntime:
             tuple(weather_item for weather_item in weather if weather_item.received_at <= now),
         )
         histories = dict(histories)
-        inverters = {inverter.inverter_id: inverter for inverter in configuration.inverters}
-        calibrations = tuple(
-            replace(
-                candidate,
-                configuration_version=configuration.version,
-                weather_version=forecast.weather_version,
-                history_version=version(document(histories[source.entity_id])),
-            )
-            for source in configuration.sources
-            if (
-                candidate := fit(
-                    source,
-                    histories.get(source.entity_id),
-                    hourly,
-                    now,
-                    inverters[source.inverter_id],
-                )
-            )
-            is not None
-        )
         self.store.archive_series(
-            "weather",
-            forecast.weather_version,
-            [document(weather_item) for weather_item in weather],
+            "weather", forecast.weather_version, [document(row) for row in weather]
         )
         for history in histories.values():
             body = document(history)
             self.store.archive_series(
                 "history", version(body), body["hours"], entity=history.entity_id
             )
-        for calibration in calibrations:
-            body = document(calibration)
-            self.store.archive("calibration", version(asdict(calibration)), body)
-        learning, hourly_factors = self._learned_candidates(
-            configuration, location, histories, hourly, weather, now, calibrations
+        learning = self._learned_candidates(
+            configuration, location, histories, hourly, weather, now
         )
-        learned_names = {
-            row.source_id: learning[row.source_id].model.schema
-            if learning[row.source_id].model is not None
-            else "pvwatts-calibrated-v2"
-            for row in calibrations
+        models_by_source = {
+            source_id: result.model
+            for source_id, result in learning.items()
+            if result.model is not None
         }
+        try:
+            candidate = learned_forecast(configuration, location, weather, now, models_by_source)
+        except (ImportError, ValueError, RuntimeError, OSError) as error:
+            self.learning_log.exception(
+                "Independent solar prediction is unavailable. PVWatts remains available. Retrying with the next usable solar forecast update.",
+                expected=True,
+                reason=type(error).__name__,
+            )
+            _LOGGER.debug(
+                "Independent solar prediction failure (%s).\n%s",
+                type(error).__name__,
+                failure_trace(error),
+            )
+            learning = {
+                source_id: replace(
+                    result,
+                    model=None,
+                    summary=replace(
+                        result.summary,
+                        status=TrainingStatus.FAILED,
+                        issue="The independent prediction could not be updated. PVWatts remains usable.",
+                    ),
+                )
+                if result.model is not None
+                else result
+                for source_id, result in learning.items()
+            }
+            models_by_source, candidate = {}, None
+        calibrations = tuple(models_by_source.values())
+        learned_names = {source_id: model.schema for source_id, model in models_by_source.items()}
         learned_references = {
-            row.source_id: learning[row.source_id].archive_reference
-            if learning[row.source_id].model is not None
-            else version(asdict(row))
-            for row in calibrations
+            source_id: learning[source_id].archive_reference for source_id in models_by_source
         }
-        candidate = (
-            predictor.forecast(
-                configuration,
-                location,
-                weather,
-                now,
-                calibrations=calibrations,
-                hourly_factors=hourly_factors,
-            )
-            if calibrations
-            else None
-        )
-        if candidate and any(row.model is not None for row in learning.values()):
-            candidate = replace(
-                candidate,
-                model="solar-learned-v1",
-                calibration_versions=tuple(learned_references.values()),
-            )
         if candidate:
             self.store.archive(
                 "forecast", candidate.version, {"forecast": forecast_document(candidate)}
@@ -422,6 +406,7 @@ class SolarRuntime:
         ):
             if archived is not None:
                 calibrated = {row.source_id for row in applied}
+                available_sources = {row.source_id for row in archived.energies}
                 self.store.archive(
                     "quality-source-models",
                     archived.version,
@@ -434,6 +419,7 @@ class SolarRuntime:
                             else baseline.model
                         )
                         for source in configuration.sources
+                        if source.source_id in available_sources
                     },
                 )
         alternatives = [baseline]
@@ -474,16 +460,13 @@ class SolarRuntime:
             learning,
         )
 
-    def _learned_candidates(
-        self, configuration, location, histories, hourly, weather, now, calibrations
-    ):
+    def _learned_candidates(self, configuration, location, histories, hourly, weather, now):
         """Persist bounded tree weights once and retain separate source/cleaning provenance per fit."""
-        sources = {row.source_id: row for row in configuration.sources}
         inverters = {row.inverter_id: row for row in configuration.inverters}
-        future = tuple(row for row in hourly if row.start + timedelta(hours=1) > now)
-        learning, factors, failed = {}, {}, False
-        for calibration in calibrations:
-            source = sources[calibration.source_id]
+        learning, failed = {}, False
+        for source in configuration.sources:
+            if source.entity_id not in histories:
+                continue
             try:
                 result = fit_boosted_model(
                     source,
@@ -494,7 +477,6 @@ class SolarRuntime:
                     weather,
                     now,
                 )
-                values = result.model.factors(future, weather, known_at=now) if result.model else {}
                 metadata = document(result.model) if result.model else None
                 if result.model:
                     weights = {
@@ -508,21 +490,18 @@ class SolarRuntime:
                     "source_id": source.source_id,
                     "configuration_version": configuration.version,
                     "location": document(location),
-                    "history_version": calibration.history_version,
-                    "weather_version": calibration.weather_version,
+                    "history_version": version(document(histories[source.entity_id])),
+                    "weather_version": version([document(row) for row in weather]),
                     "model": metadata,
                     "summary": document(result.summary),
                 }
                 reference = version(record)
                 self.store.archive("ml-training", reference, record)
                 learning[source.source_id] = replace(result, archive_reference=reference)
-                factors.update(
-                    {(source.source_id, instant): value for instant, value in values.items()}
-                )
             except (ImportError, ValueError, RuntimeError, OSError) as error:
                 failed = True
                 self.learning_log.exception(
-                    "PVWatts and usable scalar candidates remain available. Retrying with the next usable solar forecast update.",
+                    "PVWatts remains available. Retrying with the next usable solar forecast update.",
                     expected=True,
                     reason=type(error).__name__,
                 )
@@ -543,11 +522,11 @@ class SolarRuntime:
                         issue="The ML candidate could not be updated. Simpler forecasts remain usable.",
                     ),
                 )
-        if calibrations and not failed:
+        if learning and not failed:
             self.learning_log.success(
                 "Training checks completed. Candidate activation still requires matched forecast evidence."
             )
-        return learning, factors
+        return learning
 
     def install(self, result, now):
         """Never let a delayed worker replace forecasts for newer source definitions or weather."""
@@ -591,7 +570,7 @@ class SolarRuntime:
             }
             fitted = {candidate_item.source_id for candidate_item in self.calibrations}
             for source in self.configuration.sources:
-                status = calibration_blocker(source, inverters[source.inverter_id])
+                status = learning_blocker(source, inverters[source.inverter_id])
                 if status is not None:
                     statuses[source.source_id] = status
                     continue
@@ -612,16 +591,24 @@ class SolarRuntime:
             "configuration": configuration_document(self.configuration),
             "forecast": forecast,
             "candidate": candidate,
-            "calibrations": [document(candidate_item) for candidate_item in self.calibrations],
+            "calibrations": [
+                {
+                    "source_id": model.source_id,
+                    "trained_until": model.trained_until.isoformat(),
+                    "training_version": model.training_version,
+                    "status": "nonlinear_shadow",
+                }
+                for model in self.calibrations
+            ],
             "calibration_status": statuses,
             "learning": {
                 source_id: {
                     **{
                         key: value
                         for key, value in document(row.summary).items()
-                        if key != "excluded_periods"
+                        if key not in ("excluded_periods", "diagnostic_periods")
                     },
-                    "candidate_model": row.model.schema if row.model else "pvwatts-calibrated-v2",
+                    "candidate_model": row.model.schema if row.model else None,
                     "audit_reference": row.archive_reference,
                 }
                 for source_id, row in self.learning.items()

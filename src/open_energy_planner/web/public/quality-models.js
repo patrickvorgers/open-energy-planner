@@ -26,7 +26,25 @@ export function renderCurrentModel(parent, row, expanded = false) {
     const details = document.createElement("details"), summary = document.createElement("summary");
     details.className = "quality-current-model"; details.dataset.modelSource = row.id; details.open = expanded;
     summary.textContent = "Current model and learning"; details.append(summary);
-    const paragraph = value => { const node = document.createElement("p"); node.textContent = value; details.append(node); };
+    const paragraph = (value, parent = details) => { const node = document.createElement("p"); node.textContent = value; parent.append(node); };
+    const comparison = title => {
+        const section = document.createElement("section"), heading = document.createElement("h4");
+        section.className = "quality-comparison"; section.setAttribute("aria-label", title);
+        heading.textContent = title; section.append(heading); details.append(section); return section;
+    };
+    const errors = (parent, rows) => {
+        const table = document.createElement("table"), head = document.createElement("thead"), header = document.createElement("tr"), body = document.createElement("tbody");
+        table.className = "quality-model-errors";
+        for (const label of ["Prediction", "MAE (kWh/hour)"]) { const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; header.append(cell); }
+        head.append(header); table.append(head);
+        for (const [label, error] of rows) {
+            const line = document.createElement("tr"), name = document.createElement("th"), value = document.createElement("td");
+            name.scope = "row"; name.textContent = label;
+            value.textContent = error == null ? "Not yet available" : error.toLocaleString(undefined, {minimumFractionDigits: 3, maximumFractionDigits: 3});
+            line.append(name, value); body.append(line);
+        }
+        table.append(body); parent.append(table);
+    };
     paragraph("Current status observed now. The graph retains the original model and forecast fixed at the selected day's midnight.");
     const model = row.selection;
     const statuses = {training_history_required: "Collecting training history", learned_preferred: "Learned model has consistent decision benefit", collecting_decision_evidence: "Collecting realized decision evidence", no_consistent_decision_benefit: "Baseline retained: No consistent decision benefit"};
@@ -61,21 +79,31 @@ export function renderCurrentModel(parent, row, expanded = false) {
     if (row.solarSelection) {
         const solar = row.solarSelection;
         const names = {automatic: "Automatic", pvwatts: "PVWatts", ha: "Home Assistant", ml: "ML model"};
-        paragraph(`Forecast source: ${names[solar.requested]}: Active: ${names[solar.active]}`);
-        paragraph(`Accuracy comparison: ${solar.complete_days} of ${solar.required_days} complete days. Candidates use the same previously forecast hours. Lower mean absolute error is better.`);
-        for (const [source, error] of Object.entries(solar.mae_kwh || {})) paragraph(`${names[source]}: Mean absolute error: ${error.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh per hour`);
-        if (solar.issue) paragraph(solar.issue);
-        if (row.solarLearning && !row.solarTraining) paragraph(`ML learning: ${optionLabel(row.solarLearning)}`);
+        const complete = comparison("Complete forecast comparison");
+        paragraph(`Forecast source: ${names[solar.requested]}: Active: ${names[solar.active]}`, complete);
+        paragraph(`${solar.complete_days} of ${solar.required_days} complete days. Forecasts saved before the measured day are compared on the same actual production hours. Lower mean absolute error is better.`, complete);
+        paragraph("PVWatts and XGBoost use the same captured Open-Meteo weather. The Home Assistant provider uses its own weather. This comparison includes the weather source and determines Automatic selection.", complete);
+        if (Object.keys(solar.mae_kwh || {}).length) errors(complete, Object.entries(solar.mae_kwh).map(([source, error]) => [source === "ml" ? "XGBoost" : names[source], error]));
+        else paragraph("Scores appear after the required comparable days are complete.", complete);
+        if (solar.issue) paragraph(solar.issue, complete);
+        if (row.solarLearning && !row.solarTraining) paragraph(`ML learning: ${optionLabel(row.solarLearning)}`, complete);
     }
     if (row.solarTraining) {
         const training = row.solarTraining;
-        const names = {nonlinear_shadow: row.solarSelection?.active === "ml" ? "Nonlinear model is active" : "Nonlinear candidate is learning in shadow mode", linear_preferred: "Simpler correction retained", insufficient_clean_history: "Collecting usable training history", training_failed: "Training temporarily unavailable", blocked: "Independent production evidence required"};
-        paragraph(`Solar learning: ${names[training.status] || "Waiting for usable history"}`);
-        paragraph(`Training: ${training.training_hours} daylight hours. Historical validation: ${training.validation_hours} hours from a later, separate week.`);
-        for (const [label, error] of [["PVWatts", training.baseline_mae_kwh], ["Simple correction", training.linear_mae_kwh], ["Nonlinear candidate", training.tree_mae_kwh]]) if (error != null) paragraph(`${label}: Historical mean absolute error: ${error.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh per hour`);
-        for (const [reason, count] of Object.entries(training.excluded_counts || {})) paragraph(`Excluded from learning: ${optionLabel(reason)}: ${count} ${count === 1 ? "hour" : "hours"}. Original measurements are retained.`);
-        if (training.status === "nonlinear_shadow" && row.solarSelection?.active !== "ml") paragraph("The nonlinear candidate must also improve forecasts issued before later measurements. Historical training alone does not activate it.");
-        if (training.issue) paragraph(training.issue);
+        const controlled = comparison("Model comparison");
+        const names = {nonlinear_shadow: row.solarSelection?.active === "ml" ? "XGBoost is active" : "XGBoost is learning in shadow mode", baseline_preferred: "PVWatts retained after historical validation", linear_preferred: "Simpler correction retained", insufficient_clean_history: "Collecting usable training history", insufficient_validation_history: "Collecting usable historical validation", training_failed: "Training temporarily unavailable", blocked: "Independent production evidence required"};
+        paragraph(`Solar learning: ${names[training.status] || "Waiting for usable history"}`, controlled);
+        paragraph("XGBoost predicts production directly from weather, sun position and time. It does not multiply or depend on a PVWatts prediction.", controlled);
+        paragraph("Historical validation compares PVWatts and XGBoost using the same weather and measured daylight hours from a later period held out of training. It compares the models under equal weather inputs, not the weather source's accuracy.", controlled);
+        const trainingDays = training.training_days == null ? "" : ` across ${training.training_days} days`, validationDays = training.validation_days == null ? "" : ` across ${training.validation_days} days`;
+        paragraph(`Training: ${training.training_hours} daylight hours${trainingDays}. Historical validation: ${training.validation_hours} daylight hours${validationDays}.`, controlled);
+        if (training.validation_start && training.validation_end) paragraph(`Validation period: ${when(training.validation_start)} to ${when(training.validation_end)}`, controlled);
+        errors(controlled, [["PVWatts", training.baseline_mae_kwh], ["XGBoost", training.tree_mae_kwh]]);
+        paragraph("Reliable daylight measurements remain included at zero, low or unexpectedly high production. Original measurements are retained.", controlled);
+        for (const [reason, count] of Object.entries(training.excluded_counts || {})) paragraph(`Excluded from learning: ${optionLabel(reason)}: ${count} ${count === 1 ? "hour" : "hours"}.`, controlled);
+        for (const [reason, count] of Object.entries(training.diagnostic_counts || {})) paragraph(`Marked for review, still included: ${optionLabel(reason)}: ${count} ${count === 1 ? "hour" : "hours"}. A statistical difference does not prove a meter fault or curtailment.`, controlled);
+        if (training.status === "nonlinear_shadow" && row.solarSelection?.active !== "ml") paragraph("Historical training alone does not activate it. XGBoost must also improve forecasts saved before later measurements in the complete forecast comparison.", controlled);
+        if (training.issue) paragraph(training.issue, controlled);
     }
     for (const issue of new Set([row.issue, model?.issue].filter(Boolean))) paragraph(issue === "Available PV needs uncurtailed, independent production evidence" ? "Model comparison needs independent evidence of available solar production, including production prevented by curtailment." : issue);
     for (const [label, value] of [["Pending comparison ends", model?.pending_until], ["Last evaluated", model?.evaluated_at]]) if (value) paragraph(`${label}: ${when(value)}`);

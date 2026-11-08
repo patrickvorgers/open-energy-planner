@@ -18,6 +18,7 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
+from open_energy_planner.solar.learning import unrestricted_interval
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
 from open_energy_planner.solar.wire import document
 
@@ -44,7 +45,7 @@ def comparison_hours(day, timezone):
 def eligibility(configuration, source):
     """Exclude unknown available-production boundaries without inventing DC from hybrid AC metering."""
     inverter = next(row for row in configuration.inverters if row.inverter_id == source.inverter_id)
-    if source.can_curtail:
+    if source.can_curtail and source.unrestricted_history_start is None:
         return "Production affected by curtailment cannot establish forecast accuracy"
     if inverter.hybrid:
         return (
@@ -129,6 +130,9 @@ def family(configuration, source, location, *, learned_policy=None):
     inverter = next(row for row in configuration.inverters if row.inverter_id == source.inverter_id)
     source_definition = asdict(source)
     source_definition.pop("forecast_source")
+    for field in ("unrestricted_history_start", "unrestricted_history_end"):
+        source_definition.pop(field)
+
     for group in (source_definition, *source_definition["ha_imports"]):
         for panel in group["panels"]:
             panel.pop("name")
@@ -201,8 +205,8 @@ def choose_sources(
         store: Active solar archive. The single model worker owns these writes.
         configuration: Typed physical sources, geometry and converter limits.
         baseline: Original physical DC/AC forecasts in kWh with HA location.
-        candidate: Original learned correction forecast, or None before fitting.
-        calibrations: Fitted source identities eligible for the ML candidate.
+        candidate: Independent direct-production forecast, or None before fitting.
+        calibrations: Fitted direct-production model identities eligible for ML.
         ha: Source IDs mapped to normalized HA planning energies in kWh.
         histories: Meter entity IDs mapped to cumulative Recorder kWh sums.
         now: Aware capture/evaluation time. No completed outcome may enter a capture.
@@ -314,6 +318,8 @@ def choose_sources(
                 ForecastSource.HOME_ASSISTANT in models
                 and record.get("ha_configuration_versions", []) != provider_revisions
             ):
+                continue
+            if not all(unrestricted_interval(source, instant, instant + HOUR) for instant in hours):
                 continue
             values = [actual.get(instant) for instant in hours]
             if any(value is None for value in values):

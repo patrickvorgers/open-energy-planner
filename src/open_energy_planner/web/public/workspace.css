@@ -283,6 +283,14 @@
 .forecast-workspace .model-selection-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .forecast-workspace .model-selection-summary dt { color:var(--oep-muted); font-size:12px; }
 .forecast-workspace .model-selection-summary dd { margin:6px 0 0; overflow-wrap:anywhere; }
+.forecast-workspace .quality-comparison { border-top:1px solid var(--oep-line); margin-top:20px; padding-top:16px; }
+.forecast-workspace .quality-comparison h4 { margin:0 0 12px; font-size:16px; }
+.forecast-workspace .quality-comparison p { max-width:75ch; line-height:1.6; }
+.forecast-workspace .quality-model-errors { width:100%; max-width:520px; font-variant-numeric:tabular-nums; }
+.forecast-workspace .quality-model-errors th { font-weight:400; background:transparent; }
+.forecast-workspace .quality-model-errors th:last-child,.forecast-workspace .quality-model-errors td:last-child { text-align:right; }
+.solar-history-confirmation { grid-column:1/-1; min-width:0; }
+.solar-history-confirmation > p { grid-column:1/-1; max-width:75ch; }
 .forecast-workspace .quality-evidence-controls label { min-height:44px; }
 @media(max-width:640px) { .forecast-workspace .toolbar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.forecast-workspace .toolbar button { width:100%; }.forecast-workspace .quality-summary { gap:16px; }.forecast-workspace .quality-summary div { flex:1 1 120px; } }
 

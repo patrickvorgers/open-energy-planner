@@ -96,6 +96,12 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
         try:
             body = await request.json()
             candidate = parse_configuration(body)
+            if any(
+                source.unrestricted_history_end is not None
+                and datetime.fromisoformat(source.unrestricted_history_end) > datetime.now(UTC)
+                for source in candidate.sources
+            ):
+                raise ValueError("Historical production confirmation cannot cover the future")
         except (ValueError, TypeError, KeyError, OverflowError):
             raise web.HTTPBadRequest(text="Invalid solar configuration") from None
         async with lock:

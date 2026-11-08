@@ -45,6 +45,31 @@ When Home Assistant Energy links supported Forecast.Solar panel metadata to the 
 
 Available solar DC energy and measured inverter AC production are different quantities. Conversion losses, clipping, curtailment and hybrid battery flows can prevent a direct comparison. Do not infer forecast failure from two values that use different measurement boundaries.
 
+Each solar source can use **PVWatts**, **ML model** or **Home Assistant**. These
+are independent production predictions. PVWatts uses the installation geometry
+and weather. The XGBoost ML model learns the metered production directly from
+weather, sun position and time. It does not scale a PVWatts prediction. The
+Home Assistant provider supplies its own forecast. **Automatic** chooses among
+eligible sources using predictions saved before the later measured production.
+Insufficient or unproven learning keeps PVWatts available.
+
+Reliable daylight measurements remain useful when production is zero, unusually
+low or higher than PVWatts predicted. Daylight is determined from the sun's
+position, independently of the predicted output. Missing or incomplete meter
+hours, decreasing cumulative readings and physically invalid values cannot
+establish production. Unusual relationships between irradiance and yield are
+marked for review without discarding the measurements. A statistical anomaly or
+low production alone does not prove that panels were switched off.
+
+For a source that allows proposed solar on/off commands, **Historical production
+for learning** offers **Confirmed unrestricted production from (UTC)** and
+**Confirmed unrestricted production until (UTC)**. Set both only when you know
+the source was not limited in that period. The end is exclusive and neither
+endpoint can be in the future. This is your explicit historical declaration,
+not an automatically detected state. Unconfirmed periods remain excluded for
+that source. Extending a confirmed historical range does not confirm future
+production or authorize a hardware command.
+
 ## Read Forecast quality
 
 Open **Insights > Forecast quality** and choose a day above the **Household**,
@@ -94,7 +119,22 @@ observations with an explicit warning.
 
 **Current model and learning** describes the model available now. The chart retains the model that produced the selected day's midnight prediction. Refreshing evidence updates measurements and current readiness, not that original forecast.
 
-Automatic model selection uses its own chronological comparison of simulated decisions. A lower descriptive prediction error alone does not activate a candidate. Simulated decision costs are not measured savings. For actual metering and retrospective evaluation, use [Savings](savings.md).
+For Solar, this disclosure separates two comparisons:
+
+| Comparison | What it tells you |
+|---|---|
+| **Complete forecast comparison** | How well independently saved PVWatts, XGBoost and Home Assistant predictions matched the same later production hours. PVWatts and XGBoost share captured Open-Meteo weather. The Home Assistant provider uses its own weather. This assesses the complete forecast, including its weather source, and determines Automatic selection. |
+| **Model comparison** | How PVWatts and XGBoost performed with the same weather inputs on a later historical period excluded from training. This compares their models under equal weather inputs. It does not measure the weather source's own error or establish a forecast that was issued in the past. |
+
+The model comparison reports training and validation hours and days separately.
+Missing validation coverage is different from insufficient training history.
+Excluded hours have their reasons. Hours marked for review remain included.
+Historical improvement alone never activates XGBoost. It must also improve the
+required complete days of predictions saved before the measured outcomes.
+
+Household model selection separately compares simulated decisions. Simulated
+decision costs are not measured savings. For actual metering and retrospective
+evaluation, use [Savings](savings.md).
 
 If a source or day is unavailable, check its specific reason in the page and [troubleshooting](troubleshooting.md). Developer details remain in [demand forecasting](../development/DEMAND-FORECASTING.md), [solar forecasting](../development/SOLAR-FORECASTING.md), [model selection](../development/MODEL-SELECTION.md) and [forecast quality contracts](../development/FORECAST-QUALITY.md).
 

@@ -124,6 +124,8 @@ class SolarSource:
     panels: tuple[SolarPanel, ...] = ()
     ha_imports: tuple[SolarImport, ...] = ()
     forecast_source: ForecastSource = ForecastSource.AUTOMATIC
+    unrestricted_history_start: str | None = None
+    unrestricted_history_end: str | None = None
 
     def __post_init__(self):
         """Validate minimum inputs and make default tilt and measurement boundary explicit."""
@@ -139,6 +141,18 @@ class SolarSource:
             raise ValueError("Unsupported approximate orientation")
         if self.measurement_boundary not in ("ac", "dc") or type(self.can_curtail) is not bool:
             raise ValueError("Invalid solar measurement/control boundary")
+        if (self.unrestricted_history_start is None) != (self.unrestricted_history_end is None):
+            raise ValueError("Confirm both unrestricted history boundaries")
+        if self.unrestricted_history_start is not None:
+            try:
+                start = aware(datetime.fromisoformat(self.unrestricted_history_start))
+                end = aware(datetime.fromisoformat(self.unrestricted_history_end))
+            except (TypeError, ValueError):
+                raise ValueError("Invalid unrestricted history period") from None
+            if start >= end:
+                raise ValueError("Unrestricted history must have a positive duration")
+            object.__setattr__(self, "unrestricted_history_start", start.isoformat())
+            object.__setattr__(self, "unrestricted_history_end", end.isoformat())
         object.__setattr__(self, "forecast_source", ForecastSource(self.forecast_source))
         object.__setattr__(self, "capacity_w", float(self.capacity_w))
         object.__setattr__(self, "tilt", float(self.tilt))
@@ -230,7 +244,12 @@ class SolarConfiguration:
                 for panel in group["panels"]:
                     if not panel["name"]:
                         panel.pop("name")
-            for field in ("panels", "ha_imports"):
+            for field in (
+                "panels",
+                "ha_imports",
+                "unrestricted_history_start",
+                "unrestricted_history_end",
+            ):
                 if not source[field]:
                     source.pop(field)
             if source["forecast_source"] == ForecastSource.AUTOMATIC:

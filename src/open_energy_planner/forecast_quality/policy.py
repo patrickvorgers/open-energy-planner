@@ -18,7 +18,8 @@ FORECAST_MODELS = {
     "pvwatts-v2": "Physical solar model (PVWatts quarter geometry)",
     "ha-production-v1": "Home Assistant solar production forecast",
     "solar-selected-v1": "Independently selected solar forecasts",
-    "solar-xgboost-v1": "Solar ML (XGBoost CPU)",
+    "solar-xgboost-v1": "Solar ML correction (XGBoost CPU)",
+    "solar-xgboost-production-v2": "Independent solar production (XGBoost CPU)",
     "solar-learned-v1": "Per-source learned solar forecasts",
 }
 

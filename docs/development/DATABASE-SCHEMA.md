@@ -322,7 +322,15 @@ catalogue contract and does not add tables, columns or a second source registry.
 
 Solar source objects also contain `forecast_source`, one of `automatic`, `pvwatts`,
 `ha` or `ml`. Its default `automatic` is omitted from the canonical configuration
-hash. Forecast documents may contain `valid_until`, an exclusive aware UTC provider
+hash. Optional `unrestricted_history_start` and `unrestricted_history_end` retain
+an explicit user declaration of unrestricted production for a curtailable source.
+Both aware UTC ISO endpoints are required together and ordered. The end is
+exclusive and endpoints cannot be in the future. They participate in the
+configuration version, use the existing settings concurrency check, and are
+stored through the active engine. Their absence does not establish curtailment
+or unrestricted history. Unknown periods cannot establish training or forward
+accuracy for a curtailable source. No hardware command or automatic detection
+is implied. Forecast documents may contain `valid_until`, an exclusive aware UTC provider
 freshness deadline. Null leaves the existing OEP forecast age policy authoritative.
 Selected HA forecasts must pass both deadlines. `weather_version` is `none` when
 an explicit all-HA forecast was built without independent weather.
@@ -334,8 +342,8 @@ The `solar` namespace additionally owns these JSON contracts:
 | `ha-first-<version>.json` | First normalized observation of exact provider configuration and native AC `steps` with aware `start`, `duration_h` in elapsed hours and `kwh`. Partial sunrise/sunset and native quarter intervals are retained. Contains `observed_at`, nullable `provider_issued_at` and nullable `provider_refreshed_at`. Content identity excludes observation and refresh times. The first record is never rewritten by cache reads. |
 | `ha-receipt-<hash>.json` | Immutable meter `entity_id` and normalized prediction including actual observation/refresh times. Credentials and raw provider payloads are excluded. New real refreshes retain separate provenance. |
 | `source-day-<family>-<local-date>.json` | First forward capture for one measured source/local day. Retains exact UTC `hours`, HA timezone, original configuration/baseline/ML references, original `ha_versions` and per-model hourly kWh values. The family scopes physical source/inverter definitions and location, excluding requested source preference. Nonlinear model families additionally bind the learning policy, including library/features, cleaning, fitting and gain thresholds. Earlier scalar captures cannot admit a tree candidate. |
-| `ml-weights-<hash>.json` | Immutable nonlinear solar `schema` and bounded native XGBoost CPU `model_json`. The model metadata retains its SHA-256 checksum. Native JSON is structurally validated before loading. No pickle or executable Python objects are stored. |
-| `ml-training-<hash>.json` | Per-source training report with original configuration/location, weather/history references, optional model metadata and `weights_reference`. Metadata binds source/inverter/site, capacity in kWp, training cutoff, actual creation time, library/policy/features, training digest and model checksum. The summary retains daylight training/validation counts, UTC validation bounds, baseline/scalar/tree MAE in hourly kWh, status, excluded reason counts and coalesced UTC exclusion intervals. Raw history/weather are unchanged. |
+| `ml-weights-<hash>.json` | Immutable direct-production solar `schema` (`solar-xgboost-production-v2`) and bounded native XGBoost CPU `model_json`. The target is measured hourly kWh, not a PVWatts correction factor. Native inference provides mean kW for integration over shorter intervals. The model metadata retains its SHA-256 checksum. Native JSON is structurally validated before loading. No pickle or executable Python objects are stored. |
+| `ml-training-<hash>.json` | Per-source training report with original configuration/location, weather/history references, optional model metadata and `weights_reference`. Metadata binds source/inverter/site, `capacity_kw` in kWp, `measurement_boundary` (`ac` or `dc`), `max_power_kw`, training cutoff, actual creation time, library/policy/features, training digest and model checksum. The summary retains `training_hours`, `validation_hours`, `training_days`, `validation_days`, UTC validation bounds, PVWatts/direct-production XGBoost MAE in hourly kWh, status, excluded reason counts and coalesced UTC exclusion intervals. `diagnostic_counts` and coalesced diagnostic periods mark irradiance/yield anomalies or possible production limitation without removing admitted observations. Insufficient training and insufficient validation have distinct statuses. Raw history/weather are unchanged. |
 | `source-choice-<forecast-version>.json` | Original source-selection statuses, requested/active source, matched comparison days, common-cohort per-model MAE in kWh per hour, required/completed day counts, measurement history version, policy and HA observation references. Choices do not rewrite earlier forecasts or selections when Recorder history changes. |
 
 Selected forecast documents also retain their source selection and HA observation

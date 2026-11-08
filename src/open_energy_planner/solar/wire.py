@@ -114,6 +114,9 @@ def configuration_document(value):
     body = document(value)
     # Preserve the content of immutable archives written before optional names existed.
     for source in body["sources"]:
+        for field in ("unrestricted_history_start", "unrestricted_history_end"):
+            if source[field] is None:
+                source.pop(field)
         for group in (source, *source["ha_imports"]):
             for panel in group["panels"]:
                 if not panel["name"]:

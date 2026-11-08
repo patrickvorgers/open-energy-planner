@@ -125,6 +125,8 @@ def test_unnamed_planes_keep_archived_versions_and_names_preserve_accuracy_famil
         for plane in group["panels"]:
             plane.pop("name")
     original["sources"][0].pop("forecast_source")
+    original["sources"][0].pop("unrestricted_history_start")
+    original["sources"][0].pop("unrestricted_history_end")
     assert configuration.version == version(original)
     assert parse_configuration(original) == configuration
     archived = {**original, "version": configuration.version}
@@ -161,6 +163,8 @@ def test_existing_saved_manual_configuration_keeps_its_version(tmp_path):
         source.pop("panels")
         source.pop("ha_imports")
         source.pop("forecast_source")
+        source.pop("unrestricted_history_start")
+        source.pop("unrestricted_history_end")
     original_ref = version(original)
     assert configuration.version == original_ref
     store = make_store(tmp_path, SolarStore)

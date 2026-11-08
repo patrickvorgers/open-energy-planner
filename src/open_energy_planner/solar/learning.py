@@ -120,3 +120,23 @@ def calibration_factor(rows):
     )
     factor = max(MIN_CALIBRATION_FACTOR, min(MAX_CALIBRATION_FACTOR, factor))
     return factor
+
+
+def learning_blocker(source, inverter):
+    """Require explicit historical control evidence without inferring available hybrid DC."""
+    if source.can_curtail and source.unrestricted_history_start is None:
+        return "curtailment_feedback_required"
+    if inverter.hybrid and source.measurement_boundary == "ac":
+        return "hybrid_route_history_required"
+    return None
+
+
+def unrestricted_interval(source, start, end):
+    """Admit a controllable source only inside its explicitly confirmed unlimited period."""
+    if not source.can_curtail:
+        return True
+    if source.unrestricted_history_start is None:
+        return False
+    return datetime.fromisoformat(
+        source.unrestricted_history_start
+    ) <= start and end <= datetime.fromisoformat(source.unrestricted_history_end)

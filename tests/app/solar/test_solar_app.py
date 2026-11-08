@@ -134,3 +134,46 @@ def test_solar_api_projects_two_sources_into_real_plan_and_retains_original_arch
                 assert response.status == 401
 
     asyncio.run(scenario())
+
+
+def test_unrestricted_history_confirmation_is_bounded_and_concurrency_protected(tmp_path):
+    """Persist an explicit past declaration, rejecting future, partial and stale writes unchanged."""
+
+    async def scenario():
+        """Exercise the actual authenticated settings route with independent UTC period inputs."""
+        async with running_forecasts(tmp_path, weather_factory=fixture_weather) as (session, url):
+            initial = configuration_document(plant())
+            initial.pop("version")
+            configured = await configure_forecasts(session, url, solar_definition=initial)
+            current = configured["solar"]["configuration"]
+            body = {
+                **current,
+                "sources": [
+                    {
+                        **current["sources"][0],
+                        "can_curtail": True,
+                        "unrestricted_history_start": "2025-01-01T00:00:00+00:00",
+                        "unrestricted_history_end": "2025-12-31T00:00:00+00:00",
+                    }
+                ],
+                "expected_version": current["version"],
+            }
+            async with session.put(url + "/v1/solar", json=body) as response:
+                assert response.status == 200
+                saved = (await response.json())["configuration"]
+            assert saved["sources"][0]["unrestricted_history_start"] == "2025-01-01T00:00:00+00:00"
+            assert saved["sources"][0]["unrestricted_history_end"] == "2025-12-31T00:00:00+00:00"
+            async with session.put(url + "/v1/solar", json=body) as response:
+                assert response.status == 409
+            for end in (None, "2099-01-01T00:00:00+00:00"):
+                invalid = {
+                    **body,
+                    "expected_version": saved["version"],
+                    "sources": [{**body["sources"][0], "unrestricted_history_end": end}],
+                }
+                async with session.put(url + "/v1/solar", json=invalid) as response:
+                    assert response.status == 400
+            async with session.get(url + "/v1/solar") as response:
+                assert (await response.json())["configuration"] == saved
+
+    asyncio.run(scenario())
