@@ -85,8 +85,12 @@ def test_partial_mixed_intervals_use_both_endpoint_stocks_and_add_up():
     assert costs["inventory_change"] == pytest.approx(0.05)
     assert costs["economic_cost"] == pytest.approx(0.075)
     pieces = [
-        window_summary(plan, refs, a, b)["scenarios"]["optimizer"]["costs"]
-        for a, b in ((START, start), (start, stop), (stop, START + timedelta(hours=1.5)))
+        window_summary(plan, refs, piece_start, piece_end)["scenarios"]["optimizer"]["costs"]
+        for piece_start, piece_end in (
+            (START, start),
+            (start, stop),
+            (stop, START + timedelta(hours=1.5)),
+        )
     ]
     assert sum(item["economic_cost"] for item in pieces) == pytest.approx(0.15)
 

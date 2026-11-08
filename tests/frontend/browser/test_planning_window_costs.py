@@ -8,7 +8,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.documentation_fixture import START
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 HEADERS = {"Authorization": "Bearer " + TOKEN}
 
@@ -124,6 +124,7 @@ def test_late_six_hour_response_cannot_replace_newer_day_selection(app_page):
     pending[0].fulfill(
         json={"period": None, "scenarios": {"optimizer": {"costs": {"economic_cost": 999}}}}
     )
+    wait_for_product_reads(page)
     assert_amounts(page, expected)
     expect(page.get_by_role("button", name="Next 24 hours", exact=True)).to_have_attribute(
         "aria-pressed", "true"

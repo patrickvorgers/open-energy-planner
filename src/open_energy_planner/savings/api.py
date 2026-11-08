@@ -267,10 +267,25 @@ def register(
         return web.json_response(result, headers={"Cache-Control": "no-store"})
 
     async def expected(request):
-        """Return original advice and separate successful repricing without activation.
+        """Read original comparisons or a financial period without activating advice.
 
-        Unavailable comparisons expose their comparison_issue through
-        scenarios["self_consumption"]["issue"], never invented reference flows."""
+        Without period parameters, return the original plan, evidence, scenarios
+        and separate successful repricing. An unavailable comparison exposes its
+        comparison_issue through scenarios["self_consumption"]["issue"], never
+        invented reference flows.
+
+        Supplying either query bound requires both start and end as increasing,
+        timezone-aware ISO timestamps. This mode returns only window_summary's
+        period, scenario amounts/issues and original valuation basis. It omits
+        the plan, evidence and separate valuation data.
+
+        Raises:
+            web.HTTPBadRequest: A period bound is missing, invalid, naive or
+                non-increasing (400).
+            web.HTTPNotFound: The selected original plan does not exist (404).
+            web.HTTPServiceUnavailable: Period calculation cannot read usable
+                original evidence (503). Its explanation never exposes raw errors.
+        """
         window = None
         if "start" in request.query or "end" in request.query:
             try:
