@@ -2,6 +2,10 @@
 
 All command entities are read-only proposals from the app. User-owned Home Assistant automations translate them to physical equipment. The app's wizard owns capabilities and limits. This integration has no separate device-setting wizard.
 
+For an operator-facing explanation of every non-diagnostic sensor, including
+consumer forecasts, cycle tasks, boilers and EVs, see the
+[virtual-device sensor reference](../users/virtual-device-sensors.md).
+
 | Virtual device | Entity | Meaning |
 | --- | --- | --- |
 | Open Energy Planner | Enabled switch | Desired EMS enablement. Pause remains explicit until switched on. |
