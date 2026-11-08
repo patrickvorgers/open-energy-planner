@@ -1,5 +1,6 @@
 """Integration-first vehicle selection with explicit ambiguity and independent saved identities."""
 
+import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN, discover
@@ -240,6 +241,70 @@ def test_selected_manual_sensor_survives_matching_device_and_refresh(app_page):
     expect(page.locator("#status")).to_contain_text("sources refreshed")
     expect(soc).to_have_value("sensor.synthetic_alternative_soc")
     expect(page.get_by_label("Usable battery capacity (kWh)", exact=True)).to_have_value("78.5")
+
+
+@pytest.mark.parametrize("removed_level", ["instance", "device", "type"])
+def test_missing_parent_remains_visible_without_rebinding_after_refresh(app_page, removed_level):
+    """A disappearing account, device or integration stays explicit until the user chooses a replacement."""
+    page, url = app_page
+    replacement = vehicle_source("sensor.synthetic_second_soc", "second", entry="account-b")
+    if removed_level == "device":
+        replacement.update(integration_id="account-a", integration_name="Synthetic account A")
+    elif removed_level == "type":
+        replacement.update(
+            integration_domain="replacement_ev", integration_display_name="Replacement EV"
+        )
+    headers = prepare_vehicle(page, url, extra=[replacement])
+    page.get_by_label("Home Assistant integration", exact=True).select_option("zeekr_ev")
+    if removed_level == "instance":
+        page.get_by_label("Home Assistant integration instance", exact=True).select_option(
+            "account-a"
+        )
+    elif removed_level == "device":
+        page.get_by_label("Home Assistant device", exact=True).select_option("synthetic-zeekr")
+    soc = page.get_by_label("Vehicle state of charge", exact=True)
+    expect(soc).to_have_value("sensor.synthetic_zeekr_soc")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("78.5")
+    catalogue = page.request.get(url + "/v1/setup", headers=headers).json()["catalogue"]["data"]
+    catalogue["entities"] = [
+        entity for entity in catalogue["entities"] if entity.get("device_id") != "synthetic-zeekr"
+    ]
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=catalogue).ok
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST" and response.url.endswith("/v1/ha/source-choices/ev")
+        )
+    ) as pending:
+        page.get_by_role("button", name="Refresh Home Assistant sources", exact=True).click()
+    accepted = page.request.post(
+        url + "/v1/ha/source-choices",
+        headers=headers,
+        data={"scope": "ev", "id": pending.value.json()["id"], "page": catalogue},
+    )
+    assert accepted.ok and accepted.json()["accepted"]
+    expect(page.locator("#status")).to_contain_text("sources refreshed")
+    expect(soc).to_have_value("sensor.synthetic_zeekr_soc")
+    expect(page.get_by_label("Usable battery capacity (kWh)", exact=True)).to_have_value("78.5")
+    if removed_level == "instance":
+        parent = page.get_by_label("Home Assistant integration instance", exact=True)
+        expect(parent).to_have_value("account-a")
+        expect(parent.locator("option:checked")).to_contain_text("unavailable")
+        parent.select_option("account-b")
+    elif removed_level == "device":
+        parent = page.get_by_label("Home Assistant device", exact=True)
+        expect(parent).to_have_value("synthetic-zeekr")
+        expect(parent.locator("option:checked")).to_contain_text("unavailable")
+        parent.select_option("second")
+    else:
+        parent = page.get_by_label("Home Assistant integration", exact=True)
+        expect(parent).to_have_value("zeekr_ev")
+        expect(parent.locator("option:checked")).to_contain_text("unavailable")
+        parent.select_option("replacement_ev")
+    expect(soc).to_have_value("sensor.synthetic_second_soc")
+    expect(page.get_by_label("Usable battery capacity (kWh)", exact=True)).to_have_value("78.5")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == []
 
 
 def test_equal_device_names_keep_distinct_explicit_identities(app_page):

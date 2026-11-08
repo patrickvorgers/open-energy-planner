@@ -84,6 +84,8 @@ function vehicleSourcePicker(card, row) {
     const source = candidates.find(entity => entity.entity_id === row.soc_entity);
     const groups = new Map(candidates.map(entity => [vehicleIntegration(entity), entity.integration_display_name || entity.integration_name || "Other Home Assistant sources"]));
     const type = integrationTypeSelections.get(row.id) ?? (source ? vehicleIntegration(source) : "");
+    integrationTypeSelections.set(row.id, type);
+    if (type && !groups.has(type)) groups.set(type, "Previously selected integration (unavailable)");
     const integrationControl = select(card, {type}, "type", "Home Assistant integration", "Choose the integration that supplies your car's measured battery percentage. Its account is shown only when several instances need a choice.", pickerOptions(groups));
     integrationControl.required = false;
     integrationControl.parentElement.style.gridColumn = "1 / -1";
@@ -98,8 +100,11 @@ function vehicleSourcePicker(card, row) {
     const entries = new Map(typed.map(entity => [entity.integration_id || "other", entity.integration_name || "Other Home Assistant sources"]));
     const sameType = source && vehicleIntegration(source) === type;
     const integration = integrationSelections.get(row.id) ?? (sameType ? source.integration_id || "other" : entries.size === 1 ? entries.keys().next().value : "");
-    if (entries.size > 1) {
-        const entryControl = select(card, {integration}, "integration", "Home Assistant integration instance", "Several accounts or instances supply this integration. Choose the one that owns the car.", pickerOptions(entries));
+    integrationSelections.set(row.id, integration);
+    const missingIntegration = integration && !entries.has(integration);
+    if (missingIntegration) entries.set(integration, "Previously selected instance (unavailable)");
+    if (entries.size > 1 || missingIntegration) {
+        const entryControl = select(card, {integration}, "integration", "Home Assistant integration instance", missingIntegration ? "The previously selected instance is unavailable. Refresh sources or explicitly choose the account that owns this car. The existing sensor is retained until you choose a replacement." : "Several accounts or instances supply this integration. Choose the one that owns the car.", pickerOptions(entries));
         entryControl.required = false;
         entryControl.parentElement.style.gridColumn = "1 / -1";
         entryControl.onchange = () => {
@@ -114,6 +119,7 @@ function vehicleSourcePicker(card, row) {
     const devices = new Map(scoped.map(entity => [entity.device_id || NO_DEVICE, entity.device_id ? entity.device_name || "Home Assistant device" : "Sources without a Home Assistant device"]));
     const sameEntry = sameType && (source.integration_id || "other") === integration;
     const device = deviceSelections.get(row.id) ?? (sameEntry ? source.device_id || NO_DEVICE : !row.soc_entity && devices.size === 1 ? devices.keys().next().value : "");
+    deviceSelections.set(row.id, device);
     if (device && !devices.has(device)) devices.set(device, "Previously selected device (unavailable)");
     const deviceControl = select(card, {device}, "device", "Home Assistant device", "Only devices with a compatible SoC source are listed. One suitable device is selected automatically. Service devices are excluded.", pickerOptions(devices));
     deviceControl.required = false;

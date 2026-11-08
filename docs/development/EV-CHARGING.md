@@ -45,6 +45,8 @@ use an explicit no-device group. Automatic choices are drafts until Save. Parent
 changes clear incompatible draft sources, while matching choices, metadata refresh
 and Cancel retain their existing boundaries. Charge-point power and connection
 selectors keep their independent device/integration filters and separate Energy meter.
+Resolved vehicle filters remain pinned across refresh. Missing parents stay visible
+as unavailable choices, preserving the original sensor until an explicit replacement.
 
 The thin HA catalogue adapter projects `integration_domain` and the loaded
 manifest's `integration_display_name` separately from `integration_id` and its

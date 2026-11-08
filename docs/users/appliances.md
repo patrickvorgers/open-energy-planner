@@ -61,6 +61,9 @@ Changing to another integration, account or device clears an incompatible draft
 sensor and selects its replacement only when exactly one suitable sensor remains.
 Cancel restores the saved configuration. Refresh retains numeric edits and an
 explicit sensor choice.
+If a chosen integration, account or device disappears during refresh, its selection
+stays visible as unavailable. Refresh again or explicitly choose a replacement.
+The vehicle is never silently linked to a different account or car.
 
 For a charge point, choose its device, then the integration that supplies power
 and connection status. Its consumption meter is selected separately from Home Assistant Energy,
