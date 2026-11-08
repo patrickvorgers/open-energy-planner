@@ -4,29 +4,57 @@ import hashlib
 import json
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import lru_cache
 from importlib.metadata import version as distribution_version
 from itertools import pairwise
 from math import cos, fsum, isfinite, pi, sin
 from statistics import median, quantiles
+from types import MappingProxyType
 
 import numpy as np
 
+from open_energy_planner.core.units import MINUTES_PER_HOUR
+from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES, PLANNING_HORIZON_HOURS
 from open_energy_planner.prices.model import aware
-from open_energy_planner.solar.calculation.model import identity, number, version
+from open_energy_planner.solar.backtest import HistoricalForecastAssessment
+from open_energy_planner.solar.calculation.model import (
+    MAX_SOLAR_ENERGY_KWH,
+    identity,
+    number,
+    version,
+)
+from open_energy_planner.solar.forecast_weather import (
+    DEFAULT_FORECAST_ORIGIN_DELAY_HOURS,
+    FORECAST_WEATHER_POLICY,
+)
 from open_energy_planner.solar.learning import (
-    MIN_CALIBRATION_PRODUCTION_KWH,
     MIN_CALIBRATION_SAMPLES,
     TrainingExclusion,
-    calibration_blocker,
-    calibration_factor,
-    training_sample_issue,
+    learning_blocker,
+    learning_interval,
+    unrestricted_interval,
 )
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
+from open_energy_planner.solar.trend import (
+    MIN_FOLD_DAYS,
+    MIN_FOLD_HOURS,
+    SOLAR_YEAR_DAYS,
+    TREND_POLICY,
+    TREND_SAFETY_ADVICE,
+    TREND_VALIDATION_FOLDS,
+    TrendAssessment,
+    TrendFold,
+    TrendRateOutOfRange,
+    TrendStatus,
+    YieldTrend,
+    assess_trend,
+    estimate_trend,
+    quarterly_windows,
+)
 
-MODEL_ID = "solar-xgboost-v1"
+MODEL_ID = "solar-xgboost-production-v2"
 TREE_ROUNDS = 96
 TREE_DEPTH = 3
 TREE_LEARNING_RATE = 0.08
@@ -35,14 +63,14 @@ MAX_MODEL_JSON_BYTES = 2 * 1024 * 1024
 MIN_TRAINING_DAYS = 28
 VALIDATION_DAYS = 7
 MIN_VALIDATION_HOURS = 28
-MAX_CORRECTION_FACTOR = 1.5
 MAX_DC_CAPACITY_MULTIPLE = 3.0
 AC_METER_HEADROOM = 1.05
 MIN_OUTLIER_GROUP_SAMPLES = 8
 OUTLIER_SEASON_DAYS = 45
 OUTLIER_IQR_MULTIPLIER = 3.0
 MIN_OUTLIER_RATIO_DISTANCE = 0.15
-SOLAR_YEAR_DAYS = 365.2425
+TRAINING_POLICY = TREND_POLICY
+CONTROLLED_WEATHER_POLICY = "controlled-weather-experiment-v1"
 FEATURE_NAMES = (
     "utc_hour_sin",
     "utc_hour_cos",
@@ -53,8 +81,18 @@ FEATURE_NAMES = (
     "dhi_kw_m2",
     "temperature_scaled",
     "wind_scaled",
-    "physical_dc_kwh_per_kwp",
+    "solar_elevation",
+    "solar_azimuth_sin",
+    "solar_azimuth_cos",
+    "daylight_fraction",
 )
+GHI_FEATURE_INDEX = FEATURE_NAMES.index("ghi_kw_m2")
+MAX_TRAINING_FORECAST_LEAD_HOURS = PLANNING_HORIZON_HOURS + DEFAULT_FORECAST_ORIGIN_DELAY_HOURS
+GEOMETRY_SUBSTEPS_PER_HOUR = MINUTES_PER_HOUR // FINE_INTERVAL_MINUTES
+PREDICTION_QUARTER_HOURS = FINE_INTERVAL_MINUTES / MINUTES_PER_HOUR
+HIGH_IRRADIANCE_W_M2 = 600
+MIN_DIAGNOSTIC_IRRADIANCE_W_M2 = 50
+MAX_CACHED_HISTORY_GEOMETRIES = 8
 
 
 class TrainingStatus(StrEnum):
@@ -65,6 +103,8 @@ class TrainingStatus(StrEnum):
     LINEAR_PREFERRED = "linear_preferred"
     NONLINEAR_SHADOW = "nonlinear_shadow"
     FAILED = "training_failed"
+    INSUFFICIENT_VALIDATION = "insufficient_validation_history"
+    BASELINE_PREFERRED = "baseline_preferred"
 
 
 @dataclass(frozen=True)
@@ -83,12 +123,61 @@ class TrainingSummary:
     issue: str | None = None
     validation_start: datetime | None = None
     validation_end: datetime | None = None
+    training_days: int = 0
+    validation_days: int = 0
+    diagnostic_counts: dict | None = None
+    diagnostic_periods: tuple = ()
+    training_start: datetime | None = None
+    training_end: datetime | None = None
+    time_trend: TrendAssessment | None = None
+    weather_policy: str = CONTROLLED_WEATHER_POLICY
+    training_samples: int = 0
+    validation_samples: int = 0
+    historical_assessment: HistoricalForecastAssessment | None = None
 
 
-def _features(instant, weather, physical_dc_kwh, capacity_kw):
-    """Describe one hourly yield with UTC calendar, weather and location-aware physical production."""
-    instant = instant.astimezone(UTC)
-    hour = (instant.hour + 0.5) / 24
+def solar_geometry(instants, location, duration_h=1):
+    """Return geometric daylight and sun direction independently of weather or PVWatts.
+
+    Four midpoint samples per hour retain partially sunlit dawn and dusk hours.
+    Values describe the UTC interval, not the provider's irradiance estimate.
+    """
+    import pandas as pd
+    from pvlib import solarposition
+
+    if not instants:
+        return {}
+    steps = max(1, round(duration_h * GEOMETRY_SUBSTEPS_PER_HOUR))
+    times = pd.DatetimeIndex(
+        [
+            instant + timedelta(hours=duration_h * (step + 0.5) / steps)
+            for instant in instants
+            for step in range(steps)
+        ]
+    )
+    sun = solarposition.get_solarposition(times, location.latitude, location.longitude)
+    elevations = np.asarray(sun.elevation).reshape(-1, steps)
+    azimuths = np.radians(np.asarray(sun.azimuth).reshape(-1, steps))
+    return {
+        instant: (
+            float(elevations[index].mean() / 90),
+            float(np.sin(azimuths[index]).mean()),
+            float(np.cos(azimuths[index]).mean()),
+            float((elevations[index] > 0).mean()),
+        )
+        for index, instant in enumerate(instants)
+    }
+
+
+@lru_cache(maxsize=MAX_CACHED_HISTORY_GEOMETRIES)
+def _history_geometry(instants, location, duration_h=1):
+    """Reuse immutable geometry for unchanged history without admitting prediction queries into this cache."""
+    return MappingProxyType(solar_geometry(instants, location, duration_h))
+
+
+def _features(instant, weather, geometry, duration_h=1):
+    """Describe weather and astronomical time without a production-model input."""
+    hour = (instant.hour + instant.minute / 60 + duration_h / 2) / 24
     year = (instant.timetuple().tm_yday - 1 + hour) / SOLAR_YEAR_DAYS
     return (
         sin(2 * pi * hour),
@@ -100,7 +189,7 @@ def _features(instant, weather, physical_dc_kwh, capacity_kw):
         weather.dhi / 1000,
         weather.celsius / 40,
         weather.wind_ms / 10,
-        physical_dc_kwh / capacity_kw,
+        *geometry,
     )
 
 
@@ -138,7 +227,7 @@ def _validate_json(model_json):
         base = json.loads(learner["learner_model_param"]["base_score"])
         if not isinstance(base, list) or len(base) != 1:
             raise ValueError("Invalid solar model base score")
-        number(base[0], 0, MAX_CORRECTION_FACTOR)
+        number(base[0], 0, MAX_SOLAR_ENERGY_KWH)
         for tree_index, tree in enumerate(trees):
             node_count = tree["tree_param"]["num_nodes"]
             if node_count not in tuple(str(count) for count in range(1, 2 ** (TREE_DEPTH + 1))):
@@ -239,6 +328,8 @@ class SolarBoostedModel:
     configuration_version: str
     location_version: str
     capacity_kw: float
+    measurement_boundary: str
+    max_power_kw: float
     trained_until: datetime
     created_at: datetime
     training_version: str
@@ -246,16 +337,32 @@ class SolarBoostedModel:
     model_json: str
     model_digest: str
     schema: str = MODEL_ID
+    training_policy: str = TRAINING_POLICY
+    time_trend: YieldTrend | None = None
+    weather_policy: str = CONTROLLED_WEATHER_POLICY
 
     def __post_init__(self):
         """Validate archive metadata and the complete bounded tree structure before prediction."""
         identity(self.source_id)
         number(self.capacity_kw, 0.001, 10000)
+        number(self.max_power_kw, 0.001, 30000)
+        if self.measurement_boundary not in ("ac", "dc"):
+            raise ValueError("Invalid solar learning boundary")
         object.__setattr__(self, "trained_until", aware(self.trained_until))
         object.__setattr__(self, "created_at", aware(self.created_at))
         if self.trained_until > self.created_at:
             raise ValueError("Solar training cutoff is after model creation")
-        if self.schema != MODEL_ID or self.library_version != "3.4.1":
+        if self.time_trend is not None and (
+            not isinstance(self.time_trend, YieldTrend)
+            or self.time_trend.reference >= self.trained_until
+        ):
+            raise ValueError("Invalid solar yield trend reference")
+        if (
+            self.schema != MODEL_ID
+            or self.library_version != "3.4.1"
+            or self.training_policy != TRAINING_POLICY
+            or self.weather_policy not in (CONTROLLED_WEATHER_POLICY, FORECAST_WEATHER_POLICY)
+        ):
             raise ValueError("Unsupported solar learning model")
         for reference in (
             self.configuration_version,
@@ -298,10 +405,12 @@ class SolarBoostedModel:
                 "gain_ratio": MIN_RELATIVE_GAIN,
                 "ac_headroom": AC_METER_HEADROOM,
                 "dc_headroom": MAX_DC_CAPACITY_MULTIPLE,
-                "outlier_season": OUTLIER_SEASON_DAYS,
-                "outlier_iqr": OUTLIER_IQR_MULTIPLIER,
-                "outlier_floor": MIN_OUTLIER_RATIO_DISTANCE,
-                "max_factor": MAX_CORRECTION_FACTOR,
+                "target": "measured_boundary_kwh_per_hour",
+                "training_policy": self.training_policy,
+                "sample_weights": "equal-per-measurement-shared-across-forecasts",
+                "weather_policy": self.weather_policy,
+                "daylight": "geometric-quarter-midpoints",
+                "admission": "physical-measurement-controls-v2",
             }
         )
 
@@ -310,48 +419,88 @@ class SolarBoostedModel:
         """Decode only the known archive schema with explicit UTC training and knowledge times."""
         if not isinstance(body, dict):
             raise TypeError("Invalid solar model archive")
+        if body.get("training_policy") != TRAINING_POLICY:
+            raise ValueError("Unsupported solar training policy")
         try:
             return cls(
                 **{
                     **body,
                     "trained_until": datetime.fromisoformat(body["trained_until"]),
                     "created_at": datetime.fromisoformat(body["created_at"]),
+                    "time_trend": (
+                        YieldTrend(
+                            body["time_trend"]["log_rate"],
+                            datetime.fromisoformat(body["time_trend"]["reference"]),
+                        )
+                        if body.get("time_trend") is not None
+                        else None
+                    ),
                 }
             )
         except (AttributeError, KeyError, TypeError, ValueError) as error:
             raise ValueError("Invalid solar model archive") from error
 
-    def factors(self, physical_hours, weather, *, known_at):
-        """Predict hourly corrections only from received weather, retaining physical quarter geometry."""
+    def predict(self, weather, location, *, known_at, duration_h=1, offset_minutes=0):
+        """Predict measured-boundary kWh directly without any PVWatts forecast.
+
+        Hourly trained targets are mean kW. A finer interval uses its own sun
+        position and duration. Night is physical zero. Missing weather stays absent.
+        The cap is the installation's physical rating, never a ratio to a forecast.
+        """
         from xgboost import DMatrix
 
         known_at = aware(known_at)
         if self.created_at > known_at:
             raise ValueError("Solar model was created after prediction")
-        by_hour = {row.start: row for row in weather if row.received_at <= known_at}
-        rows = [
-            row
-            for row in physical_hours
-            if row.source_id == self.source_id
-            and row.start in by_hour
-            and row.dc_kwh >= MIN_CALIBRATION_PRODUCTION_KWH
-        ]
-        if not rows:
-            return {}
-        if any(row.duration_h != 1 for row in rows):
-            raise ValueError("Solar learning requires physical hourly energies")
-        features = [
-            _features(row.start, by_hour[row.start], row.dc_kwh, self.capacity_kw) for row in rows
-        ]
-        values = _booster(self.model_json).predict(
-            DMatrix(np.array(features), feature_names=list(FEATURE_NAMES), nthread=1)
-        )
-        if not np.isfinite(values).all():
-            raise ValueError("Nonfinite solar learning output")
-        return {
-            row.start: max(0.0, min(MAX_CORRECTION_FACTOR, float(value)))
-            for row, value in zip(rows, values, strict=True)
-        }
+        if version(asdict(location)) != self.location_version:
+            raise ValueError("Solar learning location changed")
+        if duration_h not in (PREDICTION_QUARTER_HOURS, 1):
+            raise ValueError("Solar learning requires hourly or quarter intervals")
+        if offset_minutes not in range(0, MINUTES_PER_HOUR, FINE_INTERVAL_MINUTES) or (
+            duration_h == 1 and offset_minutes != 0
+        ):
+            raise ValueError("Invalid solar prediction offset")
+        rows = tuple(row for row in weather if row.received_at <= known_at)
+        offset = timedelta(minutes=offset_minutes)
+        geometry = solar_geometry(tuple(row.start + offset for row in rows), location, duration_h)
+        daylight = tuple(row for row in rows if geometry[row.start + offset][3] > 0)
+        result = {row.start + offset: 0.0 for row in rows if geometry[row.start + offset][3] == 0}
+        if daylight:
+            values = _booster(self.model_json).predict(
+                DMatrix(
+                    np.array(
+                        [
+                            _features(
+                                row.start + offset, row, geometry[row.start + offset], duration_h
+                            )
+                            for row in daylight
+                        ]
+                    ),
+                    feature_names=list(FEATURE_NAMES),
+                    nthread=1,
+                )
+            )
+            if not np.isfinite(values).all():
+                raise ValueError("Nonfinite solar learning output")
+            result.update(
+                {
+                    row.start + offset: max(
+                        0.0,
+                        min(
+                            self.max_power_kw,
+                            float(value)
+                            * (
+                                self.time_trend.factor(row.start + offset)
+                                if self.time_trend
+                                else 1.0
+                            ),
+                        ),
+                    )
+                    * duration_h
+                    for row, value in zip(daylight, values, strict=True)
+                }
+            )
+        return result
 
 
 @dataclass(frozen=True)
@@ -361,15 +510,17 @@ class TrainingResult:
     model: SolarBoostedModel | None
     summary: TrainingSummary
     archive_reference: str | None = None
+    challenger: SolarBoostedModel | None = None
 
 
 @lru_cache(maxsize=16)
 def _train(rows):
-    """Reuse unchanged daily training data instead of fitting again on every forecast quarter."""
+    """Fit all supplied outcomes with equal weight and reuse unchanged daily training data."""
     from xgboost import DMatrix, train
 
     features = np.array([row[3] for row in rows])
-    target = np.array([row[2] / row[1] for row in rows])
+    target = np.array([row[2] for row in rows])
+    measurements = Counter(row[0] for row in rows)
     model = train(
         {
             "objective": "reg:squarederror",
@@ -381,10 +532,149 @@ def _train(rows):
             "min_child_weight": TREE_MIN_CHILD_WEIGHT,
             "seed": 0,
         },
-        DMatrix(features, label=target, feature_names=list(FEATURE_NAMES), nthread=1),
+        DMatrix(
+            features,
+            label=target,
+            weight=np.array([1 / measurements[row[0]] for row in rows]),
+            feature_names=list(FEATURE_NAMES),
+            nthread=1,
+        ),
         num_boost_round=TREE_ROUNDS,
     )
     return model.save_raw(raw_format="json").decode()
+
+
+def _hourly_mae(rows, errors):
+    """Give every actual measurement equal total influence across its forecast realizations."""
+    by_hour = defaultdict(list)
+    for row, error in zip(rows, errors, strict=True):
+        by_hour[row[0]].append(float(error))
+    return fsum(fsum(values) / len(values) for values in by_hour.values()) / len(by_hour)
+
+
+def _weather_samples(source, location, weather, physical_hours, forecast_runs, forecast_physical):
+    """Pair each measured hour with original forecasts rather than substituting observed weather.
+
+    A None run collection is an explicit low-level controlled-weather experiment.
+    The production runtime always supplies a run collection, including an empty
+    collection while import is incomplete. Empty forecasts never borrow reanalysis.
+    """
+    samples = defaultdict(list)
+    if forecast_runs is None:
+        expected = {row.start: row for row in physical_hours if row.source_id == source.source_id}
+        for conditions in weather:
+            samples[conditions.start].append((conditions, expected.get(conditions.start)))
+        return samples
+    seen = set()
+    for run in sorted(
+        forecast_runs, key=lambda value: (value.initialized_at, value.forecast_origin)
+    ):
+        if run.location_version != version(asdict(location)):
+            raise ValueError("Solar training forecast location changed")
+        if run.initialized_at in seen:
+            continue
+        seen.add(run.initialized_at)
+        expected = {
+            row.start: row
+            for row in (forecast_physical or {}).get(run.version, ())
+            if row.source_id == source.source_id
+        }
+        for conditions in run.hours:
+            if (
+                run.initialized_at
+                <= conditions.start
+                < run.initialized_at + timedelta(hours=MAX_TRAINING_FORECAST_LEAD_HOURS)
+            ):
+                samples[conditions.start].append((conditions, expected.get(conditions.start)))
+    return samples
+
+
+def _predict_rows(model_json, rows, max_power_kw, trend=None):
+    """Use the production learner and identical physical bounds for historical comparisons."""
+    from xgboost import DMatrix
+
+    predictions = _booster(model_json).predict(
+        DMatrix(np.array([row[3] for row in rows]), feature_names=list(FEATURE_NAMES), nthread=1)
+    )
+    if not np.isfinite(predictions).all():
+        raise ValueError("Nonfinite solar learning validation")
+    return tuple(
+        max(0.0, min(max_power_kw, float(predicted) * (trend.factor(row[0]) if trend else 1.0)))
+        for row, predicted in zip(rows, predictions, strict=True)
+    )
+
+
+def _trend_model(rows, trend):
+    """Fit equal-weight measured targets translated to one common yield reference."""
+    return _train(tuple((row[0], None, row[2] / trend.factor(row[0]), row[3]) for row in rows))
+
+
+@lru_cache(maxsize=16)
+def _choose_trend(rows, max_power_kw):
+    """Keep trend estimation and eight seasonal tests entirely inside the training partition.
+
+    Each fold fits its own weather learner and trend exclusively before the
+    quarter it predicts. A missing quarter does not become zero production or
+    shorten the required two-year evidence. The final held-out week is untouched.
+    """
+    baseline_json = _train(rows)
+    folds = []
+    for start, end in quarterly_windows(rows):
+        earlier = tuple(row for row in rows if row[0] < start)
+        later = tuple(row for row in rows if start <= row[0] < end)
+        if (
+            not earlier
+            or len({row[0] for row in later}) < MIN_FOLD_HOURS
+            or len({row[0].date() for row in later}) < MIN_FOLD_DAYS
+        ):
+            break
+        earlier_json = _train(earlier)
+        try:
+            trend = estimate_trend(earlier, _predict_rows(earlier_json, earlier, max_power_kw))
+        except TrendRateOutOfRange:
+            return (
+                baseline_json,
+                None,
+                TrendAssessment(
+                    TrendStatus.UNSTABLE, folds=tuple(folds), reason=TREND_SAFETY_ADVICE
+                ),
+            )
+        if trend is None:
+            break
+        plain = _predict_rows(earlier_json, later, max_power_kw)
+        adjusted = _predict_rows(_trend_model(earlier, trend), later, max_power_kw, trend)
+        folds.append(
+            TrendFold(
+                earlier[-1][0] + timedelta(hours=1),
+                start,
+                end,
+                _hourly_mae(
+                    later, [abs(value - row[2]) for row, value in zip(later, plain, strict=True)]
+                ),
+                _hourly_mae(
+                    later, [abs(value - row[2]) for row, value in zip(later, adjusted, strict=True)]
+                ),
+                trend.annual_change,
+                len({row[0] for row in later}),
+                len({row[0].date() for row in later}),
+            )
+        )
+    try:
+        final_trend = (
+            estimate_trend(rows, _predict_rows(baseline_json, rows, max_power_kw))
+            if len(folds) == TREND_VALIDATION_FOLDS
+            else None
+        )
+    except TrendRateOutOfRange:
+        return (
+            baseline_json,
+            None,
+            TrendAssessment(TrendStatus.UNSTABLE, folds=tuple(folds), reason=TREND_SAFETY_ADVICE),
+        )
+    assessment = assess_trend(final_trend, folds)
+    if assessment.status == TrendStatus.ACTIVE:
+        return _trend_model(rows, final_trend), final_trend, assessment
+    return baseline_json, None, assessment
 
 
 def _periods(excluded):
@@ -399,152 +689,181 @@ def _periods(excluded):
     return tuple(periods)
 
 
-def fit_boosted_model(source, inverter, location, history, physical_hours, weather, before):
-    """Fit clean older daylight hours and score every eligible hour in a disjoint final week.
+def fit_boosted_model(
+    source,
+    inverter,
+    location,
+    history,
+    physical_hours,
+    weather,
+    before,
+    *,
+    forecast_runs=None,
+    forecast_physical=None,
+    known_at=None,
+):
+    """Train direct measured production on clean older daylight and score a later week.
 
-    Historical realized weather is conditional training evidence, not a historical
-    issued forecast. This check can create only a shadow candidate. Activation
-    still requires forecasts captured before later outcomes. Outlier fences use
-    training hours only and never remove validation outcomes or raw history.
+    PVWatts enters only the held-out comparison. Neither its estimates nor model
+    errors select training targets. Statistical anomalies are diagnostics only.
+    Raw cumulative history remains unchanged. Control declarations are bounded
+    to their explicit historical UTC period and cannot authorize future outcomes.
     """
     before = aware(before)
-    issue = calibration_blocker(source, inverter)
+    known_at = aware(known_at) if known_at is not None else before
+    if known_at < before:
+        raise ValueError("Solar training knowledge precedes its outcome cutoff")
     source_hours = max(0, len(history.hours) - 1) if history else 0
+    issue = learning_blocker(source, inverter)
     if issue:
         return TrainingResult(
             None, TrainingSummary(TrainingStatus.BLOCKED, source_hours, 0, 0, {}, (), issue=issue)
         )
-    predictions = {row.start: row for row in physical_hours if row.source_id == source.source_id}
-    by_hour = {row.start: row for row in weather}
-    rows, excluded = [], []
+    samples = _weather_samples(
+        source, location, weather, physical_hours, forecast_runs, forecast_physical
+    )
+    instants = tuple(following.start for following in history.hours[1:]) if history else ()
+    geometry = _history_geometry(instants, location)
+    max_power_kw = (
+        inverter.ac_limit_w / 1000
+        if source.measurement_boundary == "ac"
+        else source.capacity_w / 1000 * MAX_DC_CAPACITY_MULTIPLE
+    )
+    rows, excluded, diagnostics = [], [], []
     for previous, following in pairwise(history.hours if history else ()):
-        predicted = predictions.get(following.start)
-        reason = training_sample_issue(source, inverter, previous, following, predicted, before)
+        instant = following.start
+        end = instant + timedelta(hours=1)
         observed = following.total_kwh - previous.total_kwh
-        conditions = by_hour.get(following.start)
-        expected = (
-            (predicted.ac_kwh if source.measurement_boundary == "ac" else predicted.dc_kwh)
-            if predicted
-            else 0
-        )
-        limit = (
-            inverter.ac_limit_w / 1000 * AC_METER_HEADROOM
-            if source.measurement_boundary == "ac"
-            else source.capacity_w / 1000 * MAX_DC_CAPACITY_MULTIPLE
-        )
-        reason = reason or (
-            TrainingExclusion.WEATHER_MISSING
-            if conditions is None
-            else TrainingExclusion.WEATHER_NOT_KNOWN
-            if conditions.received_at > before
-            else TrainingExclusion.PRODUCTION_OUT_OF_RANGE
-            if observed > limit or observed > expected * MAX_CORRECTION_FACTOR
-            else None
-        )
-        if reason:
-            excluded.append((following.start, reason))
-        else:
-            rows.append(
-                (
-                    following.start,
-                    expected,
-                    observed,
-                    _features(
-                        following.start, conditions, predicted.dc_kwh, source.capacity_w / 1000
-                    ),
-                )
+        for conditions, expected in samples.get(instant, ((None, None),)):
+            reason = (
+                TrainingExclusion.HISTORY_GAP
+                if instant - previous.start != timedelta(hours=1)
+                else TrainingExclusion.INCOMPLETE_HOUR
+                if end > before
+                else TrainingExclusion.METER_CORRECTION
+                if observed < 0
+                else "before_learning_start"
+                if not learning_interval(source, instant, end)
+                else "control_history_unconfirmed"
+                if not unrestricted_interval(source, instant, end)
+                else "outside_daylight"
+                if geometry[instant][3] == 0
+                else TrainingExclusion.WEATHER_MISSING
+                if conditions is None
+                else TrainingExclusion.WEATHER_NOT_KNOWN
+                if conditions.received_at > known_at
+                else TrainingExclusion.PRODUCTION_OUT_OF_RANGE
+                if observed > max_power_kw * AC_METER_HEADROOM
+                else None
             )
+            if reason:
+                excluded.append((instant, reason))
+                continue
+            physical = (
+                (expected.ac_kwh if source.measurement_boundary == "ac" else expected.dc_kwh)
+                if expected
+                else None
+            )
+            rows.append(
+                (instant, physical, observed, _features(instant, conditions, geometry[instant]))
+            )
+            if source.can_curtail and observed == 0 and conditions.ghi >= HIGH_IRRADIANCE_W_M2:
+                diagnostics.append((instant, "possible_production_limitation"))
+    rows.sort(key=lambda row: (row[0], row[3]))
+    excluded, diagnostics = sorted(set(excluded)), sorted(set(diagnostics))
     validation_end = before.replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = validation_end - timedelta(days=VALIDATION_DAYS)
-    training = [row for row in rows if row[0] < cutoff]
+    training = [(row[0], None, row[2], row[3]) for row in rows if row[0] < cutoff]
     validation = [row for row in rows if cutoff <= row[0] < validation_end]
     groups = defaultdict(list)
     for row in training:
-        groups[(row[0].hour, (row[0].timetuple().tm_yday - 1) // OUTLIER_SEASON_DAYS)].append(
-            row[2] / row[1]
-        )
-    fences = {}
-    for group, values in groups.items():
-        if len(values) >= MIN_OUTLIER_GROUP_SAMPLES:
-            quartiles = quantiles(values, n=4, method="inclusive")
-            distance = max(
-                MIN_OUTLIER_RATIO_DISTANCE, (quartiles[2] - quartiles[0]) * OUTLIER_IQR_MULTIPLIER
+        if row[3][GHI_FEATURE_INDEX] * 1000 >= MIN_DIAGNOSTIC_IRRADIANCE_W_M2:
+            groups[(row[0].hour, (row[0].timetuple().tm_yday - 1) // OUTLIER_SEASON_DAYS)].append(
+                row
             )
-            fences[group] = median(values), distance
-    cleaned = []
-    for row in training:
-        center, distance = fences.get(
-            (row[0].hour, (row[0].timetuple().tm_yday - 1) // OUTLIER_SEASON_DAYS),
-            (0, float("inf")),
+    for group in groups.values():
+        if len(group) < MIN_OUTLIER_GROUP_SAMPLES:
+            continue
+        ratios = [row[2] / (row[3][GHI_FEATURE_INDEX] * 1000) for row in group]
+        quartiles = quantiles(ratios, n=4, method="inclusive")
+        distance = max(
+            (quartiles[2] - quartiles[0]) * OUTLIER_IQR_MULTIPLIER,
+            source.capacity_w / 1000 * MIN_OUTLIER_RATIO_DISTANCE / 1000,
         )
-        if abs(row[2] / row[1] - center) > distance:
-            excluded.append((row[0], TrainingExclusion.STATISTICAL_OUTLIER))
-        else:
-            cleaned.append(row)
-    counts = dict(Counter(reason for _start, reason in excluded))
+        center = median(ratios)
+        diagnostics.extend(
+            (row[0], "irradiance_yield_anomaly")
+            for row, ratio in zip(group, ratios, strict=True)
+            if abs(ratio - center) > distance
+        )
+    diagnostics = sorted(set(diagnostics))
+    training_days = len({row[0].date() for row in training})
+    validation_days = len({row[0].date() for row in validation})
     summary = TrainingSummary(
         TrainingStatus.INSUFFICIENT_HISTORY,
         source_hours,
-        len(cleaned),
-        len(validation),
-        counts,
+        len({row[0] for row in training}),
+        len({row[0] for row in validation}),
+        dict(Counter(reason for _instant, reason in excluded)),
         _periods(excluded),
         validation_start=cutoff,
         validation_end=validation_end,
+        training_days=training_days,
+        validation_days=validation_days,
+        diagnostic_counts=dict(Counter(reason for _instant, reason in diagnostics)),
+        diagnostic_periods=_periods(diagnostics),
+        training_start=training[0][0] if training else None,
+        training_end=training[-1][0] + timedelta(hours=1) if training else None,
+        weather_policy=FORECAST_WEATHER_POLICY
+        if forecast_runs is not None
+        else CONTROLLED_WEATHER_POLICY,
+        training_samples=len(training),
+        validation_samples=len(validation),
     )
-    if (
-        len(cleaned) < MIN_CALIBRATION_SAMPLES
-        or len({row[0].date() for row in cleaned}) < MIN_TRAINING_DAYS
-        or len(validation) < MIN_VALIDATION_HOURS
-        or len({row[0].date() for row in validation}) < VALIDATION_DAYS
-    ):
+    if summary.training_hours < MIN_CALIBRATION_SAMPLES or training_days < MIN_TRAINING_DAYS:
         return TrainingResult(None, summary)
-    baseline_error = fsum(abs(row[1] - row[2]) for row in validation) / len(validation)
-    linear_factor = calibration_factor([row[:3] for row in cleaned])
-    linear_error = fsum(abs(row[1] * linear_factor - row[2]) for row in validation) / len(
-        validation
-    )
-    summary = replace(
-        summary,
-        status=TrainingStatus.LINEAR_PREFERRED,
-        baseline_mae_kwh=baseline_error,
-        linear_mae_kwh=linear_error,
-    )
-    reference_error = min(baseline_error, linear_error)
-    if reference_error <= MIN_ABSOLUTE_GAIN_KWH:
-        return TrainingResult(None, summary)
-    model_json = _train(tuple(cleaned))
+    if summary.validation_hours < MIN_VALIDATION_HOURS or validation_days < VALIDATION_DAYS:
+        return TrainingResult(None, replace(summary, status=TrainingStatus.INSUFFICIENT_VALIDATION))
+    if any(row[1] is None for row in validation):
+        return TrainingResult(
+            None,
+            replace(
+                summary,
+                status=TrainingStatus.INSUFFICIENT_VALIDATION,
+                issue="Historical model comparison needs matching PVWatts coverage.",
+            ),
+        )
+    baseline_error = _hourly_mae(validation, [abs(row[1] - row[2]) for row in validation])
+    model_json, time_trend, trend_assessment = _choose_trend(tuple(training), max_power_kw)
     model = SolarBoostedModel(
         source.source_id,
         version({"source": asdict(source), "inverter": asdict(inverter)}),
         version(asdict(location)),
         source.capacity_w / 1000,
-        cleaned[-1][0] + timedelta(hours=1),
-        before,
-        version(cleaned),
+        source.measurement_boundary,
+        max_power_kw,
+        training[-1][0] + timedelta(hours=1),
+        known_at,
+        version(training),
         distribution_version("xgboost-cpu"),
         model_json,
         hashlib.sha256(model_json.encode()).hexdigest(),
+        time_trend=time_trend,
+        weather_policy=summary.weather_policy,
     )
-    from xgboost import DMatrix
-
-    factors = _booster(model_json).predict(
-        DMatrix(
-            np.array([row[3] for row in validation]), feature_names=list(FEATURE_NAMES), nthread=1
-        )
+    predictions = _predict_rows(model_json, validation, max_power_kw, time_trend)
+    tree_error = _hourly_mae(
+        validation,
+        [abs(predicted - row[2]) for row, predicted in zip(validation, predictions, strict=True)],
     )
-    if not np.isfinite(factors).all():
-        raise ValueError("Nonfinite solar learning validation")
-    tree_error = fsum(
-        abs(row[1] * max(0.0, min(MAX_CORRECTION_FACTOR, float(factor))) - row[2])
-        for row, factor in zip(validation, factors, strict=True)
-    ) / len(validation)
-    preferred = reference_error - tree_error >= max(
-        MIN_ABSOLUTE_GAIN_KWH, reference_error * MIN_RELATIVE_GAIN
+    preferred = baseline_error - tree_error >= max(
+        MIN_ABSOLUTE_GAIN_KWH, baseline_error * MIN_RELATIVE_GAIN
     )
     summary = replace(
         summary,
-        status=TrainingStatus.NONLINEAR_SHADOW if preferred else TrainingStatus.LINEAR_PREFERRED,
+        status=TrainingStatus.NONLINEAR_SHADOW if preferred else TrainingStatus.BASELINE_PREFERRED,
+        baseline_mae_kwh=baseline_error,
         tree_mae_kwh=tree_error,
+        time_trend=trend_assessment,
     )
-    return TrainingResult(model if preferred else None, summary)
+    return TrainingResult(model if preferred else None, summary, challenger=model)

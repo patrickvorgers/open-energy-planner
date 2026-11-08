@@ -329,20 +329,96 @@ catalogue contract and does not add tables, columns or a second source registry.
 
 Solar source objects also contain `forecast_source`, one of `automatic`, `pvwatts`,
 `ha` or `ml`. Its default `automatic` is omitted from the canonical configuration
-hash. Forecast documents may contain `valid_until`, an exclusive aware UTC provider
+hash. Optional `unrestricted_history_start` and `unrestricted_history_end` retain
+an explicit user declaration of unrestricted production for a curtailable source.
+Both aware UTC ISO endpoints are required together and ordered. The end is
+exclusive and endpoints cannot be in the future. They participate in the
+configuration version, use the existing settings concurrency check, and are
+stored through the active engine. Their absence does not establish curtailment
+or unrestricted history. Unknown periods cannot establish training or forward
+accuracy for a curtailable source. No hardware command or automatic detection
+is implied. Forecast documents may contain `valid_until`, an exclusive aware UTC provider
 freshness deadline. Null leaves the existing OEP forecast age policy authoritative.
 Selected HA forecasts must pass both deadlines. `weather_version` is `none` when
 an explicit all-HA forecast was built without independent weather.
 
+The optional source `learning_start` is an aware UTC ISO instant. The UI edits a
+calendar date beginning at midnight in the Home Assistant installation timezone.
+Future cutoffs are rejected. An absent value is omitted from canonical hashing.
+Unset `learning_start`, `unrestricted_history_start` and
+`unrestricted_history_end` are omitted from the saved configuration document.
+Saving the same current configuration reuses its exact immutable document.
+Setting or clearing a learning date retains the other versions. No conversion of
+earlier development document layouts is provided.
+A present value participates in the configuration and comparison-family identity
+and limits admitted training, validation and accuracy cohorts. Earlier raw
+history, original plans, models and evidence remain stored. This setting is
+independent of the source's confirmed unrestricted production interval.
+
 The `solar` namespace additionally owns these JSON contracts:
+
+Solar daily-series writers compare the expected manifest and every referenced
+block in one active-database transaction. Reads use batches of at most 128 block
+identities. Reusing an existing manifest does not bypass immutable-content or
+missing-block checks. Valid matching blocks from an earlier incomplete write may
+complete an absent manifest. New blocks and the new manifest commit or roll back
+together. Document names, payloads and cross-backend transfer contracts remain
+unchanged.
+
+Original forecast runs under `forecast-weather-*` supply historical forecast
+training and assessment. Retained `weather-cache-*` reanalysis is diagnostic
+evidence only; its receipt is not a forecast issue or publication time.
+
+The public learning report distinguishes `training_hours` (unique physical
+production hours) from `training_samples` (forecast/measurement pairs). Pairs
+sharing a measured hour share that hour's total training weight of one.
+Its `historical_assessment` retains status (`eligible`, `insufficient_history`
+or `not_improved`), policy, weather model, predetermined run
+initializations, per-origin scores, simulated windows, matched-pair and unique-hour
+counts, actual creation time and owned issue. Each window binds run initialization,
+simulated origin/exclusive end, origin delay, matched hours and baseline/model/
+served-forecast MAE in kWh per hour, training end, actual model creation time,
+training reference and original weather-run reference. `per_origin` retains the same errors and
+matched-pair count for each delay group. Simulated origins are not publication
+timestamps. A complete assessment has 384 pairs over 288 unique production hours.
+For a shared inverter, evidence identity also binds the neighboring source
+definitions and relevant production histories because their predictions share a
+conversion limit. A source on an independent inverter does not reset this proof.
+
+`source_selection.admission_basis` distinguishes `historical_forecast_backtest`
+from `captured_forecasts`. Historical admission has `required_days` zero;
+`complete_days` still counts only actual captured days. The current
+`weather_service` exposes model, newest-available selection, nullable run
+initialization, actual receipt, nullable provider publication and policy without
+inventing missing provider metadata.
+
+`SolarStore.transaction()` acquires the shared store instance's reentrant write
+lock before opening the SQL document transaction. Weather-cache, history-import,
+configuration, model and assessment writes use that ordering. Nested immutable
+archive writes reuse the lock and transaction. This serializes those workers in
+one app instance; it is not a distributed lock between app processes. Provider
+HTTP requests and native fitting run outside the write lock.
 
 | Document name | Contents and semantics |
 | --- | --- |
 | `ha-first-<version>.json` | First normalized observation of exact provider configuration and native AC `steps` with aware `start`, `duration_h` in elapsed hours and `kwh`. Partial sunrise/sunset and native quarter intervals are retained. Contains `observed_at`, nullable `provider_issued_at` and nullable `provider_refreshed_at`. Content identity excludes observation and refresh times. The first record is never rewritten by cache reads. |
 | `ha-receipt-<hash>.json` | Immutable meter `entity_id` and normalized prediction including actual observation/refresh times. Credentials and raw provider payloads are excluded. New real refreshes retain separate provenance. |
 | `source-day-<family>-<local-date>.json` | First forward capture for one measured source/local day. Retains exact UTC `hours`, HA timezone, original configuration/baseline/ML references, original `ha_versions` and per-model hourly kWh values. The family scopes physical source/inverter definitions and location, excluding requested source preference. Nonlinear model families additionally bind the learning policy, including library/features, cleaning, fitting and gain thresholds. Earlier scalar captures cannot admit a tree candidate. |
-| `ml-weights-<hash>.json` | Immutable nonlinear solar `schema` and bounded native XGBoost CPU `model_json`. The model metadata retains its SHA-256 checksum. Native JSON is structurally validated before loading. No pickle or executable Python objects are stored. |
-| `ml-training-<hash>.json` | Per-source training report with original configuration/location, weather/history references, optional model metadata and `weights_reference`. Metadata binds source/inverter/site, capacity in kWp, training cutoff, actual creation time, library/policy/features, training digest and model checksum. The summary retains daylight training/validation counts, UTC validation bounds, baseline/scalar/tree MAE in hourly kWh, status, excluded reason counts and coalesced UTC exclusion intervals. Raw history/weather are unchanged. |
+| `ml-weights-<hash>.json` | Immutable direct-production solar `schema` (`solar-xgboost-production-v2`) and bounded native XGBoost CPU `model_json`. The target is measured hourly kWh, not a PVWatts correction factor. Native inference provides mean kW for integration over shorter intervals. The model metadata retains its SHA-256 checksum. Native JSON is structurally validated before loading. No pickle or executable Python objects are stored. |
+| `ml-training-<hash>.json` | Per-source training report with original configuration/location, weather/history references, optional model metadata and `weights_reference`. Metadata binds source/inverter/site, `capacity_kw` in kWp, `measurement_boundary` (`ac` or `dc`), `max_power_kw`, training cutoff, actual creation time, library/policy/features, training digest and model checksum. An optional model `time_trend` stores its selected log-rate per solar year and aware reference instant. The summary retains `training_start`, exclusive `training_end`, `training_hours`, `validation_hours`, `training_days`, `validation_days` and UTC validation bounds. Training and validation use equal observation weights. Summary `time_trend` retains status (`active`, `insufficient_history`, `not_improved` or `unstable`), selected `annual_change` and attempted `candidate_annual_change` as fractions, reference, fixed reason and chronological `folds`. Each fold stores training end, validation start/exclusive end, baseline/trend MAE in kWh/hour, fitted annual change, admitted hours and days. A trend selected inside ML does not establish that ML is the current forecast. PVWatts/direct-production XGBoost MAE is in hourly kWh. Status, excluded reason counts and coalesced UTC exclusion intervals remain auditable. `diagnostic_counts` and coalesced diagnostic periods mark irradiance/yield anomalies or possible production limitation without removing admitted observations. Insufficient training and insufficient validation have distinct statuses. Raw history/weather are unchanged. |
+| `history-import-discovery-<hash>.json` | Immutable Recorder availability observation with `entity_id`, optional explicit UTC `learning_start`, `statistics_identity` (`metadata_id`, `source`, original `unit`), nullable `available_start` and actual `captured_at`. Availability is month-level metadata, not an exact first complete hourly reading. |
+| `history-import-chunk-<hash>.json` | One bounded UTC annual source transfer with entity/statistics identity, `year`, inclusive request `start`, exclusive `end` and compact `hours` of epoch/cumulative-kWh/meter-kWh values. The shared 9,000-hour and 367-day request bounds remain. Empty years are retained as completed empty transfers. Overlapping endpoints must agree. Changed earlier rows or identity block pointer replacement while preserving original evidence. |
+| `history-import-<hash>.json` and `history-import-current-<cohort-hash>.json` | Immutable source import state and its atomically advanced current pointer. State retains entity/statistics identity, optional explicit UTC `learning_start`, coarse `available_start`, discovery time and sorted annual chunk descriptors with year/start/end/reference. The default cohort hash identifies the entity alone. An explicit cutoff binds entity and normalized UTC start, allowing new identity discovery without rewriting the original cohort. Annual imports retain one cumulative endpoint before the first complete learning hour. Restarts resume missing/current chunks from the active database. Clearing the date selects the original cohort again. The aggregate has no fixed year-count cutoff. Public `history_import` status reports available month, loaded years, received reading count, loaded-through request boundary and issue. Transfer coverage does not imply that every hour contains a measurement. |
+| `history-import-fault-<hash>.json` and `history-import-quarantine-<cohort-hash>.json` | Immutable contradiction evidence reference and durable blocking pointer for one meter/regime. A fault retains `entity_id`, optional UTC `learning_start`, fixed `issue`, `incoming_kind` and `incoming_reference`. Identity changes or conflicting accepted rows retain both originals and incoming evidence. Restart preserves the block. A bounded recheck clears the pointer to JSON null only after the original identity and accepted rows agree again. Explicitly selecting a different learning date uses a separate cohort. Clearing the date restores its earlier block. Cached closed years are not periodically reread, so this detects contradictions when evidence is read rather than continuously auditing Recorder. |
+| `weather-cache-data-<hash>.json` | Complete normalized historical weather month prefix in the existing daily-block manifest format. Values omit receipt timestamps and reuse immutable daily `block-<hash>.json` documents. The reference binds the complete logical query and normalized values. A month contains at most 744 hours and may require 32 daily blocks because end-labelled radiation normalizes to the preceding hour. Missing or malformed hours cannot establish complete cache coverage. |
+| `weather-cache-receipt-<hash>.json` | Immutable historical weather cache provenance with logical prefix `query`, `data_reference` and ordered actual `requests`. Every actual request retains its exact endpoint/query dates/parameters, normalization revision, normalized units and original `received_at`. A suffix-only extension remains a separate actual fetch. Old normalized values and receipt times do not change when a prefix extends. Receipt time is actual retrieval, not historical issuance. |
+| `weather-cache-index-<family-hash>.json` | Atomically advanced pointer for one provider, site, parameter, normalization and calendar-month family. A valid complete prefix can extend only through missing calendar dates. Complete closed months are reused across restart. Endpoint, model/run metadata when present, field, unit, timezone or site changes select a different family. Failed, partial, conflicting or corrupt input cannot advance coverage. Current forecast transport is separate. |
+| `forecast-weather-data-<hash>.json` | Original normalized ECMWF IFS Single Runs weather in the shared immutable daily-block manifest format. Content identity binds the complete normalized query and original hourly values. Values omit receipt times; the separate receipt restores them. Complete runs can be reused by different simulated origins without duplicating the physical weather. Reanalysis is not substituted. |
+| `forecast-weather-receipt-<hash>.json` | Immutable exact `query`, `data_reference`, model, `initialized_at`, actual `received_at`, nullable `available_at`, location version and forecast policy version. Historical publication can be unknown. Simulated origins never replace initialization or real receipt times. Model creation also retains its actual timestamp. |
+| `forecast-weather-index-<query-hash>.json` | Atomic first-accepted pointer for the full endpoint/model/site/run/query/normalization identity. Retraining and restart reuse original accepted data and receipt. Read/write validates original values, complete coverage and query agreement. Incomplete or changed responses cannot silently replace accepted evidence. |
+| `historical-fit-<hash>.json` | Immutable chronological replay fit with actual model metadata, separate `weights_reference`, training summary, simulated-origin cutoff and original forecast-run references. Model creation retains its actual clock. The original fit and weights are not relabelled as a model created in the past. |
+| `historical-assessment-<hash>.json` | Immutable typed assessment for one source/model-policy family and predetermined run schedule. Retains original windows, training/model/run references, actual creation time and issue. Restore validates the checksum and rederives status, matched-pair/unique-hour counts and per-origin scores from the window evidence. A stored eligibility flag cannot independently admit a model. Invalid retained evidence causes learning failure and physical fallback, rather than publishing a fourth assessment status or overwriting the original. |
+| `historical-assessment-current-<input-digest>.json` | Atomic pointer to an assessment, keyed by source/configuration/site/model-policy family, deterministic origins, relevant earlier production history and original run references. Changes after the last test horizon do not alter the assessment's input identity. Restart can reuse matching immutable evidence; changed inputs select another identity. |
 | `source-choice-<forecast-version>.json` | Original source-selection statuses, requested/active source, matched comparison days, common-cohort per-model MAE in kWh per hour, required/completed day counts, measurement history version, policy and HA observation references. Choices do not rewrite earlier forecasts or selections when Recorder history changes. |
 
 Selected forecast documents also retain their source selection and HA observation

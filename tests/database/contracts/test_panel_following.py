@@ -119,7 +119,24 @@ def test_follow_update_outage_unlink_and_relink_preserve_converter_and_originals
     """Complete HA updates replace geometry, unknown reads retain it, and only explicit unlink enables manual writes."""
     original = manual_configuration()
     with closing(SqlPlanRepository(tmp_path, database_url=panel_database)) as owner:
-        SolarStore(SqlDocuments(owner.engine, "solar")).save(original)
+        store = SolarStore(SqlDocuments(owner.engine, "solar"))
+        store.save(original)
+        original_archive = store.documents.read(f"configuration-{original.version}.json")
+        assert original_archive["sources"] == [
+            {
+                "source_id": "array",
+                "entity_id": "sensor.array",
+                "inverter_id": "converter",
+                "capacity_w": 3000.0,
+                "orientation": "west",
+                "tilt": 35.0,
+                "measurement_boundary": "ac",
+                "can_curtail": False,
+                "panels": [],
+                "ha_imports": [],
+                "forecast_source": "automatic",
+            }
+        ]
 
     async def scenario():
         """Exercise metadata and configuration transport with real persistence on each backend."""
@@ -216,7 +233,7 @@ def test_follow_update_outage_unlink_and_relink_preserve_converter_and_originals
             store = SolarStore(SqlDocuments(owner.engine, "solar"))
             assert store.current.inverters == original.inverters
             archived = store.documents.read(f"configuration-{original.version}.json")
-            assert archived == {**document(original), "version": original.version}
+            assert archived == original_archive
 
     asyncio.run(scenario())
 

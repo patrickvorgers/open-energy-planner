@@ -270,6 +270,9 @@ def test_app_solar_configuration_prefills_energy_sources_and_reads_independent_h
                     ),
                 },
             )
+            # East discovers monthly coverage, then imports its annual chunk.
+            # The third independent request diagnoses unsupported west statistics.
+            await entry.runtime_data.sync()
             await entry.runtime_data.sync()
             await entry.runtime_data.sync()
             async with (

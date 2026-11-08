@@ -30,8 +30,7 @@ from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRep
 from tests.app.contract.support.settings import settings
 from tests.app.demand.test_demand_app import definition
 from tests.app.planning.test_live_app import TOKEN, Solver
-from tests.app.solar.test_solar import SITE
-from tests.app.solar.test_solar_app import fixture_weather
+from tests.app.solar.support import SITE, fixture_weather
 from tests.database.support.archive import list_documents, make_store, read_plan
 
 
