@@ -168,6 +168,8 @@ function render() {
     if (!upcoming.length) find("activity-upcoming").textContent = "No known scheduled work in this window.";
     const modules = new Map();
     const focusedGroup = document.activeElement?.parentElement?.dataset.moduleGroup;
+    const focusedOwner = document.activeElement?.parentElement?.dataset.owner;
+    const openModules = new Set([...find("activity-health").querySelectorAll("details[data-owner][open]")].map(item => item.dataset.owner));
     const expanded = new Map([...find("activity-health").querySelectorAll("details[data-module-group]")].map(item => [item.dataset.moduleGroup, item.open]));
     for (const row of health) {
         let children = modules, node;
@@ -179,6 +181,10 @@ function render() {
         if (!node.row || row.owner.split(":").length >= node.row.owner.split(":").length) node.row = row;
     }
     find("activity-health").replaceChildren(...[...modules].sort(([left], [right]) => left.localeCompare(right)).map(([key, node]) => moduleBranch(node, [key], expanded)));
+    for (const details of find("activity-health").querySelectorAll("details[data-owner]")) {
+        details.open = openModules.has(details.dataset.owner);
+        if (details.dataset.owner === focusedOwner) details.querySelector("summary").focus({preventScroll:true});
+    }
     if (focusedGroup) [...find("activity-health").querySelectorAll("details[data-module-group]")].find(item => item.dataset.moduleGroup === focusedGroup)?.querySelector("summary").focus({preventScroll:true});
 }
 
