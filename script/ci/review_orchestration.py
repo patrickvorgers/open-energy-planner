@@ -306,6 +306,31 @@ def provider_active(checks):
     )
 
 
+def kody_request_command(checks):
+    """Permit one force request only for exact merge-only metadata from the current Kody app."""
+    command = "@kody start-review"
+    for check in checks:
+        if check.get("app", {}).get("id") != KODY_APP_ID:
+            continue
+        output = check.get("output") or {}
+        if (
+            check.get("name") != "Kody Code Review"
+            or check.get("status") != "completed"
+            or check.get("conclusion") != "skipped"
+            or output.get("title") != "Code Review Skipped"
+        ):
+            raise VerificationError("Kody already has evidence for this revision. Inspect it first")
+        summary = output.get("summary")
+        if summary == "Only Merge Commits (All new commits identified as merge commits)":
+            command = "@kody review --force"
+        elif (
+            summary
+            != "Automated Review is disabled — Enable 'Automated Code Review' in General Settings"
+        ):
+            raise VerificationError("Kody already has evidence for this revision. Inspect it first")
+    return command
+
+
 def require_revision(repository, number, state, client):
     """Recheck the live Draft, current main, ancestry and cheap gates before each provider command."""
     current = client.get(f"repos/{repository}/pulls/{number}")
@@ -354,8 +379,9 @@ def send_command(repository, number, state, target, subject, client, now, publis
     else:
         if state["kody_used"]:
             raise VerificationError("Kody was already requested for this revision")
+        kody_command = kody_request_command(checks)
         state["kody_used"] = True
-        command = f"@kody start-review\n<!-- oep-kody-head:{state['head']} -->"
+        command = f"{kody_command}\n<!-- oep-kody-head:{state['head']} -->"
     state.update(
         phase="sending",
         publisher_id=publisher_id,
@@ -367,7 +393,9 @@ def send_command(repository, number, state, target, subject, client, now, publis
         message=f"Publishing the {target} request.",
     )
     save_state(state, subject, client)
-    require_revision(repository, number, state, client)
+    _, final_checks = require_revision(repository, number, state, client)
+    if target == "kody" and kody_request_command(final_checks) != kody_command:
+        raise VerificationError("Kody request evidence changed before publication")
     require_original_requester(repository, number, state, client)
     require_command_account(repository, state, client, publisher)
     result = add_comment(
@@ -485,18 +513,7 @@ def start_request(repository, number, command, client, now, publisher=None):
     try:
         preflight(repository, number, head, base, client)
         checks = current_checks(repository, head, client)
-        if any(
-            row.get("app", {}).get("id") == KODY_APP_ID
-            and not (
-                row.get("status") == "completed"
-                and row.get("conclusion") == "skipped"
-                and row.get("output", {}).get("title") == "Code Review Skipped"
-                and row.get("output", {}).get("summary")
-                == "Automated Review is disabled — Enable 'Automated Code Review' in General Settings"
-            )
-            for row in checks
-        ):
-            raise VerificationError("Kody already has evidence for this revision. Inspect it first")
+        kody_request_command(checks)
         send_command(repository, number, state, "quota", current["node_id"], client, now, publisher)
     except VerificationError as error:
         if state["phase"] != "sending":
@@ -577,7 +594,10 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         if row["id"] > state["command"] and instant(row["created_at"]) >= instant(state["sent"])
     ]
     if any(
-        re.search(r"(?m)^@(coderabbitai|kody)\s+(review|start-review|rate limit)\s*$", row["body"])
+        re.search(
+            r"(?m)^@(coderabbitai|kody)\s+(review(?: --force)?|start-review|rate limit)\s*$",
+            row["body"],
+        )
         and not is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
         for row in fresh
     ):
