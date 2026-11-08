@@ -580,6 +580,7 @@ def test_bounded_quota_rechecks_never_repeat_kody():
         ("issue_comment", " \t\n/oep-reviewer review\r\n \t", "write", True, True),
         ("issue_comment", "Please /oep-reviewer review", "write", True, False),
         ("issue_comment", "/oep-reviewer review extra", "write", True, False),
+        ("issue_comment", "/OEP-reviewer review", "write", True, False),
         ("issue_comment", "ordinary discussion", "write", False, False),
         ("issue_comment", "/oep-reviewer review\r\n", "read", True, False),
     ],
