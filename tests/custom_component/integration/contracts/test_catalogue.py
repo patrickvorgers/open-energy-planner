@@ -13,23 +13,41 @@ from aiohttp import ClientSession
 from homeassistant.util import dt as dt_util
 
 from custom_components.open_energy_planner.const import DOMAIN
-from tests.custom_component.support.chain import TOKEN, app_write, find, running_chain, setup_energy
+from tests.custom_component.support.chain import (
+    TOKEN,
+    app_write,
+    configure_energy,
+    find,
+    running_chain,
+    setup_energy,
+)
 
 
 def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(monkeypatch):
-    """A car after 2,000 unrelated sensors crosses real HA HTTP discovery without truncation."""
+    """A saved car and 2,000 Energy meters cross active HA discovery without truncation."""
     import json
+    from uuid import uuid4
+
+    from homeassistant.auth import auth_manager_from_config
+    from homeassistant.components.energy.data import async_get_manager
 
     async def scenario():
         """Capture real bounded requests while the app assembles and validates the full snapshot."""
-        async with running_chain(live=True) as (hass, entry, url, _root):
+        async with running_chain(live=True, recorder=True, peer_gateway=True) as (
+            hass,
+            entry,
+            url,
+            _root,
+        ):
             for index in range(2000):
                 hass.states.async_set(
                     f"sensor.synthetic_meter_{index:04}",
                     "1",
                     {
                         "friendly_name": f"Independent synthetic meter {index}",
-                        "unit_of_measurement": "W",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "state_class": "total_increasing",
                     },
                 )
             hass.states.async_set(
@@ -42,6 +60,56 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
                 },
             )
             coordinator = entry.runtime_data
+            hass.auth = await auth_manager_from_config(hass, [], [])
+            assert await setup_energy(hass)
+            manager = await async_get_manager(hass)
+            await manager.async_update(
+                {
+                    "energy_sources": [],
+                    "device_consumption": [
+                        {"stat_consumption": f"sensor.synthetic_meter_{index:04}"}
+                        for index in range(2000)
+                    ],
+                }
+            )
+            async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session:
+                async with session.post(url + "/v1/ha/source-choices/ev", json={}) as response:
+                    assert response.status == 200
+                await coordinator.sync()
+                async with session.get(url + "/v1/ha/source-choices/ev") as response:
+                    choices = await response.json()
+                assert not choices["pending"] and not choices["failed"]
+                assert any(
+                    entity["entity_id"] == "sensor.zzz_family_vehicle_soc"
+                    for entity in choices["catalogue"]["entities"]
+                )
+                async with session.get(url + "/v1/ev") as response:
+                    current = await response.json()
+                assert all(
+                    entity["entity_id"] != "sensor.zzz_family_vehicle_soc"
+                    for entity in current["catalogue"]["entities"]
+                )
+                async with session.post(
+                    url + "/v1/ev/configuration",
+                    json={
+                        "configuration": {
+                            "vehicles": [
+                                {
+                                    "id": str(uuid4()),
+                                    "soc_entity": "sensor.zzz_family_vehicle_soc",
+                                    "soc_timestamp_attribute": None,
+                                    "capacity_kwh": 60,
+                                    "maximum_w": 11000,
+                                    "target_soc": 80,
+                                    "departure_time": "07:00",
+                                }
+                            ],
+                            "points": [],
+                        },
+                        "expected_version": current["configuration_version"],
+                    },
+                ) as response:
+                    assert response.status == 200
             request = coordinator.client.request
             exchanges = []
 
@@ -742,11 +810,31 @@ def test_installation_energy_balance_prefill_requires_all_declared_channels(comp
 
 
 def test_ha_options_only_link_to_app_and_push_fresh_setup_metadata():
-    """HA exposes no sensor/device wizard. Opening app setup requests fresh read-only sensor choices without storing configuration in HA."""
+    """HA options link to the app while setup refresh updates selected Energy metadata only."""
 
     async def scenario():
         """Verify actual HA options, local app discovery and bounded sensor metadata."""
-        async with running_chain(live=True) as (hass, entry, url, _root):
+        async with running_chain(live=True, recorder=True) as (hass, entry, url, _root):
+            hass.states.async_set(
+                "sensor.import",
+                "10",
+                {
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                },
+            )
+            await configure_energy(
+                hass,
+                entry,
+                [
+                    {
+                        "type": "grid",
+                        "stat_energy_from": "sensor.import",
+                        "stat_rate": "sensor.later_grid",
+                    }
+                ],
+            )
             hass.states.async_set(
                 "sensor.later_grid",
                 "42",
@@ -756,6 +844,7 @@ def test_ha_options_only_link_to_app_and_push_fresh_setup_metadata():
                     "secret_attribute": "never-export",
                 },
             )
+            hass.states.async_set("sensor.unrelated_grid", "99", {"unit_of_measurement": "W"})
             form = await hass.config_entries.options.async_init(entry.entry_id)
             assert form["step_id"] == "init"
             assert not form["data_schema"].schema
@@ -773,6 +862,10 @@ def test_ha_options_only_link_to_app_and_push_fresh_setup_metadata():
             )
             assert grid["unit"] == "W"
             assert "state" not in grid and "secret_attribute" not in grid
+            assert all(
+                entity_item["entity_id"] != "sensor.unrelated_grid"
+                for entity_item in data["catalogue"]["data"]["entities"]
+            )
             assert not entry.options
             assert data["installation"] is None
 
