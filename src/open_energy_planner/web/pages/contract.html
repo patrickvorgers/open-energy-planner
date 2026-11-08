@@ -105,7 +105,7 @@
 <dt>Price rule starts</dt><dd><code class="example-value">2027-01-01</code><p>Add a new rule with the bonus from this date. The earlier June rule has no bonus. The first bonus allowance excludes all export before January.</p></dd>
 
 <dt>Extra export rate</dt><dd><code class="example-value">0.30 * min(max(market, 0), 0.20)</code><p>No extra payment at zero or negative prices. The maximum extra payment is €0.06/kWh. At market €0.10/kWh, one eligible kWh earns €0.03 bonus and €0.13 total. At market €0.25/kWh, it earns €0.06 bonus and €0.31 total.</p></dd>
-<dt>Annual export cap</dt><dd><code class="example-value">5000 kWh</code><p>All export from the start of the bonus counts, including unpaid hours. The first allowance runs from 1 January until 1 June 2027 in this example.</p></dd>
+<dt>Annual export cap</dt><dd><code class="example-value">5000 kWh</code><p>The planner counts all grid export from the bonus start towards this cap, including unpaid hours and battery export. Supplier source exclusions are not reproduced. The first allowance runs from 1 January until 1 June 2027 in this example.</p></dd>
 <dt>Annual reset</dt><dd><code class="example-value">Contract anniversary</code><p>The next 5,000 kWh allowance starts on 1 June 2027, then each contract anniversary. A later price rule does not restart the allowance.</p></dd>
 <dt>Paid window</dt><dd><code class="example-value">Monthly schedule</code><p>Use the following local hours in the Home Assistant installation timezone. Start is included and end is excluded.</p></dd>
 </dl>
