@@ -757,17 +757,22 @@ def test_workspace_navigation_does_not_turn_notification_loading_into_a_warning(
 def test_workspace_notification_read_deadline_replaces_loading_with_private_safe_recovery(
     app_page, previous_active
 ):
-    """A held current-document read remains loading at4999ms and withdraws private prior notices at5000ms."""
+    """Keep loading at 4,999 ms and withdraw private prior notices at 5,000 ms.
+
+    The literal expectations independently verify the client's native read
+    deadline, NOTIFICATION_READ_TIMEOUT_MILLISECONDS, without importing that
+    production constant as the expected value.
+    """
     page, url = app_page
     beginning = datetime(2026, 11, 8, tzinfo=UTC)
     page.clock.install(time=beginning)
     page.clock.pause_at(beginning + timedelta(minutes=1))
     page.add_init_script("""(() => {
         const nativeFetch=window.fetch;
-        window.fetch=(path,options)=>{
-            if(String(path).includes('/v1/notifications'))
-                window.notificationDeadlineRead={started:Date.now(),signal:options.signal};
-            return nativeFetch(path,options);
+        window.fetch=(requestTarget,fetchOptions)=>{
+            if(String(requestTarget).includes('/v1/notifications'))
+                window.notificationDeadlineRead={started:Date.now(),signal:fetchOptions?.signal};
+            return nativeFetch(requestTarget,fetchOptions);
         };
     })();""")
     held_reads = []
