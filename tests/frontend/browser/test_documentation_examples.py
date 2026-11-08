@@ -44,7 +44,7 @@ def test_documentation_plan_contains_real_solar_storage_and_daily_variation(app_
     page.clock.install(time=START)
     authenticate(page, url, "/overview")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    page.get_by_role("button", name="Full horizon", exact=True).click()
+    page.locator('[data-hours="0"]').click()
     groups = page.locator("#plan-chart").evaluate(
         "canvas => Chart.getChart(canvas).data.datasets.map(series => ({name:series.label, values:series.data.map(point => point.y)}))"
     )

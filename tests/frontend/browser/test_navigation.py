@@ -721,10 +721,8 @@ def test_interactive_planning_navigation_legends_range_and_commands(app_page):
     assert page.evaluate(
         "['plan-chart','reference-chart','self-consumption-chart','forecast-chart','energy-chart','price-chart'].every(id => Chart.getChart(document.getElementById(id)).scales.x.ticks.every(tick => tick.value % 900000 === 0))"
     )
-    page.get_by_role("button", name="Full horizon", exact=True).click()
-    expect(page.get_by_role("button", name="Full horizon", exact=True)).to_have_attribute(
-        "aria-pressed", "true"
-    )
+    page.locator('[data-hours="0"]').click()
+    expect(page.locator('[data-hours="0"]')).to_have_attribute("aria-pressed", "true")
     assert page.evaluate(
         "['reference-chart','self-consumption-chart','forecast-chart','energy-chart','price-chart'].every(id => {const reference=Chart.getChart(document.getElementById('plan-chart')).scales.x;const scale=Chart.getChart(document.getElementById(id)).scales.x;return scale.min===reference.min && scale.max===reference.max;})"
     )

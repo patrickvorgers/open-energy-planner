@@ -12,7 +12,7 @@ expected benefit = without-battery economic cost - scenario economic cost
 
 For example, a synthetic baseline of EUR 14.21 and optimizer cost of EUR 9.25 imply EUR 4.96 expected benefit. If self-consumption costs EUR 12.00, its benefit against that same baseline is EUR 2.21. These are alternative scenarios. Do not add their benefits together.
 
-These amounts cover the whole selected original plan, including remaining stored-energy value. Zooming the chart does not change their period. They are not measured savings or annual investment returns.
+These amounts follow the selected Planning chart period, including its change in stored-energy value. The caption states the covered period. **Full period** shows the available duration, normally 48 hours for a new plan. They are not measured savings or annual investment returns.
 
 ## Read the cost breakdown
 
@@ -23,9 +23,11 @@ net electricity cost = import cost - export income - bonus income
 economic cost = net electricity cost + battery wear - battery value change
 ```
 
-For example, 20.00 EUR import cost minus 4.50 EUR export income minus 0.50 EUR bonus income gives 15.00 EUR net electricity cost. Negative income increases costs. An unavailable amount stays unavailable. Displayed amounts have two decimal places, while totals use full precision. Small rounding differences are possible when subtracting the displayed amounts. These figures cover the complete selected plan, even when the chart is zoomed into fewer hours.
+For example, 20.00 EUR import cost minus 4.50 EUR export income minus 0.50 EUR bonus income gives 15.00 EUR net electricity cost. Negative income increases costs. An unavailable amount stays unavailable. Displayed amounts have two decimal places, while totals use full precision. Small rounding differences are possible when subtracting the displayed amounts. These figures cover the selected chart period.
 
 Battery value change is the estimated end value minus the starting value of stored energy. A positive value change reduces economic cost. It is not money paid into your account. The planner does not treat the battery's remaining usable energy as worthless merely because the horizon ends.
+
+Every view uses the same valuation basis frozen with the original plan. Only its opening and closing battery stocks change. Reserves and useful-energy limits still apply. Partial intervals use their original mean flows and interpolated battery endpoints. Bonus limits count earlier export chronologically, including export outside the visible window. Changing the view never re-optimizes the plan.
 
 Open **Cost breakdown** to separate cash, wear and stored-energy value. Check effective tariffs and bonus eligibility before comparing the result with a supplier bill. Investment costs and unsupported billing arrangements are not implicitly included.
 

@@ -618,8 +618,8 @@ def test_planning_time_edges_fill_plot_and_forecast_colors_are_distinct(app_page
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    for window, hours in (("Full horizon", 0), ("Next 6 hours", 6), ("Next 24 hours", 24)):
-        page.get_by_role("button", name=window, exact=True).click()
+    for hours in (0, 6, 24):
+        page.locator(f'[data-hours="{hours}"]').click()
         expected_end = expected_start + timedelta(hours=hours) if hours else last
         axes = page.evaluate("""['reference-chart','self-consumption-chart','plan-chart','forecast-chart'].map(id => {
             const chart = Chart.getChart(document.getElementById(id)), axis = chart.scales.x;

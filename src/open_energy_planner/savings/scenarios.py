@@ -1,7 +1,7 @@
 """Read-only reference chart projections using frozen physics, never another optimizer."""
 
 from copy import deepcopy
-from math import isclose
+from math import isclose, isfinite
 
 from .context import physical_context
 from .forecast import comparison
@@ -75,6 +75,15 @@ def scenario(plan, reference, *, without_battery=False):
             }
         )
     view["expected_flows"] = physical_flows
+    reference = deepcopy(reference)
+    for costs in (reference.get("reference_costs"), reference.get("ems_costs")):
+        if costs is not None:
+            amounts = [costs.get(key) for key in ("purchase", "sale", "bonus")]
+            costs["electricity_cost"] = (
+                amounts[0] - amounts[1] - amounts[2]
+                if all(type(value) in (int, float) and isfinite(value) for value in amounts)
+                else None
+            )
     result = {"comparison": reference, "chart": view}
     if reference.get("financial_issue"):
         result["issue"] = reference["financial_issue"]

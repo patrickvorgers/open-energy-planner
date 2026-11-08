@@ -23,6 +23,7 @@ from .repricing import PlanValuations
 from .runtime import SavingsRuntime, quarter
 from .scenarios import scenarios
 from .storage.adapters.sqlalchemy import SettlementStore
+from .windows import window_summary
 
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
@@ -266,20 +267,52 @@ def register(
         return web.json_response(result, headers={"Cache-Control": "no-store"})
 
     async def expected(request):
-        """Return original advice and separate successful repricing without activation.
+        """Read original comparisons or a financial period without activating advice.
 
-        Unavailable comparisons expose their comparison_issue through
-        scenarios["self_consumption"]["issue"], never invented reference flows."""
+        Without period parameters, return the original plan, evidence, scenarios
+        and separate successful repricing. An unavailable comparison exposes its
+        comparison_issue through scenarios["self_consumption"]["issue"], never
+        invented reference flows.
+
+        Supplying either query bound requires both start and end as increasing,
+        timezone-aware ISO timestamps. This mode returns only window_summary's
+        period, scenario amounts/issues and original valuation basis. It omits
+        the plan, evidence and separate valuation data.
+
+        Raises:
+            web.HTTPBadRequest: A period bound is missing, invalid, naive or
+                non-increasing (400).
+            web.HTTPNotFound: The selected original plan does not exist (404).
+            web.HTTPServiceUnavailable: Period calculation cannot read usable
+                original evidence (503). Its explanation never exposes raw errors.
+        """
+        window = None
+        if "start" in request.query or "end" in request.query:
+            try:
+                start, end = (
+                    datetime.fromisoformat(request.query[key]) for key in ("start", "end")
+                )
+                if start.utcoffset() is None or end.utcoffset() is None or start >= end:
+                    raise ValueError
+                window = start, end
+            except (KeyError, ValueError):
+                raise web.HTTPBadRequest(
+                    text="Choose an increasing, timezone-aware planning period"
+                ) from None
         plan = await asyncio.to_thread(plans.get_plan, request.match_info["plan_id"])
         if plan is None:
             raise web.HTTPNotFound(text="Original plan not found")
         plan = display_plan(plan, catalogue.value)
-        result = {
-            "plan": plan,
-            "evidence": await asyncio.to_thread(evidence, plan),
-            **(await asyncio.to_thread(valuations.latest, plan["plan_id"])),
-            "current_contract_version": contracts.current.version if contracts.current else None,
-        }
+        result = {}
+        if not window:
+            result = {
+                "plan": plan,
+                "evidence": await asyncio.to_thread(evidence, plan),
+                **(await asyncio.to_thread(valuations.latest, plan["plan_id"])),
+                "current_contract_version": contracts.current.version
+                if contracts.current
+                else None,
+            }
         try:
             if plan.get("reference_forecast_issue"):
                 result["comparison_issue"] = plan["reference_forecast_issue"]
@@ -297,6 +330,18 @@ def register(
         result["scenarios"] = await asyncio.to_thread(scenarios, plan, result.get("comparison"))
         if result.get("comparison_issue"):
             result["scenarios"]["self_consumption"]["issue"] = result["comparison_issue"]
+        if window:
+            try:
+                result = await asyncio.to_thread(window_summary, plan, result["scenarios"], *window)
+            except (ValueError, KeyError, TypeError, OverflowError) as error:
+                raise web.HTTPServiceUnavailable(
+                    text=request_error_message(
+                        error,
+                        logger=_LOGGER,
+                        operation="Planning period costs",
+                        fallback="Expected costs for this period are unavailable. Inspect application diagnostics.",
+                    )
+                ) from None
         import json
 
         from ..planning import encode

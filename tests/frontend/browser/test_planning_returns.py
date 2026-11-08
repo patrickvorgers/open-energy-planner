@@ -1,5 +1,6 @@
 """Show original scenario costs and benefits against one no-battery baseline."""
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,16 @@ def financial_page(app_page, request):
         timezone_id=SAVINGS_BROWSER_TIME_ZONE,
         locale=getattr(request, "param", "nl-NL"),
     ) as context:
-        yield context.new_page(), url
+        page = context.new_page()
+        headers = {"Authorization": "Bearer " + TOKEN}
+        plans = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()
+        plan = page.request.get(
+            url + "/v1/plans/" + plans["plans"][0]["plan_id"], headers=headers
+        ).json()
+        page.clock.set_fixed_time(
+            datetime.fromisoformat(plan["input_snapshot"]["problem"]["intervals"][0]["start"])
+        )
+        yield page, url
 
 
 def comparison_response(route, baseline_benefit_eur=4.96, *, without_battery=True):
@@ -39,6 +49,7 @@ def comparison_response(route, baseline_benefit_eur=4.96, *, without_battery=Tru
             "wear": 0,
             "inventory_change": 0,
             "economic_cost": cost_eur,
+            "electricity_cost": cost_eur,
         }
 
     baseline = body["scenarios"]["without_battery"]["comparison"]
@@ -112,10 +123,10 @@ def test_scenario_headers_lead_with_cost_then_baseline_benefit(
     ).to_have_count(0)
     periods = page.locator(".scenario-period").all_text_contents()
     assert len(periods) == 3 and len(set(periods)) == 1
-    assert "Whole original plan" in periods[0]
+    assert "original plan's valuation basis" in periods[0]
     before = page.locator("#ems-costs > dl").text_content()
-    for title in ("Next 6 hours", "Next 24 hours", "Full horizon"):
-        page.get_by_role("button", name=title, exact=True).click()
+    for hours in (6, 24, 0):
+        page.locator(f'[data-hours="{hours}"]').click()
         expect(page.locator("#ems-costs > dl")).to_have_text(before)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     positions = page.locator("#ems-costs > dl > div").evaluate_all(
@@ -255,6 +266,7 @@ def test_cost_breakdown_shows_each_scenario_income_with_original_sign(financial_
                 "wear": wear,
                 "inventory_change": inventory,
                 "economic_cost": economic,
+                "electricity_cost": purchase - sale * direction - bonus * direction,
             }
             for (purchase, sale, bonus, wear, inventory), economic in zip(
                 [
@@ -324,6 +336,7 @@ def test_cost_breakdown_shows_each_scenario_income_with_original_sign(financial_
                 "wear": 0,
                 "inventory_change": 0,
                 "economic_cost": 8.311,
+                "electricity_cost": 8.311,
             },
             ["11,38 EUR", "3,06 EUR", "0,00 EUR", "8,31 EUR", "0,00 EUR", "0,00 EUR"],
             "8,31 EUR",
@@ -362,7 +375,7 @@ def test_cost_breakdown_on_real_two_day_plan_remains_readable(app_page):
     page, url = app_page
     page.clock.install(time=START)
     connect(page, url)
-    page.get_by_role("button", name="Full horizon", exact=True).click()
+    page.locator('[data-hours="0"]').click()
     # A tall mobile capture retains the complete two-day card below the sticky menu.
     if page.viewport_size["width"] < 500:
         page.set_viewport_size({"width": page.viewport_size["width"], "height": 1600})
