@@ -4,21 +4,25 @@ import asyncio
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 from aiohttp import web
 
 from open_energy_planner.activities.api import EVENTS
 from open_energy_planner.activities.events import Health, Outcome
 from open_energy_planner.core.units import BYTES_PER_KIB, MINUTES_PER_HOUR, SECONDS_PER_MINUTE
-from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import source_names
 from open_energy_planner.installation.forecast_policy import next_update
 from open_energy_planner.notifications.api import NOTIFICATIONS
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, request_error_message
+from open_energy_planner.solar.storage.history import parse_report
+from open_energy_planner.storage.writes import complete_write
 
 from .basis import forecast_usable
 from .ha_forecasts import parse_ha_predictions
 from .notifications import explain_solar_problem, solar_forecast_notifications
+from .weather import OpenMeteoSolarSource
+from .weather import solar_weather_factory as default_solar_weather_factory
 from .wire import parse_configuration
 
 SOLAR_WORKER_POLL_SECONDS = 5
@@ -55,6 +59,18 @@ async def worker(runtime, job):
 
 def register(app, runtime, live, lock, persist, snapshot, weather_factory, membership):
     """Wire authenticated routes and one coalesced model/weather lifecycle into the existing app."""
+
+    def oldest_history():
+        """Request weather back to the earliest accepted meter hour, preserving bounded provider reads."""
+        return min(
+            (history.hours[0].start for history in runtime.histories.values() if history.hours),
+            default=None,
+        )
+
+    if weather_factory is default_solar_weather_factory:
+        weather_factory = partial(
+            weather_factory, store=runtime.store, history_start=oldest_history
+        )
 
     def activity_context(configuration):
         """Name all captured PV sources without exposing opaque source identities or location."""
@@ -96,6 +112,18 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
         try:
             body = await request.json()
             candidate = parse_configuration(body)
+            if any(
+                source.unrestricted_history_end is not None
+                and datetime.fromisoformat(source.unrestricted_history_end) > datetime.now(UTC)
+                for source in candidate.sources
+            ):
+                raise ValueError("Historical production confirmation cannot cover the future")
+            if any(
+                source.learning_start is not None
+                and datetime.fromisoformat(source.learning_start) > datetime.now(UTC)
+                for source in candidate.sources
+            ):
+                raise ValueError("Solar learning start cannot be in the future")
         except (ValueError, TypeError, KeyError, OverflowError):
             raise web.HTTPBadRequest(text="Invalid solar configuration") from None
         async with lock:
@@ -136,7 +164,8 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                 not in ("recorder_unavailable", "history_unavailable", "unsupported_statistics")
             ):
                 raise ValueError("Unsupported solar history failure")
-            values = None if error else parse_history(body)
+            report = None if error else parse_report(body)
+            values = report.history if report else None
         except (ValueError, TypeError, KeyError, OverflowError):
             raise web.HTTPBadRequest(text="Invalid solar history") from None
         async with lock:
@@ -144,7 +173,18 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
             if pending is None or body.get("request_version") != pending["version"]:
                 raise web.HTTPConflict(text="Solar history request changed")
             try:
-                runtime.receive(body["request_version"], values, datetime.now(UTC), error=error)
+                cancellation = await complete_write(
+                    partial(
+                        runtime.receive,
+                        body["request_version"],
+                        values,
+                        datetime.now(UTC),
+                        error=error,
+                        report=report,
+                    )
+                )
+                if cancellation:
+                    raise cancellation
             except ValueError:
                 raise web.HTTPBadRequest(text="Invalid solar history source/range") from None
         return await snapshot(request)
@@ -322,6 +362,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                 async def update_weather():
                     """Fetch only for configured PV and the latest HA location, independent of solver cadence."""
                     last_location, due = None, datetime.min.replace(tzinfo=UTC)
+                    last_history_start = None
                     while True:
                         now = datetime.now(UTC)
                         async with lock:
@@ -332,6 +373,9 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                             if location != last_location:
                                 runtime.set_weather(location, ())
                                 last_location, due = location, now
+                            history_start = oldest_history()
+                            if history_start != last_history_start:
+                                last_history_start, due = history_start, now
                         if configured and location and now >= due:
                             due = now + timedelta(minutes=WEATHER_RETRY_MINUTES)
                             activity = (
@@ -354,7 +398,17 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                         and runtime.configuration
                                         and runtime.configuration.sources
                                     ):
-                                        runtime.set_weather(location, weather)
+                                        runtime.set_weather(
+                                            location,
+                                            weather,
+                                            service=source.service
+                                            if isinstance(source, OpenMeteoSolarSource)
+                                            else None,
+                                        )
+                                        if isinstance(source, OpenMeteoSolarSource):
+                                            runtime.set_forecast_runs(
+                                                location, source.forecast_runs
+                                            )
                                         installed = True
                                         if weather:
                                             weather_logger.success(
@@ -425,13 +479,54 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                 events.withdraw("solar-weather")
                         await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
+                async def update_original_runs():
+                    """Import small historical original-run batches independently of current forecast publication."""
+                    history_logger = BackgroundLog(_LOGGER, "Historical solar forecast refresh")
+                    while True:
+                        now = datetime.now(UTC)
+                        async with lock:
+                            location = live.report.location if live.report else None
+                            configured = bool(
+                                runtime.configuration and runtime.configuration.sources
+                            )
+                        if configured and location:
+                            try:
+                                runs = await source.import_runs(location, now)
+                                async with lock:
+                                    if (
+                                        live.report
+                                        and live.report.location == location
+                                        and runtime.configuration
+                                        and runtime.configuration.sources
+                                    ):
+                                        runtime.set_forecast_runs(location, runs)
+                            except Exception as error:
+                                history_logger.exception(
+                                    "Current solar forecasts remain available. Missing historical original forecasts are retried after the import backoff.",
+                                    expected=isinstance(error, ValueError),
+                                    reason="invalid original forecast data"
+                                    if isinstance(error, ValueError)
+                                    else None,
+                                )
+                        await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
+
                 task = asyncio.create_task(update_weather())
+                history_task = (
+                    asyncio.create_task(update_original_runs())
+                    if isinstance(source, OpenMeteoSolarSource)
+                    else None
+                )
                 try:
                     yield
                 finally:
                     task.cancel()
+                    if history_task is not None:
+                        history_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
+                    if history_task is not None:
+                        with suppress(asyncio.CancelledError):
+                            await history_task
 
         app.cleanup_ctx.append(weather_lifecycle)
     app.router.add_get("/v1/solar", settings)

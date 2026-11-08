@@ -30,7 +30,7 @@ from tests.app.contract.support.settings import settings
 from tests.app.contract.test_contract_bonuses import measured_inputs
 from tests.app.contract.test_contract_prices import NOW, contract, price_series
 from tests.app.demand.test_demand import config
-from tests.app.solar.test_solar import plant
+from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
@@ -39,7 +39,7 @@ def test_solar_import_forecast_and_accuracy_contracts_survive_restart(archive):
     from open_energy_planner.solar.calculation.model import SolarImport, SolarPanel
     from open_energy_planner.solar.runtime import SolarRuntime
     from open_energy_planner.solar.source_selection import choose_sources
-    from tests.app.solar.test_solar import START
+    from tests.app.solar.support import START
     from tests.app.solar.test_source_selection import prediction, provider
 
     engine, _root = archive
@@ -817,3 +817,197 @@ def test_solar_nonlinear_weights_and_training_reports_survive_backend_restart(ar
     choice = restored.documents.read("source-choice-" + runtime.forecast.version + ".json")
     assert choice["sources"]["pv0"]["active"] == "pvwatts"
     assert restored.documents.read("ml-training-" + reference + ".json") == report
+
+
+def test_solar_learning_boundary_and_time_trend_replay_after_backend_restart(archive):
+    """Each real backend preserves the explicit learning regime and continuous measured-yield correction."""
+    from open_energy_planner.solar.boosting import SolarBoostedModel
+    from open_energy_planner.solar.trend import YieldTrend
+    from open_energy_planner.solar.wire import document
+    from tests.app.solar.support import SITE
+    from tests.app.solar.test_boosting import fit_case
+
+    engine, _root = archive
+    result, _history, _physical, weather, now = fit_case()
+    model = replace(result.model, time_trend=YieldTrend(-0.005, now - timedelta(days=30)))
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    configuration = plant()
+    configuration = replace(
+        configuration,
+        sources=(
+            replace(
+                configuration.sources[0], learning_start=(now - timedelta(days=40)).isoformat()
+            ),
+        ),
+    )
+    store.save(configuration)
+    store.archive("ml-training", model.version, document(model))
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    replay = SolarBoostedModel.restore(
+        restored.documents.read("ml-training-" + model.version + ".json")
+    )
+    assert restored.current == configuration
+    assert replay == model
+    assert replay.predict(weather[-24:], SITE, known_at=now) == model.predict(
+        weather[-24:], SITE, known_at=now
+    )
+
+
+def test_shared_solar_writers_preserve_one_immutable_content_and_release_transactions(archive):
+    """Concurrent model and forecast-cache writers safely reuse identical content on every backend."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    payload = {"synthetic": True, "values": [0.0, 1.5, 3.0]}
+
+    def write_same_content(_):
+        """Exercise the public immutable write path from independent worker threads."""
+        for _ in range(5):
+            store.archive("concurrent-proof", "same", payload)
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        list(workers.map(write_same_content, range(8)))
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    assert restored.documents.read("concurrent-proof-same.json") == payload
+    with pytest.raises(ValueError, match="Solar evidence archive mismatch"):
+        store.archive("concurrent-proof", "same", {"synthetic": False})
+    store.archive("other-source", "after-conflict", {"retained": True})
+    assert restored.documents.read("other-source-after-conflict.json") == {"retained": True}
+
+
+def test_historical_forecast_assessment_and_original_run_cache_survive_restart(archive):
+    """All backends retain both original forecast receipts and derived admission without new downloads."""
+    from open_energy_planner.solar.backtest import HistoricalForecastAssessment
+    from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
+    from open_energy_planner.solar.weather import forecast_weather_query
+    from open_energy_planner.solar.wire import document
+    from tests.database.support.solar import forecast_evidence
+
+    engine, _root = archive
+    site, run, report = forecast_evidence()
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    store.archive("historical-assessment", "synthetic", document(report))
+    query = forecast_weather_query(site, run.initialized_at)
+    ForecastWeatherCache(store).write(query, run)
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    replay = HistoricalForecastAssessment.restore(
+        restored.documents.read("historical-assessment-synthetic.json")
+    )
+    assert (
+        replay.status == "eligible" and replay.matched_pairs == 384 and replay.unique_hours == 288
+    )
+    assert replay == report
+    assert ForecastWeatherCache(restored).read(query) == run
+
+
+def solar_series_rows():
+    """Use three distinct daily raw evidence blocks without claiming complete learning coverage."""
+    return [
+        {
+            "start": f"2026-01-0{index + 1}T00:00:00+00:00",
+            "total_kwh": float(index),
+            "meter_kwh": float(index),
+        }
+        for index in range(3)
+    ]
+
+
+def solar_documents_snapshot(engine):
+    """Detach every solar payload to detect overwritten evidence or stray partial inserts."""
+    with engine.connect() as connection:
+        return dict(
+            connection.execute(
+                select(DOCUMENTS.c.name, DOCUMENTS.c.payload).where(
+                    DOCUMENTS.c.namespace == "solar"
+                )
+            ).all()
+        )
+
+
+@pytest.mark.parametrize("damage", ["manifest", "block", "missing", "input"])
+def test_existing_solar_series_rejects_conflicting_or_incomplete_evidence(archive, damage):
+    """Manifest presence cannot hide corrupt, missing or differently supplied immutable blocks."""
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    rows = solar_series_rows()
+    store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    manifest = store.documents.read("history-synthetic-series.json")
+    block = "block-" + manifest["blocks"][1]["block"] + ".json"
+    if damage == "manifest":
+        store.documents.write("history-synthetic-series.json", {"entity_id": "other"})
+    elif damage == "block":
+        store.documents.write(block, {"entity_id": "sensor.synthetic", "hours": []})
+    elif damage == "missing":
+        with engine.begin() as connection:
+            connection.execute(
+                DOCUMENTS.delete().where(
+                    DOCUMENTS.c.namespace == "solar", DOCUMENTS.c.name == block
+                )
+            )
+    else:
+        rows[1] = {**rows[1], "total_kwh": 99.0}
+    before = solar_documents_snapshot(engine)
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    with pytest.raises(ValueError, match="Solar evidence archive mismatch"):
+        restored.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    assert solar_documents_snapshot(engine) == before
+
+
+def test_solar_series_finishes_prior_partial_blocks_and_rolls_back_failed_manifest(
+    archive, monkeypatch
+):
+    """A failed new publication adds no blocks, while an accepted legacy partial block remains recoverable."""
+    from open_energy_planner.solar.calculation.model import version
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    rows = solar_series_rows()
+    body = {"entity_id": "sensor.synthetic", "hours": rows[:1]}
+    store.archive("block", version(body), body)
+    before = solar_documents_snapshot(engine)
+    original_write = store.documents.write
+
+    def failed_manifest(name, payload):
+        """Fail after the new blocks are staged but before the public series manifest commits."""
+        if name == "history-synthetic-series.json":
+            raise OSError("Synthetic manifest write failure")
+        return original_write(name, payload)
+
+    monkeypatch.setattr(store.documents, "write", failed_manifest)
+    with pytest.raises(OSError, match="Synthetic manifest write failure"):
+        store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    assert solar_documents_snapshot(engine) == before
+    monkeypatch.setattr(store.documents, "write", original_write)
+    store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    manifest = restored.documents.read("history-synthetic-series.json")
+    replay = [
+        row
+        for item in manifest["blocks"]
+        for row in restored.documents.read("block-" + item["block"] + ".json")["hours"]
+    ]
+    assert replay == rows
+
+
+def test_concurrent_solar_series_writers_publish_one_complete_manifest(archive):
+    """Independent model/cache threads atomically reuse identical complete series evidence."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    rows = solar_series_rows()
+
+    def write(_index):
+        """Publish the same original evidence through the actual shared domain writer lock."""
+        store.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        list(workers.map(write, range(8)))
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    manifest = restored.documents.read("history-synthetic-series.json")
+    assert len(manifest["blocks"]) == 3
+    assert all(
+        restored.documents.read("block-" + item["block"] + ".json")["hours"] == [row]
+        for item, row in zip(manifest["blocks"], rows, strict=True)
+    )

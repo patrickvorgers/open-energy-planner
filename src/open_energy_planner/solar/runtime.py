@@ -2,25 +2,33 @@
 
 import logging
 from dataclasses import asdict, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from importlib.metadata import version as distribution_version
 
 from open_energy_planner.forecast_quality.policy import FORECAST_MODELS
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, failure_trace
 from open_energy_planner.solar.calculation.model import ForecastSource, SolarForecast, version
+from open_energy_planner.solar.forecast_weather import (
+    FORECAST_RUN_RESPONSE_HOURS,
+    MAX_LIVE_RUN_AGE_HOURS,
+    ForecastWeatherRun,
+)
 
-from ..planning_policy import FINE_INTERVAL_MINUTES
+from ..planning_policy import FINE_INTERVAL_MINUTES, PLANNING_HORIZON_HOURS
 from .boosting import TrainingResult, TrainingStatus, TrainingSummary, fit_boosted_model
+from .calculation.projection import learned_forecast
 from .ha_forecasts import HA_REFRESH_MAX_AGE
-from .learning import calibration_blocker, fit
+from .learning import learning_blocker
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
 from .source_selection import MIN_ACCURACY_DAYS, SOURCE_POLICY, choose_sources, ha_energies
+from .storage.history import HistoryContinuityError, SolarHistoryImport
 from .wire import configuration_document, document, forecast_document
 
-HISTORY_LOOKBACK_DAYS = 365
 HISTORY_RETRY_MINUTES = 15
+HARD_HISTORY_ISSUES = frozenset({"history_continuity_unavailable", "history_cache_unreadable"})
 EAST_WEST_ARRAY_SHARE = 0.5
 MODEL_RETRY_MINUTES = 5
+MIN_HISTORY_MODEL_UPDATE_SECONDS = 60
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -32,9 +40,20 @@ class SolarRuntime:
         self.store = store
         self.configuration, self.issue = store.current, store.issue
         self.location, self.weather = None, ()
+        self.forecast_runs, self.weather_service = (), {}
+        self.forecast_runs_revision, self.last_fit_at = 0, None
+        self.forecast_cohort_revision = 0
         self.weather_revision, self.history_revision = 0, 0
         self.histories, self.ranges, self.history_issues = {}, {}, {}
         self.history_retry_after = {}
+        self.history_import = SolarHistoryImport(store)
+        self.history_import.configure(self.configuration.sources if self.configuration else ())
+        self.histories = (
+            self.history_import.restore(source.entity_id for source in self.configuration.sources)
+            if self.configuration
+            else {}
+        )
+        self.history_issues.update(self.history_import.issues)
         self.forecast, self.candidate, self.calibrations = None, None, ()
         self.baseline = None
         self.last_key, self.failed_key, self.retry_after = None, None, None
@@ -44,11 +63,57 @@ class SolarRuntime:
         self.learning_log = BackgroundLog(_LOGGER, "Solar ML candidate update")
 
     def configure(self, configuration):
-        """Reset incompatible live state only after a changed definition has been persisted."""
+        """Reset model state after persistence, retaining validated unchanged meter cohorts.
+
+        This install callback runs under the app lock on the event loop. Geometry,
+        control declarations and forecast preferences do not change immutable
+        meter history. Only unchanged source/entity/learning-date bindings with
+        an accepted importer state may reuse their already validated aggregate.
+        New bindings and selected learning cohorts use the full restore path.
+        """
+        previous = (
+            {source.source_id: source for source in self.configuration.sources}
+            if self.configuration
+            else {}
+        )
+        unchanged = {
+            source.entity_id: source.learning_start
+            for source in configuration.sources
+            if source.source_id in previous
+            and (previous[source.source_id].entity_id, previous[source.source_id].learning_start)
+            == (source.entity_id, source.learning_start)
+        }
+        retained = {
+            entity: history
+            for entity, history in self.histories.items()
+            if entity in unchanged
+            and (state := self.history_import.states.get(entity))
+            and state["entity_id"] == entity
+            and state.get("learning_start") == unchanged[entity]
+            and self.history_import.learning_starts.get(entity) == unchanged[entity]
+        }
+        issues = {
+            entity: issue for entity, issue in self.history_issues.items() if entity in unchanged
+        }
+        retries = {
+            entity: retry
+            for entity, retry in self.history_retry_after.items()
+            if entity in unchanged
+        }
         self.configuration, self.issue = configuration, None
         self.history_revision += 1
-        self.histories, self.ranges, self.history_issues = {}, {}, {}
-        self.history_retry_after = {}
+        self.ranges, self.history_issues = {}, issues
+        self.history_import.configure(configuration.sources)
+        self.histories = {
+            **retained,
+            **self.history_import.restore(
+                source.entity_id
+                for source in configuration.sources
+                if source.entity_id not in retained
+            ),
+        }
+        self.history_issues.update(self.history_import.issues)
+        self.history_retry_after = retries
         self.forecast, self.candidate, self.calibrations, self.last_key = None, None, (), None
         self.baseline = None
         self.failed_key, self.retry_after = None, None
@@ -57,7 +122,7 @@ class SolarRuntime:
 
     def save_ha(self, predictions):
         """Retain original cache observations and each real refresh without overwriting earlier receipts."""
-        with self.store.documents.transaction():
+        with self.store.transaction():
             for entity, providers in predictions.items():
                 for prediction in providers:
                     first = "ha-first-" + prediction.version + ".json"
@@ -71,58 +136,89 @@ class SolarRuntime:
         self.ha_predictions = predictions
         self.ha_revision += 1
 
-    def set_weather(self, location, weather):
+    def set_weather(self, location, weather, *, service=None):
         """Install typed source evidence. Changing the site revokes old-site weather and outputs."""
         if self.location != location:
             self.forecast, self.candidate, self.baseline, self.last_key = None, None, None, None
             self.learning = {}
+            self.forecast_runs = ()
+            self.forecast_runs_revision += 1
         self.location, self.weather = location, tuple(weather)
+        self.weather_service = dict(service) if service is not None else {}
         self.weather_revision += 1
 
+    def set_forecast_runs(self, location, runs):
+        """Coalesce added runs but revoke results when captured evidence is replaced or withdrawn."""
+        if location != self.location:
+            return False
+        selected = tuple(runs)
+        site = version(asdict(location))
+        if any(
+            not isinstance(run, ForecastWeatherRun)
+            or run.location_version != site
+            or len(run.hours) != FORECAST_RUN_RESPONSE_HOURS - 1
+            for run in selected
+        ) or len({run.initialized_at for run in selected}) != len(selected):
+            raise ValueError("Invalid original solar forecast run cohort")
+        selected = tuple(replace(run, forecast_origin=None) for run in selected)
+        if selected == self.forecast_runs:
+            return False
+        incoming = {run.initialized_at: run.version for run in selected}
+        if any(incoming.get(run.initialized_at) != run.version for run in self.forecast_runs):
+            self.forecast_cohort_revision += 1
+            self.last_key = None
+            self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
+            self.source_selection, self.learning = {}, {}
+        self.forecast_runs = selected
+        self.forecast_runs_revision += 1
+        return True
+
     def request(self, now):
-        """Request one source's daily bounded history without requiring all inverters to succeed together."""
+        """Discover all available years and resume one bounded source transfer at a time."""
         if self.configuration is None or self.store.issue:
             return None
-        end = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)
-        start = end - timedelta(days=HISTORY_LOOKBACK_DAYS, hours=1)
         for source in self.configuration.sources:
-            if self.ranges.get(source.entity_id) != (start, end) or (
-                source.entity_id in self.history_issues
-                and now >= self.history_retry_after[source.entity_id]
-            ):
-                body = {
-                    "entity_id": source.entity_id,
-                    "start": start.isoformat(),
-                    "end": end.isoformat(),
-                    "configuration_version": self.configuration.version,
-                }
-                return {**body, "version": version(body)}
+            if now < self.history_retry_after.get(source.entity_id, now):
+                continue
+            pending = self.history_import.request(source.entity_id, self.configuration.version, now)
+            if pending is not None:
+                return pending
         return None
 
-    def receive(self, ref, history, now, *, error=None):
-        """Reject delayed source replies and advance failed channels so other sources can still learn."""
-        from datetime import datetime
+    def receive(self, ref, history, now, *, error=None, report=None):
+        """Persist a source-bound annual transfer before installing a multi-year aggregate.
 
+        Delayed replies cannot cross configuration changes. Recorder failures
+        advance to other sources until their bounded retry. Identity or overlap
+        changes retain the prior accepted cache and the original incoming evidence.
+        """
         pending = self.request(now)
         if pending is None or pending["version"] != ref:
             raise ValueError("Solar history request changed")
         entity = pending["entity_id"]
-        start, end = (datetime.fromisoformat(pending[key_item]) for key_item in ("start", "end"))
+        if not error:
+            try:
+                accepted = self.history_import.receive(pending, report, now)
+            except HistoryContinuityError:
+                error = "history_continuity_unavailable"
+            else:
+                if accepted:
+                    self.histories[entity] = accepted
+                self.history_revision += 1
+                self.history_issues.pop(entity, None)
+                self.history_retry_after.pop(entity, None)
         if error:
+            previous = self.history_issues.get(entity)
+            if previous in HARD_HISTORY_ISSUES and error not in HARD_HISTORY_ISSUES:
+                error = previous
+            if error in HARD_HISTORY_ISSUES and previous != error:
+                self.history_revision += 1
+                self.last_key = None
+                self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
+                self.source_selection, self.learning = {}, {}
             self.history_issues[entity] = error
             self.history_retry_after[entity] = now + timedelta(minutes=HISTORY_RETRY_MINUTES)
-        else:
-            if history.entity_id != entity or any(
-                not start <= hour.start < end for hour in history.hours
-            ):
-                raise ValueError("Solar history source/range mismatch")
-            self.histories[entity] = history
-            self.history_revision += 1
-            self.history_issues.pop(entity, None)
-            self.history_retry_after.pop(entity, None)
-        # A read failure does not loop on source one forever. Retry next daily
-        # cohort or after fifteen minutes. A failed channel is never zero production.
-        self.ranges[entity] = start, end
+        self.ranges[entity] = pending["start"], pending["end"]
 
     def key(self, now):
         """Coalesce input/version changes and quarter boundaries without fitting on every HA poll."""
@@ -142,6 +238,8 @@ class SolarRuntime:
                     (entity, tuple(row.fresh(now) for row in providers))
                     for entity, providers in sorted(self.ha_predictions.items())
                 ),
+                self.forecast_cohort_revision,
+                self.forecast_runs_revision,
             )
             if self.configuration
             else None
@@ -158,11 +256,34 @@ class SolarRuntime:
         if self.location is None or not self.weather and not ha_only:
             self.issue = "solar_weather_unavailable"
             return None
-        expired = bool(self.weather and now - self.weather[-1].received_at > timedelta(hours=2))
+        if self.weather_service:
+            try:
+                initialized = datetime.fromisoformat(self.weather_service["initialized_at"])
+                available = datetime.fromisoformat(self.weather_service["available_at"])
+                expired = not initialized <= available <= now or now - initialized > timedelta(
+                    hours=MAX_LIVE_RUN_AGE_HOURS
+                )
+                origin = now.replace(minute=0, second=0, microsecond=0)
+                present = {row.start for row in self.weather}
+                expired = expired or any(
+                    origin + timedelta(hours=index) not in present
+                    for index in range(PLANNING_HORIZON_HOURS + 1)
+                )
+            except (TypeError, ValueError, KeyError):
+                expired = True
+        else:
+            expired = bool(self.weather and now - self.weather[-1].received_at > timedelta(hours=2))
         if expired and not ha_only:
             self.issue = "solar_weather_expired"
             return None
         key = self.key(now)
+        if (
+            self.last_key
+            and key[:-1] == self.last_key[:-1]
+            and self.last_fit_at
+            and now - self.last_fit_at < timedelta(seconds=MIN_HISTORY_MODEL_UPDATE_SECONDS)
+        ):
+            return None
         if key == self.last_key or (
             key == self.failed_key and self.retry_after and now < self.retry_after
         ):
@@ -172,16 +293,32 @@ class SolarRuntime:
             self.configuration,
             self.location,
             () if expired else self.weather,
-            tuple(self.histories.items()),
+            tuple(
+                (entity, history)
+                for entity, history in self.histories.items()
+                if self.history_issues.get(entity) not in HARD_HISTORY_ISSUES
+            ),
             now,
             self.ha_predictions,
+            self.forecast_runs,
+            dict(self.weather_service),
         )
 
     def build(self, job):
         """Compute and archive exact physical output plus shadow corrections outside the event loop."""
         from open_energy_planner.solar.calculation.predictor import PVWattsPredictor
 
-        key, configuration, location, weather, histories, now, ha_predictions = job
+        (
+            key,
+            configuration,
+            location,
+            weather,
+            histories,
+            now,
+            ha_predictions,
+            forecast_runs,
+            weather_service,
+        ) = job
         if not weather:
             energies, issues = ha_energies(configuration, None, ha_predictions, now)
             if issues or len(energies) != len(configuration.sources):
@@ -244,87 +381,85 @@ class SolarRuntime:
             return key, forecast, (), None, None, statuses, {}, {}
         predictor = PVWattsPredictor()
         forecast = predictor.forecast(configuration, location, weather, now)
+        weather_provenance = {
+            "weather_service": weather_service,
+            "forecast_weather_source": {
+                "model": weather_service["model"],
+                "initialized_at": weather_service["initialized_at"],
+                "location_version": version(asdict(location)),
+                "weather_version": forecast.weather_version,
+                "policy": weather_service["policy"],
+            }
+            if weather_service
+            else None,
+        }
         hourly = predictor.hourly(
             configuration,
             location,
             tuple(weather_item for weather_item in weather if weather_item.received_at <= now),
         )
         histories = dict(histories)
-        inverters = {inverter.inverter_id: inverter for inverter in configuration.inverters}
-        calibrations = tuple(
-            replace(
-                candidate,
-                configuration_version=configuration.version,
-                weather_version=forecast.weather_version,
-                history_version=version(document(histories[source.entity_id])),
-            )
-            for source in configuration.sources
-            if (
-                candidate := fit(
-                    source,
-                    histories.get(source.entity_id),
-                    hourly,
-                    now,
-                    inverters[source.inverter_id],
-                )
-            )
-            is not None
-        )
         self.store.archive_series(
-            "weather",
-            forecast.weather_version,
-            [document(weather_item) for weather_item in weather],
+            "weather", forecast.weather_version, [document(row) for row in weather]
         )
         for history in histories.values():
             body = document(history)
             self.store.archive_series(
                 "history", version(body), body["hours"], entity=history.entity_id
             )
-        for calibration in calibrations:
-            body = document(calibration)
-            self.store.archive("calibration", version(asdict(calibration)), body)
-        learning, hourly_factors = self._learned_candidates(
-            configuration, location, histories, hourly, weather, now, calibrations
+        learning = self._learned_candidates(
+            configuration, location, histories, hourly, weather, now, forecast_runs
         )
-        learned_names = {
-            row.source_id: learning[row.source_id].model.schema
-            if learning[row.source_id].model is not None
-            else "pvwatts-calibrated-v2"
-            for row in calibrations
+        models_by_source = {
+            source_id: result.model
+            for source_id, result in learning.items()
+            if result.model is not None
         }
+        try:
+            candidate = learned_forecast(configuration, location, weather, now, models_by_source)
+        except (ImportError, ValueError, RuntimeError, OSError) as error:
+            self.learning_log.exception(
+                "Independent solar prediction is unavailable. PVWatts remains available. Retrying with the next usable solar forecast update.",
+                expected=True,
+                reason=type(error).__name__,
+            )
+            _LOGGER.debug(
+                "Independent solar prediction failure (%s).\n%s",
+                type(error).__name__,
+                failure_trace(error),
+            )
+            learning = {
+                source_id: replace(
+                    result,
+                    model=None,
+                    summary=replace(
+                        result.summary,
+                        status=TrainingStatus.FAILED,
+                        issue="The independent prediction could not be updated. PVWatts remains usable.",
+                    ),
+                )
+                if result.model is not None
+                else result
+                for source_id, result in learning.items()
+            }
+            models_by_source, candidate = {}, None
+        calibrations = tuple(models_by_source.values())
+        learned_names = {source_id: model.schema for source_id, model in models_by_source.items()}
         learned_references = {
-            row.source_id: learning[row.source_id].archive_reference
-            if learning[row.source_id].model is not None
-            else version(asdict(row))
-            for row in calibrations
+            source_id: learning[source_id].archive_reference for source_id in models_by_source
         }
-        candidate = (
-            predictor.forecast(
-                configuration,
-                location,
-                weather,
-                now,
-                calibrations=calibrations,
-                hourly_factors=hourly_factors,
-            )
-            if calibrations
-            else None
-        )
-        if candidate and any(row.model is not None for row in learning.values()):
-            candidate = replace(
-                candidate,
-                model="solar-learned-v1",
-                calibration_versions=tuple(learned_references.values()),
-            )
         if candidate:
             self.store.archive(
-                "forecast", candidate.version, {"forecast": forecast_document(candidate)}
+                "forecast",
+                candidate.version,
+                {"forecast": forecast_document(candidate), **weather_provenance},
             )
         self.store.archive(
             "forecast",
             forecast.version,
             {
                 "forecast": forecast_document(forecast),
+                **weather_provenance,
                 "assumptions": {
                     "pvlib": distribution_version("pvlib"),
                     "gamma_pdc": -DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE,
@@ -358,6 +493,9 @@ class SolarRuntime:
                 source_id: row.model.policy_version
                 for source_id, row in learning.items()
                 if row.model is not None
+            },
+            historical_assessments={
+                source_id: row.summary.historical_assessment for source_id, row in learning.items()
             },
         )
         selected = tuple(
@@ -397,6 +535,7 @@ class SolarRuntime:
                 forecast.version,
                 {
                     "forecast": forecast_document(forecast),
+                    **weather_provenance,
                     "source_selection": selection_status,
                     "ha_references": {
                         entity: [prediction.version for prediction in providers]
@@ -422,6 +561,7 @@ class SolarRuntime:
         ):
             if archived is not None:
                 calibrated = {row.source_id for row in applied}
+                available_sources = {row.source_id for row in archived.energies}
                 self.store.archive(
                     "quality-source-models",
                     archived.version,
@@ -434,6 +574,7 @@ class SolarRuntime:
                             else baseline.model
                         )
                         for source in configuration.sources
+                        if source.source_id in available_sources
                     },
                 )
         alternatives = [baseline]
@@ -461,7 +602,7 @@ class SolarRuntime:
         self.store.archive(
             "quality-candidates",
             forecast.version,
-            {"forecasts": [row.version for row in alternatives]},
+            {"forecasts": [row.version for row in alternatives], **weather_provenance},
         )
         return (
             key,
@@ -475,15 +616,17 @@ class SolarRuntime:
         )
 
     def _learned_candidates(
-        self, configuration, location, histories, hourly, weather, now, calibrations
+        self, configuration, location, histories, hourly, weather, now, forecast_runs=()
     ):
         """Persist bounded tree weights once and retain separate source/cleaning provenance per fit."""
-        sources = {row.source_id: row for row in configuration.sources}
+        from .backtest import assess_forecasts, validation_baselines
+
         inverters = {row.inverter_id: row for row in configuration.inverters}
-        future = tuple(row for row in hourly if row.start + timedelta(hours=1) > now)
-        learning, factors, failed = {}, {}, False
-        for calibration in calibrations:
-            source = sources[calibration.source_id]
+        forecast_physical = validation_baselines(configuration, location, forecast_runs, now)
+        learning, failed = {}, False
+        for source in configuration.sources:
+            if source.entity_id not in histories:
+                continue
             try:
                 result = fit_boosted_model(
                     source,
@@ -493,36 +636,44 @@ class SolarRuntime:
                     hourly,
                     weather,
                     now,
+                    forecast_runs=forecast_runs,
+                    forecast_physical=forecast_physical,
                 )
-                values = result.model.factors(future, weather, known_at=now) if result.model else {}
-                metadata = document(result.model) if result.model else None
                 if result.model:
-                    weights = {
-                        "schema": result.model.schema,
-                        "model_json": metadata.pop("model_json"),
-                    }
-                    weights_ref = version(weights)
-                    self.store.archive("ml-weights", weights_ref, weights)
-                    metadata["weights_reference"] = weights_ref
+                    assessment = assess_forecasts(
+                        configuration,
+                        source,
+                        location,
+                        histories[source.entity_id],
+                        forecast_runs,
+                        now,
+                        result.model.policy_version,
+                        self.store,
+                        histories=histories,
+                    )
+                    result = replace(
+                        result, summary=replace(result.summary, historical_assessment=assessment)
+                    )
+                metadata = None
+                if result.model:
+                    metadata = self.store.archive_model(result.model)
                 record = {
                     "source_id": source.source_id,
                     "configuration_version": configuration.version,
                     "location": document(location),
-                    "history_version": calibration.history_version,
-                    "weather_version": calibration.weather_version,
+                    "history_version": version(document(histories[source.entity_id])),
+                    "weather_version": version([document(row) for row in weather]),
+                    "forecast_run_references": [run.version for run in forecast_runs],
                     "model": metadata,
                     "summary": document(result.summary),
                 }
                 reference = version(record)
                 self.store.archive("ml-training", reference, record)
                 learning[source.source_id] = replace(result, archive_reference=reference)
-                factors.update(
-                    {(source.source_id, instant): value for instant, value in values.items()}
-                )
             except (ImportError, ValueError, RuntimeError, OSError) as error:
                 failed = True
                 self.learning_log.exception(
-                    "PVWatts and usable scalar candidates remain available. Retrying with the next usable solar forecast update.",
+                    "PVWatts remains available. Retrying with the next usable solar forecast update.",
                     expected=True,
                     reason=type(error).__name__,
                 )
@@ -543,15 +694,16 @@ class SolarRuntime:
                         issue="The ML candidate could not be updated. Simpler forecasts remain usable.",
                     ),
                 )
-        if calibrations and not failed:
+        if learning and not failed:
             self.learning_log.success(
                 "Training checks completed. Candidate activation still requires matched forecast evidence."
             )
-        return learning, factors
+        return learning
 
     def install(self, result, now):
-        """Never let a delayed worker replace forecasts for newer source definitions or weather."""
-        if result[0] != self.key(now):
+        """Preserve every captured input guard except additive immutable forecast-history imports."""
+        current_key = self.key(now)
+        if current_key is None or result[0][:-1] != current_key[:-1]:
             return False
         (
             self.last_key,
@@ -564,6 +716,7 @@ class SolarRuntime:
             self.learning,
         ) = result
         self.failed_key, self.retry_after, self.issue = None, None, None
+        self.last_fit_at = now
         return True
 
     def failed(self, job, now):
@@ -591,7 +744,7 @@ class SolarRuntime:
             }
             fitted = {candidate_item.source_id for candidate_item in self.calibrations}
             for source in self.configuration.sources:
-                status = calibration_blocker(source, inverters[source.inverter_id])
+                status = learning_blocker(source, inverters[source.inverter_id])
                 if status is not None:
                     statuses[source.source_id] = status
                     continue
@@ -612,16 +765,24 @@ class SolarRuntime:
             "configuration": configuration_document(self.configuration),
             "forecast": forecast,
             "candidate": candidate,
-            "calibrations": [document(candidate_item) for candidate_item in self.calibrations],
+            "calibrations": [
+                {
+                    "source_id": model.source_id,
+                    "trained_until": model.trained_until.isoformat(),
+                    "training_version": model.training_version,
+                    "status": "nonlinear_shadow",
+                }
+                for model in self.calibrations
+            ],
             "calibration_status": statuses,
             "learning": {
                 source_id: {
                     **{
                         key: value
                         for key, value in document(row.summary).items()
-                        if key != "excluded_periods"
+                        if key not in ("excluded_periods", "diagnostic_periods")
                     },
-                    "candidate_model": row.model.schema if row.model else "pvwatts-calibrated-v2",
+                    "candidate_model": row.model.schema if row.model else None,
                     "audit_reference": row.archive_reference,
                 }
                 for source_id, row in self.learning.items()
@@ -644,5 +805,12 @@ class SolarRuntime:
             else {},
             "issue": self.issue,
             "history_issues": dict(self.history_issues),
+            "weather_service": dict(self.weather_service),
+            "history_import": self.history_import.status(
+                (source.entity_id for source in self.configuration.sources)
+                if self.configuration
+                else (),
+                self.histories,
+            ),
             "request": self.request(now),
         }

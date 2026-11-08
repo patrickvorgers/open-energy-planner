@@ -18,7 +18,7 @@ from open_energy_planner.planning import InputSnapshot
 from script.release import package_ha_app, package_release
 from tests.app.installation.test_installation import problem, solve
 from tests.app.installation.test_installation_app import installation
-from tests.app.solar.test_solar import START
+from tests.app.solar.support import START
 from tests.database.support.archive import make_store, read_document
 
 

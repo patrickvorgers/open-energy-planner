@@ -11,7 +11,7 @@ from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.service import PriceService
 from open_energy_planner.prices.storage.adapters.store import PriceStore
 from tests.app.planning.test_live_app import TOKEN, Solver
-from tests.app.solar.test_solar import SITE
+from tests.app.solar.support import SITE
 from tests.database.support.archive import make_store
 
 

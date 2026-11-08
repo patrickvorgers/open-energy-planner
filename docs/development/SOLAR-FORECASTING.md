@@ -86,7 +86,7 @@ HA Energy is never modified. All OEP settings persist in the app. No solar sourc
 | Thin HA integration | Forward Energy sources, normalized Recorder history and HA location. App owns settings |
 | Solar weather adapter | Fetch Open-Meteo GHI/DNI/DHI, air temperature and wind, validate units, normalize interval labels |
 | Physical model adapter | pvlib-python 0.16.1 solar geometry, irradiance transposition, Faiman temperature and PVWatts DC output |
-| Solar learning | Per-source scalar baseline and CPU XGBoost challenger, independent of HTTP/HA/pvlib objects |
+| Solar learning | Independent per-source CPU XGBoost production model, independent of PVWatts output and HTTP/HA objects |
 | App runtime/storage | Coalesced model jobs, current weather/history, stale-result protection and immutable evidence |
 | Planning-basis adapter | Replace PV energy while retaining upstream physical installation/load/price settings |
 | Existing planner | Optimize and independently validate energy flows and costs. Never operate physical equipment |
@@ -143,8 +143,12 @@ Missing radiation remains absent. Nonfinite, nonnumeric and excessive quantities
 remain invalid. This provider normalization does not alter measured energy or
 previously archived forecasts.
 
-Weather is fetched once per site, hourly, independently of model/solver polling.
-Failures retry after 30 minutes. The optional historical archive is cached daily.
+Live weather explicitly selects Open-Meteo `ecmwf_ifs`, the same concrete
+ECMWF IFS domain as the Single Runs archive. Earlier implicit `best_match`
+selection is no longer used. The current service still uses the latest actually
+available forecast; it does not deliberately select an older run to imitate the
+historical backtest. Weather is fetched once per site, hourly, independently of
+model/solver polling. Failures retry after 30 minutes. Historical runs are cached.
 Its outage cannot discard a usable current forecast. Site changes clear old-site
 weather. Requests are bounded to 15 seconds, 4 MiB and 9000 hours, with no redirects.
 HTTP failures retain only forecasts within normal validity. There is no forecast
@@ -160,6 +164,20 @@ less than 30 minutes old. Weather older than two hours cannot create a new one.
 These are implementation defaults to validate in practice, not field reliability
 guarantees. Existing planner cadence remains separate.
 
+Additional immutable original forecast runs do not invalidate a usable running
+model job. Removing or replacing a previously accepted run is a hard cohort
+change: it revokes the old ML state to the physical baseline and rejects workers
+started against the earlier cohort. Subsequent work uses the changed run set;
+an older completion cannot restore the revoked candidate.
+
+Saving geometry, control declarations or forecast preferences reuses already
+validated production history only for the exact same source, meter and learning
+start. This avoids rereading every annual chunk in the event-loop install
+callback. Existing source issues, retry deadlines and quarantines remain intact.
+Startup and new, changed or cleared learning cohorts retain the complete restore
+and integrity checks. An unrelated settings save is not an additional reread of
+all previously accepted immutable chunks.
+
 The solar module owns its forecast availability notification. It names the solar
 forecast explicitly and explains automatic weather retries and forecast refresh.
 The warning clears only when a forecast matches the current configuration and HA
@@ -172,96 +190,329 @@ without technical-detail disclosures. Authenticated API diagnostics remain avail
 
 ## Learning from existing production history
 
-The integration reads bounded annual cumulative Recorder sums per source, daily.
-Counter resets normalized by Recorder remain valid. Nonconsecutive/decreasing
-statistics are not converted into invented energy. Missing/incompatible history
-produces a deduplicated HA notification naming the affected sensors. A failed
-source advances to the next source and retries after 15 minutes, so it cannot
-block all other inverters. The physical model remains available without history.
+### Historical measurement and weather coverage
 
-The first learned candidate is a bounded regularized through-origin regression:
+The integration discovers each selected source's earliest available Recorder
+month, then imports all available calendar years in bounded annual requests.
+The monthly availability boundary is coarse metadata, not proof of the first
+complete hourly measurement. Each annual request remains bounded to 367 days
+and the shared 9,000-hour wire limit. It includes the preceding cumulative
+endpoint needed for the first hourly delta. The aggregate has no fixed year-count
+cutoff. Empty years retain explicit completed transfer coverage without hiding
+later years or inventing zero production.
 
-`factor = clip((sum(predicted * measured) + 1) / (sum(predicted²) + 1), 0.5, 1.5)`
+Accepted annual chunks are immutable and resume after restart from the active
+database. They bind the meter entity, Recorder metadata identity, source and
+original unit. Changed identities, incompatible overlapping endpoints or changes
+to earlier accepted readings retain the original evidence and block replacement.
+Counter resets normalized by Recorder remain valid. Nonconsecutive or decreasing
+statistics never become invented energy. A failed source cannot hide other
+sources. The physical model remains available without learning history.
 
-Fit AC measurements to predicted AC, or declared DC measurements to predicted DC.
-The ordered AC path is canonical DC, declared efficiency, one shared inverter
-cap, then proportional source attribution. Never invert clipped AC to infer DC.
-Hybrid AC history additionally needs its historical battery/direct-DC route
-context. Until connected, calibration reports `hybrid_route_history_required`.
-Declared DC production history is compared directly at its own DC boundary.
-Use at least 100 usable daylight hours spanning 27 days. Omit low-yield hours
-below 0.05 kWh and inverter-clipped hours. Potentially curtailable installations
-do not train until usable historical execution feedback is available. A planned
-command is not proof of physical curtailment. This conservative exclusion avoids
-teaching controlled low production as poor sunlight. The gain is an empirical
-installation correction, not an identification of its physical cause.
+Historical training and forecast admission use archived original ECMWF IFS
+weather forecasts from the Open-Meteo Single Runs API, paired with actual
+production. Reanalysis is optional diagnostic evidence only. It does not train
+the production model or establish historical forecast accuracy. The current
+ECMWF IFS archive starts in 2024; older production remains archived without
+inventing forecast inputs for those years.
 
-Each source has its own factor. Another source without history retains factor one.
-The current editor does not map one aggregate meter onto several independently
-modeled inverters. Such future support must aggregate physical predictions first
-and apply exactly one group correction. It cannot invent per-inverter histories
-or apply a correction both before and after aggregation.
-Candidate future DC is scaled before applying shared AC conversion/caps. The
-physical forecast and corrected candidate are archived separately. History can
-train immediately without an old OEP forecast archive. However, historical
-realized weather does not prove old forecast quality. Receipt times are retained.
-Reanalysis must not masquerade as a weather forecast known at a past decision.
+The actual training set is the intersection of admitted production, usable
+forecast weather and geometric daylight. Missing readings, unavailable runs and
+provider coverage gaps reduce that intersection. They remain unknown and are
+not filled from predictions or reanalysis. Existing paired history can meet
+training and forecast-admission requirements without waiting for new days.
 
-A nonlinear CPU XGBoost challenger can learn recurring shade and weather/calendar
-patterns per independently measured source. It uses hourly UTC calendar cycles,
-GHI/DNI/DHI, temperature, wind and capacity-normalized PVWatts DC production.
-The fixed CPU model uses 96 trees of depth three and one native thread. The CPU-only
-runtime is shared with other learning domains. Model policies and selection
-remain owned by each domain.
+Original forecast runs use a durable cache in the solar namespace of the active
+database. The cache binds provider endpoint, model/domain, site, run
+initialization, full query, normalization and units. Retraining and restart reuse
+accepted runs without refetching them. Changed model, site, initialization or
+query cannot silently reuse another request. Failed, malformed or incomplete
+responses do not become complete run evidence. The actual receipt time remains
+unchanged. Run initialization, simulated planning origin, provider lead and
+planning lead are separate values. Historical `available_at` remains unknown
+unless separately established; initialization is not a publication timestamp.
+An archive outage cannot discard an independently usable current forecast.
+The original-run policy is `ecmwf-ifs-frozen-original-runs-v1`; simulated-origin
+delays belong to the separate backtest policy rather than the physical weather
+cache identity.
+
+Each missing or unusable original initialization has an independent retry delay.
+It starts at 15 minutes and doubles to a maximum of 24 hours, with a bounded
+attempt counter. Actual success or a site change clears that run's retry state.
+Other initializations continue importing, and cached/current forecasts remain
+independent. Transport failures and non-404 provider errors retain the separate
+15-minute global history backoff. A delayed old-site failure cannot install retry
+state for the new site. Restart resets these in-memory retry counters.
+
+### Direct production model and learned time trend
+
+The production candidate is an independent CPU XGBoost model per independently
+metered source. Its target is the measured hourly kWh at the declared AC or DC
+boundary. Its features are UTC calendar cycles, GHI/DNI/DHI, temperature, wind
+and solar position. Neither PVWatts output
+nor a measured-to-PVWatts ratio enters the learned features or target. The fixed
+CPU model uses 96 trees of depth three and one native thread. The shared CPU
+runtime does not share model policies with other learning domains.
+
+Training geometry reuses a separate cache of at most eight immutable history,
+site and interval-duration combinations. Results are read-only mappings of
+tuples. Short future prediction queries do not occupy this history cache.
+This changes repeated astronomical work, not admitted measurements, training
+weights, model features or numerical output.
+
+All admitted training and validation measurements have equal weight. Older years
+do not receive an arbitrary age discount. Multiple archived forecast/target
+pairs can represent a physical hour, but the samples share that hour's total
+weight of one. The public `training_hours` counts
+unique physical hours; `training_samples` counts forecast/measurement pairs.
+With N admitted forecast samples for one physical hour, native fitting receives
+weight 1/N for each sample. Those weights are not rescaled to have mean one.
+Learned tree thresholds and leaf values are model parameters. Tree count, depth,
+learning rate and minimum child weight are fitting controls, not observation age
+weights.
+
+The candidate can additionally learn a log-linear time trend from measured yield
+after its own XGBoost model has explained weather and season. The rate estimate
+uses monthly totals of measured production divided by this learner's prediction,
+then robust same-calendar-month log-ratio differences across years. Each usable
+physical hour is counted once in those monthly aggregates: forecasts sharing
+that measurement are collapsed before aggregation. Each usable
+month needs at least 14 measured days and 28 hours. All 12 calendar-month groups
+must have matched observations across years, with at least two years of preceding
+training span. Monthly totals that are not positive cannot identify a
+multiplicative trend, but their original zero measurements remain in production
+training and validation. PVWatts output never enters the trend estimate.
+
+Trend and no-trend candidates use equal observation weights. A trend fit translates
+measured targets to a common reference yield before fitting, then applies its
+learned log-rate at prediction time. This is an internal choice within the
+independent ML candidate, not a correction applied to PVWatts. A positive or
+negative yield change may reflect shading, soiling or weather bias. It is not
+proof of physical panel degradation.
+
+The automatic trend decision uses the eight complete calendar quarters preceding
+the latest admitted training sample. Each fold fits both learners and estimates
+its trend using only observations before its validation quarter. It requires at
+least 28 measured validation days and 100 hours. Missing quarters do not become
+zeros or shorten the required two complete seasonal validation years. In each
+consecutive group of four quarters, the trend must improve equally weighted
+hourly MAE by at least 5% and 0.001 kWh, win at least three quarters and never
+increase a quarter's MAE by more than 0.001 kWh. These are separate chronological
+comparisons, not a random split or training fit.
+This requires about four years of comparable production and forecast weather at minimum. The earliest
+validation quarter needs two preceding training years, followed by eight complete
+validation quarters. Quarter alignment, the separate final seven-day holdout and
+coverage gaps can increase the required calendar span. Less history can still
+train the ordinary no-trend model.
+Because the current IFS archive starts in 2024, this optional trend will often
+remain unavailable until enough comparable forecast seasons exist. Production
+years predating the forecast archive cannot establish those seasons.
+
+The fitted annual direction must agree across all folds and the final estimate.
+Every rate must lie within 0.5 percentage points of the median fold rate. Annual
+changes outside plus or minus 5% are rejected as an extrapolation safety bound,
+not clipped into an assumed correction. These conservative thresholds are chosen
+policies, not a claim of universally optimal settings. The final held-out week
+never participates in trend selection. An incomplete, inconsistent or
+unhelpful trend leaves ordinary equal-weight XGBoost available.
+
+The public `time_trend` assessment retains its status, selected annual change,
+attempted annual change, reference time, chronological fold periods/errors and
+owned reason. `active` here means that the trend was selected inside the ML
+candidate. `source_selection.active` still decides which complete forecast is
+used. A selected trend does not bypass historical or forward forecast admission.
+The model's training and trend policies participate in evidence identity, so
+another policy cannot inherit earlier promotion evidence.
+
+### Learning after a fundamental installation change
+
+An optional per-source `learning_start` excludes earlier observations from both
+training and validation/accuracy cohorts. The **Learning data from** editor uses
+midnight in the Home Assistant installation timezone and stores an aware UTC
+instant. Future dates are rejected. An absent cutoff uses all otherwise eligible
+history and does not change the default configuration hash. Changing it versions
+the configuration and comparison family, retaining original plans, measurements,
+model archives and earlier comparison records.
+
+This cutoff is appropriate after replacing panels, changing metering or another
+fundamental installation change. It does not delete earlier history or infer
+that it is faulty. It is independent of the explicitly confirmed unrestricted
+production interval for a curtailable source.
+An explicit UTC cutoff owns a separate meter/history pointer family. It performs
+new source-identity discovery and bounded annual imports, retaining one cumulative
+endpoint before the first complete UTC learning hour. This explicitly selected
+regime can accept a replacement meter identity without silently rebinding the
+original cohort. Clearing the cutoff restores the original cohort and any
+unresolved quarantine. Old manifests, chunks and fault evidence remain stored.
+Recorder availability still describes the original coarse monthly observation,
+not an exact first usable hour within the new regime.
+
+### Measurement admission and diagnostics
+
+Daylight is determined from solar position, independently of either model's
+predicted yield. Reliable daylight zeros, low production and production greater
+than PVWatts remain admitted. Gaps, decreasing cumulative sums, incomplete hours,
+missing or not-yet-received weather and values beyond the declared physical
+boundary are excluded with owned reasons. Nighttime output is zero. Original
+cumulative readings and weather remain unchanged.
+
+The irradiance/yield diagnostic compares measured kWh per GHI within the same UTC
+hour and 45-day seasonal group. At least eight training samples are required,
+and very low irradiance is not divided into a ratio. Its median/IQR fence marks
+unusual training hours without removing them. A separate diagnostic can mark
+zero production under high irradiance on a curtailable source. Neither a ratio,
+a statistical anomaly nor a price signal proves executed curtailment. Reliable
+held-out production is never removed merely because either model predicts it
+poorly. Training and validation share measurement-quality rules, not a minimum
+PVWatts production threshold or a maximum correction factor.
+
+### Chronological validation and forecast admission
 
 Training needs at least 100 admitted daylight hours on 28 dates before a separate
-final seven-day validation week. That week needs at least 28 daylight hours
-covering all seven dates. The scalar comparison is fitted on the same older clean
-training hours. Held-out outcomes never enter either fitted comparison. A shadow
-candidate must beat both PVWatts and the simple correction by at least
-0.005 kWh per hour and 5%. Constant bias can therefore retain the simpler correction. These historical errors use retrieved historical weather.
-They are not evidence of predictions actually issued in the past.
+final seven-day validation week. Validation needs at least 28 admitted daylight
+hours spanning all seven dates. A dark day with valid zero readings contributes
+normally. The public status distinguishes insufficient training history from
+insufficient validation history and retains the actual hours, days and UTC
+validation bounds. The chronological split precedes fitting. Held-out outcomes
+never enter the learned model or diagnostic thresholds. An independent candidate
+must improve historical hourly MAE over PVWatts by at least 0.005 kWh and 5%.
+A tie retains PVWatts. These errors use the same archived forecast weather for
+both models. Holding weather constant compares model quality; it does not
+isolate the provider's own weather error.
 
-Cleaning retains original cumulative sums and weather. It excludes gaps, decreases,
-incomplete hours, missing/unreceived weather, low physical yield, clipping and
-production outside configured physical or bounded correction ranges. Training-only
-outlier fences use the same UTC hour within 45-day seasonal groups. At least eight
-samples are required. The fence is the median plus/minus the greater of three IQRs
-and 0.15 correction ratio. Repeated shade remains learnable. Validation observations
-are not removed by these statistical fences. Counts and UTC exclusion intervals
-are archived, alongside raw source references and the training/validation split.
-Neither a price signal nor a statistical anomaly proves executed curtailment.
-The existing curtailment and hybrid route evidence guards remain mandatory.
+The report retains the actual first admitted training hour, exclusive training
+end, admitted day/hour counts and separate UTC validation bounds. A wide calendar
+span is not proof of complete observations. A separate historical forecast
+assessment uses four predetermined weekly ECMWF IFS run initializations at
+12:00 UTC. The schedule leaves a 24-hour settlement allowance after the final
+test horizon before selecting those runs, accommodating Recorder lag. Selection
+does not inspect available outcomes to choose more favorable windows. Each
+run provides two simulated 48-hour planning origins: initialization and
+initialization plus 24 hours. Both planning-origin groups must meet the gain
+requirements. Every comparison uses the same archived weather and measured
+production for PVWatts and XGBoost, with training kept chronologically before
+the held-out outcomes.
 
-Tree predictions correct physical DC before the shared inverter conversion and cap.
+Four complete runs provide 192 matched forecast/measurement pairs in each
+origin group and 384 pairs in aggregate. The two origins overlap by 24 hours
+per run: only 288 physical production hours are unique. Overlapping predictions
+can expose different leads but do not create independent measurements. Missing
+required hours cannot be replaced with zeros or a shorter horizon.
+
+These are simulations using historical weather forecasts, not claims that the
+app or provider actually published a forecast at a simulated origin. Provider
+lead is measured from run initialization; planning lead is measured from the
+simulated origin. Run initialization does not prove availability at that instant.
+Historical `available_at` may be unknown. Original receipt and model creation
+timestamps remain actual present-day observations and are never backdated.
+
+The raw XGBoost candidate and the actually served ML forecast, including its
+physical fallback, have separate scores. Both must improve on PVWatts in each
+origin-delay group by at least the shared absolute and relative gain thresholds.
+An incomplete assessment is `insufficient_history`; a complete unsuccessful
+assessment is `not_improved`; only a complete successful assessment is `eligible`.
+Invalid retained evidence is a learning failure that keeps the physical forecast,
+not another published assessment status.
+
+The model predicts production directly within its measurement boundary and
+physical power limits. Standalone AC production may be represented as equivalent
+DC using declared conversion efficiency for planning. This does not reconstruct
+unobserved clipped panel DC. Hybrid AC still needs independent route evidence.
+Changing algorithm, feature policy, geometry or site starts an independent
+comparison family. Earlier scalar or correction-factor evidence cannot promote
+the new direct-production model. The scalar fitting utility does not provide a
+runtime candidate or a fourth selectable solar source.
+
+### Immutable model and source evidence
+
 Weights use bounded, validated native JSON, never pickle. Training data and native
 prediction objects have bounded in-memory caches. Immutable weights are stored
-once, separately from each training report. Public status exposes readiness,
-training/validation counts and exclusion reasons, without native model blobs.
+once, separately from training reports. Model metadata binds the measurement
+boundary and maximum power as well as source, configuration, location, library,
+training and weight identities. Public status exposes readiness, training and
+validation counts, exclusion reasons and included diagnostic counts without native
+model blobs.
 
-Even a historically better tree remains in shadow mode until three complete,
-matched HA-local days of forecasts captured before their outcomes show material
-improvement over PVWatts with the same absolute and relative gain requirements.
-Manual **ML model** selection cannot bypass this tree gate. A changed learning
-policy, geometry or site starts an independent evidence family. Automatic excludes
-trees that fail the gain gate and ranks the remaining eligible forecasts, including
-Home Assistant. Explicit ML selection retains PVWatts until the tree qualifies.
-Older scalar
-forecast evidence cannot promote the tree. Unavailable learning retains usable
-PVWatts/scalar candidates and logs a safe, deduplicated recovery explanation.
+Each chronological historical fit archives its actual model metadata, separate
+native-weight reference, summary, cutoff and original weather-run references.
+Assessments retain those fit references, exact windows and actual creation time.
+Their reusable input identity binds source family and model policy, predetermined
+origins, relevant prior production history and original weather runs. Restore
+checks the immutable assessment checksum and derives counts, scores and eligibility
+again. It does not trust a persisted eligibility flag. Later outcomes beyond the
+final test horizon cannot change that assessment's input identity.
 
-Automatic solar source selection uses forecast accuracy rather than simulated decision costs.
-The household economic selection policy in [model selection](MODEL-SELECTION.md)
+The weather provenance captured with a model job travels with its baseline,
+candidate, selected forecast and forecast-quality context. A later live weather
+refresh cannot relabel those saved forecasts as having used another run. HTTP
+and fitting remain outside archive write transactions. The shared solar-store
+write lock is acquired before its SQL transaction, serializing cache, import and
+model workers without holding that lock during provider requests or fitting.
+
+Curtailable sources can declare an explicit unrestricted historical period with
+`unrestricted_history_start` and `unrestricted_history_end`. Both aware UTC
+endpoints are required together, ordered and not in the future. The end is
+exclusive. The range is a user's statement that production was not limited,
+not automatic detection or an inferred fact about all history. Training and
+completed forward comparisons use only the confirmed unrestricted periods.
+Unknown later periods remain excluded with `control_history_unconfirmed`.
+Configuration versioning, database persistence and existing settings concurrency
+checks bind this declaration to the source. Extending a confirmed past period
+does not rewrite original forward captures or change their physical comparison
+family. Current confirmed coverage determines which actual hours may score those
+original predictions. No hardware operation is issued.
+
+Disabling proposed solar commands makes the historical declaration editor
+inactive and excludes its hidden fields from form validation. Its local draft
+remains available if commands are enabled again before saving. Saving while the
+editor is inactive retains only the previously accepted declaration, or no
+declaration when none was saved; it does not serialize a hidden partial draft.
+Cancel reloads the accepted configuration and declaration. No retained history
+or original declaration archive is deleted by hiding this editor.
+
+A complete successful historical forecast assessment can admit ML without
+waiting for three new matched days. Historical training fit or the later held-out
+week alone is insufficient; both 48-hour planning-origin groups must pass their
+material accuracy gain requirements. Real forecasts captured before their
+outcomes remain a separate evidence route. Manual **ML model** selection cannot
+bypass the required accuracy evidence. Automatic excludes
+models that fail the gain gate and ranks the remaining eligible forecasts,
+including Home Assistant. Missing or rejected ML falls back to PVWatts without
+silently applying a scalar correction. Learning failures retain the physical
+forecast and log safe, deduplicated recovery advice.
+
+Forecast quality separates two comparisons:
+
+- **Model comparison** controls weather input. Independent PVWatts and XGBoost
+  use the same archived forecast weather and identical held-out measurements.
+  Historical fitting, simulated 48-hour backtests and real forward captures
+  remain distinguishable evidence.
+- **Complete forecast comparison** controls the evaluated production hours.
+  It compares previously saved PVWatts, XGBoost and HA forecasts with the same
+  later measurements. PVWatts and XGBoost share captured ECMWF IFS forecasts.
+  The HA provider retains its own weather and algorithm. This evaluates the
+  complete forecast and determines Automatic selection. The provider's weather
+  error cannot be isolated from its product forecast without separate evidence.
+
+Archived original IFS runs supply historical forecast weather. The current
+forecast endpoint supplies the newest actually available IFS forecast. Neither
+is a roof-mounted irradiance measurement. The independent DWD/EUMETSAT satellite
+view and any retained reanalysis remain diagnostic evidence and do not replace
+training forecasts. Receipt times are retained. Reanalysis never becomes an
+old issued forecast.
+
+Automatic solar selection uses forecast accuracy rather than simulated decision
+costs. Household economic selection in [model selection](MODEL-SELECTION.md)
 remains separate. A smaller solar error does not guarantee a cheaper energy plan.
-Baseline, learned candidate and selected forecasts remain archived independently.
+Baseline, independent candidate and selected forecasts remain archived separately.
 
 ## HA forecast adapters and source selection
 
 Each source offers **Automatic**, **PVWatts**, **Home Assistant** and **ML model**.
 ML remains unavailable until sufficient usable production history exists. Manual
-Home Assistant and legacy scalar choices bypass accuracy warm-up but never bypass
-measurement-boundary or freshness validation. Nonlinear ML choices require their
-own forward accuracy evidence. Unavailable choices explicitly fall back to
+Home Assistant selection never bypasses measurement-boundary or freshness
+validation. ML choices require their own historical forecast or real forward
+accuracy evidence. Unavailable choices explicitly fall back to
 PVWatts. Forecast quality shows the requested and actual source, comparison coverage and MAE in kWh per hour.
 
 Core Forecast.Solar is the first forecast adapter. The integration reads the Core
@@ -322,9 +573,10 @@ are not reconstructed. A missing cumulative endpoint, negative correction or
 missing forecast excludes that day from the common cohort. MAE averages absolute
 hourly kWh errors over the common hours. Ties retain PVWatts before ML before HA.
 No prices, bonuses or simulated savings enter this ranking. Until a complete
-cohort exists, Automatic retains PVWatts. A newly available ML or HA candidate
-must build a common forward cohort before participating. Existing meter history
-cannot recreate past forecasts.
+cohort exists, Automatic retains PVWatts unless ML has passed the separate
+historical forecast assessment. A newly available HA candidate still needs a
+common real forward cohort: the historical IFS backtest cannot manufacture old
+HA forecasts. Existing meter history alone cannot recreate past forecasts.
 
 Configuration, source binding and location changes separate evidence families.
 Changing the requested source alone does not discard comparable evidence. Original
@@ -373,6 +625,13 @@ on source count, available history and changing weather. Final storage must add
 capacity monitoring, deployment sizing and lossless compaction before SD-card
 deployment. Automatic retention/pruning would contradict the agreed permanent
 historical evidence requirement.
+Series publication validates the expected manifest and its daily bodies in one
+transaction, with at most 128 block identities per read batch. Repeated and
+reopened series retain full block equality checks instead of opening one
+transaction per day. Manifest presence alone is never sufficient: conflicting
+or missing published blocks fail closed. A missing manifest can be completed
+from previously accepted matching partial blocks. New blocks and their manifest
+roll back together if publication fails.
 SQLite, PostgreSQL, MariaDB and MySQL use the shared database contract and backend
 transfer. See the [database dictionary](DATABASE-SCHEMA.md). Production volume
 sizing and complete deployment backup/restore verification remain separate gates.
@@ -396,4 +655,4 @@ Temperature and wind retain their hourly means. This estimates a trend between
 hour means. It does not predict measured quarter cloud changes. Missing adjacent
 weather uses a zero boundary slope. No extra provider request is made.
 
-Historical calibration aggregates quarter power arrays directly into hourly energy rows. It does not construct temporary quarter `SolarEnergy` objects for the complete annual archive. All required historical hours and shared clipping calculations are retained.
+The physical historical comparison aggregates quarter power arrays directly into hourly energy rows. It does not construct temporary quarter `SolarEnergy` objects for the complete annual archive. Independent XGBoost fitting retains its own measured target and solar-position features. All required historical hours and shared clipping calculations are retained.

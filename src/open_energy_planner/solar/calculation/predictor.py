@@ -7,9 +7,10 @@ import pandas as pd
 from pvlib import irradiance, pvsystem, solarposition, temperature
 
 from open_energy_planner.core.forecast_timing import limited_slope
-from open_energy_planner.core.units import MINUTES_PER_HOUR, SECONDS_PER_HOUR, WATTS_PER_KW
+from open_energy_planner.core.units import MINUTES_PER_HOUR, WATTS_PER_KW
 from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
 from open_energy_planner.solar.calculation.model import SolarEnergy, SolarForecast, horizon, version
+from open_energy_planner.solar.calculation.projection import integrate_intervals
 from open_energy_planner.solar.model_policy import (
     DEFAULT_GROUND_ALBEDO,
     DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE,
@@ -195,29 +196,9 @@ class PVWattsPredictor:
             factors={calibration.source_id: calibration.factor for calibration in calibrations},
             hourly_factors=hourly_factors,
         )
-        by_source = {
-            source_item.source_id: tuple(
-                hour for hour in hours if hour.source_id == source_item.source_id
-            )
-            for source_item in configuration.sources
-        }
-        energies = []
-        for source in configuration.sources:
-            for start, duration in grid:
-                end = start + timedelta(hours=duration)
-                covered = dc = ac = 0.0
-                for row in by_source[source.source_id]:
-                    overlap = (
-                        min(end, row.start + timedelta(hours=row.duration_h))
-                        - max(start, row.start)
-                    ).total_seconds() / SECONDS_PER_HOUR
-                    if overlap > 0:
-                        covered += overlap
-                        dc += row.dc_kwh * overlap / row.duration_h
-                        ac += row.ac_kwh * overlap / row.duration_h
-                if abs(covered - duration) > COVERAGE_TOLERANCE_HOURS:
-                    raise ValueError("solar_weather_coverage_missing")
-                energies.append(SolarEnergy(source.source_id, start, duration, dc, ac))
+        energies = integrate_intervals(
+            hours, now, tuple(source.source_id for source in configuration.sources)
+        )
         return SolarForecast(
             configuration.version,
             location,

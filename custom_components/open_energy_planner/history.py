@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from math import isfinite
 
 from homeassistant.components.recorder import get_instance
@@ -17,6 +17,11 @@ HISTORY_RETRY_MINUTES = 15
 MAX_HISTORY_REQUEST_DAYS = 367
 
 MAX_HISTORY_HOURS = 9000
+HISTORY_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+HISTORY_DISCOVERY_TIMEOUT_SECONDS = 60
+HOUR_SECONDS = 3600
+MONTHS_PER_YEAR = 12
+MAX_CALENDAR_MONTH_DAYS = 31
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,10 +59,18 @@ class HistoryBridge:
         ):
             raise ValueError("Invalid history meter set")
         start, end = (datetime.fromisoformat(request[key]) for key in ("start", "end"))
+        solar_discovery = request.get("basis") == "solar_history_range"
+        solar_chunk = request.get("basis") == "solar_history_chunk"
+        if (solar_discovery or solar_chunk) and entities != [entity]:
+            raise ValueError("Solar history requires one meter")
         if (
             start.utcoffset() is None
             or end.utcoffset() is None
-            or not timedelta(0) < end - start <= timedelta(days=MAX_HISTORY_REQUEST_DAYS)
+            or (
+                not (start == HISTORY_EPOCH and end > start)
+                if solar_discovery
+                else not timedelta(0) < end - start <= timedelta(days=MAX_HISTORY_REQUEST_DAYS)
+            )
         ):
             raise ValueError("Invalid history request range")
 
@@ -73,6 +86,47 @@ class HistoryBridge:
                 for item in entities
             ):
                 return {**result, "error": "unsupported_statistics"}
+            if solar_discovery:
+                monthly = statistics_during_period(
+                    self.hass, start, end, {entity}, "month", {"energy": "kWh"}, {"sum"}
+                ).get(entity, [])
+                expected_months = (
+                    (end.year - start.year) * MONTHS_PER_YEAR + end.month - start.month + 2
+                )
+                if len(monthly) > expected_months:
+                    return {**result, "error": "history_unavailable"}
+                stamps = []
+                for row in monthly:
+                    stamp, cumulative = row.get("start"), row.get("sum")
+                    if (
+                        type(stamp) not in (int, float)
+                        or not isfinite(stamp)
+                        or not (start - timedelta(days=MAX_CALENDAR_MONTH_DAYS)).timestamp()
+                        <= stamp
+                        < end.timestamp()
+                    ):
+                        return {**result, "error": "history_unavailable"}
+                    if type(cumulative) in (int, float) and isfinite(cumulative):
+                        stamps.append(stamp)
+                first = (
+                    max(
+                        HISTORY_EPOCH,
+                        datetime.fromtimestamp(min(stamps) // HOUR_SECONDS * HOUR_SECONDS, UTC),
+                    )
+                    if stamps
+                    else None
+                )
+                return {
+                    **result,
+                    "basis": "solar_history_range",
+                    "entity_id": entity,
+                    "statistics_identity": {
+                        "metadata_id": metadata[entity][0],
+                        "source": metadata[entity][1]["source"],
+                        "unit": metadata[entity][1]["unit_of_measurement"],
+                    },
+                    "available_start": first.isoformat() if first else None,
+                }
             channels = {}
             for batch in channel_batches(entities):
                 channels.update(
@@ -106,8 +160,26 @@ class HistoryBridge:
                     ],
                 }
             rows = channels.get(entities[0], [])
-            if not rows or len(rows) > MAX_HISTORY_HOURS:
+            if (not rows and not solar_chunk) or len(rows) > MAX_HISTORY_HOURS:
                 return {**result, "error": "history_unavailable"}
+            if solar_chunk:
+                if any(
+                    type(row.get("start")) not in (int, float)
+                    or not isfinite(row["start"])
+                    or row["start"] % HOUR_SECONDS
+                    or not start.timestamp() <= row["start"] < end.timestamp()
+                    for row in rows
+                ):
+                    return {**result, "error": "history_unavailable"}
+                # Absent/nonfinite endpoints stay gaps. They cannot become zero energy.
+                rows = [
+                    row
+                    for row in rows
+                    if all(
+                        type(row.get(field)) in (int, float) and isfinite(row[field])
+                        for field in ("sum", "state")
+                    )
+                ]
             if len(entities) > 1:
                 if any(
                     [row["start"] for row in channels.get(item, [])]
@@ -143,6 +215,18 @@ class HistoryBridge:
                     if len(entities) > 1
                     else {}
                 ),
+                **(
+                    {
+                        "basis": "solar_history_chunk",
+                        "statistics_identity": {
+                            "metadata_id": metadata[entity][0],
+                            "source": metadata[entity][1]["source"],
+                            "unit": metadata[entity][1]["unit_of_measurement"],
+                        },
+                    }
+                    if solar_chunk
+                    else {}
+                ),
                 "entity_id": entity,
                 "unit": "kWh",
                 "hours": [[row["start"], row.get("sum"), row.get("state")] for row in rows],
@@ -150,7 +234,8 @@ class HistoryBridge:
 
         try:
             return await asyncio.wait_for(
-                get_instance(self.hass).async_add_executor_job(read), HISTORY_TIMEOUT_SECONDS
+                get_instance(self.hass).async_add_executor_job(read),
+                HISTORY_DISCOVERY_TIMEOUT_SECONDS if solar_discovery else HISTORY_TIMEOUT_SECONDS,
             )
         except Exception:
             _LOGGER.warning(

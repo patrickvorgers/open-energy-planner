@@ -121,8 +121,8 @@ function graph(source, index, inProgress) {
     paragraph(details, `Original forecast version: ${source.forecast_version}`, "quality-version");
     paragraph(details, `Latest measurement receipt: ${source.last_received_at ? when(source.last_received_at) : "Unavailable"}`);
     article.append(details);
-    const comparison = document.createElement("div"); comparison.className = "table-scroll quality-comparison"; comparison.tabIndex = 0; comparison.setAttribute("role", "region"); comparison.setAttribute("aria-label", "Original model comparison");
-    const modelsTable = document.createElement("table"), caption = document.createElement("caption"); caption.textContent = "Original model comparison"; modelsTable.append(caption);
+    const comparison = document.createElement("div"); comparison.className = "table-scroll quality-comparison"; comparison.tabIndex = 0; comparison.setAttribute("role", "region"); comparison.setAttribute("aria-label", "Original forecast comparison");
+    const modelsTable = document.createElement("table"), caption = document.createElement("caption"); caption.textContent = "Original forecast comparison"; modelsTable.append(caption);
     const modelHead = document.createElement("tr");
     for (const label of ["Model", "Day forecast (kWh)", "Difference (kWh)", "MAE (kWh/hour)"]) {const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; modelHead.append(cell);}
     const modelHeader = document.createElement("thead"); modelHeader.append(modelHead); modelsTable.append(modelHeader);

@@ -23,7 +23,7 @@ from open_energy_planner.solar.source_selection import choose_sources, compariso
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import document
 from tests.app.forecast.support.basis import forecast_basis
-from tests.app.solar.test_solar import SITE, START, plant, weather
+from tests.app.solar.support import SITE, START, plant, weather
 from tests.database.support.archive import make_store
 
 

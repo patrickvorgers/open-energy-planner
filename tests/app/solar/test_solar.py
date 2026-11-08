@@ -15,8 +15,6 @@ from open_energy_planner.optimization.adapters.highs import HighsSolver
 from open_energy_planner.solar.calculation.model import (
     SolarConfiguration,
     SolarEnergy,
-    SolarInverter,
-    SolarSource,
     SolarWeatherHour,
     horizon,
     version,
@@ -27,44 +25,13 @@ from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import document
 from tests.app.forecast.support.basis import forecast_basis
+from tests.app.solar.support import SITE, START, plant, weather
 from tests.database.support.archive import (
     corrupt_document,
     list_documents,
     make_store,
     read_document,
 )
-
-START = datetime(2026, 6, 20, 0, tzinfo=UTC)
-SITE = SiteLocation(52, 6, "Europe/Amsterdam")
-
-
-def plant(*, count=1, shared=False, limit=5000, tilt=0, orientation="south"):
-    """Declare disjoint 1 kWp sources with explicit standalone or shared inverter ratings."""
-    return SolarConfiguration(
-        tuple(
-            SolarSource(
-                f"pv{index_item}",
-                f"sensor.pv{index_item}",
-                "shared" if shared else f"i{index_item}",
-                1000,
-                orientation,
-                tilt=tilt,
-            )
-            for index_item in range(count)
-        ),
-        (SolarInverter("shared", limit),)
-        if shared
-        else tuple(SolarInverter(f"i{index_item}", limit) for index_item in range(count)),
-    )
-
-
-def weather(now=START, *, days=3, ghi=600):
-    """Provide complete independently fixed hourly radiation and temperature, never external weather."""
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return tuple(
-        SolarWeatherHour(start + timedelta(hours=index_item), ghi, 500, 100, 20, 1, now)
-        for index_item in range(days * 24)
-    )
 
 
 def test_horizontal_noon_power_matches_independent_pvwatts_temperature_arithmetic():
@@ -516,48 +483,45 @@ def test_installation_blocks_unusable_solar_cache_without_replacing_its_evidence
     assert runtime.forecast == original
 
 
-def test_runtime_uses_existing_history_for_one_shadow_correction_without_affecting_other_source(
+def test_runtime_uses_existing_history_for_an_independent_candidate_only_on_the_measured_source(
     tmp_path,
 ):
-    """A source measuring 80% of the physical estimate gets its own candidate. Another source without history keeps factor one."""
+    """A measured roof trains a direct model while its neighbor and selected baseline remain independent."""
+    from tests.app.solar.support import frozen_runs
+
     config = plant(count=2)
     values = tuple(
-        replace(weather_item, received_at=START)
-        for weather_item in weather(START - timedelta(days=35), days=38)
+        replace(row, received_at=START) for row in weather(START - timedelta(days=56), days=59)
     )
     physical = PVWattsPredictor().hourly(config, SITE, values)
     rows, total = [], 100.0
     for row in physical:
         if row.source_id == "pv0" and row.start < START:
-            total += row.ac_kwh * 0.8
+            total += row.ac_kwh * (0.25 if row.start.hour < 11 else 0.9)
             rows.append(EnergyHour(row.start, total, total))
     store = make_store(tmp_path, SolarStore)
     store.save(config)
     runtime = SolarRuntime(store)
     runtime.set_weather(SITE, values)
+    runtime.set_forecast_runs(SITE, frozen_runs(values, SITE, START))
     runtime.histories["sensor.pv0"] = EnergyHistory("sensor.pv0", tuple(rows))
-    result = runtime.build(runtime.job(START))
-    assert runtime.install(result, START)
-    assert len(runtime.calibrations) == 1
-    correction = runtime.calibrations[0]
-    assert correction.source_id == "pv0"
-    assert correction.factor == pytest.approx(0.8, abs=0.01)
-    assert runtime.candidate.model == "pvwatts-calibrated-v2"
+    assert runtime.install(runtime.build(runtime.job(START)), START)
     assert runtime.forecast.model == "pvwatts-v2"
+    assert runtime.candidate.model == "solar-xgboost-production-v2"
+    assert {row.source_id for row in runtime.candidate.energies} == {"pv0"}
     assert store.documents.read("quality-source-models-" + runtime.candidate.version + ".json") == {
-        "pv0": "pvwatts-calibrated-v2",
-        "pv1": "pvwatts-v2",
+        "pv0": "solar-xgboost-production-v2",
     }
     assert store.documents.read("quality-source-models-" + runtime.forecast.version + ".json") == {
         "pv0": "pvwatts-v2",
         "pv1": "pvwatts-v2",
     }
-    for original, corrected in zip(
-        runtime.forecast.energies, runtime.candidate.energies, strict=True
-    ):
-        factor = correction.factor if original.source_id == "pv0" else 1
-        assert corrected.dc_kwh == pytest.approx(original.dc_kwh * factor)
-    assert [name for name in list_documents(tmp_path, "solar") if name.startswith("calibration-")]
+    assert (
+        runtime.learning["pv0"].summary.tree_mae_kwh
+        < runtime.learning["pv0"].summary.baseline_mae_kwh
+    )
+    assert [name for name in list_documents(tmp_path, "solar") if name.startswith("ml-training-")]
+    assert runtime.histories["sensor.pv0"].hours == tuple(rows)
 
 
 def test_daily_evidence_blocks_reuse_values_and_reconstruct_receipt_times(tmp_path):

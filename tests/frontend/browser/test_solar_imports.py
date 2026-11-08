@@ -575,7 +575,20 @@ def test_solar_accuracy_comparison_explains_current_source_and_matched_error(app
     source.get_by_text("Current model and learning", exact=True).click()
     expect(source).to_contain_text("Forecast source: Automatic: Active: Home Assistant")
     expect(source).to_contain_text("3 of 3 complete days")
-    expect(source).to_contain_text("Home Assistant: Mean absolute error: 0.04 kWh per hour")
+    comparison = source.get_by_role("region", name="Complete forecast comparison", exact=True)
+    table = comparison.get_by_role("table")
+    expect(table.get_by_role("columnheader")).to_have_text(["Prediction", "MAE (kWh/hour)"])
+    expect(table.get_by_role("row")).to_have_count(4)
+    for prediction, error in (
+        ("PVWatts", "0.100"),
+        ("Home Assistant", "0.040"),
+        ("XGBoost", "0.070"),
+    ):
+        row = table.get_by_role("row").filter(
+            has=page.get_by_role("rowheader", name=prediction, exact=True)
+        )
+        expect(row).to_have_count(1)
+        expect(row.get_by_role("cell")).to_have_text(error)
     expect(source).not_to_contain_text("Simulated baseline cost")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     source.screenshot(path=f"results/ci/solar-accuracy-{page.viewport_size['width']}.png")

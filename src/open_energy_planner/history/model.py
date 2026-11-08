@@ -50,11 +50,11 @@ class EnergyHistory:
     component_meters: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self):
-        """Bound annual transfers and require strictly ordered, typed rows."""
+        """Require ordered, typed aggregate rows. Wire adapters separately bound each transfer."""
         if not isinstance(self.entity_id, str) or not self.entity_id.startswith("sensor."):
             raise ValueError("History requires a sensor identity")
-        if not isinstance(self.hours, tuple) or not 1 <= len(self.hours) <= MAX_HISTORY_HOURS:
-            raise ValueError("Expected bounded immutable hourly history")
+        if not isinstance(self.hours, tuple) or not self.hours:
+            raise ValueError("Expected immutable hourly history")
         if any(not isinstance(hour, EnergyHour) for hour in self.hours):
             raise TypeError("Expected normalized energy hours")
         if any(
