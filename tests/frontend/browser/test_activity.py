@@ -450,13 +450,29 @@ def test_module_status_hierarchy_preserves_collapsed_groups_and_live_states(app_
     weather = page.get_by_role("region", name="Weather", exact=True)
     for name in ("Overview: Available", "Solar: Degraded", "Temperature: Available"):
         expect(weather.get_by_text(name, exact=True)).to_be_visible()
-    for group in (prices, weather):
-        summary = group.locator(":scope > details > summary")
-        heading_box = summary.locator("h3").bounding_box()
-        summary_box = summary.bounding_box()
-        child_box = group.locator(":scope > details > ul summary").first.bounding_box()
-        assert heading_box["x"] - summary_box["x"] >= 12
-        assert abs(heading_box["x"] - child_box["x"]) <= 1
+    # Live updates replace module nodes, so measure one connected render atomically.
+    geometry = page.evaluate("""() => ["Prices", "Weather"].map(name => {
+        const group = [...document.querySelectorAll("#activity-health .activity-health-group")]
+            .find(group => group.getAttribute("aria-label") === name);
+        const summary = group.querySelector(":scope > details > summary");
+        const heading = summary.querySelector("h3");
+        const child = group.querySelector(":scope > details > ul summary");
+        return {
+            connected: [group, summary, heading, child].every(node => node.isConnected),
+            expanded: summary.parentElement.open,
+            heading: heading.getBoundingClientRect().toJSON(),
+            summary: summary.getBoundingClientRect().toJSON(),
+            child: child.getBoundingClientRect().toJSON(),
+        };
+    })""")
+    for measurement in geometry:
+        assert measurement["connected"] and measurement["expanded"]
+        assert all(
+            measurement[node]["width"] > 0 and measurement[node]["height"] > 0
+            for node in ("heading", "summary", "child")
+        )
+        assert measurement["heading"]["x"] - measurement["summary"]["x"] >= 12
+        assert abs(measurement["heading"]["x"] - measurement["child"]["x"]) <= 1
     weather_heading = weather.locator(":scope > details[data-module-group] > summary")
     weather_heading.click()
     expect(weather.get_by_text("Solar: Degraded", exact=True)).not_to_be_visible()
