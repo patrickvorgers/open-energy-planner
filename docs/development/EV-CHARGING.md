@@ -45,8 +45,14 @@ explicit at every level. Service devices and devices
 without a compatible SoC source are excluded. Sources without a registered device
 use an explicit no-device group. Automatic choices are drafts until Save. Parent
 changes clear incompatible draft sources, while matching choices, metadata refresh
-and Cancel retain their existing boundaries. Charge-point power and connection
-selectors keep their independent device/integration filters and separate Energy meter.
+and Cancel retain their existing boundaries. Charge-point selection starts with
+the authoritative Energy device consumption list, including meters without a
+device registry entry. It has no device or integration prerequisites. Power and
+physical connection remain explicit, independent source bindings with
+quantity-filtered choices across integrations. Refreshing sources also rereads
+the current Energy consumer options without replacing the configuration draft
+or its saved version. Missing Energy meters remain visible as unavailable and
+server-side membership validation rejects them.
 Resolved vehicle filters remain pinned across refresh. Missing parents stay visible
 as unavailable choices, preserving the original sensor until an explicit replacement.
 

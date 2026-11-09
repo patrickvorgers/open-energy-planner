@@ -56,11 +56,15 @@ The car's state-of-charge sensor must report `%`.
 A sensor with an unrelated device class, such as humidity, is not a vehicle SoC
 source.
 
-For a charge point, search its integration's binary sensors by name or entity ID.
+For a charge point, first choose its consumption meter from the Home Assistant
+Energy dashboard's individual devices. A registered device or integration is
+not required. If no meters appear, configure the charge point in Energy and
+refresh Home Assistant sources. A removed selected meter is shown as unavailable.
+Then search the connection binary sensors by device name, sensor name or entity ID.
 Use a sensor that stays On while plugged in, including when charging is paused.
 A charging-active sensor is not equivalent. Check the sensor in Home Assistant
-if its purpose is unclear. Choose the charge point's Energy consumption meter
-separately. After correcting HA configuration, use **Refresh Home Assistant sources**
+if its purpose is unclear. The power sensor, Energy meter and connection helper
+may belong to different integrations. After correcting HA configuration, use **Refresh Home Assistant sources**
 to reload available choices without discarding pending edits. Large catalogues are
 transferred in bounded parts. Sources are not omitted because their names sort
 late or the installation contains many sensors. A new list becomes available

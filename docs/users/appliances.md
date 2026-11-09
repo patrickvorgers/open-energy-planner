@@ -67,12 +67,20 @@ If a chosen integration, account or device disappears during refresh, its select
 stays visible as unavailable. Refresh again or explicitly choose a replacement.
 The vehicle is never silently linked to a different account or car.
 
-For a charge point, choose its device, then the integration that supplies power
-and connection status. Its consumption meter is selected separately from Home Assistant Energy,
-so a utility-meter integration can own it. Use **Find connection sensor** to
-search by device name, sensor name or entity ID. Changing the integration keeps
-your selected power and connection sources visible. Switch back to **All devices / choose an integration** to explicitly pair
-a charger's power sensor with a connection helper from another integration.
+For a charge point, start with **Charging consumption meter**. This list contains
+the individual device consumption meters configured in the Home Assistant Energy
+dashboard. Choose the meter belonging to the charge point. No Home Assistant
+device or integration choice is required. Meters without a registered device
+are included. If the meter is missing, add it under the Energy dashboard's
+individual devices and choose **Refresh Home Assistant sources**.
+
+Choose **Measured AC charging power** and **Vehicle connected** separately.
+Compatible sensors from all devices and integrations are available, including
+connection helpers. Use **Find connection sensor** to search by device name,
+sensor name or entity ID. Choosing another Energy meter does not replace these
+explicit sources. Refresh updates the Energy list without discarding edits.
+A removed meter remains visible as unavailable until you choose a replacement.
+It cannot be saved while absent from Home Assistant Energy.
 **Vehicle connected** must be On
 while physically plugged in, including when charging is paused. Charging-active,
 door and fault sensors do not prove a connection. No source is chosen for you.
