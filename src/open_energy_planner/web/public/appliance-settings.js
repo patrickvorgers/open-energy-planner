@@ -1,4 +1,3 @@
-import {bindApplianceSettingsNavigation} from "./appliance-settings-navigation.js";
 import {confirmAction} from "./confirmation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {SaveBar} from "./save-bar.js";
@@ -13,7 +12,6 @@ const consumerChoices = new Map(), pending = new Map();
 let selectedId = null, editing = false, evidenceEpoch = 0, evidenceRefreshing = false;
 bindSettingsActions();
 const saveState = new SaveBar({form: "appliance-settings", bar: "appliance-save-bar", save: "save-settings", discard: "discard-settings", status: "save-state", read: () => [...consumerChoices].map(([id, inputs]) => [id, inputs.enabled.checked, inputs.weather.checked, inputs.permission.checked, inputs.duration.value, inputs.energy.value])});
-bindApplianceSettingsNavigation(saveState);
 /** Send versioned configuration requests through the authenticated app boundary. */
 async function api(path, body, method = body ? "POST" : "GET") {
     const response = await fetch(base + path, {method, headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store"});

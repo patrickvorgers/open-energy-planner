@@ -230,7 +230,7 @@ def test_sidebar_shows_loaded_version_build_and_integration_mismatch(app_page, m
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
 def test_menu_navigation_can_be_cancelled_without_losing_installation_edits(app_page):
-    """Native document navigation still honors the existing unsaved-installation warning."""
+    """Internal document navigation uses custom consent while retaining the unsaved installation."""
     page, url = app_page
     discover(page, url)
     if "/api/hassio_ingress/" in url:
@@ -245,7 +245,7 @@ def test_menu_navigation_can_be_cancelled_without_losing_installation_edits(app_
     dialogs = []
 
     def keep_draft(dialog):
-        """Cancel a genuine beforeunload prompt rather than navigating away with unsaved edits."""
+        """Record unexpected browser prompts without allowing them to discard the draft."""
         dialogs.append(dialog.type)
         dialog.dismiss()
 
@@ -253,9 +253,12 @@ def test_menu_navigation_can_be_cancelled_without_losing_installation_edits(app_
     page.get_by_role("region", name="Settings", exact=True).get_by_role(
         "link", name="Contract", exact=True
     ).click(no_wait_after=True)
+    page.get_by_role("alertdialog", name="Leave without saving?", exact=True).get_by_role(
+        "button", name="Cancel", exact=True
+    ).click()
     expect(page).to_have_url(url + "/setup")
     expect(grid_import_limit_input).to_have_value("6.3")
-    assert dialogs == ["beforeunload"]
+    assert dialogs == []
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
@@ -454,7 +457,7 @@ def test_workspace_hash_views_and_cancelled_navigation_keep_state(app_page):
     dialogs = []
 
     def keep_draft(dialog):
-        """Dismiss the browser's actual content-document unload prompt."""
+        """Record unexpected browser prompts without allowing them to discard the draft."""
         dialogs.append(dialog.type)
         dialog.dismiss()
 
@@ -462,9 +465,12 @@ def test_workspace_hash_views_and_cancelled_navigation_keep_state(app_page):
     page.get_by_role("region", name="Settings", exact=True).get_by_role(
         "link", name="Contract", exact=True
     ).click()
+    content.get_by_role("alertdialog", name="Leave without saving?", exact=True).get_by_role(
+        "button", name="Cancel", exact=True
+    ).click()
     expect(content.get_by_label("Maximum grid import (kW)", exact=True)).to_have_value("6.3")
     expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Installation")
-    assert dialogs == ["beforeunload"]
+    assert dialogs == []
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)

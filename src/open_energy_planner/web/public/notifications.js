@@ -129,7 +129,7 @@ function bindCenter() {
     });
 }
 
-/** Restrict links to this installation and retain embedded routing and native draft guards. */
+/** Restrict links to this installation and retain embedded routing and shared draft guards. */
 function recoveryTarget(notice) {
     if (!notice.action_path) return null;
     const base = new URL(document.querySelector('meta[name="oep-api-base"]').content, location.href);

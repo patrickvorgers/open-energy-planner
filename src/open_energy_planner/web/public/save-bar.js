@@ -1,6 +1,13 @@
 /** One save state and floating action pattern for editable configuration pages. */
+import {confirmAction} from "./confirmation.js";
+
+/** Let the loaded document guard app navigation without sharing its draft with the workspace shell. */
+export function guardNavigation(navigate, content = document) {
+    return !content.dispatchEvent(new CustomEvent("oep-before-navigation", {cancelable: true, detail: {navigate}}));
+}
+
 export class SaveBar {
-    /** Bind form/actions and JSON-serializable draft readers. Request native unload confirmation while busy or dirty. */
+    /** Bind persistence state, custom app navigation consent and native browser unload protection. */
     constructor({form, bar, save, discard, status, canSave = () => true, read}) {
         this.form = document.getElementById(form);
         this.bar = document.getElementById(bar);
@@ -17,6 +24,8 @@ export class SaveBar {
         this.locked = new Map();
         this.baseline = null;
         this.detail = "";
+        this.navigationPending = false;
+        this.allowUnload = false;
         this.bar.classList.add("save-bar");
         document.body.classList.add("has-save-bar");
         new ResizeObserver(() => {
@@ -27,7 +36,23 @@ export class SaveBar {
         this.status.setAttribute("aria-live", "polite");
         this.discard.textContent = "Discard changes";
         window.addEventListener("beforeunload", event => {
+            if (this.allowUnload) { this.allowUnload = false; return; }
             if (this.busy || this.dirty) { event.preventDefault(); event.returnValue = ""; }
+        });
+        document.addEventListener("oep-before-navigation", event => {
+            if (!this.busy && !this.dirty) return;
+            event.preventDefault();
+            this.leave(event.detail.navigate);
+        });
+        document.addEventListener("click", event => {
+            const link = event.target.closest("a[href]");
+            if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
+            const destination = new URL(link.href), base = new URL(document.querySelector('meta[name="oep-api-base"]').content, location.href);
+            if (destination.origin !== base.origin || !destination.pathname.startsWith(base.pathname) || (destination.href.includes("#") && destination.href.split("#")[0] === location.href.split("#")[0])) return;
+            if (guardNavigation(() => {
+                if (!link.isConnected || link.href !== destination.href) return false;
+                location.assign(destination.href);
+            })) event.preventDefault();
         });
         document.addEventListener("input", (event) => {
             if (event.target.form === this.form) { this.detail = ""; this.update(); }
@@ -42,6 +67,22 @@ export class SaveBar {
     }
     /** Compare the current draft with confirmed persistence, only after loading. */
     get dirty() { return this.ready && JSON.stringify(this.read()) !== this.baseline; }
+    /** Ask once for a stable draft. Consent permits only the immediate app navigation, never a later browser unload. */
+    async leave(navigate) {
+        if (this.busy) { this.update("Wait for the current save or refresh to finish before leaving this page."); return; }
+        if (this.navigationPending) return;
+        this.navigationPending = true;
+        const draft = JSON.stringify(this.read());
+        try {
+            const accepted = await confirmAction({title: "Leave without saving?", message: "Your unsaved changes on this page will be discarded. Saved settings will stay unchanged.", confirmLabel: "Discard and leave"});
+            if (!accepted) return;
+            if (this.busy || JSON.stringify(this.read()) !== draft) { this.update("Settings changed while confirmation was open. Review your changes before leaving."); return; }
+            this.allowUnload = true;
+            try { if (navigate() === false) this.allowUnload = false; }
+            catch (error) { this.allowUnload = false; throw error; }
+            finally { setTimeout(() => { this.allowUnload = false; }, 0); }
+        } finally { this.navigationPending = false; }
+    }
     /** Capture confirmed state. False leaves a null baseline. Lock newly rendered controls during reload. */
     loaded(saved = true) {
         this.ready = true;
