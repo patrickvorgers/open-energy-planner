@@ -129,7 +129,7 @@ def test_bonus_checkbox_only_edit_requires_fresh_preview_before_save(app_page):
         }
     ]
     response = page.request.put(url + "/v1/contracts", headers=headers, data=body)
-    assert response.ok, response.text()
+    assert response.ok, f"Contract setup failed (HTTP {response.status})"
     page.goto(url + "/contract")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
