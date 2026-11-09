@@ -16,6 +16,16 @@ from script.ci.pytest_suites import pytest_arguments
 
 ROOT = Path(__file__).resolve().parents[2]
 IDENTIFIERS = [f"tests/frontend/browser/test_cases.py::test_case[{index}]" for index in range(4)]
+EXPECTED_CAUSES = {
+    "missing_worker": (FileNotFoundError, "browser-collected.json"),
+    "inventory": (ValueError, "Browser worker inventories differ"),
+    "partition": (ValueError, "Invalid browser worker 1 collection"),
+    # Both execution corruptions exercise the same combined metadata guard.
+    "execution": (ValueError, "Browser worker 1 execution differs from collection"),
+    "missing_phase": (ValueError, "Browser worker 1 execution differs from collection"),
+    "duplicate": (ValueError, "Duplicated browser execution identity"),
+    "skip": (ValueError, "Unsuccessful browser execution"),
+}
 
 
 def pytest_child(project, worker, *, collect_only, arguments=()):
@@ -126,7 +136,7 @@ def test_actual_browser_phase_failure_prevents_completion(tmp_path, failed_phase
 def test_browser_completion_rejects_partial_or_inconsistent_execution(
     tmp_path, actual_browser_reports, corruption
 ):
-    """Missing cases, stale collections, overlapping identities and unsuccessful phases cannot count as coverage."""
+    """Each corruption reaches its responsible validator before it can count as coverage."""
     output = tmp_path / "reports"
     shutil.copytree(actual_browser_reports, output)
     worker = output / "browser-1"
@@ -135,7 +145,11 @@ def test_browser_completion_rejects_partial_or_inconsistent_execution(
     elif corruption in {"inventory", "partition"}:
         path = worker / "browser-collected.json"
         record = json.loads(path.read_text())
-        record["all" if corruption == "inventory" else "selected"] = [IDENTIFIERS[0]]
+        if corruption == "inventory":
+            record["all"] = IDENTIFIERS[:2]
+            record["selected"] = [IDENTIFIERS[1]]
+        else:
+            record["selected"] = [IDENTIFIERS[0]]
         path.write_text(json.dumps(record))
     elif corruption in {"execution", "missing_phase"}:
         path = worker / "browser-executed.json"
@@ -150,12 +164,19 @@ def test_browser_completion_rejects_partial_or_inconsistent_execution(
         document = ElementTree.parse(path)
         case = document.find(".//testcase")
         if corruption == "duplicate":
-            case.find("./properties/property").set("value", IDENTIFIERS[0])
+            case.find("./properties/property").set("value", IDENTIFIERS[3])
         else:
             ElementTree.SubElement(case, "skipped")
         document.write(path)
-    with pytest.raises(RuntimeError, match="browser"):
+    with pytest.raises(RuntimeError, match="browser") as failure:
         browser_suites.combine_reports(output)
+    cause = failure.value.__cause__
+    expected_type, expected_message = EXPECTED_CAUSES[corruption]
+    assert isinstance(cause, expected_type)
+    if corruption == "missing_worker":
+        assert Path(cause.filename) == worker / expected_message
+    else:
+        assert str(cause) == expected_message
 
 
 @pytest.mark.parametrize("failed_worker", [None, 0, 1])

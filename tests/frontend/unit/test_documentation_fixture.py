@@ -15,7 +15,7 @@ def test_teaching_example_is_solved_once_but_stores_and_plan_copies_are_independ
     documentation_fixture._validated_example.cache_clear()
     original_solve = documentation_fixture.HighsSolver.solve
     solves = []
-    stores = []
+    seed_repositories = []
 
     def solve(solver, problem, options):
         """Count actual solves while retaining the production solver and independent validation."""
@@ -24,36 +24,36 @@ def test_teaching_example_is_solved_once_but_stores_and_plan_copies_are_independ
 
     monkeypatch.setattr(documentation_fixture.HighsSolver, "solve", solve)
 
-    def store(directory):
+    def open_seed_repository(directory):
         """Retain the actual seed objects so sharing a mutable cached document becomes observable."""
         repository = SqlPlanRepository(directory)
-        stores.append(repository)
+        seed_repositories.append(repository)
         return repository
 
-    monkeypatch.setattr(documentation_fixture, "SqlPlanRepository", store)
-    first, second = tmp_path / "first", tmp_path / "second"
-    first.mkdir()
-    second.mkdir()
+    monkeypatch.setattr(documentation_fixture, "SqlPlanRepository", open_seed_repository)
+    first_directory, second_directory = tmp_path / "first", tmp_path / "second"
+    first_directory.mkdir()
+    second_directory.mkdir()
     try:
-        documentation_fixture.seed(first)
-        with_first = SqlPlanRepository(first)
+        documentation_fixture.seed(first_directory)
+        first_repository = SqlPlanRepository(first_directory)
         try:
-            original = deepcopy(with_first.state["plan"])
-            stores[0].state["plan"]["comparison_names"]["roof"] = "Changed seed object"
-            with_first.state["plan"]["comparison_names"]["roof"] = "Changed first copy"
-            documentation_fixture.seed(second)
-            with_second = SqlPlanRepository(second)
+            original = deepcopy(first_repository.state["plan"])
+            seed_repositories[0].state["plan"]["comparison_names"]["roof"] = "Changed seed object"
+            first_repository.state["plan"]["comparison_names"]["roof"] = "Changed first copy"
+            documentation_fixture.seed(second_directory)
+            second_repository = SqlPlanRepository(second_directory)
             try:
-                assert with_second.state["plan"] == original
-                with_second.state["fixture_isolation"] = "Second store only"
-                with_second.save()
+                assert second_repository.state["plan"] == original
+                second_repository.state["fixture_isolation"] = "Second store only"
+                second_repository.save()
             finally:
-                with_second.close()
-            assert "fixture_isolation" not in with_first.state
+                second_repository.close()
+            assert "fixture_isolation" not in first_repository.state
             with pytest.raises(ValueError, match="Archived plan identity is immutable"):
-                with_first.save()
+                first_repository.save()
         finally:
-            with_first.close()
+            first_repository.close()
         assert len(solves) == 1
         assert documentation_fixture._validated_example()[0]["comparison_names"]["roof"] == (
             "Example south roof"
