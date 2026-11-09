@@ -63,6 +63,15 @@ Full dates remain available as accessible labels. Clipped edge days occupy only
 their visible time. Archived UTC daily savings retain UTC calendar boundaries.
 Relative appliance-cycle charts retain their elapsed-time axis. Bands do not
 fill missing series, change interval widths or alter stored evidence.
+
+Planning day headings expose energy summaries on hover, focus and tap. Integrate
+each visible balance series in kWh over its covered duration, clipped to the
+selected range and installation-local day. Preserve the chart's signs and omit
+SoC percentages. A gap, overlap or unavailable interval makes that series' total
+unavailable. Partial days state their actual coverage. Canvas redraws preserve
+heading nodes so an open summary does not destroy keyboard focus. Summaries do
+not change archived plans or trigger optimization.
+
 Without battery, self-consumption and OEP share the union of their visible signed
 stack extrema, with the existing ten-percent clearance and identical ticks.
 Recalculate together after window, plan, visibility and size changes. SoC and

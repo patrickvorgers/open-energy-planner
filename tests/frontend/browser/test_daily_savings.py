@@ -196,6 +196,14 @@ def test_daily_results_show_partial_and_unavailable_scenarios_without_false_zero
         "Chart.getChart(document.getElementById('savings-chart')).scales.x.ticks.map(tick => tick.label)"
     )
     assert labels and all("2026" in label for label in labels)
+    for identity in ("savings-chart", "realization-chart"):
+        expect(page.locator("#" + identity + "-tooltip")).to_have_count(1)
+        assert (
+            page.locator("#" + identity).evaluate(
+                "canvas => canvas.closest('figure').querySelectorAll('.chart-day-headings').length"
+            )
+            == 0
+        )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
