@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import subprocess
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -631,19 +632,67 @@ def test_retained_state_detects_replaced_or_missing_administration_token(tmp_pat
         supervisor_smoke.retained_state()
 
 
-def test_pending_forecast_sqlite_error_keeps_bounded_message_and_original_cause(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("temporary_failure", ["missing_table", "locked"])
+def test_pending_forecast_sqlite_timeout_keeps_bounded_chained_diagnostics(
+    tmp_path, monkeypatch, temporary_failure
 ):
-    """A real missing archive table becomes a retryable bounded error with its SQLite cause retained."""
+    """Real SQLite failures remain retryable without leaking raw messages through the final traceback."""
     directory = tmp_path / "apps/data" / supervisor_smoke.APP_SLUG
     directory.mkdir(parents=True)
-    sqlite3.connect(directory / "archive.sqlite3").close()
+    connect = sqlite3.connect
+    writer = connect(directory / "archive.sqlite3")
+    if temporary_failure == "locked":
+        writer.execute("CREATE TABLE oep_documents (namespace TEXT, name TEXT, payload TEXT)")
+        writer.commit()
+        writer.execute("BEGIN EXCLUSIVE")
+
+    def immediate_lock_check(*arguments, **keywords):
+        """Expose the real SQLite lock immediately without changing production connection budgets."""
+        return connect(*arguments, **keywords, timeout=0)
+
+    def bounded_wait(operation, description):
+        """Exercise the real retry and timeout chain with a deterministic one-attempt deadline."""
+        return provision_supervisor.wait_for(operation, description, timeout=1)
+
     monkeypatch.setattr(supervisor_smoke, "SUPERVISOR_ROOT", tmp_path)
-    with pytest.raises(RuntimeError, match="Pending forecast captures are not ready") as caught:
-        supervisor_smoke.pending_model_forecasts()
-    assert isinstance(caught.value.__cause__, sqlite3.OperationalError)
-    assert str(caught.value) == "Pending forecast captures are not ready."
-    assert "no such table" not in str(caught.value)
+    monkeypatch.setattr(supervisor_smoke.sqlite3, "connect", immediate_lock_check)
+    monkeypatch.setattr(
+        supervisor_smoke,
+        "app_request",
+        lambda route: (
+            {"annual_estimate": {"days": 28, "start": 0, "end": 28 * 86400}}
+            if route == "setup"
+            else {}
+        ),
+    )
+    clock = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(provision_supervisor, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(provision_supervisor, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(supervisor_smoke, "wait_for", bounded_wait)
+    try:
+        with pytest.raises(RuntimeError, match="Actual model readiness:") as caught:
+            supervisor_smoke.model_history()
+    finally:
+        writer.close()
+    timeout = caught.value.__cause__
+    assert str(timeout) == (
+        "Timed out waiting for actual history-trained appliance alternatives and daily baseline selection"
+    )
+    retryable = timeout.__cause__
+    assert str(retryable) == "Pending forecast captures are not ready."
+    assert isinstance(retryable.__context__, sqlite3.OperationalError)
+    raw_message = {
+        "missing_table": "no such table: oep_documents",
+        "locked": "database is locked",
+    }[temporary_failure]
+    assert str(retryable.__context__) == raw_message
+    diagnostic = "".join(traceback.format_exception(caught.value))
+    assert "Actual model readiness: {}" in diagnostic
+    assert str(timeout) in diagnostic
+    assert "Pending forecast captures are not ready." in diagnostic
+    assert raw_message not in diagnostic
+    assert "sqlite3.OperationalError" not in diagnostic
+    assert retryable.__cause__ is None and retryable.__suppress_context__
 
 
 @pytest.mark.parametrize("temporary_failure", ["missing_table", "locked"])
@@ -667,11 +716,11 @@ def test_wait_for_retries_actual_pending_forecast_sqlite_read(
         return connect(*arguments, **keywords, timeout=0)
 
     def read_pending():
-        """Observe retryable causes independently of the returned model document."""
+        """Observe real SQLite failures independently of the returned model document."""
         try:
             return supervisor_smoke.pending_model_forecasts()
         except RuntimeError as error:
-            failures.append(type(error.__cause__))
+            failures.append(type(error.__context__))
             raise
 
     def repair_after_first_attempt(_seconds):

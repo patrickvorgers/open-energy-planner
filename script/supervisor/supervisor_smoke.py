@@ -158,7 +158,7 @@ def pending_model_forecasts():
 
     Raises:
         RuntimeError: SQLite is not readable yet. The existing readiness poll
-            can retry while retaining the original database error as its cause.
+            can retry without exposing raw database messages in chained diagnostics.
     """
     database = SUPERVISOR_ROOT / "apps/data" / APP_SLUG / "archive.sqlite3"
     try:
@@ -168,8 +168,8 @@ def pending_model_forecasts():
                 "SELECT payload FROM oep_documents WHERE namespace = ? AND name LIKE ? ORDER BY name",
                 ("demand", "accuracy-pending-%"),
             ).fetchall()
-    except sqlite3.Error as error:
-        raise RuntimeError("Pending forecast captures are not ready.") from error
+    except sqlite3.Error:
+        raise RuntimeError("Pending forecast captures are not ready.") from None
     return [json.loads(row[0])["capture"]["forecasts"] for row in rows]
 
 

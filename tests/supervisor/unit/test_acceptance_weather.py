@@ -188,7 +188,7 @@ def test_supervisor_capture_accepts_real_fitted_archives_without_forward_promoti
     def require_ready(operation, _description):
         """Require immediate acceptance of the actual fitted and durably archived model results."""
         observed = operation()
-        assert observed is not None
+        assert observed
         return observed
 
     monkeypatch.setattr(supervisor_smoke, "wait_for", require_ready)
@@ -198,3 +198,6 @@ def test_supervisor_capture_accepts_real_fitted_archives_without_forward_promoti
         archive.get("weather", {}).get("model") == "xgboost-weather-v1" for archive in archives
     )
     supervisor_smoke.model_history()
+    monkeypatch.setattr(supervisor_smoke, "pending_model_forecasts", list)
+    with pytest.raises(AssertionError):
+        supervisor_smoke.model_history()
