@@ -287,6 +287,8 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `savings` | `SavingsRuntime` and `PlanValuations`: capture cursor, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
 
 Bonus rule JSON includes optional boolean `prevent_battery_export` (default false).
+The false default is omitted from serialized rules and canonical version hashes,
+so pre-option bonus contracts retain their original immutable identities.
 Compiled `export_bonuses` retain an aligned boolean tuple under the same name in
 immutable plan input snapshots. True forbids simultaneous battery discharge and
 grid export for that billing segment while quota remains at its start. Exhausted

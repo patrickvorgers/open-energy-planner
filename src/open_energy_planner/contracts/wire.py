@@ -308,6 +308,8 @@ def parse_bonuses(values, *, installation_timezone=None, periods=(), contract_id
 def bonus_document(rule):
     """Preserve the original separate extra-rate and comparison for a dated bonus rule."""
     data = asdict(rule)
+    if not rule.prevent_battery_export:
+        data.pop("prevent_battery_export")
     if rule.monthly_schedule:
         data["monthly_schedule"] = list(data["monthly_schedule"])
     else:

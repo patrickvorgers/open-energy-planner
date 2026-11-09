@@ -23,6 +23,46 @@ ZONE = ZoneInfo("Europe/Amsterdam")
 START = datetime(2027, 1, 15, 12, tzinfo=ZONE)
 
 
+def test_original_bonus_archive_retains_identity_when_protection_is_disabled(tmp_path):
+    """A pre-option archive loads unchanged. Enabling protection creates a distinct replayable revision."""
+    import json
+
+    from open_energy_planner.contracts.storage import ContractStore
+    from tests.database.support.archive import make_store
+
+    # Captured from immutable main 91730a5, before the protection field existed.
+    version = "444f47afbf31a4b3fba2648fe81d4e03a08df94d41b082d56805e7d6d85f5019"
+    document = json.loads("""{
+        "contract_id": "archived-bonus", "market_area": "NL", "currency": "EUR",
+        "recorded_at": "2026-01-01T05:30:00+00:00",
+        "periods": [{"effective_from": "2026-01-01T00:00:00+00:00",
+            "effective_until": null, "import_formula": "market + 0.10", "export_formula": "market"}],
+        "bonuses": [{"rule_id": "solar", "effective_from": "2026-01-01T00:00:00+00:00",
+            "rate_formula": "0.04", "cap_kwh": 100.0, "timezone": "UTC", "reset_month": 1,
+            "reset_day": 1, "price_condition": null, "window": "always",
+            "start_time": null, "end_time": null}]
+    }""")
+    store = make_store(tmp_path, ContractStore)
+    store.documents.write(f"{version}.json", document)
+    store.documents.write("current.json", version)
+    restored = make_store(tmp_path, ContractStore)
+    assert restored.issue is None
+    original = restored.current
+    assert original.version == version
+    assert original.bonuses[0].prevent_battery_export is False
+    assert "prevent_battery_export" not in contract_document(original)["bonuses"][0]
+    enabled = replace(
+        original, bonuses=(replace(original.bonuses[0], prevent_battery_export=True),)
+    )
+    assert enabled.version != version
+    assert contract_document(enabled)["bonuses"][0]["prevent_battery_export"] is True
+    restored.save(enabled)
+    reloaded = make_store(tmp_path, ContractStore)
+    assert reloaded.current == enabled
+    assert reloaded.load(version) == original
+    assert reloaded.documents.read(f"{version}.json") == document
+
+
 def test_introduction_excludes_old_exports_without_moving_contract_anniversary():
     """January starts the first allowance. May still starts the next full supplier year."""
     rule = BonusRule(

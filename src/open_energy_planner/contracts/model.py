@@ -123,6 +123,8 @@ class ContractSchedule:
             if period["contract_start"] is None:
                 period.pop("contract_start")
         for bonus in body["bonuses"]:
+            if not bonus["prevent_battery_export"]:
+                bonus.pop("prevent_battery_export")
             if not bonus["monthly_schedule"]:
                 bonus.pop("monthly_schedule")
             if bonus["contract_start"] is None:
