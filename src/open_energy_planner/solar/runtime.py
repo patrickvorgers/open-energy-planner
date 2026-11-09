@@ -202,8 +202,18 @@ class SolarRuntime:
             except HistoryContinuityError:
                 error = "history_continuity_unavailable"
             else:
+                previous = self.histories.get(entity)
+                fresh = {hour.start: hour.total_kwh for hour in accepted.hours} if accepted else {}
+                if previous and any(
+                    fresh.get(hour.start) != hour.total_kwh for hour in previous.hours
+                ):
+                    self.last_key = None
+                    self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
+                    self.source_selection, self.learning = {}, {}
                 if accepted:
                     self.histories[entity] = accepted
+                else:
+                    self.histories.pop(entity, None)
                 self.history_revision += 1
                 self.history_issues.pop(entity, None)
                 self.history_retry_after.pop(entity, None)

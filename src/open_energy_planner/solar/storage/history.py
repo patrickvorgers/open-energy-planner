@@ -1,10 +1,10 @@
 """Resume bounded solar-history transfers while retaining all available measurement years."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 
-from open_energy_planner.history.model import EnergyHistory
-from open_energy_planner.history.wire import parse_history
+from open_energy_planner.history.model import MAX_CUMULATIVE_ENERGY_KWH, MAX_HISTORY_HOURS
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.calculation.model import version
 
@@ -13,6 +13,24 @@ HOUR = timedelta(hours=1)
 MAX_REQUEST_DAYS = 367
 DISCOVERY_BASIS = "solar_history_range"
 CHUNK_BASIS = "solar_history_chunk"
+ALIGNMENT_POLICY = "nearest_utc_hour_64s"
+MAX_ALIGNMENT_SECONDS = 64
+
+
+@dataclass(frozen=True)
+class SolarEnergyHour:
+    """One cumulative Recorder sum endpoint. Physical state is retained only as source evidence."""
+
+    start: datetime
+    total_kwh: float
+
+
+@dataclass(frozen=True)
+class SolarEnergyHistory:
+    """Solar-only ordered endpoints, without financial physical-meter baseline semantics."""
+
+    entity_id: str
+    hours: tuple[SolarEnergyHour, ...]
 
 
 class HistoryContinuityError(ValueError):
@@ -26,8 +44,50 @@ class SolarHistoryReport:
     basis: str
     entity_id: str
     statistics_identity: dict
-    history: EnergyHistory | None = None
+    history: SolarEnergyHistory | None = None
     available_start: datetime | None = None
+    raw_hours: tuple = ()
+    excluded_starts: frozenset[datetime] = frozenset()
+
+
+def _finite(value):
+    """Keep finite numeric source evidence without treating booleans as energy or timestamps."""
+    try:
+        return type(value) in (int, float) and isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _normalized_hours(rows):
+    """Recover bounded timestamp rounding and exclude ambiguous sums independently of meter state."""
+    if not isinstance(rows, list) or len(rows) > MAX_HISTORY_HOURS:
+        raise ValueError("Invalid solar history size")
+    raw, hours, excluded = [], {}, set()
+    for row in rows:
+        if not isinstance(row, (tuple, list)) or len(row) != 3:
+            raise ValueError("Invalid solar history row")
+        stamp, total, meter = (value if _finite(value) else None for value in row)
+        raw.append((stamp, total, meter))
+        if stamp is None or total is None or abs(total) > MAX_CUMULATIVE_ENERGY_KWH:
+            continue
+        canonical = (stamp + 1800) // 3600 * 3600
+        if abs(stamp - canonical) > MAX_ALIGNMENT_SECONDS:
+            continue
+        try:
+            instant = datetime.fromtimestamp(canonical, UTC)
+        except (OverflowError, OSError, ValueError):
+            continue
+        if instant < HISTORY_EPOCH:
+            continue
+        hour = SolarEnergyHour(instant, total)
+        if instant in hours and hours[instant] != hour:
+            excluded.add(instant)
+        hours[instant] = hour
+    return (
+        tuple(hours[instant] for instant in sorted(hours) if instant not in excluded),
+        tuple(raw),
+        frozenset(excluded),
+    )
 
 
 def _statistics_identity(value):
@@ -70,14 +130,13 @@ def parse_report(body):
             if first < HISTORY_EPOCH or first.minute or first.second or first.microsecond:
                 raise ValueError("Invalid solar availability boundary")
         return SolarHistoryReport(basis, body["entity_id"], identity, available_start=first)
-    compact = {
-        key: value for key, value in body.items() if key not in {"basis", "statistics_identity"}
-    }
-    if body["hours"] == [] and body["unit"] == "kWh":
-        history = None
-    else:
-        history = parse_history(compact)
-    return SolarHistoryReport(basis, body["entity_id"], identity, history=history)
+    if body["unit"] != "kWh":
+        raise ValueError("Unsupported solar history unit")
+    hours, raw, excluded = _normalized_hours(body["hours"])
+    history = SolarEnergyHistory(body["entity_id"], hours) if hours else None
+    return SolarHistoryReport(
+        basis, body["entity_id"], identity, history=history, raw_hours=raw, excluded_starts=excluded
+    )
 
 
 class SolarHistoryImport:
@@ -85,8 +144,8 @@ class SolarHistoryImport:
 
     Annual Recorder transfers remain bounded. The in-memory aggregate has no
     functional year limit. Empty years retain explicit completed coverage and
-    cannot truncate later years. Changes to previously accepted rows or source
-    identity retain original evidence and block replacement of the current cache.
+    cannot truncate later years. Revised sums exclude only their affected
+    endpoints. Changed source identity retains the original blocked cohort.
     """
 
     def __init__(self, store):
@@ -197,7 +256,7 @@ class SolarHistoryImport:
             state = self.store.documents.read("history-import-" + reference + ".json")
             if (
                 not isinstance(state, dict)
-                or set(state)
+                or set(state) - {"conflicts"}
                 != {
                     "entity_id",
                     "statistics_identity",
@@ -213,6 +272,26 @@ class SolarHistoryImport:
             ):
                 raise ValueError("Invalid solar history import")
             _statistics_identity(state["statistics_identity"])
+            conflicts = state.get("conflicts", [])
+            if not isinstance(conflicts, list):
+                raise ValueError("Invalid solar history conflicts")
+            for row in conflicts:
+                if (
+                    not isinstance(row, list)
+                    or len(row) != 2
+                    or not _finite(row[0])
+                    or row[0] % 3600
+                    or not _finite(row[1])
+                    or abs(row[1]) > MAX_CUMULATIVE_ENERGY_KWH
+                ):
+                    raise ValueError("Invalid solar history conflict")
+                try:
+                    if datetime.fromtimestamp(row[0], UTC) < HISTORY_EPOCH:
+                        raise ValueError("Invalid solar history conflict")
+                except (OverflowError, OSError):
+                    raise ValueError("Invalid solar history conflict") from None
+            if len({row[0] for row in conflicts}) != len(conflicts):
+                raise ValueError("Duplicate solar history conflict")
             aware(datetime.fromisoformat(state["discovered_at"]))
             if state["available_start"] is not None:
                 first = aware(datetime.fromisoformat(state["available_start"]))
@@ -233,7 +312,9 @@ class SolarHistoryImport:
         )
         if (
             not isinstance(body, dict)
-            or set(body) != {"entity_id", "statistics_identity", "year", "start", "end", "hours"}
+            or set(body) - {"alignment"}
+            != {"entity_id", "statistics_identity", "year", "start", "end", "hours"}
+            or body.get("alignment", ALIGNMENT_POLICY) != ALIGNMENT_POLICY
             or version(body) != descriptor["reference"]
             or body["entity_id"] != state["entity_id"]
             or body["statistics_identity"] != state["statistics_identity"]
@@ -253,24 +334,32 @@ class SolarHistoryImport:
                 "hours": body["hours"],
             }
         )
-        if report.history and any(not start <= hour.start < end for hour in report.history.hours):
-            raise ValueError("Invalid cached solar history coverage")
-        return report.history
+        hours = (
+            tuple(hour for hour in report.history.hours if start <= hour.start < end)
+            if report.history
+            else ()
+        )
+        return replace(
+            report,
+            history=SolarEnergyHistory(state["entity_id"], hours) if hours else None,
+            excluded_starts=frozenset(
+                instant for instant in report.excluded_starts if start <= instant < end
+            ),
+        )
 
     def _history(self, state):
         """Merge matching overlapping endpoints while preserving every absent hour as a gap."""
         rows = {}
+        excluded = {datetime.fromtimestamp(row[0], UTC) for row in state.get("conflicts", [])}
         for descriptor in state["chunks"]:
-            history = self._chunk(state, descriptor)
-            for hour in history.hours if history else ():
+            report = self._chunk(state, descriptor)
+            excluded.update(report.excluded_starts)
+            for hour in report.history.hours if report.history else ():
                 if hour.start in rows and rows[hour.start] != hour:
-                    raise HistoryContinuityError("Solar history overlap changed")
+                    excluded.add(hour.start)
                 rows[hour.start] = hour
-        return (
-            EnergyHistory(state["entity_id"], tuple(rows[key] for key in sorted(rows)))
-            if rows
-            else None
-        )
+        hours = tuple(rows[key] for key in sorted(rows) if key not in excluded)
+        return SolarEnergyHistory(state["entity_id"], hours) if hours else None
 
     def restore(self, entities):
         """Restore complete accepted chunks for selected meter identities and isolate cache faults."""
@@ -389,14 +478,11 @@ class SolarHistoryImport:
                 "available_start": min(available) if available else None,
                 "discovered_at": aware(now).isoformat(),
                 "chunks": list(state["chunks"]) if state else [],
+                "conflicts": state.get("conflicts", []) if state else [],
             }
             history = self._history(proposed)
         else:
-            if (
-                state is None
-                or report.history
-                and any(not start <= hour.start < end for hour in report.history.hours)
-            ):
+            if state is None:
                 raise ValueError("Solar history source/range mismatch")
             body = {
                 "entity_id": entity,
@@ -404,12 +490,8 @@ class SolarHistoryImport:
                 "year": request["import_year"],
                 "start": request["start"],
                 "end": request["end"],
-                "hours": [
-                    [hour.start.timestamp(), hour.total_kwh, hour.meter_kwh]
-                    for hour in report.history.hours
-                ]
-                if report.history
-                else [],
+                "hours": [list(row) for row in report.raw_hours],
+                "alignment": ALIGNMENT_POLICY,
             }
             reference = version(body)
             self.store.archive("history-import-chunk", reference, body)
@@ -419,31 +501,35 @@ class SolarHistoryImport:
             previous = next(
                 (chunk for chunk in state["chunks"] if chunk["year"] == body["year"]), None
             )
+            fresh = (
+                {hour.start.timestamp(): hour.total_kwh for hour in report.history.hours}
+                if report.history
+                else {}
+            )
+            conflicts = dict(state.get("conflicts", []))
             if previous:
-                old = self._chunk(state, previous)
-                fresh = (
-                    {hour.start: hour for hour in report.history.hours} if report.history else {}
-                )
-                if old and any(
-                    fresh.get(hour.start) != hour for hour in old.hours if start <= hour.start < end
-                ):
-                    self._quarantine(entity, "history-import-chunk", reference)
-                    raise HistoryContinuityError("Cached solar measurements changed")
+                old = self._chunk(state, previous).history
+                for hour in old.hours if old else ():
+                    stamp = hour.start.timestamp()
+                    if start <= hour.start < end and fresh.get(stamp) != hour.total_kwh:
+                        conflicts.setdefault(stamp, hour.total_kwh)
+            conflicts = {
+                stamp: total
+                for stamp, total in conflicts.items()
+                if not start.timestamp() <= stamp < end.timestamp() or fresh.get(stamp) != total
+            }
             descriptor = {field: body[field] for field in ("year", "start", "end")}
             descriptor["reference"] = reference
             proposed = {
                 **state,
+                "conflicts": [[stamp, total] for stamp, total in sorted(conflicts.items())],
                 "chunks": sorted(
                     [chunk for chunk in state["chunks"] if chunk["year"] != body["year"]]
                     + [descriptor],
                     key=lambda chunk: chunk["year"],
                 ),
             }
-            try:
-                history = self._history(proposed)
-            except HistoryContinuityError:
-                self._quarantine(entity, "history-import-chunk", reference)
-                raise
+            history = self._history(proposed)
         reference = version(proposed)
         with self.store.transaction():
             self.store.archive("history-import", reference, proposed)

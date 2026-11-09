@@ -34,6 +34,73 @@ from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
+def test_solar_raw_sum_evidence_and_local_conflicts_survive_restart(archive):
+    """Every backend preserves raw endpoints, reset-safe sums and original conflict anchors across refreshes."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.solar.runtime import SolarRuntime
+    from open_energy_planner.solar.storage.history import parse_report
+    from tests.app.solar.history_support import HISTORY_NOW, discover
+
+    engine, _root = archive
+    documents = SqlDocuments(engine, "solar")
+    store = SolarStore(documents)
+    store.save(plant())
+    runtime = SolarRuntime(store)
+    discover(runtime, first="2026-01-01T00:00:00+00:00")
+    pending = runtime.request(HISTORY_NOW)
+    start = datetime(2026, 1, 1, 9, tzinfo=UTC)
+    raw = [
+        [start.timestamp() - 16, 100, 800],
+        [(start + timedelta(hours=3)).timestamp() + 64, 112, 0],
+        [(start + timedelta(hours=4)).timestamp(), 115, None],
+    ]
+
+    def capture(request, rows):
+        """Send source evidence independently of the normalized typed view."""
+        report = parse_report(
+            {
+                "request_version": request["version"],
+                "basis": "solar_history_chunk",
+                "entity_id": "sensor.pv0",
+                "statistics_identity": {"metadata_id": 7, "source": "recorder", "unit": "kWh"},
+                "unit": "kWh",
+                "hours": rows,
+            }
+        )
+        runtime.receive(request["version"], report.history, now, report=report)
+
+    now = HISTORY_NOW
+    capture(pending, raw)
+    original = runtime.history_import.states["sensor.pv0"]["chunks"][0]["reference"]
+    evidence = documents.read("history-import-chunk-" + original + ".json")
+    assert evidence["hours"] == raw
+    assert evidence["alignment"] == "nearest_utc_hour_64s"
+    reopened = SolarRuntime(SolarStore(SqlDocuments(engine, "solar")))
+    assert reopened.histories == runtime.histories
+    original_history = reopened.histories.copy()
+    assert [hour.total_kwh for hour in reopened.histories["sensor.pv0"].hours] == [100, 112, 115]
+    runtime = reopened
+    now += timedelta(days=1)
+    changed = [raw[0], [raw[1][0], 113, None], raw[2]]
+    capture(runtime.request(now), changed)
+    assert [hour.total_kwh for hour in runtime.histories["sensor.pv0"].hours] == [100, 115]
+    assert runtime.history_issues == {}
+    runtime = SolarRuntime(SolarStore(SqlDocuments(engine, "solar")))
+    assert runtime.history_import.states["sensor.pv0"]["conflicts"] == [
+        [(start + timedelta(hours=3)).timestamp(), 112]
+    ]
+    now += timedelta(days=1)
+    capture(runtime.request(now), changed)
+    assert [hour.total_kwh for hour in runtime.histories["sensor.pv0"].hours] == [100, 115]
+    now += timedelta(days=1)
+    capture(runtime.request(now), raw)
+    assert runtime.histories == original_history
+    assert runtime.history_import.states["sensor.pv0"]["conflicts"] == []
+    assert documents.read("history-import-chunk-" + original + ".json") == evidence
+    assert SolarRuntime(SolarStore(SqlDocuments(engine, "solar"))).histories == runtime.histories
+
+
 def test_solar_import_forecast_and_accuracy_contracts_survive_restart(archive):
     """All four backends retain edited geometry, original imports and immutable HA/accuracy evidence."""
     from open_energy_planner.solar.calculation.model import SolarImport, SolarPanel

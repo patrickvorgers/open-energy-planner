@@ -203,11 +203,43 @@ later years or inventing zero production.
 
 Accepted annual chunks are immutable and resume after restart from the active
 database. They bind the meter entity, Recorder metadata identity, source and
-original unit. Changed identities, incompatible overlapping endpoints or changes
-to earlier accepted readings retain the original evidence and block replacement.
-Counter resets normalized by Recorder remain valid. Nonconsecutive or decreasing
-statistics never become invented energy. A failed source cannot hide other
-sources. The physical model remains available without learning history.
+original unit. The hourly production target is the difference between successive
+Recorder `statistics.sum` values. Physical `statistics.state` can reset or be
+unavailable without invalidating a usable sum. It remains original source evidence
+and is never substituted for the production target.
+
+Solar imports automatically align timestamps within 64 seconds of the nearest
+UTC hour. A one-hour Recorder read margin retains slightly early samples at
+request and year boundaries. Only endpoints inside the original request enter
+the learning view. The immutable transfer preserves finite original timestamps,
+sums and states, with missing or nonfinite cells represented as null. Alignment
+does not change the original evidence. Larger deviations or unusable sums leave
+gaps. Matching duplicate sums count once. Different sums for the same normalized
+hour exclude that endpoint regardless of input order or physical state.
+
+Conflicting overlaps and revisions to accepted sums exclude only their affected
+endpoints, retaining the rest of the history and both original transfers. A
+refreshed chunk retains the original sum as a durable conflict anchor until a
+later compatible reading restores it. Repeating the revised value does not
+silently accept it. Retracted evidence withdraws an existing learned forecast
+while the remaining history can train again. Changed statistics identities
+remain a source-level boundary and block mixing meters. Restart restores the
+same normalized endpoints, exclusions and identity safeguards.
+
+Only consecutive hourly sum endpoints establish hourly production. For example,
+suppose the last endpoint is labelled 09:00, the 10:00 and 11:00 records are
+missing, and the 12:00 record adds 12 kWh. That increase spans 10:00–13:00 and
+cannot train the 12:00–13:00 hour. The 12:00 record remains the reference. If
+the 13:00 record adds another 3 kWh, 13:00–14:00 is the first usable hour.
+Neither interpolation nor uniform spreading creates measured training samples.
+Decreasing sums remain excluded meter corrections.
+
+Recovered rounding and partial gaps require no user action and raise no attention
+notification. Transient history reads retry automatically. Unsupported sensors,
+missing Recorder, changed source identity and unreadable saved evidence retain
+actionable attention handling. A failed source cannot hide other sources. The
+physical model remains available without learning history. Partial history does
+not relax the separate chronological model-validation or forecast-admission gates.
 
 Historical training and forecast admission use archived original ECMWF IFS
 weather forecasts from the Open-Meteo Single Runs API, paired with actual
