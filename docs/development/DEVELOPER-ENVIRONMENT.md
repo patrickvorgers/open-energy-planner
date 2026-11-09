@@ -231,8 +231,9 @@ in use. Acceptance verifies both actual training and forward-accuracy baseline
 selection. It permits additional ready EV and boiler forecasts while requiring
 consistent measurement separation. Timeout diagnostics identify the expected
 models' training and weather-readiness states. Temporary SQLite read failures
-raise a bounded readiness message through the existing poll, retaining the
-original database cause for diagnosis.
+raise a bounded readiness message through the existing retry poll. Raw SQLite
+messages are excluded from formatted tracebacks. The original exception remains
+available only through the programmatic `__context__` attribute.
 
 The normal Supervisor bootstrap still owns configuration, authentication,
 privilege drop and runtime startup. Release packaging and numbered installation
