@@ -5,6 +5,7 @@ import json
 import pytest
 
 from script.ci import check_suite_completion as completion
+from tests.ci.browser_evidence import write_browser_evidence
 
 EXPECTED_SUITES = {
     "selected:ci,ha": {"ci", "ha-contracts", "ha", "provisioning"},
@@ -47,6 +48,8 @@ def test_every_profile_requires_exactly_its_executed_suites(tmp_path, monkeypatc
                 encoding="utf-8",
             )
     assert completion.required_suites(profile) == expected
+    if "browser" in expected:
+        write_browser_evidence(tmp_path)
     completion.write_completion(profile, expected)
     assert set(json.loads(report.read_text())["completed"]) == expected
     completion.verify_completion(profile, TREE, report)
@@ -160,6 +163,7 @@ def test_incomplete_or_stale_completion_cannot_publish_full_tree(tmp_path, corru
         },
     }
     report.write_text(json.dumps(document), encoding="utf-8")
+    write_browser_evidence(tmp_path)
     completion.verify_completion("full", TREE, report)
     if corruption == "missing":
         document["completed"].remove("supervisor")

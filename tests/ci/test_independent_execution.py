@@ -10,8 +10,15 @@ import pytest
 
 from script.ci import check_images, check_suite_completion
 from script.ci.ci_scope import selected_suites
+from tests.ci.browser_evidence import observe_browser_boundary
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def browser_controller_boundary(monkeypatch):
+    """Preserve the independent controller's mocked container boundary for both browser workers."""
+    observe_browser_boundary(monkeypatch)
 
 
 @pytest.mark.parametrize(
@@ -27,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
         ("selected:ci,ha", {"native", "ha-tests", "provision-tests"}, False),
         ("selected:ci,ha-solver", {"native", "ha-tests"}, False),
         ("selected:ci,unit-app-demand", {"native"}, False),
-        ("selected:browser,ci,unit-frontend", {"native", "ui-tests"}, False),
+        ("selected:browser,ci,unit-frontend", {"native", "ui-worker"}, False),
         ("selected:ci,provisioning,unit-provisioning", {"native", "provision-tests"}, False),
     ],
 )
@@ -48,7 +55,9 @@ def test_independent_selection_executes_exact_suites_and_reports_them(
     monkeypatch.setattr(sys, "argv", ["ci.py", "--profile", profile])
     runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
     services = {
-        command[command.index("--rm") + 1]
+        command[command.index("--entrypoint") + 2]
+        if "--entrypoint" in command
+        else command[command.index("--rm") + 1]
         for command in calls
         if "run" in command and "--rm" in command
     }
@@ -296,7 +305,7 @@ def test_unit_group_launcher_propagates_source_path_to_nested_python(tmp_path):
         (package / "__init__.py").write_text(
             '"""Provide isolated runner fixtures."""\n', encoding="utf-8"
         )
-    for name in ("ci_groups.py", "ha_suites.py", "pytest_suites.py"):
+    for name in ("ci_groups.py", "ha_suites.py", "browser_suites.py", "pytest_suites.py"):
         copyfile(ROOT / "script/ci" / name, scripts / name)
     application = project / "src/open_energy_planner"
     application.mkdir(parents=True)

@@ -215,6 +215,8 @@ jobs:
           name: test-reports-amd64
           path: |
             results/ci/*.xml
+            results/ci/browser-*/*.xml
+            results/ci/browser-*/*.json
             results/ci/suite-completion.json
             results/ci/phase-times*.json
             results/ci/selection.json
