@@ -9,6 +9,42 @@ WEB = Path(__file__).resolve().parents[3] / "src/open_energy_planner/web/public"
 
 
 @pytest.mark.parametrize("width", [390, 1280])
+def test_zero_reference_keeps_zero_and_ten_percent_negative_clearance(browser, width):
+    """Positive prices start at zero. Signed prices retain zero and ten percent of axis height below."""
+    with browser.new_context(viewport={"width": width, "height": 900}) as context:
+        page = context.new_page()
+        page.set_content('<canvas id="plot"></canvas>')
+        page.add_script_tag(path=str(WEB / "chart.umd.min.js"))
+        page.add_script_tag(path=str(WEB / "chart_theme.js"), type="module")
+        page.wait_for_function("Chart.registry.plugins.get('valueAxisHeadroom')")
+        results = page.evaluate("""() => [
+            {values:[0.2,0.8], bounds:[0,0.8/0.9]},
+            {values:[-0.2,0.4], bounds:[-0.275,0.475]},
+            {values:[-0.4,-0.2], bounds:[-0.4/0.9,0]},
+            {values:[5,5], bounds:[0,5/0.9]},
+            {values:[-5,-5], bounds:[-5/0.9,0]},
+            {values:[0.00002,0.00003], bounds:[0,0.00003/0.9]},
+            {values:[0,0]}, {values:[null,null]},
+        ].map(sample => {
+            const chart=new Chart(document.getElementById('plot'), {type:'line',data:{datasets:[{data:sample.values}]},
+                options:{responsive:false,animation:false,scales:{y:{beginAtZero:true}}}});
+            const snapshot=()=>({bounds:[chart.scales.y.min,chart.scales.y.max],ticks:chart.scales.y.ticks.map(tick=>tick.value)});
+            const initial=snapshot(); chart.resize(300,300); const resized=snapshot();
+            chart.destroy(); return {sample,initial,resized};
+        })""")
+    for result in results:
+        for snapshot in (result["initial"], result["resized"]):
+            lower, upper = snapshot["bounds"]
+            assert math.isfinite(lower) and math.isfinite(upper) and lower < upper
+            assert lower <= 0 <= upper
+            assert 0 in snapshot["ticks"]
+            if "bounds" in result["sample"]:
+                assert snapshot["bounds"] == pytest.approx(result["sample"]["bounds"])
+            else:
+                assert lower == 0
+
+
+@pytest.mark.parametrize("width", [390, 1280])
 def test_value_axes_pad_data_and_keep_nice_ticks_time_and_soc(browser, width):
     """Real line and stacked axes retain ten-percent clearance after toggles and resizes.
 

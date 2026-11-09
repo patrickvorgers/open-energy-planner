@@ -67,6 +67,12 @@ Household demand and available solar describe original forecast inputs before th
 
 The **Price inputs** chart follows the selected latest or historical plan and shows its frozen prices. Newly received prices and changed contract rules appear when a new plan uses them. Without a plan, the same graph is explicitly labelled **Current tariff preview** and uses cached market prices with saved rules. Solid lines identify published prices and dotted lines identify forecast prices. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
 
+The price scale always includes zero. With nonnegative visible prices, its lower
+bound is exactly zero. Negative prices receive clearance below the lowest
+visible price equal to ten percent of the total axis height. If all visible
+prices are negative, zero is the upper bound. Changing the time range or hiding
+a series recalculates the scale without changing any prices.
+
 See [contract and prices](contract.md) for formulas, dates and bonus interpretation, and [forecasts](forecasts.md) for how predictions are checked against measurements.
 
 ## Inspect an individual decision
