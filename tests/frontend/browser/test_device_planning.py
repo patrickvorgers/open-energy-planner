@@ -29,7 +29,9 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
         legend = page.locator("#" + identity + "-legend")
         for name in ("Washing machine", "Dryer", "Dishwasher", "Charge point"):
             expect(legend.get_by_role("checkbox", name=name, exact=True)).to_have_count(1)
-        expect(legend).to_contain_text("Striped: Expected use. Solid: Scheduled use.")
+        expect(legend).to_contain_text(
+            "Striped bars show expected use. Solid bars show scheduled use."
+        )
         washer = legend.get_by_role("checkbox", name="Washing machine", exact=True)
         expect(washer).to_have_attribute("aria-describedby", identity + "-device-key")
         washer.focus()

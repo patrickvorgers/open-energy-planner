@@ -273,7 +273,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
     if (series.some(s => s.legendId != null)) {
         const key = document.createElement("p"); key.id = `${id}-device-key`;
         key.className = "chart-device-key";
-        key.textContent = "Striped: Expected use. Solid: Scheduled use. Expected use reserves energy and does not authorize a start.";
+        key.textContent = "Striped bars show expected use. Solid bars show scheduled use. Expected use does not authorize a start.";
         legend.append(key);
     }
     if (!datasets.some((d) => d.data.length)) {
