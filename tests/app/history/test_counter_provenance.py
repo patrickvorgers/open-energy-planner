@@ -39,7 +39,9 @@ def test_price_revision_continues_usage_but_reset_and_new_supplier_request_new_p
     assert origin is not None and origin["source"] == "home_assistant_history"
     later = START + timedelta(days=1)
     changed = replace(
-        contract, bonuses=(replace(contract.bonuses[0], cap_kwh=150, effective_from=later),)
+        contract,
+        bonuses=contract.bonuses
+        + (replace(contract.bonuses[0], cap_kwh=150, effective_from=later),),
     )
     refresh = service.request(changed, configuration, book, later)
     assert refresh.periods == (("solar", START),)
@@ -56,7 +58,7 @@ def test_price_revision_continues_usage_but_reset_and_new_supplier_request_new_p
     new_year = service.request(changed, configuration, book, NOW.replace(year=2027))
     assert new_year.periods == (("solar", START.replace(year=2027)),)
     switched = replace(
-        changed, bonuses=(replace(changed.bonuses[0], rule_id="next", contract_start=later),)
+        changed, bonuses=(replace(changed.bonuses[-1], rule_id="next", contract_start=later),)
     )
     new_supplier = service.request(switched, configuration, book, later + timedelta(hours=5))
     assert new_supplier.periods == (("next", later),)

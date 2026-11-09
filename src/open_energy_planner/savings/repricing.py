@@ -128,6 +128,8 @@ def initial_counters(plan, contract, book, original_reference):
         else None
     )
     for identity, versions in BonusCompiler().families(contract).items():
+        if start < versions[0].effective_from:
+            continue
         period = versions[0].period_start(start)
         original = next(
             (

@@ -85,13 +85,18 @@ def test_gap_never_resets_reference_or_fabricates_savings():
 def test_bonus_caps_advance_all_export_and_diverge_by_scenario():
     """Both inherit 1.5 of 2 kWh used. .5 actual export gets .05 while reference stores the surplus."""
     planning_problem = problem(pv_kwh=0.5, load_kwh=0, hybrid=True)
+    selected = contract(bonus=True)
+    selected = replace(
+        selected,
+        bonuses=(replace(selected.bonuses[0], effective_from=datetime(2026, 1, 1, tzinfo=UTC)),),
+    )
     seed = CounterSeed("bonus", datetime(2026, 1, 1, tzinfo=UTC), 1.5, 10, "sensor.export", START)
     result, state = evaluate(
         planning_problem,
         frame(imported_kwh=0, exported_kwh=0.5, pv_kwh=0.5),
         bindings(),
         None,
-        contract(bonus=True),
+        selected,
         (seed,),
         prices(),
         None,

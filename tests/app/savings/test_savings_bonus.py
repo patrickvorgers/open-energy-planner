@@ -1,7 +1,7 @@
 """Independent historical export-budget arithmetic with real immutable frame storage."""
 
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -391,7 +391,16 @@ def test_non_hour_reset_never_requests_unprovable_hourly_history(evidence, timez
     """A half-hour or quarter-hour UTC reset cannot be recovered exactly from hourly statistics."""
     _store, baselines = evidence
     selected = contract(bonus=True)
-    selected = replace(selected, bonuses=(replace(selected.bonuses[0], timezone=timezone),))
+    selected = replace(
+        selected,
+        bonuses=(
+            replace(
+                selected.bonuses[0],
+                timezone=timezone,
+                effective_from=datetime(2025, 1, 1, tzinfo=UTC),
+            ),
+        ),
+    )
     with pytest.raises(PendingSettlement, match="whole UTC hour"):
         baselines.prepare(
             selected,
@@ -484,7 +493,10 @@ def test_statistics_replay_requests_historical_endpoint_without_latest_capture(
         reference,
     )
     selected = contract(bonus=True)
-    selected = replace(selected, bonuses=(replace(selected.bonuses[0], contract_start=period),))
+    selected = replace(
+        selected,
+        bonuses=(replace(selected.bonuses[0], contract_start=period, effective_from=period),),
+    )
     rows = []
     for index in range(5):
         instant = start + timedelta(minutes=15 * index)

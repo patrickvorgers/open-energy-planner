@@ -108,6 +108,7 @@ class BonusCompiler:
             identity: versions
             for identity, versions in self.families(contract).items()
             if (identities is None or identity in identities)
+            and versions[0].effective_from <= now
             and (versions[0].contract_start is None or versions[0].contract_start <= now)
         }
         if not families:
@@ -163,7 +164,7 @@ class BonusCompiler:
             policy = versions[0]
             # A future supplier contract has not accumulated exports. Existing periods still require evidence.
             initial = current[identity].initial_kwh if identity in current else 0.0
-            rates, caps, periods = [], [], []
+            rates, caps, periods, protected = [], [], [], []
             for step, price in zip(intervals, prices, strict=True):
                 middle = price.start + (price.end - price.start) / 2
                 chosen = contract.bonus_at(middle)
@@ -176,9 +177,22 @@ class BonusCompiler:
                     if chosen
                     else 0
                 )
+                protected.append(
+                    bool(
+                        chosen
+                        and chosen.prevent_battery_export
+                        and chosen.payment_window.contains(
+                            middle,
+                            timezone=chosen.timezone,
+                            location=report.location if report else None,
+                        )
+                    )
+                )
                 caps.append(chosen.cap_kwh if chosen else 0)
                 periods.append(policy.period_start(middle).isoformat())
             compiled.append(
-                ExportBonus(identity, tuple(rates), tuple(caps), tuple(periods), initial)
+                ExportBonus(
+                    identity, tuple(rates), tuple(caps), tuple(periods), initial, tuple(protected)
+                )
             )
         return tuple(compiled), tuple(evidence)

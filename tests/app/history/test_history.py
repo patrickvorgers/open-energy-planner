@@ -207,11 +207,9 @@ def test_full_counter_book_can_roll_forward_without_deleting_archived_evidence(t
     contract, config = inputs()
     contract = replace(
         contract,
-        bonuses=contract.bonuses
-        + (
-            replace(
-                contract.bonuses[0], rule_id="keep", effective_from=START + timedelta(minutes=1)
-            ),
+        bonuses=(
+            replace(contract.bonuses[0], effective_from=START - timedelta(hours=2)),
+            replace(contract.bonuses[0], rule_id="keep", effective_from=START - timedelta(hours=1)),
             replace(contract.bonuses[0], effective_from=NOW + timedelta(minutes=15)),
         ),
     )

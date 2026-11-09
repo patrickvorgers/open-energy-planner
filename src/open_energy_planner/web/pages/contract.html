@@ -43,7 +43,7 @@
 </dialog>
 <dialog id="export-bonus-help" class="contract-help" aria-labelledby="export-bonus-help-title">
 <h2 id="export-bonus-help-title">Export bonus examples</h2>
-<div class="example-tabs section-tabs" role="tablist" aria-label="Supplier examples"><button type="button" id="bonus-zonneplan-tab" role="tab" aria-selected="true" aria-controls="bonus-zonneplan-panel">Zonneplan</button><button type="button" id="bonus-nextenergy-tab" role="tab" aria-selected="false" aria-controls="bonus-nextenergy-panel" tabindex="-1">NextEnergy</button></div>
+<div class="example-tabs section-tabs" role="tablist" aria-label="Supplier examples"><button type="button" id="bonus-zonneplan-tab" role="tab" aria-selected="true" aria-controls="bonus-zonneplan-panel">Zonneplan</button><button type="button" id="bonus-nextenergy-tab" role="tab" aria-selected="false" aria-controls="bonus-nextenergy-panel" tabindex="-1">NextEnergy</button><button type="button" id="bonus-budget-tab" role="tab" aria-selected="false" aria-controls="bonus-budget-panel" tabindex="-1">Budget Energie</button></div>
 <section id="bonus-zonneplan-panel" role="tabpanel" aria-labelledby="bonus-zonneplan-tab" tabindex="0">
 <h3>Zonneplan Zonnebonus</h3>
 <p>Zonneplan describes a base export payment plus an extra 10.0% when the market price plus its addition is positive, during daylight, up to 7,500 kWh per calendar year. Check your signed terms. This example is not an exact supplier preset.</p>
@@ -95,6 +95,36 @@
 </dl>
 <p>With a simplified base export rate equal to the market price, one exported kWh at €0.06/kWh earns €0.06 base plus €0.03 bonus: €0.09 total. Outside the window or after the cap, it earns €0.06. If two kWh are exported with only one kWh of quota left, the base is €0.12 and the bonus €0.03: €0.15 total. Use the same price/VAT basis throughout.</p>
 <p>NextEnergy excludes stored battery energy from the bonus. This app counts all grid export towards the cap. Source exclusions cannot be applied. This example is not an exact supplier preset when those exclusions affect settlement. A changed price rule within the same contract retains used volume.</p>
+</section>
+<section id="bonus-budget-panel" role="tabpanel" aria-labelledby="bonus-budget-tab" tabindex="0" hidden>
+<h3>Budget Energie ZonneBonus: From 2027</h3>
+<p>The base export payment remains <code>market</code> in the price rule. Keep your signed import formula there. These action terms do not specify a complete import tariff.</p>
+<p>Based on the action terms dated 20 October 2026. The bonus begins on 1 January 2027 and pays 30.0% of a positive exchange price, capped at a price of €0.20/kWh. Check your own eligibility and current terms. This is an example, not an automatically maintained supplier preset.</p>
+<dl>
+<dt>Contract starts</dt><dd><code class="example-value">2026-06-01</code><p>Example original start of dynamic supply. Keep this date for the January price rule.</p></dd>
+<dt>Price rule starts</dt><dd><code class="example-value">2027-01-01</code><p>Add a new rule with the bonus from this date. The earlier June rule has no bonus. The first bonus allowance excludes all export before January.</p></dd>
+
+<dt>Extra export rate</dt><dd><code class="example-value">0.30 * min(max(market, 0), 0.20)</code><p>No extra payment at zero or negative prices. The maximum extra payment is €0.06/kWh. At market €0.10/kWh, one eligible kWh earns €0.03 bonus and €0.13 total. At market €0.25/kWh, it earns €0.06 bonus and €0.31 total.</p></dd>
+<dt>Annual export cap</dt><dd><code class="example-value">5000 kWh</code><p>The planner counts all grid export from the bonus start towards this cap, including unpaid hours and battery export. Supplier source exclusions are not reproduced. The first allowance runs from 1 January until 1 June 2027 in this example.</p></dd>
+<dt>Annual reset</dt><dd><code class="example-value">Contract anniversary</code><p>The next 5,000 kWh allowance starts on 1 June 2027, then each contract anniversary. A later price rule does not restart the allowance.</p></dd>
+<dt>Paid window</dt><dd><code class="example-value">Monthly schedule</code><p>Use the following local hours in the Home Assistant installation timezone. Start is included and end is excluded.</p></dd>
+</dl>
+<table><thead><tr><th>Month</th><th>Start</th><th>End</th></tr></thead><tbody>
+<tr><td>January</td><td>09:00</td><td>17:00</td></tr>
+<tr><td>February</td><td>08:00</td><td>18:00</td></tr>
+<tr><td>March</td><td>07:00</td><td>19:00</td></tr>
+<tr><td>April</td><td>07:00</td><td>21:00</td></tr>
+<tr><td>May</td><td>06:00</td><td>21:00</td></tr>
+<tr><td>June</td><td>05:00</td><td>22:00</td></tr>
+<tr><td>July</td><td>06:00</td><td>22:00</td></tr>
+<tr><td>August</td><td>06:00</td><td>21:00</td></tr>
+<tr><td>September</td><td>07:00</td><td>20:00</td></tr>
+<tr><td>October</td><td>08:00</td><td>19:00</td></tr>
+<tr><td>November</td><td>08:00</td><td>17:00</td></tr>
+<tr><td>December</td><td>09:00</td><td>17:00</td></tr>
+</tbody></table>
+<dl><dt>Prevent battery export during paid window</dt><dd><code class="example-value">Enabled</code><p>The terms prohibit using a battery to obtain more bonus. This planning restriction allows batteries to cover residual local demand, but forbids discharge from any battery while the installation exports to the grid and bonus allowance remains at the start of the planning interval. After the allowance is used, battery export is allowed from the next interval until fresh allowance restores protection. It does not identify the source of actual export or control your hardware. Your inverter or Home Assistant automation must enforce the restriction using live measurements.</p></dd></dl>
+<p>Budget settles the bonus on the annual or final bill and may amend or end the action. Missing supplier meter data and supplier estimates are not reproduced by this planner. Check the supplier bill.</p>
 </section>
 <form method="dialog"><button autofocus>Close</button></form>
 </dialog>

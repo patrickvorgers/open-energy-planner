@@ -368,7 +368,10 @@ def test_48_hour_billing_refinement_keeps_120_commands(tmp_path, window):
 def test_contract_year_boundary_and_future_reset_keep_measured_initial_volume(tmp_path):
     """An October-21 contract year resets tomorrow. The current measured 99.6 kWh remain until that instant."""
     config, report, book = measured_inputs()
-    current = rule(reset_month=10, reset_day=21, timezone="UTC")
+    current = replace(
+        rule(reset_month=10, reset_day=21, timezone="UTC"),
+        effective_from=datetime(2025, 10, 21, tzinfo=UTC),
+    )
     seed = replace(book.seeds[0], period_start=datetime(2025, 10, 21, tzinfo=UTC))
     book = replace(book, seeds=(seed,))
     future = Future(
