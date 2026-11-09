@@ -150,24 +150,56 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
 
 
 def test_corrupt_component_attribution_is_a_gap_instead_of_a_double_count(app_page):
-    """A .2-kWh device cannot be overlaid on a household load whose declared base already consumes it."""
+    """Only the first interval double counts .2 kWh. Full coverage preserves the other two independent balances."""
     page, url = app_page
     from tests.frontend.browser.helpers import balances, physical_plan
 
     plan = physical_plan()
-    step = {"start": "2026-10-23T00:00:00Z", "duration_h": 0.25, "kwh": 1}
+    plan["comparison_names"] = {"sensor.washer": "Washing machine"}
+    # Extra first-interval import also balances the corrupt 1.2-kWh breakdown.
+    # Only the independent attribution guard can reject that duplicated .2 kWh.
+    plan["expected_flows"][0]["grid_import"] = 0.2
     plan["input_snapshot"]["load_components"] = [
-        {"entity_id": None, "steps": [step]},
-        {"entity_id": "sensor.washer", "steps": [{**step, "kwh": 0.2}]},
+        {
+            "entity_id": None,
+            "steps": [
+                {"start": "2026-10-23T00:00:00Z", "duration_h": 0.25, "kwh": 1},
+                {"start": "2026-10-23T00:15:00Z", "duration_h": 1, "kwh": 1.5},
+                {"start": "2026-10-23T01:15:00Z", "duration_h": 1, "kwh": 0.8},
+            ],
+        },
+        {
+            "entity_id": "sensor.washer",
+            "steps": [
+                {"start": "2026-10-23T00:00:00Z", "duration_h": 0.25, "kwh": 0.2},
+                {"start": "2026-10-23T00:15:00Z", "duration_h": 1, "kwh": 0.5},
+                {"start": "2026-10-23T01:15:00Z", "duration_h": 1, "kwh": 0.2},
+            ],
+        },
     ]
     result = balances(page, url, plan)[0]
-    assert result["missing"] == 3
-    assert all(
-        interval["value"] is None
+    assert result["missing"] == 1
+    bars = {
+        series["name"]: [interval["value"] for interval in series["intervals"]]
         for series in result["series"]
         if series.get("type") == "bar"
-        for interval in series["intervals"]
-    )
+    }
+    assert all(values[0] is None for values in bars.values())
+    expected = {
+        "Used solar: DC": [0, 0],
+        "Grid import: AC": [0.56, 3],
+        "Battery discharge: DC": [2, 0],
+        "Household base: AC": [-1.5, -0.8],
+        "Grid export: AC": [0, 0],
+        "Battery charge: DC": [0, -1.44],
+        "Conversion losses": [-0.56, -0.56],
+        "Washing machine: Expected": [-0.5, -0.2],
+    }
+    assert set(bars) == set(expected)
+    for name, values in expected.items():
+        assert bars[name][1:] == pytest.approx(values)
+    assert sum(values[1] for values in bars.values()) == pytest.approx(0, abs=0.00001)
+    assert sum(values[2] for values in bars.values()) == pytest.approx(0, abs=0.00001)
 
 
 def test_real_component_gaps_overlaps_and_invalid_quantities_remain_unavailable(app_page):

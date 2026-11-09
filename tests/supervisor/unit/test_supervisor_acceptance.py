@@ -629,3 +629,76 @@ def test_retained_state_detects_replaced_or_missing_administration_token(tmp_pat
     token.unlink()
     with pytest.raises(FileNotFoundError):
         supervisor_smoke.retained_state()
+
+
+def test_pending_forecast_sqlite_error_keeps_bounded_message_and_original_cause(
+    tmp_path, monkeypatch
+):
+    """A real missing archive table becomes a retryable bounded error with its SQLite cause retained."""
+    directory = tmp_path / "apps/data" / supervisor_smoke.APP_SLUG
+    directory.mkdir(parents=True)
+    sqlite3.connect(directory / "archive.sqlite3").close()
+    monkeypatch.setattr(supervisor_smoke, "SUPERVISOR_ROOT", tmp_path)
+    with pytest.raises(RuntimeError, match="Pending forecast captures are not ready") as caught:
+        supervisor_smoke.pending_model_forecasts()
+    assert isinstance(caught.value.__cause__, sqlite3.OperationalError)
+    assert str(caught.value) == "Pending forecast captures are not ready."
+    assert "no such table" not in str(caught.value)
+
+
+@pytest.mark.parametrize("temporary_failure", ["missing_table", "locked"])
+def test_wait_for_retries_actual_pending_forecast_sqlite_read(
+    tmp_path, monkeypatch, temporary_failure
+):
+    """The existing poll retries an actual missing-table or locked read and accepts the repaired archive."""
+    directory = tmp_path / "apps/data" / supervisor_smoke.APP_SLUG
+    directory.mkdir(parents=True)
+    connect = sqlite3.connect
+    writer = connect(directory / "archive.sqlite3")
+    if temporary_failure == "locked":
+        writer.execute("CREATE TABLE oep_documents (namespace TEXT, name TEXT, payload TEXT)")
+        writer.commit()
+        writer.execute("BEGIN EXCLUSIVE")
+    expected = {"baseline": {"model": "weekday-hour-v2"}}
+    failures, repairs = [], []
+
+    def immediate_lock_check(*arguments, **keywords):
+        """Expose the real SQLite lock immediately without changing production connection budgets."""
+        return connect(*arguments, **keywords, timeout=0)
+
+    def read_pending():
+        """Observe retryable causes independently of the returned model document."""
+        try:
+            return supervisor_smoke.pending_model_forecasts()
+        except RuntimeError as error:
+            failures.append(type(error.__cause__))
+            raise
+
+    def repair_after_first_attempt(_seconds):
+        """Publish the archive schema/row only after the first genuine failed read."""
+        assert not repairs
+        repairs.append(temporary_failure)
+        if temporary_failure == "missing_table":
+            writer.execute("CREATE TABLE oep_documents (namespace TEXT, name TEXT, payload TEXT)")
+        writer.execute(
+            "INSERT INTO oep_documents VALUES (?, ?, ?)",
+            (
+                "demand",
+                "accuracy-pending-fixture.json",
+                json.dumps({"capture": {"forecasts": expected}}),
+            ),
+        )
+        writer.commit()
+
+    monkeypatch.setattr(supervisor_smoke, "SUPERVISOR_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor_smoke.sqlite3, "connect", immediate_lock_check)
+    # The repair hook bounds retries independently of host scheduling delays.
+    monkeypatch.setattr(provision_supervisor, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(provision_supervisor, "sleep", repair_after_first_attempt)
+    try:
+        actual = provision_supervisor.wait_for(read_pending, "retained pending captures", timeout=1)
+    finally:
+        writer.close()
+    assert actual == [expected]
+    assert failures == [sqlite3.OperationalError]
+    assert repairs == [temporary_failure]

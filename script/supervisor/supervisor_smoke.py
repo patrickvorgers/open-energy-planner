@@ -155,14 +155,21 @@ def pending_model_forecasts():
 
     These are actual app-written predictions. Reading them neither creates
     historical forecasts nor supplies admission evidence for a completed day.
+
+    Raises:
+        RuntimeError: SQLite is not readable yet. The existing readiness poll
+            can retry while retaining the original database error as its cause.
     """
     database = SUPERVISOR_ROOT / "apps/data" / APP_SLUG / "archive.sqlite3"
-    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
-        connection.execute("PRAGMA query_only=ON")
-        rows = connection.execute(
-            "SELECT payload FROM oep_documents WHERE namespace = ? AND name LIKE ? ORDER BY name",
-            ("demand", "accuracy-pending-%"),
-        ).fetchall()
+    try:
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            rows = connection.execute(
+                "SELECT payload FROM oep_documents WHERE namespace = ? AND name LIKE ? ORDER BY name",
+                ("demand", "accuracy-pending-%"),
+            ).fetchall()
+    except sqlite3.Error as error:
+        raise RuntimeError("Pending forecast captures are not ready.") from error
     return [json.loads(row[0])["capture"]["forecasts"] for row in rows]
 
 
