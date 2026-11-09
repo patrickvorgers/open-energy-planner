@@ -10,12 +10,8 @@ from script.ci.pytest_suites import pytest_arguments
 
 
 def worker_arguments(directory, worker, *, collect_only=False):
-    """Use one image and exact pytest selection with a private artifact mount per worker."""
+    """Describe one image and exact pytest selection without changing the worker's output files."""
     location = worker_directory(directory, worker).resolve()
-    location.mkdir(parents=True, exist_ok=True)
-    stale = ("browser-collected.json",) if collect_only else ("browser-executed.json", "ui.xml")
-    for name in stale:
-        (location / name).unlink(missing_ok=True)
     return [
         "run",
         "--no-deps",
@@ -31,12 +27,23 @@ def worker_arguments(directory, worker, *, collect_only=False):
     ]
 
 
+def prepare_worker_reports(directory, worker, *, collect_only=False):
+    """Create the private mount and clear only the evidence about to be produced by a real launch."""
+    location = worker_directory(directory, worker).resolve()
+    location.mkdir(parents=True, exist_ok=True)
+    stale = ("browser-collected.json",) if collect_only else ("browser-executed.json", "ui.xml")
+    for name in stale:
+        (location / name).unlink(missing_ok=True)
+
+
 def run_workers(compose):
     """Allow completion only after every worker has exited and its actual cases are verified."""
     directory = Path("results/ci")
     records = collections(directory)
     (directory / "ui.xml").unlink(missing_ok=True)
     arguments = [worker_arguments(directory, worker) for worker in range(BROWSER_WORKERS)]
+    for worker in range(BROWSER_WORKERS):
+        prepare_worker_reports(directory, worker)
 
     def launch(worker):
         """Keep each process duration, exit status and original artifact location visible."""

@@ -13,6 +13,7 @@ import pytest
 
 from script.ci import browser_suites, check_browser
 from script.ci.pytest_suites import pytest_arguments
+from tests.ci.browser_evidence import observe_browser_boundary
 
 ROOT = Path(__file__).resolve().parents[2]
 IDENTIFIERS = [f"tests/frontend/browser/test_cases.py::test_case[{index}]" for index in range(4)]
@@ -26,6 +27,59 @@ EXPECTED_CAUSES = {
     "duplicate": (ValueError, "Duplicated browser execution identity"),
     "skip": (ValueError, "Unsuccessful browser execution"),
 }
+
+
+@pytest.fixture
+def worker_artifact_sentinels(tmp_path):
+    """Keep real collection, execution and JUnit bytes in an independently owned temporary parent directory."""
+    directory = tmp_path / "results/ci"
+    paths = [directory / "ui.xml"] + [
+        directory / f"browser-{worker}" / name
+        for worker in (0, 1)
+        for name in ("browser-collected.json", "browser-executed.json", "ui.xml")
+    ]
+    expected = {}
+    for index, path in enumerate(paths):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        expected[path] = f"parent evidence {index}".encode()
+        path.write_bytes(expected[path])
+    return directory, expected
+
+
+@pytest.mark.parametrize("collect_only", [False, True])
+def test_worker_argument_construction_preserves_existing_parent_evidence(
+    worker_artifact_sentinels, collect_only
+):
+    """Inspecting either worker command cannot remove or rewrite any parent proof file."""
+    directory, expected = worker_artifact_sentinels
+    for worker in (0, 1):
+        check_browser.worker_arguments(directory, worker, collect_only=collect_only)
+    assert {path: path.read_bytes() for path in expected} == expected
+
+
+@pytest.mark.parametrize("collect_only", [False, True])
+def test_worker_argument_construction_does_not_create_directories(tmp_path, collect_only):
+    """Constructing commands for an unused output path leaves the filesystem unchanged."""
+    directory = tmp_path / "not-created"
+    for worker in (0, 1):
+        check_browser.worker_arguments(directory, worker, collect_only=collect_only)
+    assert not directory.exists()
+
+
+def test_mock_browser_boundary_preserves_parent_evidence(
+    tmp_path, worker_artifact_sentinels, monkeypatch
+):
+    """Mocked controller commands remain observable without deleting the real parent run's artifacts."""
+    _, expected = worker_artifact_sentinels
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        check_browser.subprocess, "run", lambda command, **options: calls.append(command)
+    )
+    observe_browser_boundary(monkeypatch)
+    check_browser.run_workers(["docker", "compose"])
+    assert len(calls) == 2
+    assert {path: path.read_bytes() for path in expected} == expected
 
 
 def pytest_child(project, worker, *, collect_only, arguments=()):
@@ -186,6 +240,7 @@ def test_browser_workers_overlap_and_join_before_failure_or_combination(
     """Both bounded containers launch and exit before failure propagates or complete reports are combined."""
     monkeypatch.chdir(tmp_path)
     shutil.copytree(actual_browser_reports, tmp_path / "results/ci")
+    (tmp_path / "results/ci/ui.xml").write_bytes(b"stale canonical report")
     started = [Event(), Event()]
     finished = [Event(), Event()]
 
@@ -198,6 +253,13 @@ def test_browser_workers_overlap_and_join_before_failure_or_combination(
         assert command[command.index("--volume") + 1] == (
             f"{tmp_path / 'results/ci' / f'browser-{worker}'}:/workspace/results/ci"
         )
+        location = tmp_path / "results/ci" / f"browser-{worker}"
+        assert not (tmp_path / "results/ci/ui.xml").exists()
+        assert not (location / "browser-executed.json").exists()
+        assert not (location / "ui.xml").exists()
+        assert (location / "browser-collected.json").read_bytes() == (
+            actual_browser_reports / f"browser-{worker}" / "browser-collected.json"
+        ).read_bytes()
         started[worker].set()
         assert started[1 - worker].wait(5)
         for name in ("browser-executed.json", "ui.xml"):

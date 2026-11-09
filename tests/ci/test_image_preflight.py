@@ -103,6 +103,47 @@ def test_packaged_collection_preserves_diagnostics_and_stops_on_failure(
         assert summary.read_text().count("**PASS**") == 3
 
 
+@pytest.mark.parametrize("existing_reports", [False, True])
+def test_real_browser_collection_prepares_only_its_collection_file(
+    monkeypatch, tmp_path, existing_reports
+):
+    """The real collector creates its mount or clears stale collection without changing execution evidence."""
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "results/ci"
+    preserved = {}
+    if existing_reports:
+        for worker in (0, 1):
+            location = output / f"browser-{worker}"
+            location.mkdir(parents=True)
+            (location / "browser-collected.json").write_bytes(b"stale collection")
+            for name in ("browser-executed.json", "ui.xml"):
+                path = location / name
+                preserved[path] = f"previous execution {worker} {name}".encode()
+                path.write_bytes(preserved[path])
+    identities = [
+        "tests/frontend/browser/test_sentinel.py::test_first",
+        "tests/frontend/browser/test_sentinel.py::test_second",
+    ]
+
+    def run(command, **options):
+        """Observe preparation immediately before the real collection subprocess boundary."""
+        if "--browser-shard" in command:
+            worker = int(command[command.index("--browser-shard") + 1])
+            location = output / f"browser-{worker}"
+            assert location.is_dir()
+            assert not (location / "browser-collected.json").exists()
+            assert {path: path.read_bytes() for path in preserved} == preserved
+            (location / "browser-collected.json").write_text(
+                json.dumps({"worker": worker, "all": identities, "selected": [identities[worker]]}),
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(command, 0, "Collection completed\n", "")
+
+    monkeypatch.setattr(check_images.subprocess, "run", run)
+    check_images.check_images(["docker", "compose"], "oep-test", "selected:browser,ci", {"browser"})
+    assert {path: path.read_bytes() for path in preserved} == preserved
+
+
 def test_inconsistent_browser_inventory_has_concrete_failure_diagnostics(monkeypatch, tmp_path):
     """Individually successful collectors with incompatible inventories fail visibly before execution."""
     monkeypatch.chdir(tmp_path)

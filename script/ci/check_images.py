@@ -8,7 +8,7 @@ from pathlib import Path
 from time import monotonic
 
 from script.ci.browser_suites import BROWSER_WORKERS, collections
-from script.ci.check_browser import worker_arguments
+from script.ci.check_browser import prepare_worker_reports, worker_arguments
 from script.ci.ci_scope import FUNCTIONAL_DATABASE_SUITES, PYTEST_AREAS, matrix_profile
 from script.ci.ha_suites import HA_WORKERS
 from script.ci.pytest_suites import pytest_arguments
@@ -97,6 +97,7 @@ def check_images(compose, project, profile, suites):
         if service == "ui-worker":
             worker = int(arguments[arguments.index("--browser-shard") + 1])
             command = [*compose, *worker_arguments(output, worker, collect_only=True)]
+            prepare_worker_reports(output, worker, collect_only=True)
         print(f"::group::Packaged image check: {suite} ({image})", flush=True)
         started = monotonic()
         result = subprocess.run(command, capture_output=True, text=True, check=False)
