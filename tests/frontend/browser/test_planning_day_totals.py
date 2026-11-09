@@ -10,6 +10,20 @@ from tests.frontend.browser.documentation_fixture import START
 from tests.frontend.browser.helpers import TOKEN
 
 
+def scenario_snapshots(page, url):
+    """Read original per-scenario kWh as an independent oracle for displayed daily totals."""
+    plan_id = page.locator("#plan-version").input_value()
+    comparison = page.request.get(
+        url + "/v1/plans/" + plan_id + "/comparison",
+        headers={"Authorization": "Bearer " + TOKEN},
+    ).json()
+    return {
+        "plan-chart": comparison["plan"],
+        "self-consumption-chart": comparison["scenarios"]["self_consumption"]["chart"],
+        "reference-chart": comparison["scenarios"]["without_battery"]["chart"],
+    }
+
+
 @pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
 def test_all_planning_dates_expose_daily_energy(app_page):
     """Hover and keyboard focus show scenario-specific kWh without summing battery percentages."""
@@ -19,16 +33,7 @@ def test_all_planning_dates_expose_daily_energy(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    plan_id = page.locator("#plan-version").input_value()
-    comparison = page.request.get(
-        url + "/v1/plans/" + plan_id + "/comparison",
-        headers={"Authorization": "Bearer " + TOKEN},
-    ).json()
-    snapshots = {
-        "plan-chart": comparison["plan"],
-        "self-consumption-chart": comparison["scenarios"]["self_consumption"]["chart"],
-        "reference-chart": comparison["scenarios"]["without_battery"]["chart"],
-    }
+    snapshots = scenario_snapshots(page, url)
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
         card = page.locator("#" + identity).locator("..")
         heading = card.get_by_role("button", name="Energy totals for", exact=False).first
@@ -101,6 +106,71 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         expect(tooltip.locator("tr").filter(has_text="Grid import: AC")).to_have_count(0)
         heading.press("Escape")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
+@pytest.mark.parametrize("identity", ["plan-chart", "self-consumption-chart", "reference-chart"])
+def test_switching_planning_dates_keeps_the_new_summary_open(app_page, identity):
+    """A click or tap changes date ownership without immediately dismissing the new day's totals."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    snapshots = scenario_snapshots(page, url)
+    snapshot = snapshots[identity]
+    card = page.locator("#" + identity).locator("..")
+    card.evaluate("element => element.scrollIntoView({block:'center'})")
+    dates = card.get_by_role("button", name="Energy totals for", exact=False)
+    first, second = dates.nth(0), dates.nth(1)
+    tooltip = page.locator("#" + identity + "-tooltip")
+    first.focus()
+    expect(tooltip).to_be_visible()
+    if page.viewport_size["width"] < 500:
+        second.tap()
+    else:
+        second.click()
+    expect(tooltip).to_be_visible()
+    expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
+        "Energy totals: " + second.get_attribute("aria-label").removeprefix("Energy totals for ")
+    )
+    expect(first).not_to_have_attribute("aria-describedby", identity + "-tooltip")
+    expect(second).to_have_attribute("aria-describedby", identity + "-tooltip")
+    expected_import = sum(
+        flow["grid_import"]
+        for interval, flow in zip(
+            snapshot["input_snapshot"]["problem"]["intervals"],
+            snapshot["expected_flows"],
+            strict=True,
+        )
+        if START + timedelta(days=1)
+        <= datetime.fromisoformat(interval["start"])
+        < START + timedelta(days=2)
+    )
+    displayed = tooltip.locator("tr").filter(has_text="Grid import: AC").locator("td").nth(1)
+    assert float(displayed.inner_text().replace(",", "")) == pytest.approx(
+        expected_import, abs=0.00051
+    )
+    if page.viewport_size["width"] < 500:
+        second.tap()
+    else:
+        second.click()
+    expect(tooltip).to_be_hidden()
+    expect(second).not_to_have_attribute("aria-describedby", identity + "-tooltip")
+    if page.viewport_size["width"] < 500:
+        first.tap()
+    else:
+        first.click()
+    expect(tooltip).to_be_visible()
+    expect(first).to_have_attribute("aria-describedby", identity + "-tooltip")
+    expect(second).not_to_have_attribute("aria-describedby", identity + "-tooltip")
+    first.press("Tab")
+    expect(second).to_be_focused()
+    expect(tooltip).to_be_visible()
+    second.press("Escape")
+    expect(tooltip).to_be_hidden()
+    page.mouse.move(0, 0)
 
 
 @pytest.mark.parametrize(

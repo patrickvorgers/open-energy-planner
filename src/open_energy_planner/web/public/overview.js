@@ -157,18 +157,21 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     node.style.top = `${Math.max(margin, Math.min(bounds.top + tooltip.caretY + margin, window.innerHeight - node.offsetHeight - margin))}px`;
 }
 /** Make Planning dates inspectable by pointer, keyboard and touch using the existing balance tooltip. */
-function planningDayHeading(instance, series, tooltip, heading, {date, start, end, full}) {
-    tooltip.hidden = true;
+function planningDayHeading(instance, series, tooltip, summary, heading, {date, start, end, full}) {
     const button = document.createElement("button");
     button.type = "button"; button.className = "chart-day-summary";
     button.setAttribute("aria-label", `Energy totals for ${full}`);
     button.append(...heading.childNodes); heading.append(button); heading.removeAttribute("title");
-    let hovered = false, focused = false, dismissed = false, pointerWasOpen = false;
+    let hovered = false, focused = false, dismissed = false;
+    /** A late blur from the previous date must not dismiss its successor's content. */
     const hide = () => {
-        tooltip.hidden = true; button.removeAttribute("aria-describedby");
+        button.removeAttribute("aria-describedby");
+        if (summary.owner !== button) return;
+        summary.owner = null; summary.pinned = false; tooltip.hidden = true;
         tooltip.classList.remove("chart-tooltip-day");
         tooltip.style.maxHeight = "";
     };
+    /** Read current visible flows and transfer the accessible description to this date only. */
     const show = () => {
         if (dismissed) return;
         const intervals = series.find(entry => entry.type === "bar" && entry.intervals.length)?.intervals;
@@ -185,6 +188,10 @@ function planningDayHeading(instance, series, tooltip, heading, {date, start, en
             `From ${when(from)} to ${when(to)}.`, "Supply is positive. Use is negative."];
         if (items.some(item => item.parsed.y == null)) notes.push("A dash means that energy is unavailable because interval evidence is missing or inconsistent.");
         if (!items.length) notes.push("All energy series are hidden. Show a series in the legend to see its total.");
+        if (summary.owner !== button) {
+            summary.owner?.removeAttribute("aria-describedby");
+            summary.owner = button; summary.pinned = false;
+        }
         const bounds = button.getBoundingClientRect(), canvas = instance.canvas.getBoundingClientRect();
         renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, title: [`Energy totals: ${full}`],
             afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
@@ -205,8 +212,11 @@ function planningDayHeading(instance, series, tooltip, heading, {date, start, en
     });
     button.addEventListener("focus", () => { focused = true; dismissed = false; show(); });
     button.addEventListener("blur", () => { focused = false; if (!hovered) hide(); });
-    button.addEventListener("pointerdown", () => { pointerWasOpen = !tooltip.hidden; });
-    button.addEventListener("click", event => { dismissed = event.detail ? pointerWasOpen : !tooltip.hidden; if (dismissed) hide(); else show(); });
+    button.addEventListener("click", () => {
+        dismissed = summary.owner === button && summary.pinned && !tooltip.hidden;
+        if (dismissed) hide();
+        else { show(); summary.pinned = true; }
+    });
     button.addEventListener("keydown", event => { if (event.key === "Escape") { dismissed = true; hide(); } });
 }
 /** Linear time spacing needs interval-specific widths: an hour must occupy four quarter-hour widths. */
@@ -242,15 +252,19 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
     $(`${id}-tooltip`)?.remove();
     const tooltip = document.createElement("div"); tooltip.id = `${id}-tooltip`; tooltip.className = "chart-tooltip";
     tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); document.body.append(tooltip);
+    const daySummary = {owner: null, pinned: false};
+    /** Shared dismissal also revokes date ownership when scrolling or interval inspection replaces it. */
+    const hideTooltip = () => {
+        tooltip.hidden = true;
+        daySummary.owner?.removeAttribute("aria-describedby");
+        daySummary.owner = null; daySummary.pinned = false;
+    };
     const tooltipEvents = new AbortController();
     document.addEventListener("keydown", event => {
-        if (event.key === "Escape") {
-            tooltip.hidden = true;
-            document.querySelector(`[aria-describedby="${tooltip.id}"]`)?.removeAttribute("aria-describedby");
-        }
+        if (event.key === "Escape") hideTooltip();
     }, {signal: tooltipEvents.signal});
     window.addEventListener("scroll", event => {
-        if (!tooltip.contains(event.target)) tooltip.hidden = true;
+        if (!tooltip.contains(event.target)) hideTooltip();
     }, {capture: true, signal: tooltipEvents.signal});
     const canvas = $(id), legend = $(`${id}-legend`);
     legend.replaceChildren();
@@ -266,7 +280,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets}, plugins: [intervalWidths, calendarDays, {id: "ownedTooltip", afterDestroy() { tooltipEvents.abort(); tooltip.remove(); }}],
+        type: "line", data: {datasets}, plugins: [intervalWidths, calendarDays, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
             interaction: {mode: "nearest", axis: "x", intersect: false},
             onHover: (event, _elements, instance) => {
@@ -276,7 +290,8 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
                         ? null : instance.scales.x.getValueForPixel(event.x);
                 }
             },
-            plugins: {calendarDays: {utc: utcDays, onHeading: balance ? (instance, heading, day) => planningDayHeading(instance, series, tooltip, heading, day) : null}, valueAxisHeadroom: {group: ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id) ? "planning-comparison" : null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+            plugins: {calendarDays: {utc: utcDays, onHeading: balance ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id) ? "planning-comparison" : null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+                hideTooltip();
                 const time = balanceTime; balanceTime = null;
                 renderTooltip(context, tooltip, balance, time);
             }, callbacks: {
