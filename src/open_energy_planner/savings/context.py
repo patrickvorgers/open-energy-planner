@@ -10,6 +10,51 @@ from ..installation.valuation import TerminalValuation
 from ..optimization.domain import Battery, Interval
 
 
+def appliance_schedule(plan, *, immediate=False):
+    """Project the same acknowledged cycles at their frozen or immediate reference starts."""
+    from open_energy_planner.appliances.cycles.model import CycleProfile
+
+    data = plan["input_snapshot"]["problem"]
+    intervals = data["intervals"]
+    schedules = {row["task_id"]: row for row in plan.get("appliance_schedule", ())}
+    result = []
+    for work in data.get("appliances", ()):
+        if not immediate and work["task_id"] not in schedules:
+            continue
+        cycle = CycleProfile(
+            tuple(work["profile"]["power_w"]),
+            work["profile"]["samples"],
+            work["profile"]["evidence"],
+        )
+        start = (
+            datetime.fromisoformat(work["fixed_start"])
+            if work.get("fixed_start")
+            else max(
+                datetime.fromisoformat(work["ready_at"]),
+                datetime.fromisoformat(intervals[0]["start"]),
+            )
+            if immediate
+            else datetime.fromisoformat(schedules[work["task_id"]]["start"])
+        )
+        result.append(
+            {
+                "task_id": work["task_id"],
+                "entity_id": work["entity_id"],
+                "start": start.isoformat(),
+                "end": (start + timedelta(seconds=cycle.duration_seconds)).isoformat(),
+                "interval_kwh": [
+                    cycle.energy(
+                        start,
+                        datetime.fromisoformat(step["start"]),
+                        datetime.fromisoformat(step["start"]) + timedelta(hours=step["duration_h"]),
+                    )
+                    for step in intervals
+                ],
+            }
+        )
+    return result
+
+
 def physical_context(plan, *, immediate_appliances=False):
     """Read only installation physics. Tariffs, counter states and measurements have separate owners."""
     data = plan["input_snapshot"]["problem"]
@@ -40,34 +85,13 @@ def physical_context(plan, *, immediate_appliances=False):
             for step, flow in zip(intervals, flows, strict=True)
         )
     if data.get("appliances"):
-        from open_energy_planner.appliances.cycles.model import CycleProfile
-
-        schedules = {row["task_id"]: row for row in plan.get("appliance_schedule", [])}
-        for work in data["appliances"]:
-            if not immediate_appliances and work["task_id"] not in schedules:
-                continue
-            cycle = CycleProfile(
-                tuple(work["profile"]["power_w"]),
-                work["profile"]["samples"],
-                work["profile"]["evidence"],
+        schedules = appliance_schedule(plan, immediate=immediate_appliances)
+        intervals = tuple(
+            replace(
+                step, load_kwh=step.load_kwh + sum(row["interval_kwh"][index] for row in schedules)
             )
-            start = (
-                datetime.fromisoformat(work["fixed_start"])
-                if work.get("fixed_start")
-                else max(datetime.fromisoformat(work["ready_at"]), intervals[0].start)
-                if immediate_appliances
-                else datetime.fromisoformat(schedules[work["task_id"]]["start"])
-            )
-            intervals = tuple(
-                replace(
-                    step,
-                    load_kwh=step.load_kwh
-                    + cycle.energy(
-                        start, step.start, step.start + timedelta(hours=step.duration_h)
-                    ),
-                )
-                for step in intervals
-            )
+            for index, step in enumerate(intervals)
+        )
     curves = tuple(
         TerminalValuation(
             **{

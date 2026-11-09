@@ -139,6 +139,70 @@ def prepare(service, now=NOW):
     return service.prepare(snapshot(), SimpleNamespace(), now, "Europe/Amsterdam")
 
 
+def test_real_mixed_preparation_preserves_cycle_ev_thermal_ownership_through_publication(service):
+    """The real thermal-to-EV-to-cycle chain separates .7 kWh once and publishes all three owned loads."""
+    from open_energy_planner.optimization.adapters.highs import HighsSolver
+    from tests.app.ev.support.devices import CAR, POINT, SESSION, observations
+    from tests.app.ev.support.devices import catalogue as ev_catalogue
+    from tests.app.ev.support.devices import settings as ev_settings
+
+    cycle_entity = "sensor.cycle_energy"
+    discovery = catalogue()
+    charging = ev_catalogue()
+    discovery["entities"].extend(charging["entities"])
+    discovery["entities"].append({"entity_id": cycle_entity})
+    discovery["suggestions"]["consumers"].extend(charging["suggestions"]["consumers"])
+    discovery["suggestions"]["consumers"].append({"entity_id": cycle_entity, "upstream": None})
+    service.consumers.sync(discovery)
+    charging_settings = ev_settings()
+    charging_settings["vehicles"][0].update(target_soc=51, departure_time="14:00")
+    service.ev.configure(charging_settings, discovery)
+    service.ev.receive(observations(service.ev), NOW)
+    service.ev.assign(POINT, CAR, SESSION, NOW)
+    service.consumers.save(
+        (*service.consumers.selected, {"entity_id": cycle_entity, "weather_sensitive": False}),
+        service.consumers.version,
+    )
+    service.appliances.configure(cycle_entity, True)
+    service.appliances.set_manual_profile(cycle_entity, 15, 0.25, service.appliances.revision)
+    service.appliances.submit(cycle_entity, "ready-cycle", NOW, NOW + timedelta(hours=1), NOW)
+    forecasts(service)
+    component_result = service.consumers.result
+    component_result["residual_baseline"]["steps"][0]["kwh"] = 0.3
+    for entity, energy in (("sensor.charger_energy", 0.2), (cycle_entity, 0.1)):
+        forecast = deepcopy(component_result["residual_baseline"])
+        forecast["steps"][0]["kwh"] = energy
+        component_result["devices"].append(
+            {"entity_id": entity, "forecast": deepcopy(forecast), "baseline_forecast": forecast}
+        )
+    service.receive(report(service), NOW)
+    prepared = prepare(service)
+    assert (
+        len(prepared.problem.appliances)
+        == len(prepared.problem.ev_work)
+        == len(prepared.problem.thermal_work)
+        == 1
+    )
+    assert {component.entity_id for component in prepared.load_components} == {
+        None,
+        ENERGY,
+        cycle_entity,
+        "sensor.charger_energy",
+    }
+    # The .1-kWh cycle and .4-kWh boiler expectations are replaced, leaving .3 kWh of household.
+    # The .2-kWh/h charger stays for 130 s: 120 s solve + 5 s worker overhead + 5 s HA handover.
+    assert sum(interval.load_kwh for interval in prepared.problem.intervals) == pytest.approx(
+        0.3 + 0.2 * 130 / 3600
+    )
+    solved = HighsSolver().solve(prepared.problem)
+    assert solved.plan is not None, solved.stop_reason
+    costs = validate(prepared.problem, solved.plan)
+    published = plan_document(prepared, solved, costs, NOW)
+    assert len(published["appliance_schedule"]) == 1
+    assert len(published["ev_context"]["work"]) == 1
+    assert len(published["thermal_context"]["devices"]) == 1
+
+
 def test_configuration_is_immutable_and_survives_restart_without_restoring_current_actuals(service):
     """Caller mutation cannot alter durable settings. Restart restores settings but requires fresh telemetry."""
     candidate = settings()
@@ -270,7 +334,8 @@ def test_unrelated_short_history_keeps_ready_boiler_and_unmodelled_household_loa
         NOW,
         consumers.inputs(),
     )
-    assert candidate is None
+    assert candidate.model == "consumer-composite-v1"
+    assert result["status"] == "partial_history"
     assert [row["entity_id"] for row in result["devices"]] == [ENERGY]
     consumers.result = result
     service.receive(report(service), NOW)
@@ -421,7 +486,10 @@ def test_unavailable_boiler_forecast_preserves_independently_ready_ev(service, b
     assert len(prepared.problem.ev_work) == 1
     assert prepared.problem.ev_work[0].point_id == POINT
     assert prepared.problem.ev_work[0].vehicle_id == CAR
-    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(0.8)
+    ready = prepared.problem.ev_work[0].ready_at
+    # The .2-kWh/h charger expectation remains before its admitted control window.
+    expected = 0.8 + 0.2 * (ready - NOW).total_seconds() / 3600
+    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(expected)
     assert prepared.ev_evidence and prepared.appliance_evidence
     assert prepared.thermal_evidence == ()
     assert service.ev.issue is None

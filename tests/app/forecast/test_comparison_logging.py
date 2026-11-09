@@ -50,6 +50,8 @@ def test_comparison_worker_waits_for_readable_storage_before_reporting_recovery(
     )
     preferences = []
     demand = SimpleNamespace(
+        daily_selection=None,
+        consumers=SimpleNamespace(selected=()),
         configuration=SimpleNamespace(version="demand"),
         store=SimpleNamespace(issue=None),
         select_learned=preferences.append,

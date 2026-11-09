@@ -192,7 +192,7 @@ owns a unique Docker project and new private inner-engine volumes. It removes
 only those temporary resources afterward. No host Docker socket is mounted.
 
 Acceptance checks clean onboarding, automatic pairing, a real history-trained
-household baseline and individual shadow models, desktop/mobile HA ingress, unchanged warm provisioning, outer
+household baseline and fitted individual candidates, desktop/mobile HA ingress, unchanged warm provisioning, outer
 stop/start and an actual Supervisor app update. The local update uses an
 explicit test-only development version with no numbered build identity. Its app
 and integration identify the same actual source revision. Every application
@@ -216,16 +216,24 @@ Proxies and redirects are disabled. Responses are limited to 64 KiB and must
 report both HTTP and Supervisor success. Failure stops acceptance without retry
 or skipped checks. Other commands and environments retain the normal CLI.
 
-The trained heat-pump and dishwasher ridge models must remain in shadow without
-realized decision evidence. The heat-pump model must use weather features.
-The ridge models still require at least 28 days of actual hourly training data.
+At first startup, heat-pump and dishwasher forecasts retain weekday baselines
+until preserved matching local-day accuracy admits a fitted alternative. The
+Ridge models still require at least 28 days of actual hourly training data.
+Acceptance reads original pending daily captures matching the current baseline
+forecast version to verify fitted Ridge predictions and the heat-pump weather
+alternative. The selected weekday baseline itself does not use weather features.
+
 Only the disposable candidate-source app uses a test bootstrap with the existing
 offline temperature fixture. It covers 32 historical days and three future days,
 with receipt time retained as `known_at`. These temperatures are simulated.
-Real Recorder imports and production Ridge fitting, prediction and validation
-remain in use. Acceptance waits for trained Ridge identities, heat-pump weather
-features and the completed missing-laundry-history result before checking them.
-Timeout diagnostics identify each expected model and its training/weather state.
+Real Recorder imports and production fitting, prediction and validation remain
+in use. Acceptance verifies both actual training and forward-accuracy baseline
+selection. It permits additional ready EV and boiler forecasts while requiring
+consistent measurement separation. Timeout diagnostics identify the expected
+models' training and weather-readiness states. Temporary SQLite read failures
+raise a bounded readiness message through the existing retry poll. Raw SQLite
+messages are excluded from formatted tracebacks. The original exception remains
+available only through the programmatic `__context__` attribute.
 
 The normal Supervisor bootstrap still owns configuration, authentication,
 privilege drop and runtime startup. Release packaging and numbered installation
@@ -241,12 +249,17 @@ A just-completed midnight reference can still be awaiting Recorder compilation.
 Acceptance checks the shared cumulative-sum reference period
 without treating the provisional scale as proof of machine-learning training.
 New washing-machine and dryer meters do not have seven complete days of history.
-Their absence must keep the full composition unavailable and the history-trained
-household baseline active. Synthetic cycle profiles are not forecasting history.
-The existing independent chronological replay cases run unchanged. They prove
-that future-issued forecasts cannot become historical knowledge, three measured
-0.40 gains permit promotion and a later 0.10 loss restores the baseline. Seeded
-history alone does not establish economic benefit or authorize promotion.
+Their expected use stays inside the household remainder. Ready devices are
+separated, and their baselines plus that remainder form a usable partial
+composition. Synthetic cycle profiles are not forecasting history.
+
+The existing independent chronological financial replay cases run unchanged.
+They prove that future-issued forecasts cannot become historical knowledge,
+three measured 0.40 gains permit research-challenger promotion and a later 0.10
+loss restores its baseline. This financial research seam does not replace
+production local-day forecast-accuracy admission. Seeded history alone does not
+establish forward forecast accuracy or economic benefit and cannot authorize
+learned-model promotion.
 
 The update acceptance waits for Supervisor to report the app stopped before taking its database
 baseline and again before comparing every table after updating. A successful stop response alone

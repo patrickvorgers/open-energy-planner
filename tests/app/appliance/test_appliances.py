@@ -411,6 +411,7 @@ def test_task_projection_replaces_device_forecast_once_and_retains_exact_inputs(
                     (0.5,) * 3 + (0.7,) * 3,
                     ("first",) * 3 + ("second",) * 3,
                     0.4,
+                    prevent_battery_export=(True,) * 3 + (False,) * 3,
                 ),
             ),
         )
@@ -434,6 +435,7 @@ def test_task_projection_replaces_device_forecast_once_and_retains_exact_inputs(
             == 24
         )
         assert rule.periods == ("first",) * 12 + ("second",) * 12
+        assert rule.prevent_battery_export == (True,) * 12 + (False,) * 12
         settled = settle(rule, (0.1,) * 24)
         assert sum(settled.quota_kwh) == pytest.approx(0.8), (
             "Only .1 old-period quota and .7 reset-period quota remain"

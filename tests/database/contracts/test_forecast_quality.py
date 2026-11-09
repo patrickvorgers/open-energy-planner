@@ -714,7 +714,7 @@ def test_frozen_household_device_and_pv_evidence_survives_restart_without_hindsi
     "scheduled_task", [False, True], ids=["baseline-exclusion", "appliance-task"]
 )
 def test_refinement_retains_original_household_and_component_archives(archive, scheduled_task):
-    """Keep original 1/.7-kWh hourly forecasts through task/exclusion refinement. Six .3-kWh residual hours total 1.8. Controlled hours stay unscored."""
+    """Keep original 1/.7-kWh forecasts. A .83-kWh task leaves 5.17 expected kWh, while full exclusion leaves 1.8. Controlled hours stay unscored."""
     from dataclasses import replace
     from types import SimpleNamespace
 
@@ -800,7 +800,9 @@ def test_refinement_retains_original_household_and_component_archives(archive, s
         excluded_entities=() if scheduled_task else (ENTITY,),
     )
     assert tasks.issue is None
-    assert sum(step.load_kwh for step in refined_snapshot.problem.intervals) == pytest.approx(1.8)
+    assert sum(step.load_kwh for step in refined_snapshot.problem.intervals) == pytest.approx(
+        5.17 if scheduled_task else 1.8
+    )
     device_source = {**SOURCE, "entity_id": ENTITY, "version": "b" * 64}
     receipt(archive, [(-1, 10), (0, 12)])
     receipt(archive, [(-1, 10), (0, 10.5)], source=device_source)

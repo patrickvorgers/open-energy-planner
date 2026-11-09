@@ -228,8 +228,8 @@ def test_later_bad_day_revokes_admission_and_keeps_original_evidence(tmp_path):
     )
 
 
-def test_nonlinear_composition_cannot_borrow_ridge_financial_preference(tmp_path):
-    """A validated weather component still needs financial evidence for its changed composition family."""
+def test_composition_cannot_borrow_legacy_weather_or_financial_preference(tmp_path):
+    """Legacy weather and financial evidence cannot activate a component under the new local-day policy."""
     from open_energy_planner.appliances.forecasting import parse_selection
     from open_energy_planner.demand.runtime import DemandRuntime
     from tests.app.demand.test_consumers import catalogue
@@ -254,10 +254,10 @@ def test_nonlinear_composition_cannot_borrow_ridge_financial_preference(tmp_path
     runtime.candidate_features = "consumers:" + runtime.consumers.version
     runtime.select_learned(True)
     assert runtime.install(runtime.build(runtime.job(now)), now)
-    assert runtime.forecast.model == "weekday-hour-v2"
+    assert runtime.forecast.model == "consumer-composite-v1"
     assert runtime.candidate.model == "consumer-composite-v1"
-    assert runtime.model_status == "shadow_waiting_for_decision_evidence"
-    assert ":weather:" in runtime.candidate_features
+    assert runtime.model_status == "active"
+    assert ":weather:" not in runtime.candidate_features
     assert runtime.learned_preferred is False
-    assert runtime.install(runtime.build(runtime.job(now)), now)
-    assert runtime.forecast.model == "weekday-hour-v2"
+    assert runtime.job(now) is None
+    assert runtime.forecast.model == "consumer-composite-v1"

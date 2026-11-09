@@ -25,6 +25,9 @@ from open_energy_planner.home_assistant.names import source_name
 CONSUMER_SETTINGS_POINTER = "consumer-settings.json"
 COMPOSITE_MODEL_ID = "consumer-composite-v1"
 CONSUMER_ID_HEX_LENGTH = 16
+COMPONENT_FORECAST_UNAVAILABLE = (
+    "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+)
 
 
 def parse_selection(value):
@@ -177,25 +180,29 @@ class ConsumerForecasts:
 
 
 def build_components(
-    configuration, household_histories, temperatures, now, inputs, *, documents=None
+    configuration,
+    household_histories,
+    temperatures,
+    now,
+    inputs,
+    *,
+    documents=None,
+    controlled_days=None,
 ):
-    """Build a whole-house challenger as residual plus disjoint consumer forecasts exactly once.
+    """Build household demand from its remainder and ready disjoint consumers exactly once.
 
-    The existing total-household model remains active until the shared decision
-    evaluator admits this complete challenger. Missing component evidence never
-    silently removes household demand. Unavailable components remain inside the
-    residual while independent valid components remain available for planning.
+    Each component uses its baseline until original local-day accuracy admits a
+    learned alternative. Missing components stay inside the measured remainder.
+    Complete residual evidence remains mandatory before changing the boundary.
 
     Returns:
-        The complete composite and its status document, or two None values when
-        no consumers are selected. Component failures retain only ready device
-        records and fitted parameters, without a composite candidate. Residual
-        forecasts, their baseline and configuration version are included only
-        when residual training succeeds. Failure details identify the affected
-        source. The appliance preparation chain requires complete residual and
-        controlled-component coverage before changing the household boundary.
+        A complete or explicitly partial composition and its status document,
+        or two None values when no consumers are selected. Individual failures
+        do not discard independent ready components. Residual failure retains
+        ready records without authorizing household replacement. The preparation
+        chain requires coverage for every controlled component.
     """
-    settings_version, selected, histories, options = inputs
+    settings_version, selected, histories, options = inputs[:4]
     if not selected:
         return None, None
     available = {item["entity_id"] for item in options}
@@ -211,28 +218,32 @@ def build_components(
         validate_membership(selected, options)
     except ValueError:
         return None, {"status": "energy_consumer_hierarchy_inconsistent", "devices": []}
-    profiles, forecasts, records, ready, failures = [], [], [], [], []
+    controlled_days = controlled_days or {}
+    control_history_unavailable = any("*" in days for days in controlled_days.values())
+    profiles, forecasts, records, ready = [], [], [], []
+    has_unavailable_components = False
     for item in selected:
         try:
             single = DemandConfiguration(
                 configuration.timezone, 0, (EnergyTerm(item["entity_id"], 1),)
             )
             samples = DemandReconstructor().reconstruct(single, histories, before=now)
-            model, forecast = component(
-                single, samples, temperatures, now, item["weather_sensitive"]
+            model, forecast, selection = component(
+                single,
+                samples,
+                temperatures,
+                now,
+                item["weather_sensitive"],
+                documents=documents,
+                excluded_dates=("*",)
+                if control_history_unavailable
+                else controlled_days.get(item["entity_id"], ()),
             )
-            selection = None
-            if item["weather_sensitive"]:
-                from open_energy_planner.appliances.weather_learning import select_weather_model
-
-                model, forecast, selection = select_weather_model(
-                    single, samples, temperatures, now, model, forecast, documents
-                )
             baseline_forecast = forecast_document(
                 predict(single, samples, now, WeekdayProfile.fit(single, samples))
             )
-        except ValueError as error:
-            failures.append(item["entity_id"] + ": " + str(error))
+        except ValueError:
+            has_unavailable_components = True
         else:
             ready.append(item)
             profiles.append((item["entity_id"], asdict(model)))
@@ -240,9 +251,9 @@ def build_components(
             records.append(
                 {
                     **item,
-                    "status": "shadow_waiting_for_decision_evidence",
+                    "status": selection["status"],
+                    "model_selection": selection,
                     "weather_features_used": bool(getattr(model, "temperature_enabled", False)),
-                    "weather_learning": selection,
                     "forecast": forecast_document(forecast),
                     "baseline_forecast": baseline_forecast,
                 }
@@ -259,7 +270,25 @@ def build_components(
             configuration, (*household_histories, *histories), before=now
         )
         residual_configuration = replace(configuration, exclusions=())
-        model, remaining = component(residual_configuration, residual, temperatures, now, True)
+        model, remaining, residual_selection = component(
+            residual_configuration,
+            residual,
+            temperatures,
+            now,
+            True,
+            documents=documents,
+            boundary=configuration.version,
+            excluded_dates=("*",)
+            if control_history_unavailable
+            else sorted(
+                {
+                    day
+                    for entity, days in controlled_days.items()
+                    if entity not in {item["entity_id"] for item in ready}
+                    for day in days
+                }
+            ),
+        )
         baseline = forecast_document(
             predict(
                 residual_configuration,
@@ -268,11 +297,10 @@ def build_components(
                 WeekdayProfile.fit(residual_configuration, residual),
             )
         )
-    except ValueError as error:
-        failures.append("residual: " + str(error))
+    except ValueError:
         return None, {
             "status": "history_or_weather_not_ready",
-            "detail": "\n".join(failures),
+            "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
             "model_parameters": json.loads(
                 json.dumps(profiles, default=lambda value: value.isoformat())
@@ -280,13 +308,14 @@ def build_components(
         }
     profiles.append(("residual", asdict(model)))
     parameters = json.loads(json.dumps(profiles, default=lambda value: value.isoformat()))
-    if failures:
+    if has_unavailable_components and not ready:
         return None, {
             "status": "history_or_weather_not_ready",
-            "detail": "\n".join(failures),
+            "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
             "residual": forecast_document(remaining),
             "residual_baseline": baseline,
+            "residual_selection": residual_selection,
             "configuration_version": settings_version,
             "model_parameters": parameters,
         }
@@ -319,34 +348,118 @@ def build_components(
             quality="estimated",
         )
         return forecast, {
-            "status": "shadow_waiting_for_decision_evidence",
+            "status": "partial_history" if has_unavailable_components else "active",
+            "detail": COMPONENT_FORECAST_UNAVAILABLE if has_unavailable_components else None,
+            "separated_entities": [item["entity_id"] for item in ready],
             "devices": records,
             "residual": forecast_document(remaining),
             "residual_baseline": baseline,
+            "residual_selection": residual_selection,
             "configuration_version": settings_version,
             "model_parameters": parameters,
         }
-    except ValueError as error:
+    except ValueError:
         return None, {
             "status": "history_or_weather_not_ready",
-            "detail": str(error),
+            "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
             "model_parameters": parameters,
         }
 
 
-def component(configuration, samples, temperatures, now, weather_sensitive):
-    """Reuse existing profile/Ridge models. Incomplete evidence stays unavailable, not a zero startup."""
+def component(
+    configuration,
+    samples,
+    temperatures,
+    now,
+    weather_sensitive,
+    *,
+    documents=None,
+    boundary=None,
+    excluded_dates=(),
+):
+    """Select suitable models by preserved daily accuracy, retaining a measured weekday baseline.
+
+    Args:
+        configuration: Demand configuration with the HA timezone and measurement boundary.
+        samples: Completed hourly samples containing nonnegative residual AC kWh.
+        temperatures: Available temperature evidence for optional weather features.
+        now: Aware prediction time and knowledge cutoff.
+        weather_sensitive: Whether temperature features and a weather candidate apply.
+        documents: Optional demand archive used for original daily comparisons.
+        boundary: Identity of the separated measurement component.
+        excluded_dates: Local ISO dates of controlled use, or '*' to exclude all days.
+
+    Returns:
+        Three values: the selected fitted model, its forecast in AC kWh, and daily
+        selection evidence. Unusable Ridge or weather candidate fits are omitted
+        while the weekday baseline remains available.
+
+    Raises:
+        ValueError: The weekday baseline lacks seven complete days covering every hour,
+            or its input/prediction contract is invalid.
+
+    Side Effects:
+        With an archive, choose_daily refreshes the pending next-day capture and
+        freezes original predictions after midnight. Controlled local dates cannot
+        provide promotion evidence. Unreadable comparison evidence keeps the baseline.
+    """
+    from open_energy_planner.forecast_selection.accuracy import choose_daily
+
     baseline = WeekdayProfile.fit(configuration, samples)
     if not baseline.residual_profile:
         raise ValueError("At least seven complete days covering every hour are required")
-    model = baseline
+    models = {"baseline": baseline}
+    forecasts = {"baseline": predict(configuration, samples, now, baseline)}
     weather = temperatures if weather_sensitive else ()
     try:
         candidate = RidgeDemandModel.fit(configuration, samples, temperatures=weather)
-        if weather_sensitive and not candidate.temperature_enabled:
-            raise ValueError("Weather training coverage missing")
         prediction = predict(configuration, samples, now, candidate, temperatures=weather)
-        return candidate, prediction
+        models["ridge"], forecasts["ridge"] = candidate, prediction
     except ValueError:
-        return model, predict(configuration, samples, now, model, temperatures=weather)
+        pass
+    if weather_sensitive:
+        from open_energy_planner.appliances.weather_model import WeatherDemandModel
+
+        try:
+            candidate = WeatherDemandModel.fit(
+                configuration, samples, temperatures=weather, known_at=now
+            )
+            prediction = predict(configuration, samples, now, candidate, temperatures=weather)
+            models["weather"], forecasts["weather"] = candidate, prediction
+        except (ValueError, ImportError, OSError):
+            pass
+    selection = choose_daily(
+        documents,
+        [
+            configuration.version,
+            boundary,
+            [
+                (
+                    name,
+                    model.model_id,
+                    getattr(model, "temperature_enabled", False),
+                    getattr(model, "feature_names", ()),
+                )
+                for name, model in models.items()
+            ],
+        ],
+        configuration.timezone,
+        {name: forecast_document(forecast) for name, forecast in forecasts.items()},
+        {sample.start: sample.residual_kwh for sample in samples},
+        now,
+        excluded_dates=excluded_dates,
+    )
+    chosen = selection["selected"]
+    selection["selected_model"] = models[chosen].model_id
+    if "weather" in models:
+        weather_model = models["weather"]
+        selection["training_quality"] = {
+            "source_hours": weather_model.source_hours,
+            "used_hours": weather_model.training_hours,
+            "excluded_periods": [
+                {"start": start, "end": end, "reason": reason}
+                for start, end, reason in weather_model.excluded_periods
+            ],
+        }
+    return models[chosen], forecasts[chosen], selection

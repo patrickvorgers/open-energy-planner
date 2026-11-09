@@ -24,9 +24,9 @@ _LOGGER = logging.getLogger(__name__)
 class DemandRuntime:
     """Own configured demand inputs and cached predictions without fetching HA or weather itself."""
 
-    def __init__(self, store, *, scorer=None):
+    def __init__(self, store, *, scorer=None, plans=None):
         """Restore configuration. Never restore stale predictions as live evidence after restart."""
-        self.store, self.scorer = store, scorer
+        self.store, self.scorer, self.plans = store, scorer, plans
         self.configuration = store.current
         self.histories, self.ranges, self.data_versions = {}, {}, {}
         self.pending_histories = {}
@@ -42,6 +42,7 @@ class DemandRuntime:
         self.history_issues = {}
         self.history_quality = None
         self.comparison = None
+        self.daily_selection = None
         from open_energy_planner.appliances.forecasting import ConsumerForecasts
 
         self.consumers = ConsumerForecasts(store.documents)
@@ -58,6 +59,7 @@ class DemandRuntime:
         self.history_issues = {}
         self.history_quality = None
         self.comparison = None
+        self.daily_selection = None
         self.issue = None
         self.model_status = "waiting_for_refresh"
 
@@ -155,18 +157,63 @@ class DemandRuntime:
         self.issue = "demand_forecast_update_failed"
         return True
 
-    def build(self, job):
-        """Train and archive forecasts off-loop, retaining the incumbent until decision validation.
+    def control_days(self, now):
+        """Reuse committed publication history instead of maintaining a second intervention archive.
 
-        With consumers selected, a complete composite is the challenger. Publish
-        it only with learned_preferred, otherwise retain the household baseline.
-        Always archive that baseline. Ordinary forecasts retain their model
-        archive. Composites retain their exact component/parameter document.
+        Reads the current configuration timezone and selected consumers. The
+        publication-history owner receives one bounded local-day query per
+        lookback day on each build. This method does not write history.
+
+        Args:
+            now: Aware time used to identify completed local days.
 
         Returns:
-            Ten values: key, forecast, candidate, status, issue, comparison,
-            baseline_forecast, feature family, consumer_result and history quality. A validated
-            composite reports active. Missing evidence retains a readiness status.
+            A mapping from controlled consumer entity IDs to lists of local
+            YYYY-MM-DD dates. If no plan repository is configured, returns an
+            empty mapping.
+
+        Failure Behavior:
+            OSError, ValueError, KeyError or TypeError during history lookup
+            returns ['*'] for each currently selected consumer, or 'household'
+            when none is selected. Daily selection then excludes all days and
+            cannot promote a learned model from unavailable control evidence.
+        """
+        from zoneinfo import ZoneInfo
+
+        from open_energy_planner.core.calendar import day_window
+        from open_energy_planner.forecast_quality.daily import controlled_consumers
+        from open_energy_planner.forecast_selection.calculation.accuracy import (
+            MAX_ACCURACY_LOOKBACK_DAYS,
+        )
+
+        if self.plans is None:
+            return {}
+        result = {}
+        today = now.astimezone(ZoneInfo(self.configuration.timezone)).date()
+        try:
+            for offset in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1):
+                day = today - timedelta(days=offset)
+                start, end = day_window(day.isoformat(), self.configuration.timezone)
+                for entity in controlled_consumers(self.plans, start, end):
+                    result.setdefault(entity, []).append(day.isoformat())
+        except (OSError, ValueError, KeyError, TypeError):
+            return {row["entity_id"]: ["*"] for row in self.consumers.selected} or {
+                "household": ["*"]
+            }
+        return result
+
+    def build(self, job):
+        """Train and archive forecasts off-loop using independently retained daily accuracy.
+
+        Measurement separation is active independently of learned-model admission.
+        Each component retains its baseline until daily accuracy admits another
+        model. Unavailable components remain inside the household remainder.
+        Preserve original whole-house and component forecasts and parameters.
+
+        Returns:
+            Eleven values: key, forecast, candidate, status, issue, comparison,
+            baseline forecast, feature family, consumer result, history quality
+            and daily selection. The injected scorer remains a research seam.
         """
         (
             key,
@@ -178,7 +225,7 @@ class DemandRuntime:
             consumers,
             previous_features,
         ) = job
-        issue, comparison = None, None
+        issue, comparison, daily_selection = None, None, None
         reconstruction = DemandReconstructor().analyze(configuration, histories, before=now)
         samples = reconstruction.samples
         baseline = WeekdayProfile.fit(configuration, samples)
@@ -216,8 +263,15 @@ class DemandRuntime:
         )
         from open_energy_planner.appliances.forecasting import build_components
 
+        controlled_days = self.control_days(now)
         composite, consumer_result = build_components(
-            configuration, histories, known_weather, now, consumers, documents=self.store.documents
+            configuration,
+            histories,
+            known_weather,
+            now,
+            consumers,
+            documents=self.store.documents,
+            controlled_days=controlled_days,
         )
         consumer_features = "consumers:" + consumers[0]
         weather_models = tuple(
@@ -237,10 +291,24 @@ class DemandRuntime:
             # Selection validates the complete composition against the incumbent,
             # not each component's in-sample error in isolation.
             status = consumer_result["status"]
-            forecast = composite if learned_preferred and composite else baseline_forecast
-            if composite and learned_preferred:
-                status = "active"
+            # Separation is an accounting boundary, not a reward for ML. Each
+            # component independently retains its baseline until daily proof.
+            forecast = composite or baseline_forecast
         else:
+            if self.scorer is None and baseline.residual_profile:
+                from open_energy_planner.appliances.forecasting import component
+
+                excluded_dates = sorted({day for days in controlled_days.values() for day in days})
+                selected, forecast, daily_selection = component(
+                    configuration,
+                    samples,
+                    known_weather,
+                    now,
+                    True,
+                    documents=self.store.documents,
+                    excluded_dates=excluded_dates,
+                )
+                status = daily_selection["status"]
             forecast = predict(configuration, samples, now, selected, temperatures=known_weather)
         self.store.archive(baseline_forecast, baseline)
         if not consumers[1]:
@@ -268,12 +336,6 @@ class DemandRuntime:
         if composite is not None or consumer_result and consumer_result.get("devices"):
             self.store.archive_components(forecast, composite, consumer_result)
             self.store.archive_components(baseline_forecast, composite, consumer_result)
-        if composite is not None and learned_preferred:
-            consumer_result = {
-                **consumer_result,
-                "status": status,
-                "devices": [{**record, "status": status} for record in consumer_result["devices"]],
-            }
         return (
             key,
             forecast,
@@ -289,6 +351,7 @@ class DemandRuntime:
             else "time",
             consumer_result,
             reconstruction.document(),
+            daily_selection,
         )
 
     def install(self, result, now):
@@ -304,6 +367,7 @@ class DemandRuntime:
             features,
             consumer_result,
             history_quality,
+            daily_selection,
         ) = result
         if key != self.key(now):
             return False
@@ -311,6 +375,7 @@ class DemandRuntime:
         self.failed_key, self.retry_after = None, None
         self.model_status, self.issue = status, issue
         self.comparison = comparison
+        self.daily_selection = daily_selection
         self.baseline = baseline_forecast
         if features != self.candidate_features and (
             ":weather:" in features or ":weather:" in self.candidate_features
@@ -333,6 +398,9 @@ class DemandRuntime:
 
     def select_learned(self, enabled):
         """Apply a validated family preference on the next archived forecast worker result."""
+        if self.daily_selection is not None or self.consumers.selected:
+            self.learned_preferred = False
+            return
         enabled = bool(enabled)
         if self.learned_preferred != enabled and self.baseline is not None:
             self.forecast = self.baseline
@@ -349,6 +417,7 @@ class DemandRuntime:
             "issue": self.issue or self.store.issue,
             "history_issues": self.history_issues.copy(),
             "history_quality": self.history_quality,
+            "model_selection": self.daily_selection,
             "request": self.request(now),
             "decision_comparison": {
                 **asdict(comparison),

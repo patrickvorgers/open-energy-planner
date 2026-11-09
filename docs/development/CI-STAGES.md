@@ -54,6 +54,13 @@ and timing can differ. The candidate workflow additionally establishes admission
 package identity and artifact evidence on either execution route. An informal
 local success does not replace those merge or reuse gates.
 
+The hosted **Quality and integration (AMD64)** job has a 90-minute execution
+limit. This includes container setup, all selected suites, the isolated
+Supervisor lifecycle when selected, packaging and evidence preservation. It is
+an outer CI deadline. Solver, process, HTTP and individual readiness deadlines
+retain their independent limits. Increasing this allowance does not make tests
+faster or turn an interrupted run into successful candidate evidence.
+
 Wait for the active review to complete before collecting its full batch of inline
 and outside-diff findings. Evaluate every finding, apply valid corrections and run
 affected checks before publishing one tested push. Request one incremental review
