@@ -1326,7 +1326,12 @@ Other charts retain independent value scales. Unrestricted ends retain
 ten percent of the displayed axis height as clearance. Physically nonnegative
 consumption, production, appliance power/energy and forecast-quality charts have
 a fixed zero lower bound and only upper clearance. Signed balances, net power,
-prices and savings retain their negative domain. SoC remains fixed at 0–100%.
+prices and savings retain their negative domain. Price axes always include zero
+using the native `beginAtZero` option. Nonnegative prices fix the lower bound at
+zero. Entirely negative prices fix the upper bound at zero. Negative lower bounds
+retain the existing ten-percent axis-height clearance. Visible series and the
+selected time window determine the range for both original plan prices and
+current tariff previews. SoC remains fixed at 0–100%.
 
 ### Physical reference and financial settlement separation
 
