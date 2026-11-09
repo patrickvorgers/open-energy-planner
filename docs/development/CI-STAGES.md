@@ -1036,6 +1036,27 @@ from the remaining two-worker HA run. When the four-backend suite runs separatel
 native execution excludes database contracts instead of repeating them on SQLite.
 A legacy native-only selection still includes its original SQLite coverage.
 
+Browser execution uses two isolated containers with one CPU and 1 GiB each. Together
+they retain the original browser budget of two CPUs, 2 GiB and 512 MiB shared memory.
+Both use the selected built browser image. Packaged preflight and execution share
+the same pytest paths, filters and partition plugin. Each worker owns its reports
+and screenshots under `results/ci/browser-<worker>/`.
+
+Preflight records the complete collected inventory and its disjoint worker
+partitions. Execution records actual setup, call and teardown outcomes and embeds
+the pytest identity in each JUnit case. Completion rejects missing or duplicated
+identities, changed collections, failed or skipped phases and inconsistent worker
+reports. The canonical `ui.xml` is written only after the full union passes, so
+existing candidate and package readers retain one browser report. Every worker is
+joined before service cleanup, including after failure.
+
+After cheap policy checks, focused unit groups and the browser execute concurrently
+within their separate existing container budgets. Database and HA services start
+after those early groups finish. Browser teaching examples reuse a real solved and
+independently validated plan once per process. Each case still initializes a fresh
+database and receives its own mutable copy. No database snapshot or persistent
+fixture cache is used.
+
 The controller records successful suite commands and validates the exact selected
 set before writing `results/ci/suite-completion.json`. That record binds the profile,
 source tree and completed groups. Selected pytest reports are cleared before execution.

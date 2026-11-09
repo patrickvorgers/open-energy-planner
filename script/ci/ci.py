@@ -17,6 +17,7 @@ sys.path.insert(0, str(root))
 scope = importlib.import_module("script.ci.ci_scope")
 check_images = importlib.import_module("script.ci.check_images").check_images
 completion = importlib.import_module("script.ci.check_suite_completion")
+browser_execution = importlib.import_module("script.ci.check_browser")
 
 EARLY_CHECK_WORKERS = 2
 DATABASE_CHECK_WORKERS = 1
@@ -99,6 +100,36 @@ def run(*args, suite=None):
         print(f"CI timing: {' '.join(args)}: {elapsed:.2f}s", flush=True)
 
 
+def run_browser():
+    """Record one browser phase only after the isolated workers and their exact execution union pass."""
+    started = monotonic()
+    succeeded = False
+    try:
+        browser_execution.run_workers(compose)
+        completed_suites.add("browser")
+        succeeded = True
+    finally:
+        phase_times.append(
+            {
+                "command": ["browser-workers"],
+                "suite": "browser",
+                "start_seconds": started - pipeline_started,
+                "duration_seconds": monotonic() - started,
+                "success": succeeded,
+            }
+        )
+
+
+def run_unit_suites():
+    """Keep the existing native smoke and unit groups serial within their independent container budget."""
+    if "unit-app" in suites or suites & scope.APP_UNIT_SUITES:
+        run("run", "--rm", "native", "script/app/smoke_app.py")
+        run("run", "--rm", "native", "script/app/debug_scenario.py")
+    for suite in sorted(suites):
+        if suite.startswith("unit-"):
+            run("run", "--rm", "native", "-m", "script.ci.pytest_suites", suite, suite=suite)
+
+
 def run_database_suites():
     """Run selected functional groups sequentially on the same disposable backend services."""
     for suite in sorted(database_suites):
@@ -153,14 +184,14 @@ try:
         )
     elif focused:
         run("run", "--rm", "native", "script/ci/check_native.py", "--ci-only", suite="ci")
-        if "unit-app" in suites or suites & scope.APP_UNIT_SUITES:
-            run("run", "--rm", "native", "script/app/smoke_app.py")
-            run("run", "--rm", "native", "script/app/debug_scenario.py")
-        for suite in sorted(suites):
-            if suite.startswith("unit-"):
-                run("run", "--rm", "native", "-m", "script.ci.pytest_suites", suite, suite=suite)
         if "browser" in suites:
-            run("run", "--rm", "ui-tests", suite="browser")
+            with ThreadPoolExecutor(max_workers=EARLY_CHECK_WORKERS) as early:
+                native_checks = early.submit(run_unit_suites)
+                browser_checks = early.submit(run_browser)
+                native_checks.result()
+                browser_checks.result()
+        else:
+            run_unit_suites()
         if "ha-contracts" in suites or "ha" in suites:
             run(
                 "run",
@@ -216,11 +247,7 @@ try:
             native_checks = early.submit(
                 run, "run", "--rm", "native", *native_arguments, suite="native"
             )
-            browser_checks = (
-                early.submit(run, "run", "--rm", "ui-tests", suite="browser")
-                if "browser" in suites
-                else None
-            )
+            browser_checks = early.submit(run_browser) if "browser" in suites else None
             native_checks.result()
             if browser_checks is not None:
                 browser_checks.result()

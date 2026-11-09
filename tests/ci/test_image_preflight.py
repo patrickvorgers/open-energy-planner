@@ -10,6 +10,7 @@ import pytest
 
 from script.ci import check_images
 from script.ci.pytest_suites import pytest_arguments
+from tests.ci.browser_evidence import write_browser_evidence
 
 
 def test_ha_image_default_uses_the_same_directory_runner_as_compose():
@@ -64,9 +65,17 @@ def test_packaged_collection_preserves_diagnostics_and_stops_on_failure(
         assert "--build" not in command
         assert "--collect-only" in command
         assert options == {"capture_output": True, "text": True, "check": False}
+        if "--browser-shard" in command:
+            mount = command[command.index("--volume") + 1]
+            location = Path(mount.removesuffix(":/workspace/results/ci"))
+            write_browser_evidence(location.parent, collected_only=True)
         return subprocess.CompletedProcess(
             command,
-            2 if failure else 0,
+            2
+            if failure
+            else 5
+            if "--browser-shard" in command and command[command.index("--browser-shard") + 1] == "1"
+            else 0,
             "ModuleNotFoundError: missing_fixture_module\n" if failure else "4 tests collected\n",
             "",
         )
@@ -80,17 +89,47 @@ def test_packaged_collection_preserves_diagnostics_and_stops_on_failure(
         assert "missing_fixture_module" in Path("results/ci/preflight-native.log").read_text()
     else:
         check_images.check_images(["docker", "compose"], "oep-test", "frontend", {"browser"})
-        assert len(calls) == 2
+        assert len(calls) == 3
         assert calls[0][calls[0].index("--entrypoint") + 2 :] == [
             "native",
             *pytest_arguments("native", collect_only=True),
         ]
-        assert calls[1][calls[1].index("--entrypoint") + 2 :] == [
-            "ui-tests",
-            *pytest_arguments("browser", collect_only=True),
-        ]
+        for worker, command in enumerate(calls[1:]):
+            assert command[command.index("--entrypoint") + 2 :] == [
+                "ui-worker",
+                *pytest_arguments("browser", worker=worker, collect_only=True),
+            ]
         assert "oep-test-ui-tests" in summary.read_text()
-        assert summary.read_text().count("**PASS**") == 2
+        assert summary.read_text().count("**PASS**") == 3
+
+
+def test_inconsistent_browser_inventory_has_concrete_failure_diagnostics(monkeypatch, tmp_path):
+    """Individually successful collectors with incompatible inventories fail visibly before execution."""
+    monkeypatch.chdir(tmp_path)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    def run(command, **options):
+        """Return successful processes whose worker inventories disagree about selected tests."""
+        if "--browser-shard" in command:
+            worker = int(command[command.index("--browser-shard") + 1])
+            write_browser_evidence(Path("results/ci"), collected_only=True)
+            if worker == 1:
+                path = Path("results/ci/browser-1/browser-collected.json")
+                record = json.loads(path.read_text())
+                record["all"] = ["tests/frontend/browser/test_different.py::test_different"]
+                path.write_text(json.dumps(record))
+        return subprocess.CompletedProcess(command, 0, "Collection completed\n", "")
+
+    monkeypatch.setattr(check_images.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="browser collection"):
+        check_images.check_images(["docker", "compose"], "oep-test", "frontend", {"browser"})
+    assert "**FAIL**" in summary.read_text()
+    assert "Browser inventory validation failed" in summary.read_text()
+    assert (
+        "Browser inventory validation failed"
+        in Path("results/ci/preflight-browser-1.log").read_text()
+    )
 
 
 def test_failed_preflight_prevents_long_suites_but_keeps_cleanup(monkeypatch, tmp_path):
