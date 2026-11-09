@@ -306,6 +306,12 @@ of ready Energy meters subtracted from residual training. Planning rejects a
 changed or incomplete set. EV evidence additionally retains the charge point's
 `energy_entity` for final ownership validation. Existing settings and hashes are unchanged. Historical
 plans without attribution retain their original aggregate presentation.
+Household-only publication may omit components. New cycle, EV and thermal control
+requires complete component ownership. EV source evidence must match the point,
+vehicle and session. Thermal source evidence must match the store. Missing,
+duplicate or unmatched bindings cannot authorize publication.
+An omitted optional cycle emits no schedule and does not block household-only
+publication. Its original work evidence remains in the snapshot.
 
 Bonus rule JSON includes optional boolean `prevent_battery_export` (default false).
 The false default is omitted from serialized rules and canonical version hashes,

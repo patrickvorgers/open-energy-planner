@@ -1,7 +1,7 @@
 """Independently verify one-count demand replacement and per-plan attribution guards."""
 
 import asyncio
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -136,3 +136,140 @@ def test_bad_attribution_cannot_publish_an_otherwise_valid_solver_plan():
     outcome = asyncio.run(PlanningService(Solver(), clock=lambda: START).calculate(snapshot))
     assert outcome.document is None
     assert outcome.reason == "candidate_rejected"
+
+
+@pytest.mark.parametrize(
+    "kind,evidence,allowed",
+    [
+        ("household", "empty", True),
+        ("household", "base", True),
+        ("cycle", "empty", False),
+        ("cycle", "base", False),
+        ("cycle", "owned", True),
+        ("ev", "empty", False),
+        ("ev", "base", False),
+        ("ev", "owned", True),
+        ("ev", "wrong_binding", False),
+        ("thermal", "empty", False),
+        ("thermal", "base", False),
+        ("thermal", "owned", True),
+        ("thermal", "wrong_binding", False),
+    ],
+)
+def test_publication_requires_owned_controlled_consumption_but_not_optional_household_components(
+    kind, evidence, allowed
+):
+    """A genuine feasible solve needs each controlled meter's ownership. Ordinary .3-kWh household plans remain valid."""
+    from open_energy_planner.appliances.ev.model import EVWork, refine
+    from open_energy_planner.appliances.thermal.model import ThermalWork
+    from open_energy_planner.installation.commands import plan_document
+    from open_energy_planner.installation.validation import validate
+    from open_energy_planner.optimization.adapters.highs import HighsSolver
+    from open_energy_planner.planning import InputSnapshot
+
+    problem = InstallationProblem(
+        (Interval(START, 0.25, 0.1, 0, load_kwh=0.3),), (), (), (), 3000, 3000
+    )
+    ev_evidence, thermal_evidence = (), ()
+    if kind == "cycle":
+        problem = replace(
+            problem,
+            appliances=(
+                ApplianceWork(
+                    "cycle",
+                    "sensor.controlled",
+                    START,
+                    START + timedelta(hours=1),
+                    CycleProfile((1000,)),
+                ),
+            ),
+        )
+    elif kind == "ev":
+        work = EVWork(
+            "session",
+            "point",
+            "car",
+            START,
+            START + timedelta(minutes=15),
+            10,
+            0,
+            1,
+            0,
+            1000,
+            "variable",
+        )
+        problem = refine(problem, (work,))
+        if evidence in ("owned", "wrong_binding"):
+            ev_evidence = (
+                {
+                    "work": {
+                        **asdict(work),
+                        "point_id": "wrong" if evidence == "wrong_binding" else "point",
+                    },
+                    "energy_entity": "sensor.controlled",
+                },
+            )
+    elif kind == "thermal":
+        work = ThermalWork("boiler", START, 40, 40, 80, 20, 0.1, 0, 2000, 1, (0,), 40)
+        problem = replace(problem, thermal_work=(work,))
+        if evidence in ("owned", "wrong_binding"):
+            thermal_evidence = (
+                {
+                    "configuration": {
+                        "id": "wrong" if evidence == "wrong_binding" else "boiler",
+                        "energy_entity": "sensor.controlled",
+                    }
+                },
+            )
+    components = (
+        ()
+        if evidence == "empty"
+        else (
+            LoadComponent(
+                None, "household", (LoadStep(START, 0.25, 0.3),), (LoadStep(START, 0.25, 0.3),)
+            ),
+        )
+    )
+    if evidence in ("owned", "wrong_binding"):
+        components += (
+            LoadComponent(
+                "sensor.controlled",
+                "device",
+                (LoadStep(START, 0.25, 0),),
+                (LoadStep(START, 0.25, 0),),
+            ),
+        )
+    snapshot = InputSnapshot(
+        "snapshot",
+        "settings",
+        START,
+        "meters",
+        "forecast",
+        "prices",
+        problem,
+        load_components=components,
+        ev_evidence=ev_evidence,
+        thermal_evidence=thermal_evidence,
+    )
+    solved = HighsSolver().solve(problem)
+    assert solved.plan is not None, solved.stop_reason
+    if kind == "cycle":
+        assert solved.plan.appliance_starts == (("cycle", START),)
+    costs = validate(problem, solved.plan)
+    if allowed:
+        published = plan_document(snapshot, solved, costs, START)
+        assert published["expected_flows"]
+        assert published["input_snapshot_id"] == "snapshot"
+    else:
+        with pytest.raises(ValueError):
+            plan_document(snapshot, solved, costs, START)
+
+
+def test_empty_components_cannot_bypass_explicit_controlled_meter_validation():
+    """Optional household evidence is allowed, but explicitly controlled meter ownership is mandatory."""
+    problem = InstallationProblem(
+        (Interval(START, 1, 0.1, 0, load_kwh=0.3),), (), (), (), 3000, 3000
+    )
+    validate_components(problem, ())
+    with pytest.raises(ValueError, match="Household component"):
+        validate_components(problem, (), controlled_entities=("sensor.controlled",))

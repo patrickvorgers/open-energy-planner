@@ -31,6 +31,147 @@ def catalogue():
     }
 
 
+@pytest.mark.parametrize(
+    "failure_stage", ["partial_device", "all_devices", "residual", "composition"]
+)
+def test_component_failure_details_never_publish_private_exception_values(
+    tmp_path, monkeypatch, failure_stage
+):
+    """All failure exits retain useful status without exposing raw errors or opaque IDs in detail."""
+    from open_energy_planner.appliances import forecasting
+
+    consumers = ConsumerForecasts(make_store(tmp_path, DemandStore).documents)
+    private_entity = "sensor.synthetic_private_device"
+    consumers.sync(
+        {
+            "entities": [{"entity_id": entity} for entity in ("sensor.ready", private_entity)],
+            "suggestions": {
+                "consumers": [
+                    {"entity_id": entity, "upstream": None}
+                    for entity in ("sensor.ready", private_entity)
+                ]
+            },
+        }
+    )
+    consumers.save(
+        parse_selection(
+            [
+                {"entity_id": entity, "weather_sensitive": False}
+                for entity in ("sensor.ready", private_entity)
+            ]
+        ),
+        consumers.version,
+    )
+    for entity in ("sensor.ready", private_entity):
+        consumers.histories[entity] = channel(entity, [0.1] * (35 * 24))
+    original_component = forecasting.component
+    sentinel = "synthetic-private-error-password-location"
+
+    def fail_selected_component(configuration, *arguments, **keywords):
+        """Inject private failures at each responsible component boundary."""
+        residual = keywords.get("boundary") is not None
+        if (
+            failure_stage == "residual"
+            and residual
+            or failure_stage == "all_devices"
+            and not residual
+            or failure_stage == "partial_device"
+            and configuration.entities == (private_entity,)
+        ):
+            raise ValueError(sentinel)
+        return original_component(configuration, *arguments, **keywords)
+
+    def fail_composition(*_arguments, **_keywords):
+        """Reject only final composition without altering component model calculations."""
+        raise ValueError(sentinel)
+
+    monkeypatch.setattr(forecasting, "component", fail_selected_component)
+    if failure_stage == "composition":
+        monkeypatch.setattr(forecasting, "DemandForecast", fail_composition)
+    _, consumers.result = build_components(
+        config(),
+        (channel("sensor.house", [0.5] * (35 * 24)),),
+        (),
+        START + timedelta(days=35),
+        consumers.inputs(),
+    )
+    public = consumers.document()
+    assert sentinel not in json.dumps(public)
+    assert private_entity not in public["result"]["detail"]
+    assert public["result"]["detail"] == (
+        "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+    )
+
+
+@pytest.mark.parametrize(
+    "control_case", ["unavailable_device", "separated_device", "global_wildcard"]
+)
+def test_controlled_day_exclusions_follow_the_actual_residual_measurement_boundary(
+    tmp_path, control_case
+):
+    """Real forward weather comparisons exclude controlled remainder, but not an already separated meter."""
+    from tests.app.forecast.support.weather_learning import history, known_weather
+
+    samples, weather = history()
+    separate = control_case != "unavailable_device"
+    control_store = make_store(tmp_path / "controlled", DemandStore)
+    ordinary_store = make_store(tmp_path / "ordinary", DemandStore)
+    consumers = ConsumerForecasts(control_store.documents)
+    consumers.sync(catalogue())
+    consumers.save(
+        parse_selection([{"entity_id": "sensor.heat", "weather_sensitive": True}]),
+        consumers.version,
+    )
+    if separate:
+        consumers.histories["sensor.heat"] = channel(
+            "sensor.heat", [row.residual_kwh for row in samples]
+        )
+    household = channel(
+        "sensor.house", [row.residual_kwh + (0.3 if separate else 0) for row in samples]
+    )
+    controlled_days = (
+        {"household": ["*"]}
+        if control_case == "global_wildcard"
+        else {
+            "sensor.heat": [
+                (START + timedelta(days=day)).date().isoformat() for day in range(40, 49)
+            ]
+        }
+    )
+    for day in range(42, 47):
+        now = START + timedelta(days=day)
+        temperatures = known_weather(weather[: (day + 3) * 24], now)
+        _, ordinary = build_components(
+            replace(config(), timezone="UTC"),
+            (household,),
+            temperatures,
+            now,
+            consumers.inputs(),
+            documents=ordinary_store.documents,
+        )
+        _, controlled = build_components(
+            replace(config(), timezone="UTC"),
+            (household,),
+            temperatures,
+            now,
+            consumers.inputs(),
+            documents=control_store.documents,
+            controlled_days=controlled_days,
+        )
+    if control_case == "unavailable_device":
+        assert ordinary["residual_selection"]["selected"] == "weather"
+        assert controlled["residual_selection"]["selected"] == "baseline"
+        assert controlled["residual_selection"]["completed_windows"] == 0
+    elif control_case == "separated_device":
+        assert ordinary["devices"][0]["model_selection"]["selected"] == "weather"
+        assert controlled["devices"][0]["model_selection"]["selected"] == "baseline"
+        assert controlled["residual_selection"]["completed_windows"] == 3
+    else:
+        assert ordinary["devices"][0]["model_selection"]["selected"] == "weather"
+        assert controlled["devices"][0]["model_selection"]["selected"] == "baseline"
+        assert controlled["residual_selection"]["completed_windows"] == 0
+
+
 def test_consumer_selection_preserves_versions_and_rejects_overlap(tmp_path):
     """Only Energy-owned disjoint meters can be selected. Choices survive reopening the same archive."""
     store = make_store(tmp_path, DemandStore)
@@ -152,7 +293,10 @@ def test_short_device_history_retains_independent_forecasts_and_unmodelled_load(
     )
     assert candidate.model == "consumer-composite-v1"
     assert result["status"] == "partial_history"
-    assert short_id in result["detail"]
+    assert (
+        result["detail"]
+        == "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+    )
     assert [record["entity_id"] for record in result["devices"]] == [ready_id]
     assert result["devices"][0]["status"] == "forward_archive_required"
     parameters = dict(json.loads(json.dumps(result["model_parameters"], allow_nan=False)))
@@ -209,7 +353,10 @@ def test_invalid_residual_retains_valid_device_records_without_enabling_replacem
     )
     assert candidate is None
     assert result["status"] == "history_or_weather_not_ready"
-    assert "residual:" in result["detail"]
+    assert (
+        result["detail"]
+        == "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+    )
     assert [record["entity_id"] for record in result["devices"]] == ["sensor.heat"]
     assert result["devices"][0]["status"] == "forward_archive_required"
     parameters = dict(json.loads(json.dumps(result["model_parameters"], allow_nan=False)))
@@ -264,7 +411,10 @@ def test_residual_filter_retains_components_without_hiding_substantial_conflicts
     assert [record["entity_id"] for record in result["devices"]] == ["sensor.heat"]
     if excess_kwh == 0.01 and bad_hours == 24:
         assert candidate is None
-        assert "residual: Inconsistent" in result["detail"]
+        assert (
+            result["detail"]
+            == "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+        )
         assert "residual" not in result
     else:
         assert candidate is not None

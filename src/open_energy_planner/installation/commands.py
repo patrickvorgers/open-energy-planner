@@ -1,7 +1,7 @@
 """Publish independent per-device commands only after full physical and financial validation."""
 
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import timedelta
 from uuid import uuid4
 
@@ -15,18 +15,45 @@ ZERO_GRID_TOLERANCE_KWH = 1e-07
 
 
 def plan_document(snapshot, result, costs, now):
-    """Build a complete compatible envelope with typed device commands and immutable physical evidence."""
+    """Build a complete compatible envelope with typed commands and immutable physical evidence.
+
+    Require matched EV/thermal source identities and complete component coverage
+    for emitted controls. The independently validated result determines which
+    optional cycles actually emit a schedule. Omitted cycles do not block ordinary
+    household publication. Preserve all original work in the archived snapshot.
+
+    Raises:
+        ValueError: Controlled source ownership, coverage or command mapping is invalid.
+    """
     from open_energy_planner.demand.calculation.composition import validate_components
 
-    if snapshot.load_components:
-        validate_components(
-            snapshot.problem,
-            snapshot.load_components,
-            controlled_entities=tuple(row["energy_entity"] for row in snapshot.ev_evidence)
-            + tuple(row["configuration"]["energy_entity"] for row in snapshot.thermal_evidence),
-        )
     problem = snapshot.problem
     starts = dict(result.plan.appliance_starts)
+    ev_sources = {
+        tuple(row["work"][key] for key in ("point_id", "vehicle_id", "session_id")): row[
+            "energy_entity"
+        ]
+        for row in snapshot.ev_evidence
+    }
+    thermal_sources = {
+        row["configuration"]["id"]: row["configuration"]["energy_entity"]
+        for row in snapshot.thermal_evidence
+    }
+    if (
+        len(ev_sources) != len(snapshot.ev_evidence)
+        or set(ev_sources)
+        != {(work.point_id, work.vehicle_id, work.session_id) for work in problem.ev_work}
+        or len(thermal_sources) != len(snapshot.thermal_evidence)
+        or set(thermal_sources) != {work.device_id for work in problem.thermal_work}
+    ):
+        raise ValueError("Household component ownership unavailable")
+    validate_components(
+        replace(
+            problem, appliances=tuple(work for work in problem.appliances if work.task_id in starts)
+        ),
+        snapshot.load_components,
+        controlled_entities=tuple(ev_sources.values()) + tuple(thermal_sources.values()),
+    )
     steps = []
     stored = {unit.device_id: unit.battery.initial_kwh for unit in problem.batteries}
     group_followers = {}

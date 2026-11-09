@@ -66,7 +66,10 @@ that committed history instead of keeping a second intervention database. Days
 with enabled published control are conservatively omitted from that consumer's
 spontaneous-use comparison. An unseparated whole-house comparison omits days with
 any controlled consumer. A separated household base remains comparable because
-those measured consumers were removed from its training and actuals.
+those measured consumers were removed from its training and actuals. When a
+selected device lacks usable separation, its controlled days also remain
+excluded from residual-model comparison. An unavailable control-history wildcard
+blocks promotion for every component, including separately measured devices.
 
 Publication proves planned intervention, not successful execution. Missing or
 unreadable control history withholds model promotion while the baseline remains

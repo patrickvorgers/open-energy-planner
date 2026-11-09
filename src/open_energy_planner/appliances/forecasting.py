@@ -25,6 +25,9 @@ from open_energy_planner.home_assistant.names import source_name
 CONSUMER_SETTINGS_POINTER = "consumer-settings.json"
 COMPOSITE_MODEL_ID = "consumer-composite-v1"
 CONSUMER_ID_HEX_LENGTH = 16
+COMPONENT_FORECAST_UNAVAILABLE = (
+    "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+)
 
 
 def parse_selection(value):
@@ -215,7 +218,10 @@ def build_components(
         validate_membership(selected, options)
     except ValueError:
         return None, {"status": "energy_consumer_hierarchy_inconsistent", "devices": []}
-    profiles, forecasts, records, ready, failures = [], [], [], [], []
+    controlled_days = controlled_days or {}
+    control_history_unavailable = any("*" in days for days in controlled_days.values())
+    profiles, forecasts, records, ready = [], [], [], []
+    has_unavailable_components = False
     for item in selected:
         try:
             single = DemandConfiguration(
@@ -229,13 +235,15 @@ def build_components(
                 now,
                 item["weather_sensitive"],
                 documents=documents,
-                excluded_dates=(controlled_days or {}).get(item["entity_id"], ()),
+                excluded_dates=("*",)
+                if control_history_unavailable
+                else controlled_days.get(item["entity_id"], ()),
             )
             baseline_forecast = forecast_document(
                 predict(single, samples, now, WeekdayProfile.fit(single, samples))
             )
-        except ValueError as error:
-            failures.append(item["entity_id"] + ": " + str(error))
+        except ValueError:
+            has_unavailable_components = True
         else:
             ready.append(item)
             profiles.append((item["entity_id"], asdict(model)))
@@ -270,6 +278,16 @@ def build_components(
             True,
             documents=documents,
             boundary=configuration.version,
+            excluded_dates=("*",)
+            if control_history_unavailable
+            else sorted(
+                {
+                    day
+                    for entity, days in controlled_days.items()
+                    if entity not in {item["entity_id"] for item in ready}
+                    for day in days
+                }
+            ),
         )
         baseline = forecast_document(
             predict(
@@ -279,11 +297,10 @@ def build_components(
                 WeekdayProfile.fit(residual_configuration, residual),
             )
         )
-    except ValueError as error:
-        failures.append("residual: " + str(error))
+    except ValueError:
         return None, {
             "status": "history_or_weather_not_ready",
-            "detail": "\n".join(failures),
+            "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
             "model_parameters": json.loads(
                 json.dumps(profiles, default=lambda value: value.isoformat())
@@ -291,10 +308,10 @@ def build_components(
         }
     profiles.append(("residual", asdict(model)))
     parameters = json.loads(json.dumps(profiles, default=lambda value: value.isoformat()))
-    if failures and not ready:
+    if has_unavailable_components and not ready:
         return None, {
             "status": "history_or_weather_not_ready",
-            "detail": "\n".join(failures),
+            "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
             "residual": forecast_document(remaining),
             "residual_baseline": baseline,
@@ -331,8 +348,8 @@ def build_components(
             quality="estimated",
         )
         return forecast, {
-            "status": "partial_history" if failures else "active",
-            "detail": "\n".join(failures) if failures else None,
+            "status": "partial_history" if has_unavailable_components else "active",
+            "detail": COMPONENT_FORECAST_UNAVAILABLE if has_unavailable_components else None,
             "separated_entities": [item["entity_id"] for item in ready],
             "devices": records,
             "residual": forecast_document(remaining),
@@ -341,10 +358,10 @@ def build_components(
             "configuration_version": settings_version,
             "model_parameters": parameters,
         }
-    except ValueError as error:
+    except ValueError:
         return None, {
             "status": "history_or_weather_not_ready",
-            "detail": str(error),
+            "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
             "model_parameters": parameters,
         }

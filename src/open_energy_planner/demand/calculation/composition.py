@@ -103,13 +103,23 @@ def scale_window(steps, left, right, fraction):
 
 
 def validate_components(problem, components, *, controlled_entities=()):
-    """Reject duplicate meters, missing coverage and load differences before plan publication."""
+    """Reject missing control ownership, duplicate meters, coverage gaps and load differences.
+
+    Uncontrolled household-only problems may omit components. Controlled problems
+    require explicit meter ownership and one source identity per EV/thermal work.
+    Invalid or absent required evidence raises ValueError without changing inputs.
+    """
+    controlled_entities = tuple(controlled_entities)
+    controlled = [work.entity_id for work in problem.appliances] + list(controlled_entities)
     if not components:
+        if controlled or problem.ev_work or problem.thermal_work:
+            raise ValueError("Household component ownership unavailable")
         return
+    if len(controlled_entities) != len(problem.ev_work) + len(problem.thermal_work):
+        raise ValueError("Household component ownership unavailable")
     entities = [component.entity_id for component in components]
     if len(set(entities)) != len(entities) or entities.count(None) != 1:
         raise ValueError("Household component identities overlap")
-    controlled = [work.entity_id for work in problem.appliances] + list(controlled_entities)
     if len(set(controlled)) != len(controlled) or not set(controlled) <= set(entities):
         raise ValueError("Controlled household components overlap")
     for interval in problem.intervals:
