@@ -1031,10 +1031,10 @@ still retain all transitive consumers. Scope labels remain informational.
 
 ### Execution, completion and reuse proof
 
-Packaged collection fails early before services or long tests start. Execution
-runs cheap policy/unit groups first, then selected browser and early HA contracts.
-Real database/HA groups follow. Actual Supervisor acceptance runs last after fast
-services have been cleaned up. Every group has its own JUnit report. Empty
+Packaged collection fails early before services or long tests start. Native and
+browser work finishes before early HA contracts and real database/HA groups.
+Actual Supervisor acceptance runs last after fast services have been cleaned up.
+Every group has its own JUnit report. Empty
 selection, collection failure, cancellation or process failure cannot count as a
 completed suite.
 
@@ -1057,9 +1057,10 @@ reports. The canonical `ui.xml` is written only after the full union passes, so
 existing candidate and package readers retain one browser report. Every worker is
 joined before service cleanup, including after failure.
 
-After cheap policy checks, focused unit groups and the browser execute concurrently
-within their separate existing container budgets. Database and HA services start
-after those early groups finish. Browser teaching examples reuse a real solved and
+Focused routes run cheap policy checks before overlapping their native unit groups
+and browser work within their separate container budgets. Full routes retain their
+existing native/browser overlap. Database and HA services start after those early
+groups finish. Browser teaching examples reuse a real solved and
 independently validated plan once per process. Each case still initializes a fresh
 database and receives its own mutable copy. No database snapshot or persistent
 fixture cache is used.
