@@ -1,6 +1,8 @@
 """Provide synthetic teaching data with real validated plans and visible daily variation."""
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from math import pi, sin
 
 from open_energy_planner.contracts.calculation.formula import Formula
@@ -21,8 +23,9 @@ from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRep
 START = datetime(2026, 11, 4, tzinfo=UTC)
 
 
-def seed(directory):
-    """Archive a real solved 48-hour example without connecting providers or physical equipment.
+@lru_cache(maxsize=1)
+def _validated_example():
+    """Solve and independently validate the fixed teaching example once per process.
 
     A 4-kW midday solar curve, morning/evening household peaks and higher evening
     rates create visible import, export, charge and discharge. The 10-kWh battery
@@ -112,9 +115,15 @@ def seed(directory):
         market_area="NL",
         comparison_names={"battery": "Example home battery", "roof": "Example south roof"},
     )
+    return document, schedule
+
+
+def seed(directory):
+    """Initialize an independent store with its own mutable copy of the validated example."""
+    document, schedule = _validated_example()
     repository = SqlPlanRepository(directory)
     try:
-        repository.state["plan"] = document
+        repository.state["plan"] = deepcopy(document)
         repository.save()
         ContractStore(SqlDocuments(repository.engine, "contracts")).save(schedule)
     finally:

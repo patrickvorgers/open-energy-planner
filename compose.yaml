@@ -73,7 +73,7 @@ services:
     networks: [test]
     command: [script/home_assistant/provision_smoke.py]
 
-  ui-tests:
+  ui-tests: &ui-tests
     profiles: [test]
     build:
       context: .
@@ -84,6 +84,13 @@ services:
     shm_size: 512m
     volumes:
       - ./results/ci:/workspace/results/ci
+
+  ui-worker:
+    <<: *ui-tests
+    image: ${COMPOSE_PROJECT_NAME}-ui-tests
+    cpus: 1
+    mem_limit: 1g
+    shm_size: 256m
 
   postgres-test:
     profiles: [test]

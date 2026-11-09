@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from script.ci.browser_suites import BROWSER_WORKERS
 from script.ci.ci_groups import FUNCTIONAL_DATABASE_SUITES, PYTEST_AREAS
 from script.ci.ha_suites import ha_selection
 
@@ -38,6 +39,10 @@ def pytest_arguments(suite, *, worker=None, arguments=(), collect_only=False):
     if suite == "native":
         selected += ["--ignore=tests/database/performance"]
     report = {"databases": "databases", "browser": "ui"}.get(suite, suite)
+    if suite == "browser" and worker is not None:
+        if worker not in range(BROWSER_WORKERS):
+            raise ValueError("Invalid browser worker")
+        selected += ["-p", "script.ci.browser_shard", "--browser-shard", str(worker)]
     if suite == "ha" or suite.startswith("ha-"):
         selected, report = ha_selection(suite, worker)
     elif suite not in selections:
