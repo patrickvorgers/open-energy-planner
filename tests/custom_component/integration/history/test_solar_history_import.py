@@ -41,20 +41,20 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
                         ]
                     }
                 assert period == "hour"
-                if start != chunk_start:
+                if start != chunk_start - timedelta(hours=1):
                     return {entity: []}
                 return {
                     entity: [
-                        {"start": start.timestamp(), "sum": 100.0, "state": 100.0},
+                        {"start": chunk_start.timestamp() - 16, "sum": 100.0, "state": 100.0},
                         {
-                            "start": (start + timedelta(hours=1)).timestamp(),
+                            "start": (chunk_start + timedelta(hours=1)).timestamp(),
                             "sum": None,
                             "state": None,
                         },
                         {
-                            "start": (start + timedelta(hours=2)).timestamp(),
+                            "start": (chunk_start + timedelta(hours=2)).timestamp() + 64,
                             "sum": 102.0,
-                            "state": 102.0,
+                            "state": 0.0,
                         },
                     ]
                 }
@@ -90,8 +90,9 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             assert annual["unit"] == "kWh"
             assert annual["statistics_identity"] == available["statistics_identity"]
             assert annual["hours"] == [
-                [chunk_start.timestamp(), 100.0, 100.0],
-                [(chunk_start + timedelta(hours=2)).timestamp(), 102.0, 102.0],
+                [chunk_start.timestamp() - 16, 100.0, 100.0],
+                [(chunk_start + timedelta(hours=1)).timestamp(), None, None],
+                [(chunk_start + timedelta(hours=2)).timestamp() + 64, 102.0, 0.0],
             ]
             empty = await bridge.capture(
                 {
@@ -108,6 +109,10 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             assert all(call[3] == {"energy": "kWh"} for call in calls)
             assert calls[0][4] == {"sum"}
             assert calls[1][4] == {"sum", "state"}
+            assert calls[1][:2] == (
+                chunk_start - timedelta(hours=1),
+                chunk_end + timedelta(hours=1),
+            )
 
     asyncio.run(scenario())
 

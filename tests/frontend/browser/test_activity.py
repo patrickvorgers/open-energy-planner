@@ -20,24 +20,54 @@ def app_page(app_page):
     return page, url
 
 
-def assert_serial_requests(requests):
-    """Check completed browser intervals without relying on callback delivery order."""
-    intervals = []
+@pytest.fixture
+def request_intervals(app_page):
+    """Measure request starts and transport completion on Chromium's single monotonic clock."""
+    page, _ = app_page
+    session = page.context.new_cdp_session(page)
+    intervals = {}
+
+    def started(event):
+        """Retain transport identity so repeated URLs remain separate requests."""
+        intervals[event["requestId"]] = {
+            "url": event["request"]["url"],
+            "start": event["timestamp"],
+        }
+
+    def finished(event):
+        """Pair the completed transport with its original monotonic start."""
+        if event["requestId"] in intervals:
+            intervals[event["requestId"]]["end"] = event["timestamp"]
+
+    session.on("Network.requestWillBeSent", started)
+    session.on("Network.loadingFinished", finished)
+    session.send("Network.enable")
+    yield intervals
+    session.detach()
+
+
+def assert_serial_requests(requests, request_intervals):
+    """Reject real transport overlap without mixing Playwright's different timing origins."""
     for request in requests:
         response = request.response()
         assert response is not None and response.finished() is None
-        timing = request.timing
-        start, duration = timing["startTime"], timing["responseEnd"]
+    urls = {request.url for request in requests}
+    intervals = []
+    for interval in request_intervals.values():
+        if interval["url"] not in urls:
+            continue
+        start, end = interval["start"], interval["end"]
         assert isfinite(start) and start > 0
-        assert isfinite(duration) and duration >= 0
-        intervals.append((start, start + duration))
+        assert isfinite(end) and end >= start
+        intervals.append((start, end))
+    assert len(intervals) == len(requests)
     intervals.sort()
     for previous, following in pairwise(intervals):
         assert previous[1] <= following[0], "Browser history requests overlapped"
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
-def test_serial_request_oracle_rejects_real_overlap(app_page):
+def test_serial_request_oracle_rejects_real_overlap(app_page, request_intervals):
     """Two deliberately overlapping browser reads must fail the transport assertion."""
     page, url = app_page
     page.goto(url + "/activity")
@@ -61,7 +91,34 @@ def test_serial_request_oracle_rejects_real_overlap(app_page):
     for route in reversed(held):
         route.fulfill(json={"ok": True})
     with pytest.raises(AssertionError, match="Browser history requests overlapped"):
-        assert_serial_requests(requests)
+        assert_serial_requests(requests, request_intervals)
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_serial_request_oracle_accepts_error_body_cancellation(app_page, request_intervals):
+    """Awaiting a failed response's cancellation before recovery remains genuinely serial."""
+    page, url = app_page
+    page.goto(url + "/activity")
+    requests = []
+
+    def respond(route):
+        """Return one failed body and a successful recovery through real browser transports."""
+        requests.append(route.request)
+        if len(requests) == 1:
+            route.fulfill(status=503, body="Synthetic unavailable history.")
+        else:
+            route.fulfill(json={"ok": True})
+
+    page.route("**/_test/transport-oracle?*", respond)
+    result = page.evaluate("""async () => {
+        const failed = await fetch('_test/transport-oracle?read=failed');
+        await failed.body.cancel();
+        const recovered = await fetch('_test/transport-oracle?read=recovery');
+        return {status: failed.status, recovery: await recovered.json()};
+    }""")
+    assert result == {"status": 503, "recovery": {"ok": True}}
+    assert len(requests) == 2
+    assert_serial_requests(requests, request_intervals)
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)
@@ -837,7 +894,7 @@ def test_pagination_restores_keyboard_focus_after_held_and_failed_reads(app_page
     ("first_failure", "move_focus"), [(False, False), (True, False), (False, True)]
 )
 def test_live_resets_queue_one_read_without_releasing_pagination_focus(
-    app_page, first_failure, move_focus
+    app_page, request_intervals, first_failure, move_focus
 ):
     """Real replay resets coalesce behind a held keyboard read, including failure recovery."""
     page, url = app_page
@@ -920,7 +977,7 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
     expect(next_page).to_be_enabled()
     expect(page.get_by_label("Day", exact=True) if move_focus else next_page).to_be_focused()
     assert len(held) == 2 and len(requests) == 2
-    assert_serial_requests(requests)
+    assert_serial_requests(requests, request_intervals)
 
 
 @pytest.mark.parametrize("app_site", ["activity"], indirect=True)

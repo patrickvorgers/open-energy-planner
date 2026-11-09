@@ -761,8 +761,18 @@ class PlanCoordinator:
                         "solar_configuration_unreadable",
                         "Restore the saved solar configuration or explicitly save corrected settings in the app.",
                     )
-                elif data.get("solar", {}).get("history_issues"):
-                    names = ", ".join(sorted(data["solar"]["history_issues"]))
+                elif solar_history_issues := {
+                    entity: issue
+                    for entity, issue in data.get("solar", {}).get("history_issues", {}).items()
+                    if issue
+                    in {
+                        "unsupported_statistics",
+                        "recorder_unavailable",
+                        "history_continuity_unavailable",
+                        "history_cache_unreadable",
+                    }
+                }:
+                    names = ", ".join(sorted(solar_history_issues))
                     self.action_required(
                         "solar_history_unavailable",
                         "Check Recorder and the selected cumulative solar production sensors: "

@@ -266,8 +266,8 @@ def test_explicit_learning_cohort_requests_only_complete_later_hours_and_one_pre
     )
 
 
-def test_changed_overlap_preserves_accepted_history_and_archives_the_incoming_evidence(tmp_path):
-    """Conflicting year-boundary sums never silently replace whichever chunk was loaded first."""
+def test_changed_overlap_excludes_only_the_conflict_and_archives_both_transfers(tmp_path):
+    """A conflicting year-boundary sum cannot reject the rest of either annual transfer."""
     runtime = runtime_case(tmp_path)
     discover(runtime)
     first = runtime.request(NOW)
@@ -277,12 +277,18 @@ def test_changed_overlap_preserves_accepted_history_and_archives_the_incoming_ev
     second = runtime.request(NOW)
     report = chunk_report(second, changed_overlap=True)
     runtime.receive(second["version"], report.history, NOW, report=report)
-    assert runtime.histories == accepted
-    assert runtime.history_issues["sensor.pv0"] == "history_continuity_unavailable"
+    conflict = datetime.fromisoformat(second["start"])
+    hours = runtime.histories["sensor.pv0"].hours
+    assert conflict not in {hour.start for hour in hours}
+    assert set(accepted["sensor.pv0"].hours) - set(hours) == {
+        hour for hour in accepted["sensor.pv0"].hours if hour.start == conflict
+    }
+    assert any(hour.start.year == 2024 for hour in hours)
+    assert runtime.history_issues == {}
     assert len(list(runtime.store.documents.iter_prefix("history-import-chunk-"))) == 2
     restored = SolarRuntime(SolarStore(runtime.store.documents))
-    assert restored.histories == accepted
-    assert restored.history_issues["sensor.pv0"] == "history_continuity_unavailable"
+    assert restored.histories == runtime.histories
+    assert restored.history_issues == {}
 
 
 def test_changed_recorder_identity_preserves_the_cached_cohort(tmp_path):
@@ -305,8 +311,8 @@ def test_changed_recorder_identity_preserves_the_cached_cohort(tmp_path):
     assert restored.history_issues["sensor.pv0"] == "history_continuity_unavailable"
 
 
-def test_changed_previously_accepted_reading_does_not_replace_a_current_year_chunk(tmp_path):
-    """Historical corrections require reconciliation rather than silently changing a cached training cohort."""
+def test_changed_previously_accepted_reading_excludes_only_its_endpoint(tmp_path):
+    """A historical correction cannot silently change a target or block the newly captured day."""
     runtime = runtime_case(tmp_path)
     discover(runtime)
     finish(runtime)
@@ -315,8 +321,14 @@ def test_changed_previously_accepted_reading_does_not_replace_a_current_year_chu
     pending = runtime.request(next_day)
     report = chunk_report(pending, changed_overlap=True)
     runtime.receive(pending["version"], report.history, next_day, report=report)
-    assert runtime.histories == accepted
-    assert runtime.history_issues["sensor.pv0"] == "history_continuity_unavailable"
+    conflict = datetime.fromisoformat(pending["start"])
+    hours = runtime.histories["sensor.pv0"].hours
+    assert conflict not in {hour.start for hour in hours}
+    assert set(accepted["sensor.pv0"].hours) - set(hours) == {
+        hour for hour in accepted["sensor.pv0"].hours if hour.start == conflict
+    }
+    assert len(hours) == len(accepted["sensor.pv0"].hours) + 23
+    assert runtime.history_issues == {}
 
 
 def test_aggregate_history_can_span_years_while_each_wire_transfer_remains_bounded():
@@ -381,7 +393,7 @@ def test_consistent_recheck_clears_quarantine_only_after_original_identity_and_r
     report = chunk_report(first)
     runtime.receive(first["version"], report.history, NOW, report=report)
     second = runtime.request(NOW)
-    report = chunk_report(second, changed_overlap=True)
+    report = chunk_report(second, identity={**IDENTITY, "metadata_id": 99})
     runtime.receive(second["version"], report.history, NOW, report=report)
     restored = SolarRuntime(SolarStore(runtime.store.documents))
     pending = restored.request(NOW)

@@ -4,7 +4,6 @@ import {settingsSummary} from "./appliance-settings-detail.js";
 import {identity} from "./identity.js";
 import {SaveBar} from "./save-bar.js";
 import {confirmAction} from "./confirmation.js";
-import {bindApplianceSettingsNavigation} from "./appliance-settings-navigation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {sourceRefresh, retainInputs} from "./source-refresh.js";
 import {applianceSettingsApi} from "./appliance-settings-api.js";
@@ -21,7 +20,6 @@ const integrationSelections = new Map();
 const integrationTypeSelections = new Map();
 const deviceSelections = new Map();
 const saveState = new SaveBar({form: "settings", bar: "ev-save-bar", save: "save", discard: "refresh", status: "dirty", read: () => draft, canSave: () => editing});
-bindApplianceSettingsNavigation(saveState);
 find("refresh").textContent = "Cancel";
 find("settings").hidden = true;
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }

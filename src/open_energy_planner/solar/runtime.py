@@ -189,8 +189,11 @@ class SolarRuntime:
         """Persist a source-bound annual transfer before installing a multi-year aggregate.
 
         Delayed replies cannot cross configuration changes. Recorder failures
-        advance to other sources until their bounded retry. Identity or overlap
-        changes retain the prior accepted cache and the original incoming evidence.
+        advance to other sources until their bounded retry. Identity changes
+        retain the prior accepted cache and the original incoming evidence.
+        Overlap conflicts and revised sums exclude affected endpoints from the
+        replacement aggregate, removing it when no usable endpoints remain.
+        Missing or changed accepted hours invalidate learned outputs.
         """
         pending = self.request(now)
         if pending is None or pending["version"] != ref:
@@ -202,8 +205,18 @@ class SolarRuntime:
             except HistoryContinuityError:
                 error = "history_continuity_unavailable"
             else:
+                previous = self.histories.get(entity)
+                fresh = {hour.start: hour.total_kwh for hour in accepted.hours} if accepted else {}
+                if previous and any(
+                    fresh.get(hour.start) != hour.total_kwh for hour in previous.hours
+                ):
+                    self.last_key = None
+                    self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
+                    self.source_selection, self.learning = {}, {}
                 if accepted:
                     self.histories[entity] = accepted
+                else:
+                    self.histories.pop(entity, None)
                 self.history_revision += 1
                 self.history_issues.pop(entity, None)
                 self.history_retry_after.pop(entity, None)

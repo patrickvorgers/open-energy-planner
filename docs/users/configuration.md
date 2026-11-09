@@ -27,6 +27,13 @@ Saved settings normally open as summaries. Select the relevant area or device an
 
 **Cancel** discards the remaining draft and reloads saved state. It cannot undo an independent write that already succeeded during a partially failed save. Read the failure message before retrying. A refresh is not a save, and a saved setting does not prove that Home Assistant has accepted a new plan.
 
+When you follow an internal link with unsaved configuration, **Leave without
+saving?** offers **Cancel** to keep editing or **Discard and leave** to open the
+chosen page. This applies to the main menu, appliance categories and notification
+recovery links. A save or reload already in progress must finish first. Refreshing
+the browser, closing its tab or using browser history can still show the browser's
+own warning, whose appearance the app cannot customize.
+
 ## Separate setup from daily operation
 
 **Settings > Appliances** defines equipment and permissions. The **Energy** pages contain daily requests such as an appliance deadline, an EV departure or a boiler comfort target. Those requests are explicit actions rather than replacement installation definitions.

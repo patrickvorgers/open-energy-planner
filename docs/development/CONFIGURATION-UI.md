@@ -82,15 +82,27 @@ day/filter changes, delayed reads and error recovery on desktop and mobile.
 
 Use `confirmation.js` and the shared Courtyard dialog styling for app-owned
 confirmations. Use native `<dialog>` modality rather than browser `confirm`,
-`alert` or `prompt`. Browser-owned security and `beforeunload` prompts retain
-their native behavior.
+`alert` or `prompt`. Internal navigation away from an unsaved configuration uses
+the same custom confirmation through the shared SaveBar. This includes sidebar,
+appliance-category and notification recovery links in standalone pages and the
+workspace content frame. Cancel keeps the draft and current navigation selection.
+Explicit **Discard and leave** navigates once without a second browser prompt.
+Recheck the draft after asynchronous consent. A save or reload in progress blocks
+navigation with advice by the save actions. Clean pages, same-document fragments,
+downloads and links opening another browsing context do not need discard consent.
+
+Browser-owned security and actual document unloads outside this app navigation,
+including refresh, tab/window closure and browser history controls, retain their
+native protection. Browsers do not allow a custom asynchronous dialog to replace
+their `beforeunload` prompt. Custom navigation consent must not mark a draft saved
+or disable protection for a later browser unload.
 
 Confirm removal of configured devices and saved price rules, cancellation of
 an active appliance planning request, and database replacement or recovery.
 Name the concrete item, explain what changes and what is retained, and say
 whether confirmation applies immediately or only stages a change for Save.
-Use a specific action label rather than Yes or OK. Ordinary saves, navigation,
-routine refresh and removing an unsaved draft item do not need another prompt.
+Use a specific action label rather than Yes or OK. Ordinary saves, clean-page
+navigation, routine refresh and removing an unsaved draft item do not need another prompt.
 Database migration keeps its existing preflight and explicit overwrite consent.
 
 Cancel receives initial focus. Cancel, Escape, Enter on Cancel and backdrop

@@ -181,12 +181,28 @@ def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history():
 
 
 @pytest.mark.parametrize("shared", [False, True])
-def test_app_solar_configuration_prefills_energy_sources_and_reads_independent_history(shared):
+@pytest.mark.parametrize("history_error", ["unsupported_statistics", "history_unavailable"])
+def test_app_solar_configuration_prefills_energy_sources_and_reads_independent_history(
+    shared, history_error, monkeypatch
+):
     """Configure two app-owned PV sources with separate or shared converters. Real Recorder flags unsupported history only for roof_west."""
     from homeassistant.components.energy.data import async_get_manager
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.models import StatisticMeanType
     from homeassistant.components.recorder.statistics import async_import_statistics
+
+    from custom_components.open_energy_planner.history import HistoryBridge
+
+    original_capture = HistoryBridge.capture
+
+    async def capture(bridge, request):
+        """Keep real Recorder reads while distinguishing unsupported sources from a transient outage."""
+        result = await original_capture(bridge, request)
+        if result and result.get("error") == "unsupported_statistics":
+            result["error"] = history_error
+        return result
+
+    monkeypatch.setattr(HistoryBridge, "capture", capture)
 
     async def scenario():
         """Exercise actual Energy preferences, Recorder and authenticated app configuration in isolated HA."""
@@ -283,8 +299,11 @@ def test_app_solar_configuration_prefills_energy_sources_and_reads_independent_h
             assert len(saved["configuration"]["sources"]) == 2
             assert len(saved["configuration"]["inverters"]) == (1 if shared else 2)
             assert saved["configuration"]["sources"][0]["capacity_w"] == 2000
-            assert saved["history_issues"] == {"sensor.roof_west": "unsupported_statistics"}
-            assert entry.runtime_data.issue == "solar_history_unavailable"
+            assert saved["history_issues"] == {"sensor.roof_west": history_error}
+            if history_error == "unsupported_statistics":
+                assert entry.runtime_data.issue == "solar_history_unavailable"
+            else:
+                assert entry.runtime_data.issue is None
             assert saved["request"] is None
             assert "current.json" in list_documents(root / "app", "solar")
             assert manager.data["energy_sources"] == sources
