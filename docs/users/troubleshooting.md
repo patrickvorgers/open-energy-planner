@@ -47,6 +47,7 @@ An unsuccessful new round does not overwrite the original accepted plan or prolo
 In Settings > Appliances > EV charging, choose the vehicle's **Home Assistant
 integration**, then its device and SoC source. Integration names are distinct
 from configured accounts. When several instances exist, choose the account first.
+For a new vehicle, explicitly choose the integration even when it is the only one.
 One suitable device or sensor is selected automatically, while multiple choices
 require your selection. Service devices and devices without a compatible SoC
 source are not offered as vehicles. For a helper without a device, choose

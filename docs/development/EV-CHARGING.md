@@ -38,8 +38,10 @@ a vehicle. Without a device name, the integration title supplies the name, with
 the source name retained when no config entry exists. Charge points retain their
 Energy source names. Vehicle selection starts with the integration type, then an
 optional account/config-entry choice when several instances exist, then the
-eligible device and percentage SoC source. Exactly one suitable choice is
-automatic. Ambiguity remains explicit at every level. Service devices and devices
+eligible device and percentage SoC source. A new vehicle always requires an
+explicit integration type, even when only one is available. Below that level,
+exactly one suitable account, device or SoC source is automatic. Ambiguity remains
+explicit at every level. Service devices and devices
 without a compatible SoC source are excluded. Sources without a registered device
 use an explicit no-device group. Automatic choices are drafts until Save. Parent
 changes clear incompatible draft sources, while matching choices, metadata refresh

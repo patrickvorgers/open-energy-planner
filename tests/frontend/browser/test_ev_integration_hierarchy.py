@@ -308,16 +308,43 @@ def test_missing_parent_remains_visible_without_rebinding_after_refresh(app_page
 
 
 def test_equal_device_names_keep_distinct_explicit_identities(app_page):
-    """Two equally named cars remain separate choices and each binds only its own unique SoC source."""
+    """Duplicate car labels keep group-local numbers and explicit identities when an unrelated car disappears."""
     page, url = app_page
     second = vehicle_source("sensor.synthetic_second_soc", "second")
     second["device_name"] = "Zeekr GT"
-    prepare_vehicle(page, url, extra=[second])
+    unrelated = vehicle_source("sensor.synthetic_alpha_soc", "alpha")
+    unrelated["device_name"] = "Alpha"
+    headers = prepare_vehicle(page, url, extra=[second, unrelated])
     page.get_by_label("Home Assistant integration", exact=True).select_option("zeekr_ev")
     device = page.get_by_label("Home Assistant device", exact=True)
     expect(device).to_have_value("")
-    expect(device.locator("option")).to_have_text(["Select a source", "Zeekr GT: 1", "Zeekr GT: 2"])
+    expect(device.locator("option")).to_have_text(
+        ["Select a source", "Alpha", "Zeekr GT: 1", "Zeekr GT: 2"]
+    )
     device.select_option("second")
+    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
+        "sensor.synthetic_second_soc"
+    )
+    catalogue = page.request.get(url + "/v1/setup", headers=headers).json()["catalogue"]["data"]
+    catalogue["entities"] = [
+        entity for entity in catalogue["entities"] if entity.get("device_id") != "alpha"
+    ]
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=catalogue).ok
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST" and response.url.endswith("/v1/ha/source-choices/ev")
+        )
+    ) as pending:
+        page.get_by_role("button", name="Refresh Home Assistant sources", exact=True).click()
+    accepted = page.request.post(
+        url + "/v1/ha/source-choices",
+        headers=headers,
+        data={"scope": "ev", "id": pending.value.json()["id"], "page": catalogue},
+    )
+    assert accepted.ok and accepted.json()["accepted"]
+    expect(page.locator("#status")).to_contain_text("sources refreshed")
+    expect(device.locator("option")).to_have_text(["Select a source", "Zeekr GT: 1", "Zeekr GT: 2"])
+    expect(device).to_have_value("second")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
         "sensor.synthetic_second_soc"
     )

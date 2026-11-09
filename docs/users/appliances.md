@@ -51,6 +51,8 @@ several accounts or instances belong to that integration, an extra
 **Home Assistant integration instance** choice appears before the device.
 After choosing the integration, one suitable device or sensor is selected automatically. Multiple
 suitable choices require an explicit selection. Nothing is saved until **Save**.
+The integration itself always needs your selection when adding a vehicle, even
+when only one integration is available.
 
 Only devices with a compatible SoC sensor are offered. Service/API devices and
 humidity sensors are excluded. The sensor must report `%`. Its battery device

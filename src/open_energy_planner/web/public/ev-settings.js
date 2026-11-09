@@ -76,7 +76,14 @@ function vehicleIntegration(entity) { return entity.integration_domain || entity
 /** Give identical visible names distinct choices without changing the underlying identities. */
 function pickerOptions(groups) {
     const options = [...groups].sort((left, right) => left[1].localeCompare(right[1]) || left[0].localeCompare(right[0]));
-    return options.map(([id, label], index) => [id, options.some(([otherId, otherLabel]) => otherId !== id && otherLabel === label) ? `${label}: ${index + 1}` : label]);
+    const totals = new Map(), positions = new Map();
+    for (const [, label] of options) totals.set(label, (totals.get(label) || 0) + 1);
+    return options.map(([id, label]) => {
+        if (totals.get(label) === 1) return [id, label];
+        const position = (positions.get(label) || 0) + 1;
+        positions.set(label, position);
+        return [id, `${label}: ${position}`];
+    });
 }
 /** Select integration, optional account, device and SoC in order. Unique compatible choices remain drafts until Save. */
 function vehicleSourcePicker(card, row) {
