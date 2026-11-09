@@ -28,7 +28,10 @@ hours are unavailable, not zeros. The latest three eligible days within a
 30-day lookback provide evidence. Each day records hourly MAE and absolute daily
 energy error. A challenger must improve hourly MAE on each day by more than both
 5.0% and 0.001 kWh per hour. If multiple challengers qualify, the lowest summed
-MAE wins. Ties or absent evidence retain the baseline. These thresholds are
+MAE wins. A tie with the baseline cannot qualify. Equally scoring eligible
+challengers retain their comparison order, currently Ridge before weather.
+Insufficient or unreadable evidence, no consistent improvement or unavailable
+model inputs retain the baseline. These thresholds are
 conservative product policies, not a statistical accuracy guarantee.
 
 A later bad day, changed measurement boundary or unavailable current model can

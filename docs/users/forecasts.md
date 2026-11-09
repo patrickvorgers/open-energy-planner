@@ -22,7 +22,9 @@ original predictions. Three nonoverlapping complete days must each improve mean
 absolute hourly error against the measured weekday baseline by more than 5.0% and
 0.001 kWh per hour. These are forward comparisons, not training fit or a random
 split. Among qualifying alternatives, the lowest mean error is selected. A tie
-retains the baseline. Household and device models use the same local-day
+with the baseline cannot qualify. If qualifying learned models tie, Ridge takes
+precedence over the weather model. Insufficient evidence, inconsistent improvement
+or unavailable inputs retain the baseline. Household and device models use the same local-day
 accuracy principle. Measurement separation does not wait for ML selection.
 
 Under **Insights > Forecast quality > Devices**, expand **Current model and

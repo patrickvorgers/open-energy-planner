@@ -61,19 +61,29 @@ function flowSeries(name, color, intervals, values, tooltipGroup) {
     }))};
 }
 
-/** Integrate archived component energy exactly. Missing or overlapping coverage remains unavailable. */
+/** Retain the ISO fraction below Date's millisecond precision without rounding archived timestamps. */
+function timestampRemainder(start) {
+    const fraction = String(start).match(/\.(\d+)(?=Z|[+-]\d{2}:\d{2}$)/)?.[1] || "";
+    return Number(`0.${fraction.slice(3)}`);
+}
+
+/** Integrate archived kWh using relative times to preserve microsecond weights and avoid epoch roundoff. */
 function componentEnergy(steps, interval) {
-    const start = Date.parse(interval.start), end = start + interval.duration_h * MILLISECONDS_PER_HOUR;
-    let cursor = start, result = 0;
+    const start = Date.parse(interval.start), end = interval.duration_h * MILLISECONDS_PER_HOUR;
+    if (!finite(start) || !finite(end) || end <= 0) return null;
+    const remainder = timestampRemainder(interval.start);
+    let cursor = 0, result = 0;
     for (const step of steps || []) {
-        const sourceStart = Date.parse(step.start), sourceEnd = sourceStart + step.duration_h * MILLISECONDS_PER_HOUR;
-        const left = Math.max(start, sourceStart), right = Math.min(end, sourceEnd);
+        const sourceStart = Date.parse(step.start) - start + timestampRemainder(step.start) - remainder;
+        const sourceEnd = sourceStart + step.duration_h * MILLISECONDS_PER_HOUR;
+        if (!finite(sourceStart) || !finite(sourceEnd) || !finite(step.duration_h) || step.duration_h <= 0 || !finite(step.kwh) || step.kwh < 0) return null;
+        const left = Math.max(0, sourceStart), right = Math.min(end, sourceEnd);
         if (right <= left) continue;
-        if (!energy(step.kwh) || left !== cursor || !finite(step.duration_h) || step.duration_h <= 0) return null;
+        if (Math.abs(left - cursor) > TIMESTAMP_ROUNDOFF_MILLISECONDS) return null;
         result += step.kwh * (right - left) / (sourceEnd - sourceStart);
         cursor = right;
     }
-    return cursor === end ? result : null;
+    return Math.abs(cursor - end) <= TIMESTAMP_ROUNDOFF_MILLISECONDS ? result : null;
 }
 
 /** Show original household expectation before concrete tasks replaced part of the device forecasts. */

@@ -158,7 +158,25 @@ class DemandRuntime:
         return True
 
     def control_days(self, now):
-        """Reuse committed publication history instead of maintaining a second intervention archive."""
+        """Reuse committed publication history instead of maintaining a second intervention archive.
+
+        Reads the current configuration timezone and selected consumers. The
+        publication-history owner receives one bounded local-day query per
+        lookback day on each build. This method does not write history.
+
+        Args:
+            now: Aware time used to identify completed local days.
+
+        Returns:
+            A mapping from controlled consumer entity IDs to lists of local
+            YYYY-MM-DD dates. No plan repository returns an empty mapping.
+
+        Failure Behavior:
+            OSError, ValueError, KeyError or TypeError during history lookup
+            returns ['*'] for each currently selected consumer, or 'household'
+            when none is selected. Daily selection then excludes all days and
+            cannot promote a learned model from unavailable control evidence.
+        """
         from zoneinfo import ZoneInfo
 
         from open_energy_planner.core.calendar import day_window

@@ -153,7 +153,7 @@ def summary_cards(plan, problem):
             "Forecast totals: Full planning horizon",
             [
                 fact(
-                    "Remaining household forecast: AC"
+                    "Total demand forecast: AC"
                     if plan["input_snapshot"].get("load_components")
                     else "Household demand forecast: AC",
                     sum(interval.load_kwh for interval in problem.intervals),

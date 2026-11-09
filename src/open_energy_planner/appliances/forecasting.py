@@ -361,7 +361,32 @@ def component(
     boundary=None,
     excluded_dates=(),
 ):
-    """Select suitable models by preserved daily accuracy, retaining a measured weekday baseline."""
+    """Select suitable models by preserved daily accuracy, retaining a measured weekday baseline.
+
+    Args:
+        configuration: Demand configuration with the HA timezone and measurement boundary.
+        samples: Completed hourly samples containing nonnegative residual AC kWh.
+        temperatures: Available temperature evidence for optional weather features.
+        now: Aware prediction time and knowledge cutoff.
+        weather_sensitive: Whether temperature features and a weather candidate apply.
+        documents: Optional demand archive used for original daily comparisons.
+        boundary: Identity of the separated measurement component.
+        excluded_dates: Local ISO dates of controlled use, or '*' to exclude all days.
+
+    Returns:
+        Three values: the selected fitted model, its forecast in AC kWh, and daily
+        selection evidence. Unusable Ridge or weather candidate fits are omitted
+        while the weekday baseline remains available.
+
+    Raises:
+        ValueError: The weekday baseline lacks seven complete days covering every hour,
+            or its input/prediction contract is invalid.
+
+    Side Effects:
+        With an archive, choose_daily refreshes the pending next-day capture and
+        freezes original predictions after midnight. Controlled local dates cannot
+        provide promotion evidence. Unreadable comparison evidence keeps the baseline.
+    """
     from open_energy_planner.forecast_selection.accuracy import choose_daily
 
     baseline = WeekdayProfile.fit(configuration, samples)

@@ -1,5 +1,6 @@
 """Build a real solved two-day plan with individual expected and acknowledged appliance demand."""
 
+from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -24,7 +25,7 @@ DEVICE_NAMES = {
 }
 
 
-def seed(directory):
+def seed(directory, *, fractional_boundaries=False):
     """Keep full-day solar and prices, and solve explicit washer/dryer tasks with remaining expectations."""
     seed_household(directory)
     repository = SqlPlanRepository(directory)
@@ -81,8 +82,8 @@ def seed(directory):
             appliances.submit(
                 entity,
                 "synthetic-ready-" + entity,
-                START + timedelta(hours=8),
-                START + timedelta(hours=17),
+                START + timedelta(hours=8, microseconds=123456 if fractional_boundaries else 0),
+                START + timedelta(hours=17, microseconds=-123456 if fractional_boundaries else 0),
                 START,
             )
         snapshot = InputSnapshot(
@@ -102,8 +103,20 @@ def seed(directory):
             START,
         )
         assert len(snapshot.problem.appliances) == 2 and len(snapshot.load_components) == 5
+        if fractional_boundaries:
+            # Freeze acknowledged starts to test boundary precision independently of timing search.
+            snapshot = replace(
+                snapshot,
+                problem=replace(
+                    snapshot.problem,
+                    appliances=tuple(
+                        replace(work, fixed_start=work.ready_at)
+                        for work in snapshot.problem.appliances
+                    ),
+                ),
+            )
         solution = HighsSolver().solve(snapshot.problem, SolveOptions(30))
-        assert solution.plan is not None
+        assert solution.plan is not None, (solution.status, solution.stop_reason)
         costs = validate(snapshot.problem, solution.plan)
         document = plan_document(snapshot, solution, costs, START + timedelta(seconds=1))
         document.update(

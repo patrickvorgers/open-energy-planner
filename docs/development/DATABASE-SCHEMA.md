@@ -887,15 +887,14 @@ not serialized. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
 
 `consumer-forecast-<forecast-version>.json` stores the complete composite household forecast and its `components`: source identities, per-device forecast intervals (UTC start, duration in hours, kWh), residual forecast, settings version and fitted profile/Ridge parameters. Forecasts and parameters retain their original issue/training identities. No executable estimator pickle is stored. The composite has no excluded devices because residual plus device demand is already recombined. A missing component cannot be archived as zero. Selection/evaluation references stay in the existing planning documents. History streams are transient training inputs. The archived forecasts/parameters are the evidence used for planning. All these rows join existing all-table database transfer and backup procedures automatically and must be covered by the four-backend document contracts.
 
-Weather-sensitive component records additionally expose `weather_learning` with
-policy, candidate and selected model IDs, readiness status, completed/required
-windows, absolute/relative improvement thresholds, per-window MAE in kWh/hour,
-pending UTC end, training coverage and excluded training periods with their
-unavailable-input reasons, and an optional excluded comparison with its reason. Other
-consumers retain null weather learning. The component's existing `status` still
-describes household-composition activation separately from accuracy admission.
+Ready component records expose `model_selection` with the daily policy, selected
+model ID, readiness, completed/required days, improvement thresholds, matched-day
+MAE and daily energy errors in kWh, pending end and original evidence digests.
+Weather candidates additionally retain training coverage and excluded periods
+with unavailable-input reasons. `weather_features_used` reports actual temperature
+feature use. Component `status` reflects its daily selection readiness.
 
-The same `demand` namespace owns these weather-learning JSON contracts through
+The same `demand` namespace retains these research weather-learning JSON contracts through
 the existing `oep_documents` namespace/name primary key. No new SQL table,
 column, index or database engine is introduced:
 
@@ -906,12 +905,14 @@ column, index or database engine is introduced:
 | `consumer-weather-assessment-<digest>.json` | Original window identity and UTC bounds, original issue time, later actual kWh values and their timestamp/value digest, each model's hourly MAE and the derived improvement result. Source corrections append different assessments without replacing original predictions or earlier assessments. |
 | `consumer-weather-selection-<family>.json` | Mutable bounded pointer to at most three disjoint completed window digests and one pending digest, plus the latest excluded interval/reason. Family binds meter configuration, selection policy, feature schema and simpler algorithm. No stored promotion boolean grants activation. Reads validate referenced immutable evidence and recompute scores against available actual history. |
 
-Missing interior measurements exclude the comparison instead of fabricating
-zeros. Delayed final measurements remain pending. Scores require complete
-24-hour windows within 90 days and a benefit above both 5.0% and 0.001 kWh/hour
-against each simpler alternative in all three windows. The existing financial
-composition comparison remains required. Immutable source/model evidence is
-not statistically trimmed. These documents participate in the existing four-backend
+The retained `appliances/weather_learning.py` research helper still writes these
+documents using its original UTC-window comparison policy. Production component
+selection no longer calls it. Production uses `forecast_selection/accuracy.py`
+and the `accuracy-pending-*` and `accuracy-day-*` contracts described above.
+See [automatic model selection](MODEL-SELECTION.md) for current admission rules.
+Old weather pointers and financial shadow preferences do not authorize admission.
+Retained immutable source/model evidence is not rewritten or statistically trimmed.
+These documents participate in the existing four-backend
 restart and cross-backend transfer contracts without depending on the old source
 engine afterward.
 

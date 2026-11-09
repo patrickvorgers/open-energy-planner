@@ -493,13 +493,29 @@ class ApplianceService:
     def prepare(self, snapshot, demand, now, *, excluded_entities=(), replacement_windows=()):
         """Replace controlled baselines and refine task windows for physical peaks.
 
-        Keyword-only excluded_entities removes those meters' baseline contribution
-        even without an appliance task, bypassing the no-task early return. A
-        missing excluded-meter forecast sets self.issue and retains household demand.
+        Args:
+            snapshot: Frozen installation inputs with AC interval energy in kWh.
+            demand: Current demand model used to choose matching component forecasts.
+            now: Aware calculation time used to check forecast freshness.
+            excluded_entities: Meters replaced by separately modeled service even
+                without an appliance task.
+            replacement_windows: Tuples of (entity_id, left, right), with aware
+                datetimes delimiting service replacement. Excluded meters without
+                a task use these windows, defaulting to the full planning horizon.
 
-        Preserve demand_evidence references to the original prediction archives.
-        Copy input baseline forecasts into appliance_evidence and store calculated
-        residual interval loads in the physical problem.
+        Returns:
+            A copied snapshot with refined task intervals and load_components
+            retaining original and remaining AC kWh. A task replaces a proportional
+            expected share within its ready/deadline window, capped by remaining
+            cycle energy. Other expectation remains. Original demand_evidence is
+            retained and matching forecasts are copied into appliance_evidence.
+
+        Side Effects:
+            Clears self.issue on valid preparation. Missing or incompatible device
+            forecasts set a not-ready issue. Expired, incomplete or invalid coverage
+            sets a boundary-unavailable issue. Both retain the original household
+            problem and update only the appliance revision. Unsupported problem
+            types return unchanged. No task is started or persisted here.
         """
         if not isinstance(snapshot.problem, InstallationProblem):
             return snapshot

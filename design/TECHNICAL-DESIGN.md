@@ -666,8 +666,9 @@ Validated feasible timeout results may publish with honest status. Invalid/absen
 Implementation update: [household demand](../docs/development/DEMAND-FORECASTING.md)
 now has typed AC reconstruction and measured exclusions, startup and weekday/hour
 models, a NumPy Ridge candidate and an explicit chronological decision-scoring
-port. Startup remains active without history. Ridge requires demonstrated realized
-planning benefit. Production historical settlement contexts are not fabricated.
+port. Startup remains active without history. Ridge admission requires preserved
+matched local-day forecast-accuracy evidence. Financial shadow comparisons remain
+research-only. Production historical settlement contexts are not fabricated.
 Native HA options, Recorder transfer, optional Open-Meteo temperatures and archived
 forecast evidence connect to the existing planning-basis port. The solar increment
 below now supplies production-weather ingress, PV forecasts and native source
@@ -677,7 +678,7 @@ flexible-device control remain separate work.
 Synthetic series are allowed for the first closed round. Production needs the agreed automatic sources:
 
 - PV: Open-Meteo plus HA production history. Use pvlib-python/PVWatts DC as the selected physical baseline, including the capacity/orientation startup estimate without history.
-- Demand: one whole-house profile including baseload. Start from annual-demand or weekday history. Automatically enable local learning only after chronological planning benefit. No separate user-configured baseload model.
+- Demand: one whole-house profile including baseload. Start from annual-demand or weekday history. Admit learned models only after preserved matched local-day accuracy evidence. No separate user-configured baseload model.
 - Market: internal adapter/bidding area inferred when unambiguous. Contract formulas give effective prices.
 - Extra prices: separate external forecast, with explicit published-price shortened horizon on absence.
 
@@ -807,8 +808,8 @@ realized weather can support fitting, but it must not be presented as weather
 forecasts available at an earlier planning decision. Activation still requires
 chronological matching forecast-accuracy evidence under FORE-04–06. The first implemented
 candidate is a bounded regularized per-source gain around the physical baseline.
-It is not a guarantee of improvement. Production activation now uses immutable
-forward shadow decisions and independently settled realization, as documented in
+It is not a guarantee of improvement. Production activation uses preserved
+matched local-day forecast accuracy, as documented in
 [automatic model selection](../docs/development/MODEL-SELECTION.md). Keep the
 physical baseline available when history, observable available-PV evidence or
 learned-model inputs are insufficient.

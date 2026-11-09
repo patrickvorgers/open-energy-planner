@@ -58,10 +58,12 @@ def app_site(request):
             from tests.frontend.browser.documentation_fixture import seed
 
             seed(Path(directory))
-        if getattr(request, "param", None) == "device_planning":
+        if getattr(request, "param", None) in ("device_planning", "device_planning_precision"):
             from tests.frontend.browser.device_planning_fixture import seed as seed_devices
 
-            seed_devices(Path(directory))
+            seed_devices(
+                Path(directory), fractional_boundaries=request.param == "device_planning_precision"
+            )
 
         async def serve():
             """Own the app lifecycle and close its forecast/solver tasks before deleting the temporary store."""

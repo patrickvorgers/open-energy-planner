@@ -51,7 +51,7 @@ def integral(steps, start, end):
             continue
         if left != cursor:
             raise ValueError("Household component coverage missing")
-        amounts.append(step.kwh * (right - left) / timedelta(hours=step.duration_h))
+        amounts.append(step.kwh * ((right - left) / timedelta(hours=step.duration_h)))
         cursor = right
     if cursor != end:
         raise ValueError("Household component coverage missing")
@@ -95,7 +95,7 @@ def scale_window(steps, left, right, fraction):
             {step.start, stop, max(step.start, min(stop, left)), max(step.start, min(stop, right))}
         )
         for start, end in pairwise(boundaries):
-            amount = step.kwh * (end - start) / timedelta(hours=step.duration_h)
+            amount = step.kwh * ((end - start) / timedelta(hours=step.duration_h))
             if left <= start < right:
                 amount *= 1 - fraction
             result.append(LoadStep(start, (end - start) / timedelta(hours=1), amount))

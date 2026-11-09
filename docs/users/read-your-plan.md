@@ -34,6 +34,23 @@ Use **Next 6 hours**, **Next 24 hours** or **Full period** (with its available d
 
 [Open the mobile chart example](../assets/planning-mobile.png) to see the stacked cost cards and legend below the same synthetic two-day plan. Open any guide figure at full size when its labels are too small on your screen.
 
+## See individual appliances
+
+The Optimizer, Self-consumption and Without battery charts show each separated
+appliance in the consumption bars and legend. **Expected** is probable remaining
+use. **Scheduled** is a concrete acknowledged cycle or charging session. Both
+are estimates until measured. Use the legend to hide or show a contribution.
+
+A scheduled cycle replaces its expected share rather than being added twice.
+Other probable use remains. Reference charts execute acknowledged cycles at their
+immediate reference starts, so their bars can differ from the optimizer's chosen
+starts. EV and boiler service keep their existing comparison assumptions.
+
+**Household base: AC** excludes separated appliances. **Household remainder: AC**
+also contains selected devices that still lack enough usable history to separate.
+An unavailable device is not shown as a measured zero. These expectations do not
+authorize starting a device. Readiness and execution permission remain necessary.
+
 ## Read cost before benefit
 
 Every scenario starts with **Expected economic cost**. Both battery scenarios then show **Expected benefit versus without battery** against the same baseline. A negative benefit means the scenario costs more than the baseline. An unavailable comparison stays unavailable.
@@ -67,20 +84,3 @@ Power in kW is a rate. Energy in kWh is the amount across an interval. A steady 
 For a fixed stationary-battery target, positive W means discharge and negative W means charge at the battery DC terminal. Zero is a real idle target. A numeric value can be unknown because its mode has no fixed target, or unavailable because no usable command exists. Do not turn either state into zero in an automation.
 
 **Next:** [Understand Savings](savings.md), [inspect forecast quality](forecasts.md#read-forecast-quality) or [resolve a warning](troubleshooting.md).
-
-## See individual appliances
-
-The Optimizer, Self-consumption and Without battery charts show each separated
-appliance in the consumption bars and legend. **Expected** is probable remaining
-use. **Scheduled** is a concrete acknowledged cycle or charging session. Both
-are estimates until measured. Use the legend to hide or show a contribution.
-
-A scheduled cycle replaces its expected share rather than being added twice.
-Other probable use remains. Reference charts execute acknowledged cycles at their
-immediate reference starts, so their bars can differ from the optimizer's chosen
-starts. EV and boiler service keep their existing comparison assumptions.
-
-**Household base: AC** excludes separated appliances. **Household remainder: AC**
-also contains selected devices that still lack enough usable history to separate.
-An unavailable device is not shown as a measured zero. These expectations do not
-authorize starting a device. Readiness and execution permission remain necessary.

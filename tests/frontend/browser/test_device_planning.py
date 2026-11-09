@@ -8,8 +8,10 @@ from playwright.sync_api import expect
 from tests.frontend.browser.helpers import TOKEN
 
 
-@pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
-def test_three_planning_charts_show_expected_and_scheduled_devices(app_page):
+@pytest.mark.parametrize(
+    "app_site", ["device_planning", "device_planning_precision"], indirect=True
+)
+def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, request):
     """Two acknowledged cycles and four individual expectations retain a conserved full 48-hour horizon."""
     page, url = app_page
     from tests.frontend.browser.documentation_fixture import START
@@ -42,15 +44,25 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page):
         assert "Household base: AC" in data["labels"]
         assert "Scheduled appliances: AC" not in data["labels"]
         assert len(data["bars"][0]["values"]) >= 192
-        for values in zip(*(series["values"] for series in data["bars"]), strict=True):
+        for interval_index, values in enumerate(
+            zip(*(series["values"] for series in data["bars"]), strict=True)
+        ):
             assert all(value is not None for value in values)
-            assert sum(values) == pytest.approx(0, abs=0.00001)
+            assert sum(values) == pytest.approx(0, abs=0.00001), (
+                identity,
+                interval_index,
+                [(series["label"], value) for series, value in zip(data["bars"], values)],
+            )
         scheduled = next(
             series for series in data["bars"] if series["label"] == "Washing machine: Scheduled"
         )
         assert any(value < 0 for value in scheduled["values"])
         assert any(value == 0 for value in scheduled["values"])
-        directory = Path("results/ci/device-planning")
+        directory = Path(
+            "results/ci/device-planning-precision"
+            if request.node.callspec.params["app_site"] == "device_planning_precision"
+            else "results/ci/device-planning"
+        )
         directory.mkdir(parents=True, exist_ok=True)
         capture = page.locator("#" + identity).locator("..").locator("..")
         if page.viewport_size["width"] < 500:
@@ -59,6 +71,17 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page):
             page.set_viewport_size({"width": page.viewport_size["width"], "height": 1800})
         capture.screenshot(path=str(directory / f"{identity}-{page.viewport_size['width']}.png"))
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.get_by_text("Understand this plan", exact=True).click()
+    totals = page.locator("#plan-evidence article").filter(
+        has_text="Forecast totals: Full planning horizon"
+    )
+    expect(totals).to_contain_text("Total demand forecast: AC")
+    # Two days contain 46.6 kWh. The ready windows replace .9 kWh with 2.7 kWh of cycles.
+    expect(totals.locator("dd").first).to_have_text("48.4 kWh")
+    if request.node.callspec.params["app_site"] == "device_planning":
+        totals.screenshot(
+            path=f"results/ci/device-planning/forecast-total-{page.viewport_size['width']}.png"
+        )
 
 
 def test_corrupt_component_attribution_is_a_gap_instead_of_a_double_count(app_page):
@@ -80,3 +103,30 @@ def test_corrupt_component_attribution_is_a_gap_instead_of_a_double_count(app_pa
         if series.get("type") == "bar"
         for interval in series["intervals"]
     )
+
+
+def test_real_component_gaps_overlaps_and_invalid_quantities_remain_unavailable(app_page):
+    """A 2-ms gap or overlap is real. Invalid duration or energy cannot become a valid zero."""
+    page, url = app_page
+    page.goto(url + "/overview")
+    result = page.evaluate(
+        """async () => {
+        const {householdForecastEnergy} = await import('./setup/balance.js');
+        const interval = {start:'2026-11-04T00:00:00Z', duration_h:.25};
+        const original = [{start:interval.start,duration_h:.125,kwh:.1},
+            {start:'2026-11-04T00:07:30Z',duration_h:.125,kwh:.1}];
+        const samples = [structuredClone(original)];
+        for (const change of [
+            {start:'2026-11-04T00:07:30.002Z'},
+            {start:'2026-11-04T00:07:29.998Z'},
+            {duration_h:.125 - 2/3600000},
+            {duration_h:0}, {duration_h:-.125}, {duration_h:Infinity},
+            {kwh:-.00000001}, {kwh:NaN}, {kwh:Infinity}]) {
+            samples.push([original[0],{...original[1],...change}]);
+        }
+        return samples.map(steps => householdForecastEnergy(
+            {input_snapshot:{load_components:[{forecast_steps:steps}]}},interval));
+        }"""
+    )
+    assert result[0] == pytest.approx(0.2)
+    assert result[1:] == [None] * 9

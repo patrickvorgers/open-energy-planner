@@ -12,12 +12,25 @@ from open_energy_planner.demand.calculation.composition import (
     LoadStep,
     integral,
     replace_cycle,
+    scale_window,
     validate_components,
 )
 from open_energy_planner.installation.model import InstallationProblem
 from open_energy_planner.optimization.domain import Interval
 
 START = datetime(2026, 11, 4, tzinfo=UTC)
+
+
+def test_fractional_second_integration_retains_energy_without_rounding_a_timedelta():
+    """A .123456-second portion of .04 kWh/hour contains .04*.123456/3600 kWh exactly."""
+    boundary = START + timedelta(microseconds=123456)
+    steps = (LoadStep(START, 1, 0.04),)
+    expected = 0.04 * 0.123456 / 3600
+    assert integral(steps, START, boundary) == pytest.approx(expected, abs=1e-15)
+    split = scale_window(steps, boundary, START + timedelta(hours=1), 0)
+    assert split[0].kwh == pytest.approx(expected, abs=1e-15)
+    assert integral(split, START, boundary) == pytest.approx(expected, abs=1e-15)
+    assert sum(step.kwh for step in split) == pytest.approx(0.04, abs=1e-15)
 
 
 def test_cycle_replaces_only_its_energy_and_service_window():
