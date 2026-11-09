@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENTS, IDENTITY_LENGTH
+from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
 
 DOCUMENT_NAMESPACES = (
     "contracts",
@@ -91,7 +92,7 @@ class SqlDocuments:
             raise OSError("Document archive read failed") from None
         if payload is None:
             raise FileNotFoundError("Archived document is missing")
-        return json.loads(payload)
+        return json.loads(decode_payload(payload))
 
     def read_many(self, names):
         """Snapshot known document pointers in one SQL statement. Missing identities remain absent."""
@@ -113,17 +114,19 @@ class SqlDocuments:
                 ).all()
         except SQLAlchemyError:
             raise OSError("Document archive read failed") from None
-        return {name: json.loads(payload) for name, payload in rows}
+        return {name: json.loads(decode_payload(payload)) for name, payload in rows}
 
     def write(self, name, value):
         """Persist finite JSON without exposing connection parameters in errors."""
         key = self._key(name)
-        payload = json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-            default=lambda value: value.isoformat(),
+        payload = encode_payload(
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+                default=lambda value: value.isoformat(),
+            )
         )
         with self.transaction():
             connection = self.pending.connection
@@ -152,6 +155,6 @@ class SqlDocuments:
                     .execution_options(yield_per=ARCHIVE_BATCH_ROWS)
                 )
                 for (payload,) in rows:
-                    yield json.loads(payload)
+                    yield json.loads(decode_payload(payload))
         except SQLAlchemyError:
             raise OSError("Document archive read failed") from None

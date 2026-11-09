@@ -33,13 +33,13 @@ Open **Cost breakdown** to separate cash, wear and stored-energy value. Check ef
 
 ## Read evaluated Savings
 
-Choose the evaluation version and period. The actual side uses retained measurements and published settlement prices. The reference simulates continuous battery self-consumption without price optimization.
+Choose a period and inspect **Daily results**. The actual side uses recorded meters and published settlement prices. **Battery self-consumption** simulates storage without price optimization. **Without battery** simulates the same measured household demand and available solar without storage. Each scenario has its own coverage and bonus counters.
 
 | Planning comparison | Evaluated Savings comparison |
 |---|---|
-| Predicts a future horizon | Evaluates non-overlapping historical intervals |
+| Predicts a future horizon | Evaluates completed local days from chronological quarter-hour measurements |
 | Uses the selected original plan's forecasts and prices | Uses retained metering and published settlement prices |
-| Shows both battery scenarios versus without battery | Compares actual EMS operation with continuous self-consumption |
+| Shows both battery scenarios versus without battery | Preserves actual operation, continuous self-consumption and without-battery costs |
 | Starts each future comparison from the recorded common state | Carries independent reference stock and bonus counters through time |
 
 The reference is simulated, not an independently measured parallel household. A favourable difference does not prove that OEP alone caused it. Real equipment behavior, forecasts and the reference assumptions all matter.
@@ -52,7 +52,22 @@ A contract may start after the earliest available Home Assistant history. For ex
 
 Measured history normally becomes available after the completed interval and Recorder delay. Repeatedly refreshing does not create missing evidence. Open the relevant warning or use [troubleshooting](troubleshooting.md#savings-or-quality-is-incomplete).
 
-Corrections to published prices, rules or confirmed opening evidence can create a new evaluation version. Original plans and prior evaluation evidence remain distinct. A correction does not rerun an old plan as if its inputs had always been different.
+### Provisional and finalized days
+
+Savings initially selects yesterday in Home Assistant's timezone. Device labels
+follow current Home Assistant Energy names while finalized calculations remain
+unchanged. Changing the installation timezone after daily history exists pauses
+automatic processing and retains the existing calendar evidence.
+
+The current day is not evaluated yet. After local midnight, the previous day becomes provisional. Three complete local days remain available for missing measurements, published prices and corrections. For Monday, those are Tuesday, Wednesday and Thursday. Monday closes at Friday 00:00 in Home Assistant's timezone. Summer and winter clock changes do not shorten this calendar window.
+
+Each scenario closes as **Complete**, **Partial** or **Unavailable**. Partial totals cover only the displayed measured time. They are never stretched to represent a full day. Actual costs can remain usable while a simulated scenario is unavailable. The benefit includes only intervals accepted for both scenarios being compared. A complete actual-cost total and a partial reference-cost total cannot simply be subtracted.
+
+After finalization, the daily costs, energy totals, coverage, missing ranges, battery endpoints and calculation versions remain available. Later changes to terms or prices do not silently rewrite a finalized day. Detailed temporary quarters can then expire. **View retained day plan** opens the original daily plan when one was published that day. Its forecast is separate from the measured daily result.
+
+On upgrade, existing history receives a recovery window before old days can close. Backfill proceeds in the background. An old day appearing first does not mean the entire historical import has finished.
+
+A gap in physical measurements never resets a simulated battery to the actual battery. Unknown simulated bonus usage never becomes a fresh allowance. Later actual measurements and independently recoverable scenarios may still produce partial results. Missing prices alone do not erase known physical battery progress.
 
 ## Avoid misleading comparisons
 

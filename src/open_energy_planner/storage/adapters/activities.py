@@ -7,6 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from .lifecycle.schema import ACTIVITIES
+from .payloads import decode_payload, encode_payload
 
 
 class ActivityStore:
@@ -19,7 +20,7 @@ class ActivityStore:
     def write(self, row, now):
         """Atomically upsert an execution and expire old history."""
         values = {key: row[key] for key in ("id", "started_at", "owner", "kind", "state")}
-        values["payload"] = json.dumps(row, allow_nan=False)
+        values["payload"] = encode_payload(json.dumps(row, allow_nan=False))
         try:
             with self.engine.begin() as connection:
                 connection.execute(
@@ -60,7 +61,7 @@ class ActivityStore:
         query = query.order_by(ACTIVITIES.c.started_at.desc(), ACTIVITIES.c.id.desc()).limit(limit)
         try:
             with self.engine.connect() as connection:
-                return [json.loads(row) for row in connection.scalars(query)]
+                return [json.loads(decode_payload(row)) for row in connection.scalars(query)]
         except SQLAlchemyError:
             raise OSError("Activity history could not be read") from None
 
@@ -109,7 +110,7 @@ class ActivityStore:
                 )
             )
             for payload in rows:
-                row = json.loads(payload)
+                row = json.loads(decode_payload(payload))
                 row.update(
                     state="interrupted",
                     finished_at=now.isoformat(),
@@ -118,7 +119,7 @@ class ActivityStore:
                 connection.execute(
                     ACTIVITIES.update()
                     .where(ACTIVITIES.c.id == row["id"])
-                    .values(state="interrupted", payload=json.dumps(row))
+                    .values(state="interrupted", payload=encode_payload(json.dumps(row)))
                 )
             latest, sequence = {}, 0
             for payload in connection.scalars(
@@ -126,7 +127,7 @@ class ActivityStore:
                 .where(ACTIVITIES.c.state.in_(("completed", "failed")))
                 .execution_options(yield_per=128)
             ):
-                row = json.loads(payload)
+                row = json.loads(decode_payload(payload))
                 sequence = max(sequence, row.get("finished_sequence", 0))
                 key = row["owner"], row["kind"]
                 order = (

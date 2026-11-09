@@ -9,15 +9,17 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from open_energy_planner.core.units import SECONDS_PER_HOUR
 from open_energy_planner.savings.model import MAX_BATCH_INTERVALS, PendingSettlement
+from open_energy_planner.storage.adapters.lifecycle.evidence import activation_history
 from open_energy_planner.storage.adapters.lifecycle.schema import (
-    ACTIVATIONS,
     PUBLISHED_EVENTS,
     PUBLISHED_PRICES,
+    SAVINGS_DAYS,
     SETTLEMENT_EVALUATIONS,
     SETTLEMENT_FRAMES,
     SETTLEMENT_STATE,
 )
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import canonical, digest
+from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
 
 MAX_DETAIL_INTERVALS = 96
 DAILY_CHART_WINDOW_DAYS = 366
@@ -52,6 +54,206 @@ class SettlementStore:
         """Keep native connections inside the storage boundary."""
         self.engine = engine
 
+    def day(self, *, before=None, finalized=None, latest=False):
+        """Read one calendar checkpoint, with its independently verified report and continuation."""
+        query = select(SAVINGS_DAYS)
+        if before is not None:
+            query = query.where(SAVINGS_DAYS.c.start < stamp(before))
+        if finalized is not None:
+            query = query.where(
+                SAVINGS_DAYS.c.finalized_at.is_not(None)
+                if finalized
+                else SAVINGS_DAYS.c.finalized_at.is_(None)
+            )
+        query = query.order_by(
+            SAVINGS_DAYS.c.start.desc() if latest else SAVINGS_DAYS.c.start
+        ).limit(1)
+        with self.engine.connect() as connection:
+            row = connection.execute(query).mappings().first()
+        return self._day_report(row) if row else None
+
+    @staticmethod
+    def _day_report(row):
+        """Fail closed on corrupt compact evidence instead of reconstructing a different historical day."""
+        try:
+            report = json.loads(decode_payload(row["payload"]))
+            if (
+                digest(report) != row["payload_hash"]
+                or any(
+                    report[key] != row[key]
+                    for key in ("day", "timezone", "currency", "market_area", "finalized_at")
+                )
+                or stamp(report["start"]) != row["start"]
+                or stamp(report["end"]) != row["end"]
+            ):
+                raise ValueError
+            return report
+        except (ValueError, KeyError, TypeError):
+            raise OSError("Daily savings archive failed integrity checks") from None
+
+    def put_day(self, report, documents, next_day):
+        """Publish one complete daily report and its retry cursor atomically. Final days are immutable."""
+        key = stamp(report["start"])
+        with documents.transaction():
+            connection = documents.pending.connection
+            old = (
+                connection.execute(select(SAVINGS_DAYS).where(SAVINGS_DAYS.c.start == key))
+                .mappings()
+                .first()
+            )
+            if old and old["finalized_at"] is not None:
+                if self._day_report(old) != report:
+                    raise ValueError("Final daily savings are immutable")
+                return
+            values = {
+                "end": stamp(report["end"]),
+                "day": report["day"],
+                "timezone": report["timezone"],
+                "currency": report["currency"],
+                "market_area": report["market_area"],
+                "finalized_at": report["finalized_at"],
+                "payload": encode_payload(canonical(report)),
+                "payload_hash": digest(report),
+                **{
+                    f"{scenario}_{key}": report["scenarios"][scenario]["totals"][key]
+                    if report["scenarios"][scenario]["totals"] is not None
+                    else None
+                    for scenario in ("actual", "reference", "without_battery")
+                    for key in TOTAL_KEYS
+                },
+                **{
+                    f"{scenario}_coverage_seconds": report["scenarios"][scenario][
+                        "coverage_seconds"
+                    ]
+                    for scenario in ("actual", "reference", "without_battery")
+                },
+                "savings": report["savings"],
+                "avoided_import_kwh": report["avoided_import_kwh"],
+                **{
+                    key: report[key]
+                    for key in (
+                        "comparison_seconds",
+                        "battery_savings",
+                        "battery_comparison_seconds",
+                        "self_consumption_savings",
+                        "self_consumption_comparison_seconds",
+                    )
+                },
+            }
+            if old:
+                connection.execute(
+                    SAVINGS_DAYS.update().where(SAVINGS_DAYS.c.start == key).values(**values)
+                )
+            else:
+                connection.execute(SAVINGS_DAYS.insert().values(start=key, **values))
+            documents.write(
+                "daily-progress.json", {"next": next_day, "timezone": report["timezone"]}
+            )
+            if report["finalized_at"] is not None:
+                capture = (
+                    documents.read("capture.json") if documents.exists("capture.json") else None
+                )
+                if capture is None or datetime.fromisoformat(
+                    capture["end"]
+                ) < datetime.fromisoformat(report["end"]):
+                    documents.write("capture.json", {"end": report["end"]})
+
+    def daily_overview(self, start, end):
+        """Read mutable provisional details, SQL totals and chart bins from one repeatable database snapshot."""
+        try:
+            with self.engine.connect() as connection:
+                if connection.dialect.name != "sqlite":
+                    connection = connection.execution_options(isolation_level="REPEATABLE READ")
+                with connection.begin():
+                    if connection.dialect.name == "sqlite":
+                        # sqlite3's legacy mode otherwise begins no read transaction for SELECT.
+                        connection.exec_driver_sql("BEGIN")
+                    return (
+                        self.daily_summary(start, end, _connection=connection),
+                        self.days(start, end, _connection=connection),
+                        self.daily_chart(start, end, _connection=connection),
+                    )
+        except SQLAlchemyError:
+            raise OSError("Daily savings archive unavailable") from None
+
+    def days(self, start, end, *, _connection=None):
+        """Read bounded daily details without retaining or loading quarter measurement payloads."""
+        with (
+            nullcontext(_connection) if _connection is not None else self.engine.connect()
+        ) as connection:
+            rows = (
+                connection.execute(
+                    select(SAVINGS_DAYS)
+                    .where(SAVINGS_DAYS.c.start >= stamp(start), SAVINGS_DAYS.c.end <= stamp(end))
+                    .order_by(SAVINGS_DAYS.c.start)
+                    .limit(DAILY_CHART_WINDOW_DAYS)
+                )
+                .mappings()
+                .all()
+            )
+        return [self._day_report(row) for row in rows]
+
+    def daily_summary(self, start, end, *, _connection=None):
+        """Sum only reported measured coverage. SQL NULL stays unavailable when no day supplies evidence."""
+        table = SAVINGS_DAYS
+        columns = [
+            table.c[f"{scenario}_{key}"]
+            for scenario in ("actual", "reference", "without_battery")
+            for key in (*TOTAL_KEYS, "coverage_seconds")
+        ] + [
+            table.c[key]
+            for key in (
+                "savings",
+                "avoided_import_kwh",
+                "comparison_seconds",
+                "battery_savings",
+                "battery_comparison_seconds",
+                "self_consumption_savings",
+                "self_consumption_comparison_seconds",
+            )
+        ]
+        with (
+            nullcontext(_connection) if _connection is not None else self.engine.connect()
+        ) as connection:
+            return dict(
+                connection.execute(
+                    select(
+                        func.count().label("days"),
+                        func.count(func.distinct(table.c.currency)).label("currencies"),
+                        func.min(table.c.currency).label("currency"),
+                        *(func.sum(column).label(column.name) for column in columns),
+                    ).where(table.c.start >= stamp(start), table.c.end <= stamp(end))
+                )
+                .mappings()
+                .one()
+            )
+
+    def daily_chart(self, start, end, *, _connection=None):
+        """Aggregate local calendar bins in SQL while retaining UTC instants and genuine missing benefit."""
+        table = SAVINGS_DAYS
+        month = end - start > timedelta(days=DAILY_CHART_WINDOW_DAYS)
+        day = func.substr(table.c.day, 1, 7 if month else 10)
+        with (
+            nullcontext(_connection) if _connection is not None else self.engine.connect()
+        ) as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    select(
+                        func.min(table.c.start).label("start"),
+                        func.max(table.c.end).label("end"),
+                        func.sum(table.c.savings).label("savings"),
+                        *(
+                            func.sum(table.c[f"{kind}_import_kwh"]).label(f"{kind}_import_kwh")
+                            for kind in ("actual", "reference", "without_battery")
+                        ),
+                    )
+                    .where(table.c.start >= stamp(start), table.c.end <= stamp(end))
+                    .group_by(day)
+                    .order_by(day)
+                ).mappings()
+            ]
+
     def put_frames(self, frames, context=None, active_connection=None):
         """Idempotently retain original metering. Conflicting replacements require explicit correction handling."""
         with (
@@ -62,12 +264,12 @@ class SettlementStore:
             for frame in frames:
                 key, payload = (
                     stamp(frame.start),
-                    canonical({"frame": frame.record(), "context": context}),
+                    encode_payload(canonical({"frame": frame.record(), "context": context})),
                 )
                 old = connection.scalar(
                     select(SETTLEMENT_FRAMES.c.payload).where(SETTLEMENT_FRAMES.c.start == key)
                 )
-                if old is not None and old != payload:
+                if old is not None and decode_payload(old) != decode_payload(payload):
                     raise ValueError("Settlement evidence is immutable")
                 if old is None:
                     connection.execute(
@@ -84,42 +286,43 @@ class SettlementStore:
         if end is not None:
             query = query.where(SETTLEMENT_FRAMES.c.start < stamp(end))
         with self.engine.connect() as connection:
-            return [json.loads(row.payload) for row in connection.execute(query)]
+            return [json.loads(decode_payload(row.payload)) for row in connection.execute(query)]
 
     def first_activation(self):
         """Start comparisons only after an actual plan publication, never from a historical forecast."""
+        history = activation_history()
         with self.engine.connect() as connection:
             return connection.scalar(
-                select(ACTIVATIONS.c.activated_at)
-                .where(ACTIVATIONS.c.plan_id.is_not(None))
-                .order_by(ACTIVATIONS.c.activated_at)
+                select(history.c.activated_at)
+                .where(history.c.plan_id.is_not(None))
+                .order_by(history.c.activated_at)
                 .limit(1)
             )
 
     def context_plan(self, instant):
         """Resolve recorded activation chronology independently of solver generation time."""
+        history = activation_history()
         with self.engine.connect() as connection:
             return connection.scalar(
-                select(ACTIVATIONS.c.plan_id)
-                .where(
-                    ACTIVATIONS.c.activated_at <= stamp(instant), ACTIVATIONS.c.plan_id.is_not(None)
-                )
-                .order_by(ACTIVATIONS.c.activated_at.desc())
+                select(history.c.plan_id)
+                .where(history.c.activated_at <= stamp(instant), history.c.plan_id.is_not(None))
+                .order_by(history.c.activated_at.desc())
                 .limit(1)
             )
 
     def next_configuration(self, start, end, bindings):
         """Split only at actual physical/binding changes, using indexed activation chronology."""
+        history = activation_history()
         with self.engine.connect() as connection:
             return connection.scalar(
-                select(ACTIVATIONS.c.activated_at)
+                select(history.c.activated_at)
                 .where(
-                    ACTIVATIONS.c.activated_at > stamp(start),
-                    ACTIVATIONS.c.activated_at < stamp(end),
-                    ACTIVATIONS.c.context_hash != digest(bindings),
-                    ACTIVATIONS.c.plan_id.is_not(None),
+                    history.c.activated_at > stamp(start),
+                    history.c.activated_at < stamp(end),
+                    history.c.context_hash != digest(bindings),
+                    history.c.plan_id.is_not(None),
                 )
-                .order_by(ACTIVATIONS.c.activated_at)
+                .order_by(history.c.activated_at)
                 .limit(1)
             )
 
@@ -129,16 +332,17 @@ class SettlementStore:
             payload = connection.scalar(
                 select(SETTLEMENT_STATE.c.payload).where(SETTLEMENT_STATE.c.revision == revision)
             )
-        return json.loads(payload) if payload else None
+        return json.loads(decode_payload(payload)) if payload else None
 
     def activations(self, start, end):
         """Read the last advice state and subsequent changes for one metering interval."""
+        history = activation_history()
         with self.engine.connect() as connection:
             initial = (
                 connection.execute(
-                    select(ACTIVATIONS)
-                    .where(ACTIVATIONS.c.activated_at <= stamp(start))
-                    .order_by(ACTIVATIONS.c.activated_at.desc())
+                    select(history)
+                    .where(history.c.activated_at <= stamp(start))
+                    .order_by(history.c.activated_at.desc())
                     .limit(1)
                 )
                 .mappings()
@@ -146,12 +350,12 @@ class SettlementStore:
             )
             later = (
                 connection.execute(
-                    select(ACTIVATIONS)
+                    select(history)
                     .where(
-                        ACTIVATIONS.c.activated_at > stamp(start),
-                        ACTIVATIONS.c.activated_at < stamp(end),
+                        history.c.activated_at > stamp(start),
+                        history.c.activated_at < stamp(end),
                     )
-                    .order_by(ACTIVATIONS.c.activated_at)
+                    .order_by(history.c.activated_at)
                 )
                 .mappings()
                 .all()
@@ -187,9 +391,9 @@ class SettlementStore:
                 SETTLEMENT_EVALUATIONS.c.start == stamp(result["start"])
             )
             old = connection.scalar(select(SETTLEMENT_EVALUATIONS.c.payload).where(key))
-            payload = canonical(result)
+            payload = encode_payload(canonical(result))
             if old is not None:
-                if old != payload:
+                if decode_payload(old) != decode_payload(payload):
                     raise ValueError("Evaluation revision is immutable")
                 return
             connection.execute(
@@ -219,11 +423,15 @@ class SettlementStore:
             where = SETTLEMENT_STATE.c.revision == revision
             if connection.scalar(select(SETTLEMENT_STATE.c.revision).where(where)) is None:
                 connection.execute(
-                    SETTLEMENT_STATE.insert().values(revision=revision, payload=canonical(state))
+                    SETTLEMENT_STATE.insert().values(
+                        revision=revision, payload=encode_payload(canonical(state))
+                    )
                 )
             else:
                 connection.execute(
-                    SETTLEMENT_STATE.update().where(where).values(payload=canonical(state))
+                    SETTLEMENT_STATE.update()
+                    .where(where)
+                    .values(payload=encode_payload(canonical(state)))
                 )
 
     def results(self, revision, start, end):
@@ -231,7 +439,7 @@ class SettlementStore:
         try:
             with self.engine.connect() as connection:
                 return [
-                    json.loads(payload)
+                    json.loads(decode_payload(payload))
                     for payload in connection.scalars(
                         select(SETTLEMENT_EVALUATIONS.c.payload)
                         .where(

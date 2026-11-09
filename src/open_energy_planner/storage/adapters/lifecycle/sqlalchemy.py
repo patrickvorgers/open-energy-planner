@@ -17,19 +17,24 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_energy_planner.home_assistant.observation_wire import configuration_document
+from open_energy_planner.storage.adapters.lifecycle.evidence import historical_context
 from open_energy_planner.storage.adapters.lifecycle.files import atomic_json
 from open_energy_planner.storage.adapters.lifecycle.schema import (
+    ACTIVATION_CONTEXTS,
     ACTIVATIONS,
+    ARCHIVE_INCOMING_INDEXES,
     FIELD_LENGTH,
     IDENTITY_LENGTH,
     META,
     PARTS,
+    PLAN_CONTEXTS,
     PLANS,
     RECORDS,
     SCHEMA,
     STATE,
     VALUES,
 )
+from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
 
 SCHEMA_VERSION = 1
 SQLITE_BUSY_TIMEOUT_SECONDS = 5
@@ -170,6 +175,9 @@ class SqlPlanRepository:
                 finally:
                     source_engine.dispose()
             SCHEMA.create_all(self.engine)
+            # create_all does not add indexes to already existing tables.
+            for index in ARCHIVE_INCOMING_INDEXES:
+                index.create(self.engine, checkfirst=True)
             with self.engine.begin() as connection:
                 version = connection.scalar(select(META.c.version).where(META.c.id == STATE_KEY))
                 if version is None:
@@ -188,7 +196,7 @@ class SqlPlanRepository:
                 if recorded and row is None:
                     raise OSError("Active archive state is missing. Restore it before starting")
                 if row:
-                    self.state = json.loads(row["payload"])
+                    self.state = json.loads(decode_payload(row["payload"]))
                     self.state["plan"] = (
                         self._read_plan(connection, row["plan_id"]) if row["plan_id"] else None
                     )
@@ -260,12 +268,13 @@ class SqlPlanRepository:
         if existing:
             if existing != ref:
                 raise ValueError("Archived plan identity is immutable")
+            self._write_context(connection, plan)
             return
         known_values = set(
             connection.scalars(select(VALUES.c.digest).where(VALUES.c.digest.in_(values)))
         )
         missing_values = [
-            {"digest": key, "payload": value}
+            {"digest": key, "payload": encode_payload(value)}
             for key, value in values.items()
             if key not in known_values
         ]
@@ -289,13 +298,77 @@ class SqlPlanRepository:
                 solution_status=plan.get("solution_status", "unspecified"),
             )
         )
+        self._write_context(connection, plan)
+
+    def _write_context(self, connection, plan):
+        """Preserve detached calculation context and permanent controls in the plan's transaction."""
+        identity = plan["plan_id"]
+        if connection.scalar(
+            select(PLAN_CONTEXTS.c.plan_id).where(PLAN_CONTEXTS.c.plan_id == identity)
+        ):
+            return
+        controls = plan.get("forecast_quality_controlled", [])
+        context = historical_context(plan)
+        connection.execute(
+            PLAN_CONTEXTS.insert().values(
+                plan_id=identity,
+                generated_at=datetime.fromisoformat(plan["generated_at"])
+                .astimezone(UTC)
+                .isoformat(timespec="microseconds"),
+                controls=encode_payload(canonical(controls)),
+                controls_hash=digest(controls),
+                payload=encode_payload(canonical(context)),
+                payload_hash=digest(context),
+            )
+        )
+
+    def preserve_history(self, *, limit=16):
+        """Backfill a bounded batch of original contexts and activation identities before any thinning.
+
+        New publications already write these projections atomically. Old plans
+        remain untouched until their context and every activation identity are
+        durably preserved. Repeated calls safely resume an interrupted upgrade.
+        """
+        with self.engine.begin() as connection:
+            missing = connection.scalars(
+                select(PLANS.c.plan_id)
+                .select_from(
+                    PLANS.outerjoin(PLAN_CONTEXTS, PLANS.c.plan_id == PLAN_CONTEXTS.c.plan_id)
+                )
+                .where(PLAN_CONTEXTS.c.plan_id.is_(None))
+                .order_by(PLANS.c.generated_at, PLANS.c.plan_id)
+                .limit(limit)
+            ).all()
+            for identity in missing:
+                self._write_context(connection, self._read_plan(connection, identity))
+            activations = (
+                connection.execute(
+                    select(ACTIVATIONS.c.activated_at, ACTIVATIONS.c.plan_id)
+                    .select_from(
+                        ACTIVATIONS.join(
+                            PLAN_CONTEXTS, ACTIVATIONS.c.plan_id == PLAN_CONTEXTS.c.plan_id
+                        ).outerjoin(
+                            ACTIVATION_CONTEXTS,
+                            ACTIVATIONS.c.activated_at == ACTIVATION_CONTEXTS.c.activated_at,
+                        )
+                    )
+                    .where(ACTIVATION_CONTEXTS.c.activated_at.is_(None))
+                    .order_by(ACTIVATIONS.c.activated_at)
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            if activations:
+                connection.execute(ACTIVATION_CONTEXTS.insert(), [dict(row) for row in activations])
+        return {"contexts": len(missing), "activations": len(activations)}
 
     def save(self):
         """Commit a complete archive and active pointer atomically. Restore memory on failed publication."""
         try:
             plan = self.state.get("plan")
             state = {key: value for key, value in self.state.items() if key != "plan"}
-            payload = canonical(state)
+            payload = encode_payload(canonical(state))
             with self.engine.begin() as connection:
                 if plan is not None:
                     self._write_plan(connection, plan)
@@ -303,13 +376,18 @@ class SqlPlanRepository:
                     select(STATE.c.plan_id, STATE.c.payload).where(STATE.c.id == STATE_KEY)
                 ).first()
                 previous_id = previous.plan_id if previous else None
-                previous_enabled = json.loads(previous.payload).get("enabled") if previous else None
+                previous_enabled = (
+                    json.loads(decode_payload(previous.payload)).get("enabled")
+                    if previous
+                    else None
+                )
                 if previous_id != (
                     plan["plan_id"] if plan else None
                 ) or previous_enabled != self.state.get("enabled"):
+                    activated_at = datetime.now(UTC).isoformat(timespec="microseconds")
                     connection.execute(
                         ACTIVATIONS.insert().values(
-                            activated_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+                            activated_at=activated_at,
                             plan_id=plan["plan_id"] if plan else None,
                             enabled=int(bool(self.state.get("enabled"))),
                             context_hash=digest(plan.get("comparison_bindings", {}))
@@ -317,6 +395,12 @@ class SqlPlanRepository:
                             else "",
                         )
                     )
+                    if plan:
+                        connection.execute(
+                            ACTIVATION_CONTEXTS.insert().values(
+                                activated_at=activated_at, plan_id=plan["plan_id"]
+                            )
+                        )
                 row = {"payload": payload, "plan_id": plan["plan_id"] if plan else None}
                 if connection.scalar(select(STATE.c.id).where(STATE.c.id == STATE_KEY)) is None:
                     connection.execute(STATE.insert().values(id=STATE_KEY, **row))
@@ -367,7 +451,7 @@ class SqlPlanRepository:
                 )
                 if payload is None:
                     raise ValueError("Archive input block missing")
-                child = json.loads(payload)
+                child = json.loads(decode_payload(payload))
                 if digest(child) != row["value_ref"]:
                     raise ValueError("Archive input hash mismatch")
                 value[row["field"]] = child
@@ -388,6 +472,32 @@ class SqlPlanRepository:
                 return self._read_plan(connection, plan_id)
         except SQLAlchemyError:
             raise OSError("Archive read failed") from None
+
+    def get_context(self, plan_id):
+        """Read a hash-verified historical calculation projection without presenting it as an original plan."""
+        try:
+            with self.engine.begin() as connection:
+                row = (
+                    connection.execute(
+                        select(PLAN_CONTEXTS).where(PLAN_CONTEXTS.c.plan_id == plan_id)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if row is None:
+                    plan = self._read_plan(connection, plan_id)
+                    if plan is None:
+                        return None
+                    self._write_context(connection, plan)
+                    return historical_context(plan)
+                if row["payload"] is None:
+                    return None
+                context = json.loads(decode_payload(row["payload"]))
+                if digest(context) != row["payload_hash"]:
+                    raise ValueError("Historical calculation context hash mismatch")
+                return context
+        except SQLAlchemyError:
+            raise OSError("Historical calculation archive unavailable") from None
 
     def controlled_entities(self, plan_ids):
         """Read only hash-checked control lists for published plans, without loading solver inputs.
@@ -421,7 +531,7 @@ class SqlPlanRepository:
                         raise ValueError("Archive control block missing")
                     if row.value_ref in checked:
                         continue
-                    entities = json.loads(row.payload)
+                    entities = json.loads(decode_payload(row.payload))
                     if digest(entities) != row.value_ref:
                         raise ValueError("Archive control hash mismatch")
                     if not isinstance(entities, list) or any(
@@ -433,8 +543,43 @@ class SqlPlanRepository:
         except SQLAlchemyError:
             raise OSError("Archive control read failed") from None
         if found != identities:
-            raise ValueError("Controlled-consumer publication evidence unavailable")
+            try:
+                with self.engine.connect() as connection:
+                    for row in connection.execute(
+                        select(PLAN_CONTEXTS).where(PLAN_CONTEXTS.c.plan_id.in_(identities - found))
+                    ).mappings():
+                        entities = json.loads(decode_payload(row["controls"]))
+                        if digest(entities) != row["controls_hash"]:
+                            raise ValueError("Archive control hash mismatch")
+                        if not isinstance(entities, list) or any(
+                            not isinstance(entity, str) for entity in entities
+                        ):
+                            raise ValueError("Archive control list invalid")
+                        controlled.update(entities)
+                        found.add(row["plan_id"])
+            except SQLAlchemyError:
+                raise OSError("Archive control read failed") from None
+            if found != identities:
+                raise ValueError("Controlled-consumer publication evidence unavailable")
         return sorted(controlled)
+
+    def day_plan(self, start, end):
+        """Return the first original publication in a local-day window, matching the permanent daily anchor."""
+        try:
+            with self.engine.connect() as connection:
+                return connection.scalar(
+                    select(PLANS.c.plan_id)
+                    .where(
+                        PLANS.c.generated_at
+                        >= start.astimezone(UTC).isoformat(timespec="microseconds"),
+                        PLANS.c.generated_at
+                        < end.astimezone(UTC).isoformat(timespec="microseconds"),
+                    )
+                    .order_by(PLANS.c.generated_at, PLANS.c.plan_id)
+                    .limit(1)
+                )
+        except SQLAlchemyError:
+            raise OSError("Archive history unavailable") from None
 
     def list_plans(self, *, limit=DEFAULT_HISTORY_LIMIT, before=None):
         """List newest-first summaries using bounded keyset pagination, without loading full plans."""
@@ -452,7 +597,15 @@ class SqlPlanRepository:
                         .first()
                     )
                     if cursor is None:
-                        raise ValueError("Unknown history cursor")
+                        cursor = (
+                            connection.execute(
+                                select(PLAN_CONTEXTS).where(PLAN_CONTEXTS.c.plan_id == before)
+                            )
+                            .mappings()
+                            .first()
+                        )
+                        if cursor is None:
+                            raise ValueError("Unknown history cursor")
                     query = query.where(
                         (PLANS.c.generated_at < cursor["generated_at"])
                         | (

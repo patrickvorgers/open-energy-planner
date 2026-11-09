@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from open_energy_planner.storage.adapters.payloads import decode_payload
 from script.provisioning.acceptance import verify_device_examples
 from script.supervisor.provision_supervisor import (
     APP_READY_TIMEOUT_SECONDS,
@@ -170,7 +171,7 @@ def pending_model_forecasts():
             ).fetchall()
     except sqlite3.Error:
         raise RuntimeError("Pending forecast captures are not ready.") from None
-    return [json.loads(row[0])["capture"]["forecasts"] for row in rows]
+    return [json.loads(decode_payload(row[0]))["capture"]["forecasts"] for row in rows]
 
 
 def model_history():

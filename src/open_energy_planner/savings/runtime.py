@@ -31,6 +31,7 @@ SHA256_HEX_LENGTH = 64
 
 # Only fixed owned guidance is public. Other caught exceptions may contain stored or driver values.
 PENDING_SETTLEMENT_MESSAGES = {
+    "Simulated bonus counters are unknown after missing measurements": "The simulated export allowance cannot be reconstructed from the earlier missing evidence. No actual counter was substituted.",
     "A reset inside the bonus anchor interval prevents exact reconstruction": "An export meter reset prevents reconstruction of the bonus starting total.",
     "Confirmed bonus meter disagrees with its historical boundary": "The confirmed export reading disagrees with the reading in history.",
     "Confirmed bonus meter is outside its historical interval": "The confirmed export reading falls outside the historical interval's readings.",
@@ -171,6 +172,12 @@ def quarter(instant):
     return datetime.fromtimestamp(int(instant.timestamp()) // seconds * seconds, UTC)
 
 
+def capture_start(instant):
+    """Start at the first complete quarter after publication, preserving an exactly aligned midnight."""
+    boundary = quarter(instant)
+    return boundary if instant == boundary else boundary + SETTLEMENT_INTERVAL
+
+
 class SavingsRuntime:
     """Keep ingestion, continuous scenario state and correction generations outside planning."""
 
@@ -191,7 +198,7 @@ class SavingsRuntime:
         first = self.store.first_activation()
         if first is None:
             return None
-        start = quarter(datetime.fromisoformat(first)) + SETTLEMENT_INTERVAL
+        start = capture_start(datetime.fromisoformat(first))
         if self.documents.exists("capture.json"):
             start = datetime.fromisoformat(self.documents.read("capture.json")["end"])
         end = min(
@@ -208,8 +215,8 @@ class SavingsRuntime:
         plan_id = self.store.context_plan(start)
         if plan_id:
             if self._bindings_plan != plan_id:
-                original = self.plans.get_plan(plan_id)
-                self._bindings = original.get("comparison_bindings")
+                original = self.plans.get_context(plan_id)
+                self._bindings = original.get("comparison_bindings") if original else None
                 self._bindings_plan = plan_id
             bindings = self._bindings or bindings
         changed = self.store.next_configuration(start, end, bindings)
@@ -354,7 +361,7 @@ class SavingsRuntime:
             try:
                 frame = parse_frame(row["frame"])
                 plan_id = self.store.context_plan(frame.start)
-                plan = self.plans.get_plan(plan_id) if plan_id else None
+                plan = self.plans.get_context(plan_id) if plan_id else None
                 if plan is None:
                     raise PendingSettlement("No original installation plan covers this interval")
                 bindings = dict(row["context"]["bindings"])
@@ -501,7 +508,7 @@ class SavingsRuntime:
                     frame.start.isoformat(),
                     frame.end.isoformat(),
                 )
-            plan = self.plans.get_plan(plan_id)
+            plan = self.plans.get_context(plan_id)
             try:
                 problem = physical_context(plan)
                 original_contract = plan["input_snapshot"].get("contract_version")
