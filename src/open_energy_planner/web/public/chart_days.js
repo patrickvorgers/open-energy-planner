@@ -45,6 +45,7 @@ function dayEnd(maximum, date, utc) {
 /** Decorate real calendar charts only. Relative appliance-cycle axes do not install this plugin. */
 export const calendarDays = {
     id: "calendarDays",
+    descriptors: {_scriptable: false},
     /** Own the heading container before the canvas and snapshot the original layout padding. */
     beforeInit(chart) {
         const headings = document.createElement("div");
@@ -62,11 +63,16 @@ export const calendarDays = {
     },
     /** Rebuild headings and paint day bands and boundaries using UTC dates when options.utc is true, otherwise installation dates. */
     beforeDraw(chart, _arguments, options) {
-        const {headings} = bands.get(chart), {ctx, chartArea, scales: {x}} = chart;
-        headings.replaceChildren();
-        if (!x || !hasTimestamps(chart) || !Number.isFinite(x.min) || !Number.isFinite(x.max) || x.max <= x.min) return;
+        const state = bands.get(chart), {headings} = state, {ctx, chartArea, scales: {x}} = chart;
+        if (!x || !hasTimestamps(chart) || !Number.isFinite(x.min) || !Number.isFinite(x.max) || x.max <= x.min) {
+            headings.replaceChildren(); state.layout = null; return;
+        }
         const dateAt = options.utc ? value => new Date(value).toISOString().slice(0, 10) : localDate;
         const today = dateAt(Date.now()), tomorrow = nextDate(today);
+        // Canvas hover redraws must preserve the heading owning keyboard focus or a tooltip.
+        const layout = JSON.stringify([x.min, x.max, chartArea.left, chartArea.right, chartArea.top, today, dateAt(x.min), dayEnd(Infinity, dateAt(x.min), options.utc), options.utc]);
+        const rebuild = state.layout !== layout;
+        if (rebuild) { headings.replaceChildren(); state.layout = layout; }
         headings.style.top = `${chartArea.top - HEADER_HEIGHT}px`;
         ctx.save();
         for (let start = x.min; start < x.max;) {
@@ -80,21 +86,24 @@ export const calendarDays = {
                 ctx.strokeStyle = "#9bafbc"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
                 ctx.beginPath(); ctx.moveTo(left, chartArea.top); ctx.lineTo(left, chartArea.bottom); ctx.stroke();
             }
-            const heading = document.createElement("span"), title = document.createElement("strong"), caption = document.createElement("span");
-            const instant = Date.parse(date + "T12:00:00Z");
-            const format = parts => when(options.utc ? instant : start, parts, options.utc ? "UTC" : undefined);
-            const relative = date === today ? "Today" : date === tomorrow ? "Tomorrow" : null;
-            const full = `${relative ? relative + ": " : ""}${format({weekday: "long", year: "numeric", month: "long", day: "numeric"})}`;
-            const width = right - left;
-            heading.style.cssText = `left:${left}px;width:${width}px;background:${alternate ? "#edf5fa" : "#edf6f2"}`;
-            heading.setAttribute("role", "listitem");
-            heading.setAttribute("aria-label", full); heading.title = full;
-            if (width >= MIN_HEADING_WIDTH) {
-                title.textContent = width >= FULL_HEADING_WIDTH && relative ? relative : format(width >= COMPACT_HEADING_WIDTH ? {weekday: "short"} : {day: "numeric"});
-                caption.textContent = format(width >= COMPACT_HEADING_WIDTH ? {day: "numeric", month: "short"} : {month: "short"});
-                heading.append(title, caption);
+            if (rebuild) {
+                const heading = document.createElement("span"), title = document.createElement("strong"), caption = document.createElement("span");
+                const instant = Date.parse(date + "T12:00:00Z");
+                const format = parts => when(options.utc ? instant : start, parts, options.utc ? "UTC" : undefined);
+                const relative = date === today ? "Today" : date === tomorrow ? "Tomorrow" : null;
+                const full = `${relative ? relative + ": " : ""}${format({weekday: "long", year: "numeric", month: "long", day: "numeric"})}`;
+                const width = right - left;
+                heading.style.cssText = `left:${left}px;width:${width}px;background:${alternate ? "#edf5fa" : "#edf6f2"}`;
+                heading.setAttribute("role", "listitem");
+                heading.setAttribute("aria-label", full); heading.title = full;
+                if (width >= MIN_HEADING_WIDTH) {
+                    title.textContent = width >= FULL_HEADING_WIDTH && relative ? relative : format(width >= COMPACT_HEADING_WIDTH ? {weekday: "short"} : {day: "numeric"});
+                    caption.textContent = format(width >= COMPACT_HEADING_WIDTH ? {day: "numeric", month: "short"} : {month: "short"});
+                    heading.append(title, caption);
+                }
+                headings.append(heading);
+                options.onHeading?.(chart, heading, {date, start, end, full});
             }
-            headings.append(heading);
             start = end;
         }
         ctx.restore();

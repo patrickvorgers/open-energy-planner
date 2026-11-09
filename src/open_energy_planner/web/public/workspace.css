@@ -53,6 +53,9 @@
 .chart-day-headings > span:first-child { border-left:0; }
 .chart-day-headings strong,.chart-day-headings > span > span { display:block; white-space:nowrap; }
 .chart-day-headings strong { font-size:11px; font-weight:600; }
+.chart-day-headings .chart-day-summary { all:unset; display:block; width:100%; height:100%; cursor:help; text-align:center; }
+.chart-day-summary > span { display:block; white-space:nowrap; }
+.chart-day-summary:focus-visible { outline:2px solid #324f9d; outline-offset:-2px; border-radius:3px; }
 .chart-legend { display:flex; flex-wrap:wrap; gap:4px 16px; padding-top:14px; }
 .chart-legend label { display:flex; align-items:center; gap:7px; margin:4px 0; font-size:11px; cursor:pointer; }
 .chart-legend input { accent-color:#087f76; }
@@ -130,6 +133,7 @@
 .balance-warning { width:100%; color:#95500d; font-size:12px; }
 .chart-tooltip { position:fixed; z-index:30; pointer-events:none; max-width:min(500px,calc(100vw - 24px)); box-sizing:border-box; padding:12px 14px; border-radius:9px; background:#122d3af5; color:#fff; box-shadow:0 5px 20px #102b3333; font-size:12px; overflow-wrap:anywhere; }
 .chart-tooltip[hidden] { display:none; }
+.chart-tooltip-day { pointer-events:auto; max-height:calc(100dvh - 24px); overflow-y:auto; }
 .chart-tooltip table { width:100%; margin:0; border-collapse:collapse; }
 .chart-tooltip td { padding:3px 4px; border:0; color:inherit; font-size:12px; vertical-align:top; }
 .chart-tooltip .series-swatch { margin-right:7px; }

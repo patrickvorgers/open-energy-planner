@@ -15,6 +15,20 @@ const energy = (value) => finite(value) && value >= -DISPLAY_ZERO_TOLERANCE_KWH;
 const efficiency = (value) => finite(value) && value > 0 && value <= 1;
 const total = (values) => values.reduce((sum, value) => sum + value, 0);
 
+/** Integrate signed mean power over a covered period. Gaps and overlaps remain unavailable. */
+export function balancePeriodEnergy(intervals, start, end) {
+    let cursor = start, result = 0;
+    for (const interval of intervals) {
+        const left = Math.max(start, interval.coveredStart ?? interval.start);
+        const right = Math.min(end, interval.coveredEnd ?? interval.end);
+        if (right <= left) continue;
+        if (Math.abs(left - cursor) > TIMESTAMP_ROUNDOFF_MILLISECONDS || !finite(interval.value)) return null;
+        result += interval.value * (right - left) / MILLISECONDS_PER_HOUR;
+        cursor = right;
+    }
+    return end > start && Math.abs(cursor - end) <= TIMESTAMP_ROUNDOFF_MILLISECONDS ? result : null;
+}
+
 /** Project balance bars onto UTC quarters without changing archived flows or SoC points.
  * Weight mean powers by overlap duration. Coarse intervals retain their recorded mean.
  * Partial horizon edges average only their covered duration and expose that coverage.
