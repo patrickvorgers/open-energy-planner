@@ -14,9 +14,11 @@ const find = (id) => document.getElementById(id);
 const VEHICLE_FIELDS = ["id", "soc_entity", "soc_timestamp_attribute", "capacity_kwh", "maximum_w", "target_soc", "departure_time"];
 const POINT_FIELDS = ["id", "energy_entity", "power_entity", "connected_entity", "minimum_w", "maximum_w", "control", "vehicle_ids"];
 const WATTS_PER_KW = 1000;
+const NO_DEVICE = "sources-without-device";
 let token = "", current, draft, editing = false, selectedId = null, editOriginId = null;
 const api = applianceSettingsApi(base, () => token);
 const integrationSelections = new Map();
+const integrationTypeSelections = new Map();
 const deviceSelections = new Map();
 const saveState = new SaveBar({form: "settings", bar: "ev-save-bar", save: "save", discard: "refresh", status: "dirty", read: () => draft, canSave: () => editing});
 bindApplianceSettingsNavigation(saveState);
@@ -68,47 +70,111 @@ function select(card, row, key, label, help, options, emptyMessage = "No matchin
     if (!options.length) wrapper.append(node("p", emptyMessage));
     return control;
 }
-function metadata(predicate, selection) { return current.catalogue.entities.filter(row => predicate(row) && (!selection?.device || row.device_id === selection.device) && (selection?.integration === undefined || (row.integration_id || "other") === selection.integration)).map((row) => { const name = sourceName(row, "Sensor"); return [row.entity_id, `${name}${row.name === name ? "" : ": " + row.name} (${row.entity_id})`]; }); }
-/** Start with a physical device, keeping integration-only helpers and independent charging sources available. */
-function sourcePicker(card, row, vehicle) {
-    const source = current.catalogue.entities.find(entity => entity.entity_id === (vehicle ? row.soc_entity : row.power_entity || row.connected_entity || row.energy_entity));
+function metadata(predicate, selection) { return (selection?.entities ?? current.catalogue.entities).filter(row => predicate(row) && (!selection?.device || row.device_id === selection.device) && (selection?.integration === undefined || (row.integration_id || "other") === selection.integration)).map((row) => { const name = sourceName(row, "Sensor"); return [row.entity_id, `${name}${row.name === name ? "" : ": " + row.name} (${row.entity_id})`]; }); }
+/** Keep integration types distinct from configured account instances and physical device identities. */
+function vehicleIntegration(entity) { return entity.integration_domain || entity.integration_id || "other"; }
+/** Give identical visible names distinct choices without changing the underlying identities. */
+function pickerOptions(groups) {
+    const options = [...groups].sort((left, right) => left[1].localeCompare(right[1]) || left[0].localeCompare(right[0]));
+    const totals = new Map(), positions = new Map();
+    for (const [, label] of options) totals.set(label, (totals.get(label) || 0) + 1);
+    return options.map(([id, label]) => {
+        if (totals.get(label) === 1) return [id, label];
+        const position = (positions.get(label) || 0) + 1;
+        positions.set(label, position);
+        return [id, `${label}: ${position}`];
+    });
+}
+/** Select integration, optional account, device and SoC in order. Unique compatible choices remain drafts until Save. */
+function vehicleSourcePicker(card, row) {
+    const candidates = current.catalogue.entities.filter(isVehicleSoc);
+    const source = candidates.find(entity => entity.entity_id === row.soc_entity);
+    const groups = new Map(candidates.map(entity => [vehicleIntegration(entity), entity.integration_display_name || entity.integration_name || "Other Home Assistant sources"]));
+    const type = integrationTypeSelections.get(row.id) ?? (source ? vehicleIntegration(source) : "");
+    integrationTypeSelections.set(row.id, type);
+    if (type && !groups.has(type)) groups.set(type, "Previously selected integration (unavailable)");
+    const integrationControl = select(card, {type}, "type", "Home Assistant integration", "Choose the integration that supplies your car's measured battery percentage. Its account is shown only when several instances need a choice.", pickerOptions(groups));
+    integrationControl.required = false;
+    integrationControl.parentElement.style.gridColumn = "1 / -1";
+    integrationControl.onchange = () => {
+        integrationTypeSelections.set(row.id, integrationControl.value);
+        integrationSelections.delete(row.id); deviceSelections.delete(row.id);
+        const selectedSource = candidates.find(entity => entity.entity_id === row.soc_entity);
+        if (integrationControl.value && (!selectedSource || vehicleIntegration(selectedSource) !== integrationControl.value)) row.soc_entity = "";
+        render(); changed();
+    };
+    const typed = candidates.filter(entity => vehicleIntegration(entity) === type);
+    const entries = new Map(typed.map(entity => [entity.integration_id || "other", entity.integration_name || "Other Home Assistant sources"]));
+    const sameType = source && vehicleIntegration(source) === type;
+    const integration = integrationSelections.get(row.id) ?? (sameType ? source.integration_id || "other" : entries.size === 1 ? entries.keys().next().value : "");
+    integrationSelections.set(row.id, integration);
+    const missingIntegration = integration && !entries.has(integration);
+    if (missingIntegration) entries.set(integration, "Previously selected instance (unavailable)");
+    if (entries.size > 1 || missingIntegration) {
+        const entryControl = select(card, {integration}, "integration", "Home Assistant integration instance", missingIntegration ? "The previously selected instance is unavailable. Refresh sources or explicitly choose the account that owns this car. The existing sensor is retained until you choose a replacement." : "Several accounts or instances supply this integration. Choose the one that owns the car.", pickerOptions(entries));
+        entryControl.required = false;
+        entryControl.parentElement.style.gridColumn = "1 / -1";
+        entryControl.onchange = () => {
+            integrationTypeSelections.set(row.id, type);
+            integrationSelections.set(row.id, entryControl.value); deviceSelections.delete(row.id);
+            const selectedSource = typed.find(entity => entity.entity_id === row.soc_entity);
+            if (!selectedSource || (selectedSource.integration_id || "other") !== entryControl.value) row.soc_entity = "";
+            render(); changed();
+        };
+    }
+    const scoped = typed.filter(entity => (entity.integration_id || "other") === integration);
+    const devices = new Map(scoped.map(entity => [entity.device_id || NO_DEVICE, entity.device_id ? entity.device_name || "Home Assistant device" : "Sources without a Home Assistant device"]));
+    const sameEntry = sameType && (source.integration_id || "other") === integration;
+    const device = deviceSelections.get(row.id) ?? (sameEntry ? source.device_id || NO_DEVICE : !row.soc_entity && devices.size === 1 ? devices.keys().next().value : "");
+    deviceSelections.set(row.id, device);
+    if (device && !devices.has(device)) devices.set(device, "Previously selected device (unavailable)");
+    const deviceControl = select(card, {device}, "device", "Home Assistant device", "Only devices with a compatible SoC source are listed. One suitable device is selected automatically. Service devices are excluded.", pickerOptions(devices));
+    deviceControl.required = false;
+    deviceControl.parentElement.style.gridColumn = "1 / -1";
+    deviceControl.onchange = () => {
+        integrationTypeSelections.set(row.id, type);
+        integrationSelections.set(row.id, integration);
+        deviceSelections.set(row.id, deviceControl.value);
+        const selectedSource = scoped.find(entity => entity.entity_id === row.soc_entity);
+        if (deviceControl.value && (!selectedSource || (selectedSource.device_id || NO_DEVICE) !== deviceControl.value)) row.soc_entity = "";
+        render(); changed();
+    };
+    const entities = scoped.filter(entity => (entity.device_id || NO_DEVICE) === device);
+    if (editing && !row.soc_entity && entities.length === 1) row.soc_entity = entities[0].entity_id;
+    return {entities};
+}
+/** Keep charge-point connection helpers and the independently configured Energy meter available. */
+function chargePointSourcePicker(card, row) {
+    const source = current.catalogue.entities.find(entity => entity.entity_id === (row.power_entity || row.connected_entity || row.energy_entity));
     const device = deviceSelections.get(row.id) ?? source?.device_id ?? "";
     deviceSelections.set(row.id, device);
     const devices = new Map(current.catalogue.entities.filter(entity => entity.device_id).map(entity => [entity.device_id, entity.device_name || entity.device_id]));
     if (device && !devices.has(device)) devices.set(device, "Previously selected device (unavailable)");
-    const deviceControl = select(card, {device}, "device", "Home Assistant device", "Choose your car or charge point first. Without a device, choose an integration below. Power, connection helpers and the Energy meter may come from separate devices.", [...devices].sort((left, right) => left[1].localeCompare(right[1])));
+    const deviceControl = select(card, {device}, "device", "Home Assistant device", "Choose your charge point. Without a device, choose an integration below. Power, connection helpers and the Energy meter may come from separate devices.", [...devices].sort((left, right) => left[1].localeCompare(right[1])));
     deviceControl.required = false;
     deviceControl.options[0].textContent = "All devices / choose an integration";
     deviceControl.parentElement.style.gridColumn = "1 / -1";
     deviceControl.onchange = () => {
         deviceSelections.set(row.id, deviceControl.value);
         integrationSelections.delete(row.id);
-        if (vehicle && deviceControl.value) {
-            const selectedSource = current.catalogue.entities.find(entity => entity.entity_id === row.soc_entity);
-            if (selectedSource?.device_id !== deviceControl.value) row.soc_entity = "";
-        }
         render(); changed();
     };
-    const candidates = current.catalogue.entities.filter(entity => device ? entity.device_id === device : vehicle ? isVehicleSoc(entity) : entity.entity_id.startsWith("binary_sensor.") || entity.device_class === "power" && ["W", "kW"].includes(entity.unit));
+    const candidates = current.catalogue.entities.filter(entity => device ? entity.device_id === device : entity.entity_id.startsWith("binary_sensor.") || entity.device_class === "power" && ["W", "kW"].includes(entity.unit));
     if (!candidates.some(entity => entity.integration_id)) return {device};
     const groups = new Map(candidates.map(entity => [entity.integration_id || "other", entity.integration_name || "Other Home Assistant sources"]));
     const selectedIntegration = integrationSelections.get(row.id) ?? (device && groups.size === 1 ? groups.keys().next().value : source && (!device || source.device_id === device) ? source.integration_id || "other" : "");
     const selection = {integration: selectedIntegration};
-    const control = select(card, selection, "integration", "Home Assistant integration", device ? "Selected automatically when this device has one integration. For multiple integrations, choose the one that supplies the sensor." : vehicle ? "Choose the integration that manages this car. Its device name supplies the vehicle name when available." : "Choose the integration that reports the charge point's power and physical connection. Its Energy meter is selected separately.", [...groups].sort((left, right) => left[1].localeCompare(right[1])));
+    const control = select(card, selection, "integration", "Home Assistant integration", device ? "Selected automatically when this device has one integration. For multiple integrations, choose the one that supplies the sensor." : "Choose the integration that reports the charge point's power and physical connection. Its Energy meter is selected separately.", [...groups].sort((left, right) => left[1].localeCompare(right[1])));
     control.required = false;
     control.parentElement.style.gridColumn = "1 / -1";
     control.onchange = () => {
         integrationSelections.set(row.id, control.value);
-        if (vehicle && control.value) {
-            const entity = current.catalogue.entities.find(source => source.entity_id === row.soc_entity);
-            if ((entity?.integration_id || "other") !== control.value) row.soc_entity = "";
-        }
         render(); changed();
     };
     return {device, integration: selectedIntegration};
 }
 /** Percentage SoC may omit HA's optional battery class, but incompatible classes remain excluded. */
-function isVehicleSoc(entity) { return entity.entity_id.startsWith("sensor.") && entity.unit === "%" && ["battery", ""].includes(entity.device_class); }
+function isVehicleSoc(entity) { return entity.device_entry_type !== "service" && entity.entity_id.startsWith("sensor.") && entity.unit === "%" && ["battery", ""].includes(entity.device_class); }
 /** Filter connection candidates by visible names without guessing that any binary sensor means plugged in. */
 function connectedSource(card, row, selection) {
     const group = node("fieldset"); group.className = "settings-fields"; group.append(node("legend", "Physical connection")); card.append(group);
@@ -152,19 +218,17 @@ async function removeSelected() {
 function render() {
     const all = [...draft.vehicles, ...draft.points];
     if (!all.some(row => row.id === selectedId)) selectedId = all[0]?.id || null;
-    const selector = find("ev-device-select"); selector.replaceChildren();
-    for (const [rows, label, vehicle] of [[draft.vehicles, "Vehicles", true], [draft.points, "Charge points", false]]) {
-        if (!rows.length) continue;
-        const group = node("optgroup"); group.label = label;
-        for (const row of rows) { const option = node("option", displayName(row, vehicle) + (vehicle ? ": Vehicle" : ": Charge point")); option.value = row.id; group.append(option); }
-        selector.append(group);
-    }
-    selector.value = selectedId || ""; find("ev-empty").hidden = Boolean(selectedId); find("ev-detail").hidden = !selectedId;
+    find("ev-empty").hidden = Boolean(selectedId); find("ev-detail").hidden = !selectedId;
     find("vehicles").replaceChildren(); find("points").replaceChildren();
     for (const row of draft.vehicles) {
         const card = node("section"); card.className = "settings-fields"; card.hidden = row.id !== selectedId; card.append(node("h3", "Home Assistant sources"));
-        const selection = sourcePicker(card, row, true);
-        select(card, row, "soc_entity", "Vehicle state of charge", "Select this car's measured battery percentage, not the stationary home battery.", metadata(isVehicleSoc, selection), selection?.integration === "" ? "Choose the Home Assistant integration first." : undefined);
+        const selection = vehicleSourcePicker(card, row);
+        const sources = selection.entities.map(entity => {
+            const label = entity.name || entity.entity_id;
+            const duplicate = selection.entities.some(other => other.entity_id !== entity.entity_id && (other.name || other.entity_id) === label);
+            return [entity.entity_id, duplicate ? `${label} (${entity.entity_id})` : label];
+        });
+        select(card, row, "soc_entity", "Vehicle state of charge", "One compatible sensor is selected automatically. Choose explicitly when several remain. Check this car's measured battery percentage before saving.", sources, "Choose an integration, any required account and a device with a compatible SoC source. Refresh Home Assistant sources if it is missing.");
         const advanced = node("details"); advanced.append(node("summary", "Optional original sample timestamp"));
         const stamp = input(advanced, row, "soc_timestamp_attribute", "SoC timestamp attribute", "If the SoC entity exposes its original sample time as an ISO timestamp attribute, enter that exact attribute name. Otherwise freshness uses HA report time and is labelled accordingly.", "text"); stamp.required = false; stamp.oninput = () => { row.soc_timestamp_attribute = stamp.value || null; changed(); }; card.append(advanced);
         card.append(node("h3", "Vehicle limits"));
@@ -177,7 +241,7 @@ function render() {
     }
     for (const row of draft.points) {
         const card = node("section"); card.className = "settings-fields"; card.hidden = row.id !== selectedId; card.append(node("h3", "Home Assistant sources"));
-        const selection = sourcePicker(card, row, false);
+        const selection = chargePointSourcePicker(card, row);
         select(card, row, "energy_entity", "Charging consumption meter", "Configured in Home Assistant Energy. Separate from instantaneous power.", current.energy_consumers.map((entity) => [entity.entity_id, entity.name]));
         select(card, row, "power_entity", "Measured AC charging power", "Positive W or kW consumed by this charge point.", metadata((entity) => entity.device_class === "power" && ["W", "kW"].includes(entity.unit), selection), selection?.integration === "" ? "Choose the Home Assistant integration first." : undefined);
         connectedSource(card, row, selection);
@@ -190,6 +254,14 @@ function render() {
         for (const car of draft.vehicles) { const label = node("label"), check = node("input"); check.type = "checkbox"; check.checked = row.vehicle_ids.includes(car.id); check.onchange = () => { row.vehicle_ids = check.checked ? [...row.vehicle_ids, car.id] : row.vehicle_ids.filter((id) => id !== car.id); changed(); }; label.append(check, node("span", current.vehicles.find((vehicle) => vehicle.id === car.id)?.name || car.soc_entity || "New vehicle")); group.append(label); }
         card.append(group); find("points").append(card);
     }
+    const selector = find("ev-device-select"); selector.replaceChildren();
+    for (const [rows, label, vehicle] of [[draft.vehicles, "Vehicles", true], [draft.points, "Charge points", false]]) {
+        if (!rows.length) continue;
+        const group = node("optgroup"); group.label = label;
+        for (const row of rows) { const option = node("option", displayName(row, vehicle) + (vehicle ? ": Vehicle" : ": Charge point")); option.value = row.id; group.append(option); }
+        selector.append(group);
+    }
+    selector.value = selectedId || "";
     renderSummary(); saveState.update();
     syncEditor();
 }
@@ -212,6 +284,7 @@ async function load(selection = selectedId) {
     try {
         current = await api("v1/ev"); useHomeAssistantTimezone(current.timezone);
         integrationSelections.clear();
+        integrationTypeSelections.clear();
         deviceSelections.clear();
         draft = {vehicles: current.vehicles.map((row) => Object.fromEntries(VEHICLE_FIELDS.map((key) => [key, row[key]]))), points: current.points.map((row) => Object.fromEntries(POINT_FIELDS.map((key) => [key, row[key]])))};
         selectedId = selection; editing = false; find("connect").hidden = true; find("settings").hidden = false; find("status").textContent = current.issue || ""; render(); saveState.loaded(); syncEditor();

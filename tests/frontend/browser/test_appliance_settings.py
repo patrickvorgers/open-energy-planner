@@ -237,6 +237,7 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     for index in range(2):
         add_ev_appliance(page, "vehicle")
         card = page.locator("#vehicles > section").nth(index)
+        card.get_by_label("Home Assistant integration", exact=True).select_option("other")
         card.locator('[data-field="soc_entity"]').select_option(f"sensor.soc{index}")
         card.locator('[data-field="capacity_kwh"]').fill("60")
         card.locator('[data-field="maximum_w"]').fill("11.001")
@@ -434,6 +435,7 @@ def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(ap
     for index in range(2):
         add_ev_appliance(page, "vehicle")
         card = page.locator("#vehicles > section").nth(index)
+        card.get_by_label("Home Assistant integration", exact=True).select_option("other")
         card.locator('[data-field="soc_entity"]').select_option(f"sensor.soc{index}")
         assert "wrong_soc" not in card.locator('[data-field="soc_entity"]').inner_text()
         card.locator('[data-field="capacity_kwh"]').fill("60" if index == 0 else "40")
