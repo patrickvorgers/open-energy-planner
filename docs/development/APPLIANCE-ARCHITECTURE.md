@@ -7,6 +7,22 @@ Add, removal, Save and Cancel remain available. There is no replacement tile
 landing page and no second device registry. Home Assistant Energy remains
 responsible for consumer identities, sources, names and upstream relationships.
 
+Consumption devices, charge points and electric boilers share the same Energy
+source dialog. It searches display names and meter IDs and offers Available,
+Already added and All sources filters. Assigned meters are disabled across all
+categories. Specialized additions create their typed draft only after a source
+is chosen. The Energy-defined meter and optional power link travel together.
+Missing power remains an explicit choice. No registered device or vendor
+integration is required, and no connection, car identity or temperature is
+inferred. Cancel closes the chooser without changing the saved configuration.
+
+The app checks source ownership under the existing shared settings lock before
+configuration writes. A concurrently claimed meter is rejected even if it was
+available when the chooser opened. Existing appliance-ID and meter pairs remain
+editable. Generic selection retains specialized forecast memberships and cannot
+enable a charge point or boiler as a shiftable cycle appliance. These rules use
+existing identities and archives without adding another device registry.
+
 ## Independent dimensions
 
 | Dimension | Existing ownership and meaning |
@@ -29,7 +45,7 @@ The `src/open_energy_planner/appliances/` package contains:
 
 | Module | Responsibility |
 |---|---|
-| `sources.py` | Shared disjoint Energy membership and upstream validation. |
+| `sources.py` | Shared source-assignment, disjoint Energy membership and upstream validation. |
 | `forecasting.py` | Existing individual-consumer selection and forecasting, reusing demand's statistical models and reconstruction. |
 | `weather_model.py` | Bounded CPU XGBoost adapter for selected weather-sensitive consumers. Native objects remain private. Portable archives contain JSON and fixed ordered features. |
 | `weather_learning.py` | Retained research comparison helper that can write `consumer-weather-*` archives. Production selection does not call it. |

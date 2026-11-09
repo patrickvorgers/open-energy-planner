@@ -3,7 +3,12 @@
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    add_thermal_appliance,
+    discover_boiler_sources,
+    wait_for_product_reads,
+)
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
@@ -12,7 +17,7 @@ from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 def test_settings_write_failures_are_safe_and_preserve_recovery(app_page, editor, outcome):
     """Real editor saves retain drafts, hide private errors and reload actual committed writes after lost acknowledgement."""
     page, url = app_page
-    body = discover(page, url)
+    body = discover_boiler_sources(page, url)
     body["suggestions"]["consumers"] = [{"entity_id": "sensor.roof", "upstream": None}]
     headers = {"Authorization": "Bearer " + TOKEN}
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
@@ -27,7 +32,7 @@ def test_settings_write_failures_are_safe_and_preserve_recovery(app_page, editor
         field.fill("64")
         page.locator('[data-field="maximum_w"]').fill("11")
     else:
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        add_thermal_appliance(page)
         for key, value in (
             ("energy_entity", "sensor.roof"),
             ("temperature_entity", "sensor.temperature"),

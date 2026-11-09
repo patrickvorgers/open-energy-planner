@@ -16,6 +16,8 @@ def prepare_charge_point(page, url):
     sources = catalogue()
     for source in sources["entities"]:
         source.update(device_id="", state_class="")
+    sources["entities"][2]["energy_name"] = "Garage charging"
+    sources["suggestions"]["consumers"][0]["power_entity"] = "sensor.charger_power"
     body["entities"].extend(sources["entities"])
     body["suggestions"]["consumers"] = sources["suggestions"]["consumers"]
     body["entities"].extend(
@@ -51,11 +53,12 @@ def prepare_charge_point(page, url):
     return body, headers
 
 
-def publish_choices(page, url, headers, body, action):
+def publish_choices(page, url, headers, body, action, scope="ev"):
     """Complete one actual chooser request without replacing authoritative Energy preferences."""
     with page.expect_response(
         lambda response: (
-            response.request.method == "POST" and response.url.endswith("/v1/ha/source-choices/ev")
+            response.request.method == "POST"
+            and response.url.endswith("/v1/ha/source-choices/" + scope)
         )
     ) as pending:
         action()
@@ -63,16 +66,18 @@ def publish_choices(page, url, headers, body, action):
     assert page.request.post(
         url + "/v1/ha/source-choices",
         headers=headers,
-        data={"scope": "ev", "id": nonce, "page": body},
+        data={"scope": scope, "id": nonce, "page": body},
     ).json()["accepted"]
     expect(page.locator("#status")).to_contain_text("sources refreshed")
 
 
-def test_charge_point_starts_with_energy_meter_and_saves_independent_sources(app_page):
-    """Only Energy devices are offered first, including device-less meters, and explicit bindings survive Cancel."""
+def test_charge_point_energy_picker_binds_meter_and_power_then_preserves_explicit_edits(app_page):
+    """Energy display names select the defined sensor pair before charging details, with safe overrides and Cancel."""
     page, url = app_page
     body, headers = prepare_charge_point(page, url)
-    publish_choices(page, url, headers, body, lambda: add_ev_appliance(page, "point"))
+    publish_choices(
+        page, url, headers, body, lambda: add_ev_appliance(page, "point", "sensor.charger_energy")
+    )
     card = page.locator("#points > section:visible")
     assert card.locator("select").first.get_attribute("data-field") == "energy_entity"
     expect(card.get_by_label("Home Assistant device", exact=True)).to_have_count(0)
@@ -85,13 +90,12 @@ def test_charge_point_starts_with_energy_meter_and_saves_independent_sources(app
         "sensor.charger_energy",
         "sensor.second_meter",
     ]
-    expect(meter).to_have_value("")
-    meter.select_option("sensor.charger_energy")
+    expect(meter).to_have_value("sensor.charger_energy")
+    expect(page.locator("#ev-title")).to_have_text("Garage charging")
     power = page.get_by_label("Measured AC charging power", exact=True)
     connected = page.get_by_label("Vehicle connected", exact=True)
-    expect(power).to_have_value("")
+    expect(power).to_have_value("sensor.charger_power")
     expect(connected).to_have_value("")
-    power.select_option("sensor.charger_power")
     connected.select_option("binary_sensor.charger_connected")
     page.get_by_label("Minimum active charging power (kW)", exact=True).fill("1.4")
     page.get_by_label("Maximum charging power (kW)", exact=True).fill("11")
@@ -117,6 +121,9 @@ def test_charge_point_starts_with_energy_meter_and_saves_independent_sources(app
         lambda: page.get_by_role("button", name="Edit settings", exact=True).click(),
     )
     meter.select_option("sensor.second_meter")
+    expect(power).to_have_value("")
+    power.select_option("sensor.grid")
+    meter.select_option("sensor.charger_energy")
     expect(power).to_have_value("sensor.charger_power")
     expect(connected).to_have_value("binary_sensor.charger_connected")
     page.get_by_role("button", name="Cancel", exact=True).click()
@@ -128,7 +135,9 @@ def test_charge_point_refresh_updates_energy_membership_without_replacing_draft(
     """Refreshed active Energy meters replace the list while a removed choice and numeric edits remain explicit."""
     page, url = app_page
     body, headers = prepare_charge_point(page, url)
-    publish_choices(page, url, headers, body, lambda: add_ev_appliance(page, "point"))
+    publish_choices(
+        page, url, headers, body, lambda: add_ev_appliance(page, "point", "sensor.charger_energy")
+    )
     meter = page.get_by_label("Charging consumption meter", exact=True)
     meter.select_option("sensor.charger_energy")
     maximum = page.get_by_label("Maximum charging power (kW)", exact=True)
@@ -177,11 +186,45 @@ def test_charge_point_without_energy_devices_explains_where_to_add_meter(app_pag
     body, headers = prepare_charge_point(page, url)
     body["suggestions"]["consumers"] = []
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
-    publish_choices(page, url, headers, body, lambda: add_ev_appliance(page, "point"))
-    meter = page.get_by_label("Charging consumption meter", exact=True)
-    expect(meter.locator("option")).to_have_count(1)
-    expect(
-        page.get_by_text("No device consumption meters are configured", exact=False)
-    ).to_be_visible()
-    assert meter.evaluate("control => control.required && !control.validity.valid")
+    page.get_by_role("button", name="Add vehicle or charge point", exact=True).click()
+    kind = page.get_by_role("dialog", name="Add vehicle or charge point", exact=True)
+    kind.get_by_role("radio", name="Charge point", exact=False).check()
+    kind.get_by_role("button", name="Continue", exact=True).click()
+    chooser = page.get_by_role("dialog", name="Add charge point", exact=True)
+    expect(chooser.get_by_text("No matching devices", exact=False)).to_be_visible()
+    expect(chooser.get_by_text("Add its energy meter", exact=False)).to_be_visible()
+    expect(chooser.locator("button.source-choice")).to_have_count(0)
+    chooser.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == []
+
+
+def test_energy_device_without_power_definition_keeps_manual_override_during_refresh(app_page):
+    """A device without a power link stays explicit, while refresh never replaces a chosen override."""
+    page, url = app_page
+    body, headers = prepare_charge_point(page, url)
+    publish_choices(
+        page,
+        url,
+        headers,
+        body,
+        lambda: add_ev_appliance(page, "point", "sensor.second_meter"),
+    )
+    power = page.get_by_label("Measured AC charging power", exact=True)
+    expect(power).to_have_value("")
+    power.select_option("sensor.grid")
+    publish_choices(
+        page,
+        url,
+        headers,
+        body,
+        lambda: page.get_by_role(
+            "button", name="Refresh Home Assistant sources", exact=True
+        ).click(),
+    )
+    expect(power).to_have_value("sensor.grid")
+    expect(page.get_by_label("Charging consumption meter", exact=True)).to_have_value(
+        "sensor.second_meter"
+    )
+    page.get_by_role("button", name="Cancel", exact=True).click()
     assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == []

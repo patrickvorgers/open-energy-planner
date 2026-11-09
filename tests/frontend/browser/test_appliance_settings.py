@@ -188,7 +188,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
-def add_ev_appliance(page, kind):
+def add_ev_appliance(page, kind, energy_entity=None):
     """Choose one typed EV draft through the shared Add action rather than editing every device at once."""
     page.get_by_role("button", name="Add vehicle or charge point", exact=True).click()
     dialog = page.get_by_role("dialog", name="Add vehicle or charge point", exact=True)
@@ -196,6 +196,14 @@ def add_ev_appliance(page, kind):
         "radio", name=re.compile("^Vehicle" if kind == "vehicle" else "^Charge point")
     ).check()
     dialog.get_by_role("button", name="Continue", exact=True).click()
+    if kind == "point":
+        sources = page.get_by_role("dialog", name="Add charge point", exact=True)
+        choice = (
+            sources.locator(f'button.source-choice[title="{energy_entity}"]')
+            if energy_entity
+            else sources.locator("button.source-choice:enabled").first
+        )
+        choice.click()
 
 
 def discover_charging_sources(page, url):
@@ -1133,10 +1141,10 @@ def test_appliance_source_picker_searches_large_catalogue_and_preserves_ha_membe
     expect(page.locator("#source-results")).to_contain_text("No matching devices")
     search.fill("")
     page.get_by_label("Show", exact=True).select_option("added")
-    expect(page.locator(".source-choice")).to_have_count(1)
-    expect(page.locator(".source-choice")).to_be_disabled()
+    expect(page.locator(".source-choice")).to_have_count(2)
+    expect(page.locator(".source-choice:disabled")).to_have_count(2)
     page.get_by_label("Show", exact=True).select_option("all")
-    expect(page.locator(".source-choice")).to_have_count(33)
+    expect(page.locator(".source-choice")).to_have_count(34)
     before = search.bounding_box()
     footer = page.get_by_role("button", name="Cancel", exact=True).bounding_box()
     page.locator("#source-results").press("End")

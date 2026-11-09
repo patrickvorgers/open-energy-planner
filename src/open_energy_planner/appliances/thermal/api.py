@@ -6,11 +6,13 @@ from datetime import UTC, datetime
 
 from aiohttp import web
 
+from open_energy_planner.appliances.sources import SOURCE_ALREADY_ASSIGNED, validate_new_assignments
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
 from open_energy_planner.storage.writes import complete_write
 
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
+    SOURCE_ALREADY_ASSIGNED,
     "A thermal meter cannot also control an EV or appliance cycle",
     "A thermal operation must be an object",
     "Continuing heat requires a current state and immediate dispatch boundary",
@@ -82,6 +84,12 @@ def register(app, service, catalogue, repository, live, lock):
                 }:
                     if body["expected_version"] != service.configuration_version:
                         raise ValueError("Thermal settings changed. Refresh before saving")
+                    validate_new_assignments(
+                        body["configuration"]["stores"],
+                        service.state["stores"],
+                        service.consumers.selected,
+                        service.ev.state["points"],
+                    )
                     function, arguments = (
                         service.configure,
                         (

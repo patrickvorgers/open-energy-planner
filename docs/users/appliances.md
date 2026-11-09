@@ -67,18 +67,27 @@ If a chosen integration, account or device disappears during refresh, its select
 stays visible as unavailable. Refresh again or explicitly choose a replacement.
 The vehicle is never silently linked to a different account or car.
 
-For a charge point, start with **Charging consumption meter**. This list contains
-the individual device consumption meters configured in the Home Assistant Energy
-dashboard. Choose the meter belonging to the charge point. No Home Assistant
-device or integration choice is required. Meters without a registered device
-are included. If the meter is missing, add it under the Energy dashboard's
-individual devices and choose **Refresh Home Assistant sources**.
+When adding a charge point, choose **Charge point** and then select the device
+from the shared Home Assistant Energy list. The list shows Energy display names
+and supports searching by name or meter ID. The selection supplies both its
+consumption meter and the **device power consumption** sensor configured in
+Home Assistant Energy. No device-registry or integration choice is required.
+Meters without a registered device are included.
 
-Choose **Measured AC charging power** and **Vehicle connected** separately.
-Compatible sensors from all devices and integrations are available, including
-connection helpers. Use **Find connection sensor** to search by device name,
-sensor name or entity ID. Choosing another Energy meter does not replace these
-explicit sources. Refresh updates the Energy list without discarding edits.
+The same Energy chooser is used by ordinary appliances and electric boilers.
+**Available** shows unassigned devices. **Already added** and **All sources**
+show assigned devices as disabled, regardless of their appliance category.
+Finish or cancel this choice before editing type-specific details. Cancelling
+does not add a device or save settings. To change an assigned device, use its
+existing editor. Names never determine whether two sources are the same device.
+
+If Home Assistant has no device power consumption link, choose the power sensor
+explicitly. A manual power override is allowed and survives source refresh.
+Choosing another Energy meter applies that device's defined power link or clears
+the old power choice when there is no link. The physical connection sensor and
+vehicle assignment are never inferred. Use **Find connection sensor** to search
+compatible sensors and helpers across integrations by device name, sensor name
+or entity ID. Refresh updates the Energy list without discarding edits.
 A removed meter remains visible as unavailable until you choose a replacement.
 It cannot be saved while absent from Home Assistant Energy.
 **Vehicle connected** must be On
@@ -100,7 +109,13 @@ See [EV charging contracts](../development/EV-CHARGING.md) for supported capabil
 
 ## Prepare thermal storage
 
-The supported thermal model is a fixed-power resistive electric water heater. Configure it under **Settings > Appliances > Electric boilers** using its electricity source, temperature/power measurements, volume, temperatures, standing losses and expected hourly heat draw.
+The supported thermal model is a fixed-power resistive electric water heater.
+Under **Settings > Appliances > Electric boilers**, choose **Add electric boiler**
+and select an available device from the same Energy chooser. Its Energy meter
+and configured device power sensor are selected together. Then configure the
+temperature measurement, volume, temperatures, standing losses, electrical
+heating rating and expected hourly heat draw. A missing power link requires an
+explicit power source. Already assigned appliances cannot be added again.
 
 Removing a boiler requires confirmation and then **Save settings**. Cancel in
 the dialog keeps it unchanged. Cancel in the editor restores the saved model.

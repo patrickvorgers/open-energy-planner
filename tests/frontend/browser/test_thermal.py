@@ -11,6 +11,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.control_layout import assert_field_actions_aligned
+from tests.frontend.browser.helpers import add_thermal_appliance
 
 ASSETS = Path(__file__).resolve().parents[3] / "src/open_energy_planner/web"
 STORE = "00000000-0000-4000-8000-000000000101"
@@ -121,6 +122,23 @@ def thermal_page(browser, request):
         path = urlsplit(route.request.url).path
         if path == "/setup/session":
             route.fulfill(json={"ingress": True, "timezone": "Europe/Amsterdam"})
+        elif path == "/v1/consumers":
+            options = state["document"]["energy_consumers"] + [
+                {
+                    "entity_id": "sensor.spare_boiler_energy",
+                    "name": "Spare boiler",
+                    "upstream": None,
+                }
+            ]
+            meters = [row["energy_entity"] for row in state["document"]["configuration"]["stores"]]
+            route.fulfill(
+                json={
+                    "options": options,
+                    "selected": [],
+                    "charging_meters": [],
+                    "thermal_meters": meters,
+                }
+            )
         elif path == "/v1/thermal":
             route.fulfill(json=state["document"])
         elif path == "/v1/thermal/configuration":
@@ -153,14 +171,20 @@ def thermal_page(browser, request):
             route.fulfill(json=state["document"])
         elif path in ("/thermal", "/appliance-settings/thermal"):
             filename = "thermal.html" if path == "/thermal" else "appliance-settings/thermal.html"
-            html = (ASSETS / "pages" / filename).read_text().replace("__OEP_BASE__", "/")
+            html = (
+                (ASSETS / "pages" / filename)
+                .read_text(encoding="utf-8")
+                .replace("__OEP_BASE__", "/")
+            )
             html = html.replace(
                 "<!-- OEP_NAVIGATION -->",
                 '<aside class="sidebar"><nav><a href="/thermal">Thermal storage</a></nav></aside>',
             )
             html = html.replace(
                 "<!-- OEP_APPLIANCE_SETTINGS -->",
-                (ASSETS / "partials/appliance-settings-navigation.html").read_text(),
+                (ASSETS / "partials/appliance-settings-navigation.html").read_text(
+                    encoding="utf-8"
+                ),
             )
             route.fulfill(body=html, content_type="text/html")
         elif path.startswith("/setup/"):
@@ -337,13 +361,13 @@ def test_fifth_boiler_can_be_cancelled_configured_saved_and_reloaded(thermal_pag
     page.reload()
     expect(page.locator("#thermal-store-select option")).to_have_count(4)
     expect(page.locator("#add-thermal")).to_be_enabled()
-    page.locator("#add-thermal").click()
+    add_thermal_appliance(page)
     expect(page.locator('[data-field="enabled"]')).not_to_be_checked()
     expect(page.locator("#save-thermal")).to_be_disabled()
     page.locator("#cancel-thermal").click()
     expect(page.locator("#thermal-store-select option")).to_have_count(4)
     assert state["posts"] == []
-    page.locator("#add-thermal").click()
+    add_thermal_appliance(page)
     for field in ("energy_entity", "temperature_entity", "power_entity"):
         page.locator(f'[data-field="{field}"]').select_option(available[4][field])
     for field, value in (
@@ -499,7 +523,7 @@ def test_unserved_hot_water_is_distinct_from_comfort_and_ending_stock(
 def test_new_boiler_has_no_invented_physics_or_enabled_permission(thermal_page):
     """Adding a store creates a disabled draft with empty physics and an explicitly assumed draw profile."""
     page, state = thermal_page
-    page.locator("#add-thermal").click()
+    add_thermal_appliance(page)
     expect(page.locator('[data-field="enabled"]')).not_to_be_checked()
     for field in (
         "minimum_c",

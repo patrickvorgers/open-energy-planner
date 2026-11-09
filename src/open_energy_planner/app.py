@@ -1055,10 +1055,10 @@ def create_app(
     register_consumers(app, demand, lock, ev, thermal)
     from open_energy_planner.appliances.cycles.api import register as register_appliances
 
-    register_appliances(app, appliances, repository, live, lock)
+    register_appliances(app, appliances, repository, live, lock, ev, thermal)
     from open_energy_planner.appliances.ev.api import register as register_ev
 
-    register_ev(app, ev, setup_catalogue, repository, live, lock)
+    register_ev(app, ev, setup_catalogue, repository, live, lock, thermal)
     from open_energy_planner.appliances.thermal.api import register as register_thermal
 
     register_thermal(app, thermal, setup_catalogue, repository, live, lock)

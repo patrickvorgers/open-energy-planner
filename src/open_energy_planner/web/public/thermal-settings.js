@@ -6,11 +6,12 @@ import {useHomeAssistantTimezone, sourceName} from "./display.js";
 import {settingsSummary} from "./appliance-settings-detail.js";
 import {identity} from "./identity.js";
 import {sourceRefresh, retainInputs} from "./source-refresh.js";
+import {assignedEnergySources, pickEnergySource} from "./energy-source-picker.js";
 import {applianceSettingsApi} from "./appliance-settings-api.js";
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
-let token = "", current = null, draft = {stores: []}, savedVersion = null;
+let token = "", current = null, energySources, draft = {stores: []}, savedVersion = null;
 const api = applianceSettingsApi(base, () => token);
 let selectedId = null, editOriginId = null, editing = false, conflict = false, requestGeneration = 0;
 bindSettingsActions();
@@ -70,7 +71,7 @@ function sourceSelect(parent, store, key, label, help, choices) {
     for (const [value, name] of choices) { const option = node("option", name); option.value = value; select.append(option); }
     if (store[key] && !choices.some(([value]) => value === store[key])) { const unavailable = node("option", `${store[key]}: Source unavailable`); unavailable.value = store[key]; unavailable.disabled = true; select.append(unavailable); }
     select.value = store[key] || ""; select.onchange = () => { store[key] = select.value; saveState.update(); };
-    wrapper.append(select, node("small", help)); parent.append(wrapper);
+    wrapper.append(select, node("small", help)); parent.append(wrapper); return select;
 }
 /** Offer eligible catalogue entities with their device context to distinguish similar sensors. */
 function metadata(predicate) { return (current?.catalogue?.entities || []).filter(predicate).map(source => [source.entity_id, `${sourceName(source, "Sensor")}: ${source.name} (${source.entity_id})`]); }
@@ -87,7 +88,8 @@ function renderEditor() {
     if (!store) { syncEditor(); return; }
     find("thermal-title").textContent = displayName(store);
     const sources = node("div"); sources.className = "settings-fields"; sources.append(node("h3", "Home Assistant sources"));
-    sourceSelect(sources, store, "energy_entity", "Boiler consumption meter", "Choose its Home Assistant Energy meter. Individual history is requested automatically. Heating commands wait until the separate consumption baseline is available. Planned heating replaces that baseline.", (current.energy_consumers || []).map(source => [source.entity_id, source.name]));
+    const meter = sourceSelect(sources, store, "energy_entity", "Boiler consumption meter", "Choose its Home Assistant Energy meter. Individual history is requested automatically. Heating commands wait until the separate consumption baseline is available. Planned heating replaces that baseline.", (current.energy_consumers || []).filter(source => source.entity_id === store.energy_entity || source.entity_id === current.configuration.stores.find(saved => saved.id === store.id)?.energy_entity || !assignedEnergySources(energySources).has(source.entity_id)).map(source => [source.entity_id, source.name]));
+    meter.onchange = () => { if (meter.value === store.energy_entity) return; store.energy_entity = meter.value; store.power_entity = current.energy_consumers.find(source => source.entity_id === meter.value)?.power_entity || ""; retainInputs(renderEditor); saveState.update(); queueMicrotask(syncEditor); };
     sourceSelect(sources, store, "temperature_entity", "Measured water temperature", "Use a temperature sensor or water heater reporting °C or °F. Home Assistant report time determines freshness.", metadata(source => (source.entity_id.startsWith("sensor.") || source.entity_id.startsWith("water_heater.")) && source.device_class === "temperature" && ["°C", "°F"].includes(source.unit)));
     sourceSelect(sources, store, "power_entity", "Measured heater power", "Use the boiler's own electrical power sensor in W or kW.", metadata(source => source.entity_id.startsWith("sensor.") && source.device_class === "power" && ["W", "kW"].includes(source.unit)));
     editor.append(sources);
@@ -126,8 +128,9 @@ function renderSummary(store) {
 /** Load settings only on explicit transitions. Background evidence never replaces an edited draft. */
 async function load(selection = selectedId) {
     const generation = ++requestGeneration;
-    const data = await api("v1/thermal");
+    const [data, consumers] = await Promise.all([api("v1/thermal"), api("v1/consumers")]);
     if (generation !== requestGeneration) return false;
+    energySources = consumers; data.energy_consumers = consumers.options;
     current = data; useHomeAssistantTimezone(data.timezone || data.catalogue?.timezone);
     draft = structuredClone(data.configuration || {stores: []}); savedVersion = data.configuration_version; selectedId = selection;
     editing = false; conflict = false; find("connect").hidden = true; find("thermal-settings").hidden = false; find("status").textContent = data.issue || "";
@@ -149,15 +152,33 @@ async function refreshEvidence() {
     } catch (error) { find("status").textContent = error.message; }
 }
 find("thermal-store-select").onchange = event => { selectedId = event.target.value; renderEditor(); };
-const refreshSources = sourceRefresh(api, "thermal", find("refresh-thermal-sources"), find("status"), catalogue => {
-    if (saveState.busy || !current) return;
+const refreshSources = sourceRefresh(api, "thermal", find("refresh-thermal-sources"), find("status"), async (catalogue, signal) => {
+    const opening = current;
+    if (saveState.busy || !opening) return;
+    const consumers = await api("v1/consumers", undefined, signal);
+    if (saveState.busy || current !== opening) return;
+    energySources = consumers; current.energy_consumers = consumers.options;
     current.catalogue = catalogue;
     retainInputs(renderEditor);
     saveState.update();
+    syncEditor();
 });
 find("refresh-thermal-sources").onclick = () => { if (!saveState.busy) return refreshSources(); };
 find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); };
-find("add-thermal").onclick = () => { if (saveState.busy) return; const store = {id: identity(), energy_entity: "", temperature_entity: "", power_entity: "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false}; editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); refreshSources(); };
+find("add-thermal").onclick = async () => {
+    if (saveState.busy || editing || saveState.dirty) return;
+    const opening = current;
+    saveState.begin("Loading Home Assistant Energy devices…"); syncEditor();
+    try { energySources = await api("v1/consumers"); current.energy_consumers = energySources.options; }
+    catch (error) { find("status").textContent = error.message; return; }
+    finally { saveState.end(); syncEditor(); }
+    if (current !== opening || editing) return;
+    find("add-thermal").focus();
+    const source = await pickEnergySource(find("source-dialog"), energySources, "Add electric boiler");
+    if (!source || current !== opening || saveState.busy || editing) return;
+    const store = {id: identity(), energy_entity: source.entity_id, temperature_entity: "", power_entity: source.power_entity || "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false};
+    editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); refreshSources();
+};
 find("thermal-settings").onsubmit = async event => {
     event.preventDefault(); if (saveState.busy || !editing || conflict || !validDraft()) return;
     ++requestGeneration; saveState.begin(); syncEditor();

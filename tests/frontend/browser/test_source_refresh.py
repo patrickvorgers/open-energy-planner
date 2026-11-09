@@ -8,8 +8,10 @@ from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import (
     TOKEN,
+    add_thermal_appliance,
     connect,
     discover,
+    discover_boiler_sources,
     read_settings,
     wait_for_product_reads,
 )
@@ -121,7 +123,7 @@ def test_failed_choice_refresh_retains_existing_draft_and_explicit_retry(app_pag
 def test_boiler_source_refresh_preserves_raw_inputs_and_missing_selection(app_page):
     """A late water-heater choice updates options while preserving an unsaved boiler and focus."""
     page, url = app_page
-    body = discover(page, url)
+    body = discover_boiler_sources(page, url)
     candidates = deepcopy(body)
     candidates["entities"].append(
         {
@@ -143,7 +145,7 @@ def test_boiler_source_refresh_preserves_raw_inputs_and_missing_selection(app_pa
             and response.url.endswith("/v1/ha/source-choices/thermal")
         )
     ) as pending:
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        add_thermal_appliance(page)
     volume = page.get_by_label("Water volume (litres)", exact=False)
     volume.fill("180")
     volume.focus()
@@ -333,7 +335,7 @@ def test_actual_source_refresh_clients_forward_abort_signal_and_retain_drafts(
 ):
     """Every real source-refresh caller forwards cancellation and releases its button for explicit retry."""
     page, url = app_page
-    discover(page, url)
+    discover_boiler_sources(page, url)
     if editor == "installation":
         connect(page)
         field = page.get_by_label("Maximum grid import (kW)", exact=True)
@@ -396,7 +398,7 @@ def test_actual_source_refresh_clients_forward_abort_signal_and_retain_drafts(
         field = page.get_by_label("Capacity (kWh)", exact=False)
         field.fill("64")
     elif editor == "thermal":
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        add_thermal_appliance(page)
         field = page.get_by_label("Water volume (litres)", exact=False)
         field.fill("180")
     else:

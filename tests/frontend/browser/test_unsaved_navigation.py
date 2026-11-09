@@ -7,8 +7,10 @@ from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import (
     TOKEN,
+    add_thermal_appliance,
     connect,
     discover,
+    discover_boiler_sources,
     edit_price_rule,
     open_primary_navigation,
     show_installation_sources,
@@ -105,7 +107,7 @@ def test_ev_draft_navigation_uses_custom_confirmation_and_preserves_cancelled_ed
 def test_other_configuration_editors_share_navigation_consent(app_page, kind):
     """Contract, boiler and consumer drafts use the same dialog without persisting a write."""
     page, url = app_page
-    body = discover(page, url)
+    body = discover_boiler_sources(page, url)
     body["entities"].append(
         {
             "entity_id": "sensor.synthetic_washer",
@@ -129,7 +131,7 @@ def test_other_configuration_editors_share_navigation_consent(app_page, kind):
         edit_price_rule(page)
         page.get_by_label("Import formula", exact=True).fill("market + 0.187")
     elif kind == "boiler":
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        add_thermal_appliance(page)
     else:
         page.get_by_role("button", name="Add appliance", exact=True).click()
         page.locator(".source-choice").filter(has_text="Synthetic washer").click()

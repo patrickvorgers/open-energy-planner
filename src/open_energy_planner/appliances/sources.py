@@ -1,5 +1,28 @@
 """Validate disjoint Home Assistant Energy ownership for every appliance model."""
 
+SOURCE_ALREADY_ASSIGNED = (
+    "This Energy device is already added as an appliance. "
+    "Edit or remove it in its existing category first."
+)
+
+
+def validate_new_assignments(requested, retained, selected, reserved):
+    """Reject meter reuse while permitting edits to the same persisted appliance and meter.
+
+    Call under the shared settings lock before any write. Forecast selection and
+    specialized records both reserve a source, including after an interrupted
+    specialized save or a missing forecast. Display names never establish identity.
+    Existing shape and Energy-membership validation remains authoritative.
+    """
+    occupied = {row["entity_id"] for row in selected}
+    other_categories = {row["energy_entity"] for row in reserved}
+    previous = {(row["id"], row["energy_entity"]) for row in retained}
+    for row in requested:
+        if row["energy_entity"] in other_categories or (
+            row["energy_entity"] in occupied and (row["id"], row["energy_entity"]) not in previous
+        ):
+            raise ValueError(SOURCE_ALREADY_ASSIGNED)
+
 
 def validate_membership(selected, options):
     """Reject unknown meters, cycles and any selected ancestor after every Energy change."""

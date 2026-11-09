@@ -3,7 +3,12 @@
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    add_thermal_appliance,
+    discover,
+    discover_boiler_sources,
+)
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
@@ -11,7 +16,7 @@ from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 def test_boiler_refresh_keeps_native_editing_and_next_key(app_page, raw, next_key, expected):
     """Choice updates must not clear raw invalid numbers or select an unchanged value for replacement."""
     page, url = app_page
-    body = discover(page, url)
+    body = discover_boiler_sources(page, url)
     headers = {"Authorization": "Bearer " + TOKEN}
     page.goto(url + "/appliance-settings/thermal")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
@@ -22,7 +27,7 @@ def test_boiler_refresh_keeps_native_editing_and_next_key(app_page, raw, next_ke
             and response.url.endswith("/v1/ha/source-choices/thermal")
         )
     ) as pending:
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        add_thermal_appliance(page)
     volume = page.get_by_label("Water volume (litres)", exact=False)
     volume.click()
     volume.press("ControlOrMeta+A")
@@ -82,7 +87,7 @@ def test_target_soc_keeps_incomplete_text_and_next_key_during_source_refresh(
 def test_hourly_profile_stays_open_and_typing_continues_after_source_refresh(app_page):
     """Source choices cannot hide the focused hourly-demand field or interrupt its draft editing."""
     page, url = app_page
-    body = discover(page, url)
+    body = discover_boiler_sources(page, url)
     page.goto(url + "/appliance-settings/thermal")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -92,7 +97,7 @@ def test_hourly_profile_stays_open_and_typing_continues_after_source_refresh(app
             and response.url.endswith("/v1/ha/source-choices/thermal")
         )
     ) as pending:
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        add_thermal_appliance(page)
     page.get_by_text("Expected hot-water heat demand by hour", exact=True).click()
     hour = page.get_by_label("07:00 to 08:00 (thermal kWh)", exact=True)
     hour.fill("1.2")
