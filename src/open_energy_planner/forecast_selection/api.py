@@ -48,6 +48,8 @@ def register(
 
     def current_choices():
         """Scope preferences to the current physical, contract, strategy and model-feature definitions."""
+        if demand.daily_selection is not None or demand.consumers.selected:
+            return []
         if not enabled or not all(
             (installation.current, demand.configuration, solar.configuration, contracts.current)
         ):

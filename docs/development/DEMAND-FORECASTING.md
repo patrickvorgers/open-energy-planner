@@ -166,9 +166,12 @@ It cannot be passed off as a residual forecast. Separately planned devices requi
 
 ## Activation and chronological evaluation
 
+Production uses the shared local-day accuracy policy described below. The
+financial scorer in this section remains a research and regression seam.
+
 The startup/historical profile is the active baseline. Ridge is also trained and
-published as a candidate after enough data is available. It does not replace the
-baseline merely because it has lower MAE or lower forecast objective cost.
+published as a candidate after enough data is available. Training fit or a lower forecast objective cost does not authorize activation.
+Production promotion requires preserved matching daily evidence.
 
 `DecisionScorer` is the explicit port for historical planning and realized
 settlement. The caller must retain identical prices, PV forecasts, installation
@@ -184,15 +187,12 @@ EUR 0.001 and 1% of the absolute baseline cost. This is an initial conservative
 gate, not a universal statistical guarantee. Calendar/temperature feature modes
 must match the candidate selected for activation.
 
-Production activation now uses [forward shadow decision evidence](MODEL-SELECTION.md).
-Both forecast variants are planned before realization and later replayed against
-recorded quarters/published prices under the same physical and financial conditions.
-The existing injected chronological scorer remains available for isolated research
-and regression tests. It is not used to fabricate past planning knowledge.
-Candidates train from available HA history immediately. Automatic preference needs
-three complete independent forward windows. The archived baseline remains available
-for comparisons and fallback after promotion. Actual model, preference and evidence
-are visible under Installation settings > Forecast models.
+Production activation uses the shared [local-day accuracy selection](MODEL-SELECTION.md).
+The last available forecasts before local midnight are retained and compared
+with matching later measurements. Each of three eligible recent days must show
+a material accuracy gain before a learned model replaces its measured baseline.
+The injected chronological financial scorer above remains an isolated research
+seam. It is not the production selection criterion.
 
 ## App and HA interfaces
 
@@ -305,7 +305,15 @@ Phase 1 is forecast-only. Discover individual consumption from HA Energy `device
 
 Individual-consumer forecasting reuses NumPy Ridge, weekday/hour fallback, Recorder hourly cumulative sums and Open-Meteo temperature history/forecasts. With fewer than seven complete days covering all hours, a component is unavailable: keep the existing whole-house forecast. Ridge needs the existing 28-day training threshold and complete recent-load windows. A weather-sensitive choice uses temperature features only with complete training/prediction weather. Otherwise its historical profile remains explicit. No zero-degree or zero-consumption substitution is used.
 
-The candidate is **remaining household + each selected device**, calculated once from matched historical channels. Reject selected parent/child overlap. Apply the training-only negative-balance policy above to residual history. Missing consumer evidence disables the composite challenger without removing demand from the incumbent. A completed composite carries ordinary household scope and no exclusions because its device forecasts have already been added back. It enters the existing forward decision comparison against the household weekday/hour baseline. Separate forecast error does not authorize activation. Until the existing consistent-benefit gate passes, the app labels components as shadow estimates and planning retains its baseline. Model family identity includes consumer settings and source membership, so changing these cannot reuse an old preference.
+The active composition is **remaining household + each ready selected device**,
+calculated once from matched historical channels. Reject parent/child overlap
+and apply the training-only negative-balance policy above. Measurement separation
+does not wait for ML admission. Every component retains its measured weekday
+baseline until the shared daily accuracy policy admits an alternative. A missing
+consumer stays in the remaining-household boundary while independently ready
+consumers remain separated. Missing or inconsistent residual history withholds
+separation. The public composed forecast carries household scope and no extra
+exclusions because its components have already been added back.
 
 The `/v1/consumers` API stores app-owned selection/weather flags with optimistic concurrency in the shared SQLAlchemy demand document namespace. Energy membership and upstream links remain read-only. Models, component forecasts and original parameters are archived. Source history is fetched through the integration rather than a direct Recorder database connection. Removed sources remain in historical settings, disappear from offered choices and prevent stale composition. Forecast-only HA devices publish current-interval mean forecast W, full-horizon forecast kWh and forecast status. These are estimates, not measured energy or commands.
 
@@ -313,7 +321,7 @@ Ready device forecasts remain available when another selected consumer has too
 little history. The remaining-household baseline subtracts only ready components,
 so unavailable devices stay inside measured household consumption. This permits
 safe explicit boiler, EV or appliance scheduling without inventing missing
-device demand. The incomplete composite challenger remains unavailable. Missing
+device demand. The active partial composition identifies unavailable sources explicitly. Missing
 or inconsistent residual evidence continues to withhold controlled-load
 replacement.
 The app and HA expose each device's own forecast status. Ready predictions and

@@ -490,7 +490,7 @@ class ApplianceService:
         self.commit(data, extra=((request_key, {"request": request, "task_id": task["id"]}),))
         return task
 
-    def prepare(self, snapshot, demand, now, *, excluded_entities=()):
+    def prepare(self, snapshot, demand, now, *, excluded_entities=(), replacement_windows=()):
         """Replace controlled baselines and refine task windows for physical peaks.
 
         Keyword-only excluded_entities removes those meters' baseline contribution
@@ -503,9 +503,14 @@ class ApplianceService:
         """
         if not isinstance(snapshot.problem, InstallationProblem):
             return snapshot
-        from types import SimpleNamespace
-
-        from open_energy_planner.installation.basis import EnergySeries
+        from open_energy_planner.demand.calculation.composition import (
+            LoadComponent,
+            LoadStep,
+            integral,
+            replace_cycle,
+            scale_window,
+            validate_components,
+        )
 
         problem = snapshot.problem
         self.issue = None
@@ -534,11 +539,22 @@ class ApplianceService:
             if fixed is not None or candidates(work, problem.intervals):
                 works.append(work)
                 entities.add(entity)
-        if not works and not entities:
+        if not works and not entities and not self.consumers.selected:
             return replace(snapshot, appliance_revision=self.revision)
         result = self.consumers.result or {}
         forecasts = {row["entity_id"]: row["forecast"] for row in result.get("devices", [])}
-        if not entities <= set(forecasts):
+        if (
+            not forecasts
+            or not entities <= set(forecasts)
+            or (
+                "separated_entities" in result
+                and set(result["separated_entities"]) != set(forecasts)
+            )
+            or (
+                "configuration_version" in result
+                and result["configuration_version"] != self.consumers.version
+            )
+        ):
             self.issue = "Appliance forecasts not ready. Retaining household forecast"
             return replace(snapshot, appliance_revision=self.revision)
 
@@ -551,41 +567,88 @@ class ApplianceService:
                 < issued_at + timedelta(minutes=COMPONENT_FORECAST_MAX_AGE_MINUTES)
             ):
                 raise ValueError("Appliance forecast expired")
-            energy = EnergySeries(
-                tuple(
-                    SimpleNamespace(
-                        start=instant(row["start"]),
-                        duration_h=row["duration_h"],
-                        kwh=row["kwh"],
-                    )
-                    for row in forecast["steps"]
-                ),
-                "kwh",
+            energy = tuple(
+                LoadStep(
+                    start=instant(row["start"]),
+                    duration_h=row["duration_h"],
+                    kwh=row["kwh"],
+                )
+                for row in forecast["steps"]
             )
             for step in problem.intervals:
-                energy.integral(step.start, step.start + timedelta(hours=step.duration_h))
+                integral(energy, step.start, step.start + timedelta(hours=step.duration_h))
             return energy
 
         try:
-            # An explicit runnable task changes the measurement boundary. Use the
-            # ordinary historical baseline for that boundary, not an unapproved ML challenger.
+            # Keep the active component models and their original measurement
+            # boundary. A concrete task replaces expectation, not training data.
+            horizon_start = problem.intervals[0].start
+            horizon_end = problem.intervals[-1].start + timedelta(
+                hours=problem.intervals[-1].duration_h
+            )
             baseline_parts = [
-                result["residual_baseline"],
-                *(
-                    row["baseline_forecast"]
-                    for row in result["devices"]
-                    if row["entity_id"] not in entities
-                ),
+                result["residual"]
+                if demand is not None
+                and getattr(getattr(demand, "forecast", None), "model", None)
+                == "consumer-composite-v1"
+                else result["residual_baseline"]
             ]
+            base = covered_series(baseline_parts[0])
+            components = [
+                LoadComponent(
+                    None,
+                    baseline_parts[0].get("version") or digest(baseline_parts[0]),
+                    base,
+                    base,
+                    tuple(
+                        sorted(
+                            {row["entity_id"] for row in self.consumers.selected} - set(forecasts)
+                        )
+                    ),
+                )
+            ]
+            work_by_entity = {work.entity_id: work for work in works}
+            windows = {entity: (left, right) for entity, left, right in replacement_windows}
             for row in result["devices"]:
                 if row["entity_id"] in entities:
                     covered_series(row["forecast"])
                     covered_series(row["baseline_forecast"])
-            series = [covered_series(forecast) for forecast in baseline_parts]
+                forecast = (
+                    row["forecast"]
+                    if demand is not None
+                    and getattr(getattr(demand, "forecast", None), "model", None)
+                    == "consumer-composite-v1"
+                    else row["baseline_forecast"]
+                )
+                expected = covered_series(forecast)
+                entity = row["entity_id"]
+                if entity in work_by_entity:
+                    remaining = replace_cycle(
+                        expected, work_by_entity[entity], horizon_start, horizon_end
+                    )
+                elif entity in entities:
+                    remaining = scale_window(
+                        expected, *windows.get(entity, (horizon_start, horizon_end)), 1
+                    )
+                else:
+                    remaining = expected
+                components.append(
+                    LoadComponent(
+                        entity, forecast.get("version") or digest(forecast), expected, remaining
+                    )
+                )
+                if entity not in entities:
+                    baseline_parts.append(forecast)
             intervals, parents = [], []
             for parent_index, step in enumerate(problem.intervals):
                 end = step.start + timedelta(hours=step.duration_h)
                 boundaries = {step.start, end}
+                boundaries.update(
+                    part.start
+                    for component in components
+                    for part in component.steps
+                    if step.start < part.start < end
+                )
                 for work in works:
                     starts = candidates(work, problem.intervals)
                     first, last = (
@@ -613,7 +676,9 @@ class ApplianceService:
                 for left, right in pairwise(sorted(boundaries)):
                     # Preserve forecast means. Refine only task windows to retain actual phase peaks.
                     part = slice_interval(step, left, right)
-                    residual = sum(item.integral(left, right) for item in series)
+                    residual = sum(
+                        integral(component.steps, left, right) for component in components
+                    )
                     from open_energy_planner.appliances.cycles.model import ENERGY_TOLERANCE_KWH
 
                     if residual < -ENERGY_TOLERANCE_KWH:
@@ -634,6 +699,7 @@ class ApplianceService:
                     for rule in problem.export_bonuses
                 ),
             )
+            validate_components(refined, components)
         except (ValueError, KeyError):
             self.issue = "Appliance forecast boundary unavailable. Retaining household forecast"
             return replace(snapshot, appliance_revision=self.revision)
@@ -644,6 +710,7 @@ class ApplianceService:
             problem=refined,
             appliance_revision=self.revision,
             appliance_evidence=tuple(deepcopy(baseline_parts)),
+            load_components=tuple(components),
         )
 
     def accept_plan(self, document):

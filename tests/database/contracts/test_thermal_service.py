@@ -270,7 +270,8 @@ def test_unrelated_short_history_keeps_ready_boiler_and_unmodelled_household_loa
         NOW,
         consumers.inputs(),
     )
-    assert candidate is None
+    assert candidate.model == "consumer-composite-v1"
+    assert result["status"] == "partial_history"
     assert [row["entity_id"] for row in result["devices"]] == [ENERGY]
     consumers.result = result
     service.receive(report(service), NOW)
@@ -421,7 +422,10 @@ def test_unavailable_boiler_forecast_preserves_independently_ready_ev(service, b
     assert len(prepared.problem.ev_work) == 1
     assert prepared.problem.ev_work[0].point_id == POINT
     assert prepared.problem.ev_work[0].vehicle_id == CAR
-    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(0.8)
+    ready = prepared.problem.ev_work[0].ready_at
+    # The .2-kWh/h charger expectation remains before its admitted control window.
+    expected = 0.8 + 0.2 * (ready - NOW).total_seconds() / 3600
+    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(expected)
     assert prepared.ev_evidence and prepared.appliance_evidence
     assert prepared.thermal_evidence == ()
     assert service.ev.issue is None

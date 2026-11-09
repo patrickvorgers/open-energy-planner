@@ -32,7 +32,7 @@ The `src/open_energy_planner/appliances/` package contains:
 | `sources.py` | Shared disjoint Energy membership and upstream validation. |
 | `forecasting.py` | Existing individual-consumer selection and forecasting, reusing demand's statistical models and reconstruction. |
 | `weather_model.py` | Bounded CPU XGBoost adapter for selected weather-sensitive consumers. Native objects remain private. Portable archives contain JSON and fixed ordered features. |
-| `weather_learning.py` | Immutable forward predictions and later comparable hourly measurements. Three disjoint complete days must improve both simpler forecasts before the nonlinear component is admitted. |
+| `forecast_selection/accuracy.py` | Shared demand and device local-day forecast admission, original evidence and conservative intervention exclusions. |
 | `cycles/` | Complete profiles, learned/manual evidence, tasks, attempts and mandatory execution feedback. |
 | `ev/` | Vehicles, charge points, explicit assignments, SoC, departures, charging limits and loss assumptions. |
 | `thermal/` | Electric-boiler heat stock, draw, losses, comfort and hard temperatures. |

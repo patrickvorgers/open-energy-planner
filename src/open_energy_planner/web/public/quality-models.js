@@ -1,4 +1,4 @@
-import {money, when, optionLabel, percentage} from "./display.js";
+import {money, when, dateLabel, optionLabel, percentage} from "./display.js";
 
 const HISTORY_IMPORT_MESSAGES = {
     recorder_unavailable: "Home Assistant Recorder is unavailable. Check Recorder; the next background history check retries.",
@@ -11,7 +11,7 @@ const HISTORY_IMPORT_MESSAGES = {
 /** Associate current readiness and selection with stable forecast IDs, never historical names. */
 export function currentModelRows(current = {}, selection = {}) {
     const rows = new Map();
-    if (current.household) rows.set("household", {id: "household", scope: "household", label: "Household consumption", active: current.household.model, readiness: current.household.status, issue: current.household.issue});
+    if (current.household) rows.set("household", {id: "household", scope: "household", label: "Household consumption", active: current.household.model, readiness: current.household.status, issue: current.household.issue, dailySelection: current.household.model_selection});
     const solar = current.solar || {}, consumers = current.consumers || {};
     for (const [index, source] of (solar.configuration?.sources || []).entries()) {
         const choice = solar.source_selection?.[source.source_id], training = solar.learning?.[source.source_id];
@@ -19,7 +19,7 @@ export function currentModelRows(current = {}, selection = {}) {
         const readiness = choice ? collecting ? "collecting_accuracy_evidence" : choice.issue ? "comparison_unavailable" : "active" : solar.calibration_status?.[source.source_id];
         rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], solarTraining: solar.learning?.[source.source_id], solarWeatherService: solar.weather_service, solarHistory: solar.history_import?.[source.entity_id], solarLearningStart: source.learning_start, issue: solar.history_issues?.[source.entity_id] || solar.issue});
     }
-    for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used, weatherLearning: device.weather_learning});
+    for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used, weatherLearning: device.weather_learning, dailySelection: device.model_selection});
     for (const selected of consumers.selected || []) if (!rows.has(selected.entity_id)) rows.set(selected.entity_id, {id: selected.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === selected.entity_id)?.name || selected.entity_id, readiness: consumers.result?.status || "waiting_for_history", issue: consumers.history_issues?.[selected.entity_id] || consumers.result?.detail || consumers.issue || "Waiting for usable historical evidence"});
     for (const model of selection.models || []) {
         const id = model.scope === "demand" ? "household" : model.scope?.startsWith("solar:") ? model.scope.slice("solar:".length) : null;
@@ -79,6 +79,26 @@ export function renderCurrentModel(parent, row, expanded = false) {
         paragraph(`Weather model: ${weather.model === "ecmwf_ifs" ? "ECMWF IFS" : optionLabel(weather.model)}. Selection: ${weather.selection === "latest_available" ? "Newest available forecast run" : optionLabel(weather.selection)}.`, service);
         paragraph(`Run initialized: ${weather.initialized_at ? when(weather.initialized_at) : "Not supplied"}. Actual receipt: ${when(weather.received_at)}.`, service);
         paragraph(`Provider publication: ${weather.available_at ? when(weather.available_at) : "Not known"}. Initialization and receipt do not establish a publication time.`, service);
+    }
+    if (row.dailySelection) {
+        const learning = row.dailySelection;
+        paragraph(`Daily accuracy: ${learning.completed_windows} of ${learning.required_windows} complete local days. Selection: ${optionLabel(learning.status)}.`);
+        paragraph("Original forecasts are frozen before midnight in the Home Assistant timezone. Models use the same measured hours. Missing measurements do not count as zero consumption. A simpler profile remains active until another model consistently improves accuracy.");
+        paragraph(`Each compared day must improve the baseline by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour.`);
+        if (learning.pending_until) paragraph(`Pending measured day ends: ${when(learning.pending_until)}`);
+        for (const window of learning.windows || []) {
+            const errors = Object.entries(window.mae_kwh).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
+            paragraph(`${dateLabel(window.day)}: Mean absolute hourly error: ${errors}.`);
+            const totals = Object.entries(window.daily_energy_error_kwh || {}).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
+            if (totals) paragraph(`${dateLabel(window.day)}: Absolute daily energy error: ${totals}.`);
+        }
+        if (learning.excluded_reason === "controlled_use") paragraph("Days with planned device operation are excluded from spontaneous-use comparisons. A planned shift does not prove a behavior forecast was wrong.");
+        if (learning.excluded_reason === "control_history_unavailable") paragraph("Published control history is unavailable. The simpler model remains active until intervention evidence can be checked.");
+        if (learning.training_quality) {
+            const quality = learning.training_quality;
+            paragraph(`Weather candidate training coverage: ${quality.used_hours} of ${quality.source_hours} measured hours have complete inputs.`);
+            for (const period of quality.excluded_periods || []) paragraph(`Excluded training hours: ${when(period.start)} to ${when(period.end)}: ${optionLabel(period.reason)}.`);
+        }
     }
     if (row.weatherLearning) {
         const learning = row.weatherLearning;

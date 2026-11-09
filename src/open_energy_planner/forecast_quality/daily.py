@@ -2,10 +2,11 @@
 
 import logging
 from copy import deepcopy
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import datetime, timedelta
 from math import fsum
 from zoneinfo import ZoneInfo
 
+from open_energy_planner.core.calendar import calendar_day, day_window
 from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.forecast_quality.bindings import bindings
 from open_energy_planner.forecast_quality.policy import RECORDER_DELAY_MINUTES
@@ -16,25 +17,6 @@ MAX_CAPTURE_GAP_SECONDS = DAILY_CAPTURE_POLL_SECONDS * 2
 DAY_PAGE_SIZE = 20
 INDEX_NAME = "quality-days.json"
 _LOGGER = logging.getLogger(__name__)
-
-
-def calendar_day(day):
-    """Reject non-canonical ISO date forms before using dates as archive or pagination keys."""
-    calendar_day = date.fromisoformat(day)
-    if calendar_day.isoformat() != day:
-        raise ValueError("Calendar day must use YYYY-MM-DD")
-    return calendar_day
-
-
-def day_window(day, timezone):
-    """Return actual UTC bounds of a local calendar day, including 23/25-hour DST days."""
-    local_day = calendar_day(day)
-    zone = ZoneInfo(timezone)
-    start = datetime.combine(local_day, time(), zone).astimezone(UTC)
-    end = datetime.combine(local_day + timedelta(days=1), time(), zone).astimezone(UTC)
-    if end <= start or start.astimezone(zone).date() != local_day:
-        raise ValueError("Calendar day does not exist in the installation timezone")
-    return start, end
 
 
 def forecast_context(demand, solar, catalogue, original):

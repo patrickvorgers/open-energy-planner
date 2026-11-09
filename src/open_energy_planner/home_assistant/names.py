@@ -80,6 +80,20 @@ def display_plan(plan, catalogue):
         {row["device_id"]: row.get("energy_entity") for row in bindings.get("batteries", ())}
     )
     links.update({row["source_id"]: row["entity_id"] for row in bindings.get("solar", ())})
+    links.update(
+        {
+            row["entity_id"]: row["entity_id"]
+            for row in plan.get("appliance_schedule", ())
+            if row.get("entity_id")
+        }
+    )
+    links.update(
+        {
+            row["entity_id"]: row["entity_id"]
+            for row in plan.get("input_snapshot", {}).get("load_components", ())
+            if row["entity_id"] is not None
+        }
+    )
     return {
         **plan,
         "comparison_names": {
@@ -97,11 +111,12 @@ def display_plan(plan, catalogue):
     }
 
 
-def comparison_names(catalogue, thermal_state, ev_state, installation, solar):
+def comparison_names(catalogue, thermal_state, ev_state, installation, solar, consumers=()):
     """Capture labels by stable device identity without changing frozen metering bindings."""
     names = source_names(catalogue)
     vehicles = vehicle_source_names(catalogue)
     return {
+        **{row["entity_id"]: names.get(row["entity_id"], "Appliance") for row in consumers},
         **{
             store["id"]: names.get(store["energy_entity"], "Thermal storage")
             for store in thermal_state["stores"]

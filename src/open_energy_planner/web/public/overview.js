@@ -2,7 +2,7 @@
 import "./chart_theme.js";
 import {calendarDays, calendarTime} from "./chart_days.js";
 import {money, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
-import {energyBalances, quarterBalanceSeries, QUARTER_MILLISECONDS} from "./balance.js";
+import {energyBalances, householdForecastEnergy, quarterBalanceSeries, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
@@ -513,12 +513,13 @@ async function showPlan(signal, background = false) {
                 const total = known ? prices.sell_price + rates.reduce((sum, rate) => sum + rate, 0) : null;
                 bonusSell.push([time, total, tariff?.price_kind], [end, total, tariff?.price_kind]);
             }
-            add(demandForecast, prices.duration_h > 0 && typeof prices.load_kwh === "number" ? prices.load_kwh / prices.duration_h : null);
+            const originalDemand = householdForecastEnergy(plan, prices);
+            add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
             add(solarForecast, prices.duration_h > 0 && typeof prices.pv_kwh === "number" ? prices.pv_kwh / prices.duration_h : null);
             const commands = [];
             for (const task of plan.appliance_schedule || []) {
                 const energy = task.interval_kwh[i];
-                if (energy > 0) commands.push(`Appliance ${task.entity_id}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
+                if (energy > 0) commands.push(`${plan.comparison_names?.[task.entity_id] || "Appliance"}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
             }
             for (const [index, battery] of (flow.batteries || []).entries()) {
                 const name = batteryLabels.get(battery.device_id) || `Battery ${index + 1}`;

@@ -777,8 +777,7 @@ One source without usable
 history keeps its physical baseline while other sources may use learned models.
 The learning layer corrects the physical baseline from normalized measured
 production and weather/model features. The first implemented candidate is a
-bounded regularized through-origin per-source gain. Activation still requires
-the independent chronological decision-benefit evidence in FORE-04–06.
+bounded regularized through-origin per-source gain. Activation requires the retained matched forecast-accuracy evidence and physical eligibility under FORE-04–06 and FORE-17.
 
 Output available DC production at the declared installation boundary. Apply each
 conversion, inverter clipping and shared limit exactly once only when a route
@@ -806,7 +805,7 @@ Usable existing HA production history may inform local learning immediately.
 An archive of old OEP forecasts is not required to begin training. Historical
 realized weather can support fitting, but it must not be presented as weather
 forecasts available at an earlier planning decision. Activation still requires
-chronological decision-relevant evidence under FORE-04–06. The first implemented
+chronological matching forecast-accuracy evidence under FORE-04–06. The first implemented
 candidate is a bounded regularized per-source gain around the physical baseline.
 It is not a guarantee of improvement. Production activation now uses immutable
 forward shadow decisions and independently settled realization, as documented in

@@ -286,6 +286,27 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
 | `savings` | `SavingsRuntime` and `PlanValuations`: capture cursor, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
 
+Demand additionally owns `accuracy-pending-<family>.json` and immutable
+`accuracy-day-<family>-<YYYY-MM-DD>.json` documents. Each envelope contains a
+content digest and a capture with family, local day, timezone, aware issue time,
+ordered UTC comparison hours, per-model hourly kWh predictions and original
+forecast documents. The mutable pending key keeps the latest next-day forecast
+before midnight. A frozen day cannot be overwritten. The family binds the
+measurement boundary, algorithms and daily-selection policy. Publication history
+supplies control exclusions, so no duplicate intervention archive is introduced.
+
+New plan snapshots can contain `load_components`. Each component retains an
+optional Energy `entity_id` (null for household remainder), `forecast_version`,
+original `forecast_steps`, remaining `steps` and `unseparated_entities` on the
+household remainder. Every step has an aware `start`, positive `duration_h` in
+hours and nonnegative AC `kwh`. Remaining steps integrate to physical interval
+`load_kwh`. Separate appliance/EV/thermal schedules are added once by the solver.
+Component forecast documents also retain `separated_entities`, the exact set
+of ready Energy meters subtracted from residual training. Planning rejects a
+changed or incomplete set. EV evidence additionally retains the charge point's
+`energy_entity` for final ownership validation. Existing settings and hashes are unchanged. Historical
+plans without attribution retain their original aggregate presentation.
+
 These are module-owned JSON contracts, not additional SQL columns. Follow the
 typed stores and wire models for nested fields: the database adapter does not
 interpret devices, formulas or model coefficients. Database URLs, tokens,

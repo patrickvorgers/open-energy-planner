@@ -16,6 +16,15 @@ ZERO_GRID_TOLERANCE_KWH = 1e-07
 
 def plan_document(snapshot, result, costs, now):
     """Build a complete compatible envelope with typed device commands and immutable physical evidence."""
+    from open_energy_planner.demand.calculation.composition import validate_components
+
+    if snapshot.load_components:
+        validate_components(
+            snapshot.problem,
+            snapshot.load_components,
+            controlled_entities=tuple(row["energy_entity"] for row in snapshot.ev_evidence)
+            + tuple(row["configuration"]["energy_entity"] for row in snapshot.thermal_evidence),
+        )
     problem = snapshot.problem
     starts = dict(result.plan.appliance_starts)
     steps = []

@@ -56,8 +56,8 @@ def test_consumer_selection_preserves_versions_and_rejects_overlap(tmp_path):
         )
 
 
-def test_composite_weather_forecast_preserves_residual_without_double_counting(tmp_path):
-    """Known 0.3 kWh/h residual plus temperature-driven heating sums once. Colder forecasts require more energy."""
+def test_composite_retains_measured_baseline_until_forward_accuracy_is_available(tmp_path):
+    """Known .3-kWh residual and measured device profiles sum once before weather candidates have forward proof."""
     store = make_store(tmp_path, DemandStore)
     consumers = ConsumerForecasts(store.documents)
     consumers.sync(catalogue())
@@ -85,14 +85,14 @@ def test_composite_weather_forecast_preserves_residual_without_double_counting(t
             config(), (household,), history_weather + future, now, consumers.inputs()
         )
         assert total is not None, result
-        assert result["devices"][0]["forecast"]["model"] == "ridge-v2"
+        assert result["devices"][0]["forecast"]["model"] == "weekday-hour-v2"
         for index, step in enumerate(total.steps):
             separate = result["devices"][0]["forecast"]["steps"][index]["kwh"]
             residual = result["residual"]["steps"][index]["kwh"]
             assert residual == pytest.approx(0.3 * step.duration_h, abs=0.005)
             assert step.kwh == pytest.approx(separate + residual)
         forecasts.append(sum(step.kwh for step in total.steps))
-    assert forecasts[0] > forecasts[1] + 20
+    assert forecasts[0] == pytest.approx(forecasts[1])
 
 
 def test_missing_device_history_keeps_existing_household_forecast(tmp_path):
@@ -150,11 +150,11 @@ def test_short_device_history_retains_independent_forecasts_and_unmodelled_load(
     candidate, result = build_components(
         config(), (household,), (), now, runtime.consumers.inputs()
     )
-    assert candidate is None
-    assert result["status"] == "history_or_weather_not_ready"
+    assert candidate.model == "consumer-composite-v1"
+    assert result["status"] == "partial_history"
     assert short_id in result["detail"]
     assert [record["entity_id"] for record in result["devices"]] == [ready_id]
-    assert result["devices"][0]["status"] == "shadow_waiting_for_decision_evidence"
+    assert result["devices"][0]["status"] == "forward_archive_required"
     parameters = dict(json.loads(json.dumps(result["model_parameters"], allow_nan=False)))
     assert set(parameters) == {ready_id, "residual"}
     assert parameters[ready_id] and parameters["residual"]
@@ -171,17 +171,20 @@ def test_short_device_history_retains_independent_forecasts_and_unmodelled_load(
     assert result["residual"]["steps"]
     runtime.select_learned(True)
     assert runtime.install(runtime.build(runtime.job(now)), now)
-    assert runtime.candidate is None
-    assert runtime.forecast.model == "weekday-hour-v2"
-    assert runtime.consumers.result["status"] == "history_or_weather_not_ready"
+    assert runtime.candidate.model == "consumer-composite-v1"
+    assert runtime.forecast.model == "consumer-composite-v1"
+    assert runtime.consumers.result["status"] == "partial_history"
     path = "quality-components-" + runtime.forecast.version + ".json"
     original = store.documents.read(path)
-    assert original["selected"] is False
-    assert original["components"]["devices"][0]["forecast"] == json.loads(
+    assert original["selected"] is True
+    original_components = store.documents.read(
+        "consumer-forecast-" + original["version"] + ".json"
+    )["components"]
+    assert original_components["devices"][0]["forecast"] == json.loads(
         json.dumps(result["devices"][0]["forecast"])
     )
-    assert original["components"]["model_parameters"]
-    assert not store.documents.exists("consumer-forecast-" + runtime.forecast.version + ".json")
+    assert original_components["model_parameters"]
+    assert store.documents.exists("consumer-forecast-" + runtime.forecast.version + ".json")
     runtime.consumers.histories[ready_id] = channel(ready_id, [0.4] * hours)
     later = now + timedelta(minutes=15)
     assert runtime.install(runtime.build(runtime.job(later)), later)
@@ -208,7 +211,7 @@ def test_invalid_residual_retains_valid_device_records_without_enabling_replacem
     assert result["status"] == "history_or_weather_not_ready"
     assert "residual:" in result["detail"]
     assert [record["entity_id"] for record in result["devices"]] == ["sensor.heat"]
-    assert result["devices"][0]["status"] == "shadow_waiting_for_decision_evidence"
+    assert result["devices"][0]["status"] == "forward_archive_required"
     parameters = dict(json.loads(json.dumps(result["model_parameters"], allow_nan=False)))
     assert set(parameters) == {"sensor.heat"}
     assert parameters["sensor.heat"]
@@ -276,8 +279,8 @@ def test_residual_filter_retains_components_without_hiding_substantial_conflicts
         assert result["residual"]["model"] == "weekday-hour-v2"
 
 
-def test_runtime_composite_remains_shadow_and_archives_exact_components(tmp_path):
-    """Complete measured separation trains a challenger, but no decision evidence means the incumbent stays active."""
+def test_runtime_separation_uses_baselines_and_archives_exact_components(tmp_path):
+    """Complete measured separation is active immediately while learned models await independent daily proof."""
     store = make_store(tmp_path, DemandStore)
     store.save(config())
     runtime = DemandRuntime(store)
@@ -295,7 +298,7 @@ def test_runtime_composite_remains_shadow_and_archives_exact_components(tmp_path
     import json
 
     assert json.loads(json.dumps(runtime.consumers.document()))["result"]["devices"]
-    assert runtime.forecast.model == "weekday-hour-v2"
+    assert runtime.forecast.model == "consumer-composite-v1"
     assert (
         store.documents.read("consumer-forecast-" + runtime.candidate.version + ".json")[
             "components"
@@ -305,9 +308,9 @@ def test_runtime_composite_remains_shadow_and_archives_exact_components(tmp_path
     original_path = "consumer-forecast-" + runtime.candidate.version + ".json"
     original_components = store.documents.read(original_path)
     runtime.select_learned(True)
-    assert runtime.install(runtime.build(runtime.job(now)), now)
+    assert runtime.job(now) is None
     assert runtime.forecast.model == "consumer-composite-v1"
-    assert runtime.consumers.result["devices"][0]["status"] == "active"
+    assert runtime.consumers.result["devices"][0]["status"] == "collecting_forward_accuracy"
     assert store.documents.read(original_path) == original_components
     runtime.consumers.histories.clear()
     assert runtime.install(runtime.build(runtime.job(now)), now)
@@ -336,8 +339,8 @@ def test_empty_household_boundary_retains_readiness_status(tmp_path):
     assert consumers.result["model_parameters"] == {"private": "coefficients"}
 
 
-def test_missing_weather_uses_explicit_historical_fallback_without_activating_it(tmp_path):
-    """Weather outages retain an honestly labelled measured profile. Only decision evidence can activate the composite."""
+def test_missing_weather_uses_explicit_historical_component_fallback(tmp_path):
+    """Weather outages retain measured profiles inside the active one-count household composition."""
     store = make_store(tmp_path, DemandStore)
     store.save(config())
     runtime = DemandRuntime(store)
@@ -356,6 +359,6 @@ def test_missing_weather_uses_explicit_historical_fallback_without_activating_it
     assert device["weather_features_used"] is False
     assert device["forecast"]["model"] == "weekday-hour-v2"
     assert sum(step["kwh"] for step in device["forecast"]["steps"]) == pytest.approx(9.6)
-    assert runtime.forecast.model == "weekday-hour-v2"
+    assert runtime.forecast.model == "consumer-composite-v1"
     assert runtime.candidate.model == "consumer-composite-v1"
-    assert runtime.model_status == "shadow_waiting_for_decision_evidence"
+    assert runtime.model_status == "active"
