@@ -173,6 +173,49 @@ def test_switching_planning_dates_keeps_the_new_summary_open(app_page, identity)
     page.mouse.move(0, 0)
 
 
+@pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
+@pytest.mark.parametrize("identity", ["plan-chart", "self-consumption-chart", "reference-chart"])
+def test_focusing_an_offscreen_date_keeps_its_summary(app_page, identity):
+    """Native focus scrolling keeps the date's summary and description after queued scroll events."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    card = page.locator("#" + identity).locator("..")
+    date = card.get_by_role("button", name="Energy totals for", exact=False).nth(1)
+    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+    page.wait_for_function(
+        """() => scrollY >= document.documentElement.scrollHeight - innerHeight - 1"""
+    )
+    assert date.bounding_box()["y"] < 0
+    date.focus()
+    page.evaluate(
+        "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+    )
+    expect(date).to_be_focused()
+    bounds = date.bounding_box()
+    assert 0 <= bounds["y"] < page.viewport_size["height"]
+    tooltip = page.locator("#" + identity + "-tooltip")
+    expect(tooltip).to_be_visible()
+    expect(date).to_have_attribute("aria-describedby", identity + "-tooltip")
+    expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
+        "Energy totals: " + date.get_attribute("aria-label").removeprefix("Energy totals for ")
+    )
+    base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
+    expect(base).to_have_text("-17.54")
+    page.mouse.move(page.viewport_size["width"] - 20, page.viewport_size["height"] / 2)
+    page.mouse.wheel(0, page.viewport_size["height"] * 2)
+    page.wait_for_function(
+        "id => document.getElementById(id).parentElement.querySelectorAll('.chart-day-summary')[1].getBoundingClientRect().bottom < 0",
+        arg=identity,
+    )
+    expect(tooltip).to_be_hidden()
+    expect(date).not_to_have_attribute("aria-describedby", identity + "-tooltip")
+    expect(date).to_be_focused()
+
+
 @pytest.mark.parametrize(
     "day,zone,hours",
     [

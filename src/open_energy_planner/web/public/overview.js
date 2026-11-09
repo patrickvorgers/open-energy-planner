@@ -156,7 +156,31 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     node.style.left = `${Math.max(margin, Math.min(bounds.left + tooltip.caretX + margin, window.innerWidth - node.offsetWidth - margin))}px`;
     node.style.top = `${Math.max(margin, Math.min(bounds.top + tooltip.caretY + margin, window.innerHeight - node.offsetHeight - margin))}px`;
 }
-/** Make Planning dates inspectable by pointer, keyboard and touch using the existing balance tooltip. */
+/**
+ * Place daily totals in viewport CSS pixels without covering their owning date.
+ * @param {HTMLElement} tooltip Visible rendered summary. Mutates top, left and maxHeight styles.
+ * @param {HTMLButtonElement} button Date control anchoring the summary.
+ */
+function positionDayTooltip(tooltip, button) {
+    const bounds = button.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
+    const below = innerHeight - bounds.bottom - margin, above = bounds.top - margin;
+    const placeBelow = below >= above;
+    tooltip.style.maxHeight = `${Math.max(0, placeBelow ? below : above)}px`;
+    tooltip.style.top = `${placeBelow ? bounds.bottom : bounds.top - tooltip.offsetHeight}px`;
+    tooltip.style.left = `${Math.max(margin, Math.min(bounds.left + (bounds.width - tooltip.offsetWidth) / 2, innerWidth - tooltip.offsetWidth - margin))}px`;
+}
+/**
+ * Attach inspection of signed daily kWh without changing archived plan inputs.
+ * @param {Chart} instance Chart supplying current series visibility and canvas geometry.
+ * @param {Array} series Balance series with covered mean-power intervals in kW.
+ * @param {HTMLElement} tooltip Shared content, visibility, classes, sizing and leave handler are mutable.
+ * @param {{owner: HTMLButtonElement|null, pinned: boolean}} summary Exclusive per-chart owner.
+ * Pinned means explicit click/tap activation rather than a hover/focus preview.
+ * @param {HTMLElement} heading Calendar list item whose children are replaced and listeners installed.
+ * @param {{date: string, start: number, end: number, full: string}} day Local date and accessible label,
+ * with visible start/end in epoch milliseconds. Missing energy stays unavailable. No positive
+ * covered duration means no summary opens. Opening and dismissal mutate summary ownership.
+ */
 function planningDayHeading(instance, series, tooltip, summary, heading, {date, start, end, full}) {
     const button = document.createElement("button");
     button.type = "button"; button.className = "chart-day-summary";
@@ -197,12 +221,7 @@ function planningDayHeading(instance, series, tooltip, summary, heading, {date, 
             afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
         tooltip.classList.add("chart-tooltip-day");
         button.setAttribute("aria-describedby", tooltip.id);
-        const margin = TOOLTIP_VIEWPORT_MARGIN_PX;
-        const below = innerHeight - bounds.bottom - margin, above = bounds.top - margin;
-        const placeBelow = below >= above;
-        tooltip.style.maxHeight = `${Math.max(0, placeBelow ? below : above)}px`;
-        tooltip.style.top = `${placeBelow ? bounds.bottom : bounds.top - tooltip.offsetHeight}px`;
-        tooltip.style.left = `${Math.max(margin, Math.min(bounds.left + (bounds.width - tooltip.offsetWidth) / 2, innerWidth - tooltip.offsetWidth - margin))}px`;
+        positionDayTooltip(tooltip, button);
         tooltip.onmouseleave = event => { if (!focused && !button.contains(event.relatedTarget)) hide(); };
     };
     button.addEventListener("mouseenter", () => { hovered = true; dismissed = false; show(); });
@@ -264,7 +283,14 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         if (event.key === "Escape") hideTooltip();
     }, {signal: tooltipEvents.signal});
     window.addEventListener("scroll", event => {
-        if (!tooltip.contains(event.target)) hideTooltip();
+        if (event.target instanceof Node && tooltip.contains(event.target)) return;
+        const owner = daySummary.owner, bounds = owner?.getBoundingClientRect();
+        const movesOwner = event.target === document || event.target === window
+            || event.target instanceof Element && event.target.contains(owner);
+        if (owner && owner === document.activeElement && movesOwner && !tooltip.hidden
+            && bounds.bottom > 0 && bounds.top < innerHeight && bounds.right > 0 && bounds.left < innerWidth) {
+            positionDayTooltip(tooltip, owner);
+        } else hideTooltip();
     }, {capture: true, signal: tooltipEvents.signal});
     const canvas = $(id), legend = $(`${id}-legend`);
     legend.replaceChildren();
