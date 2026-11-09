@@ -245,7 +245,15 @@ def test_thermal_edit_cancel_save_and_readonly_refresh_preserve_drafts(thermal_p
     ).click()
     expect(page).to_have_url("http://thermal.test/appliance-settings/thermal")
     expect(power).to_have_value("2.5")
-    expect(page.locator("#thermal-save-state")).to_contain_text("Save or discard")
+    confirmation = page.get_by_role("alertdialog", name="Leave without saving?", exact=True)
+    expect(confirmation).to_be_visible()
+    expect(confirmation.get_by_role("button", name="Cancel", exact=True)).to_be_focused()
+    expect(confirmation.get_by_role("button", name="Discard and leave", exact=True)).to_be_visible()
+    confirmation.get_by_role("button", name="Cancel", exact=True).click()
+    expect(confirmation).to_have_count(0)
+    expect(page).to_have_url("http://thermal.test/appliance-settings/thermal")
+    expect(power).to_have_value("2.5")
+    assert state["posts"] == []
     page.locator("#cancel-thermal").click()
     expect(power).to_have_value("2")
     expect(power).to_be_disabled()
@@ -577,7 +585,7 @@ def test_thermal_axes_and_tooltips_omit_timezone_names_during_wintertime(thermal
 
 
 def test_category_navigation_retains_unsaved_boiler_configuration(thermal_page):
-    """Opening another type is refused until a boiler draft is saved or explicitly discarded."""
+    """Cancelling navigation to another type retains the boiler draft without saving it."""
     page, state = thermal_page
     page.locator("#edit-thermal").click()
     page.locator('[data-field="heater_w"]').fill("2.5")
@@ -586,7 +594,14 @@ def test_category_navigation_retains_unsaved_boiler_configuration(thermal_page):
     ).click()
     expect(page).to_have_url("http://thermal.test/appliance-settings/thermal")
     expect(page.locator('[data-field="heater_w"]')).to_have_value("2.5")
-    expect(page.locator("#thermal-save-state")).to_contain_text("Save or discard")
+    confirmation = page.get_by_role("alertdialog", name="Leave without saving?", exact=True)
+    expect(confirmation).to_be_visible()
+    expect(confirmation.get_by_role("button", name="Cancel", exact=True)).to_be_focused()
+    expect(confirmation.get_by_role("button", name="Discard and leave", exact=True)).to_be_visible()
+    confirmation.get_by_role("button", name="Cancel", exact=True).click()
+    expect(confirmation).to_have_count(0)
+    expect(page).to_have_url("http://thermal.test/appliance-settings/thermal")
+    expect(page.locator('[data-field="heater_w"]')).to_have_value("2.5")
     assert state["posts"] == []
 
 

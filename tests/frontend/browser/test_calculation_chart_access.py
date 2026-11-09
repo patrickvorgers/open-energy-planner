@@ -93,6 +93,7 @@ def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_h
     canvas.press("Enter")
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
+    expect(page.locator("#calculation-summary")).to_contain_text("Total")
     assert detail_reads == ["synthetic-calculation-095"]
     page.keyboard.press("Escape")
     expect(canvas).to_be_focused()
@@ -105,6 +106,7 @@ def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_h
     canvas.press("ArrowRight")
     canvas.press(" ")
     expect(dialog).to_be_visible()
+    expect(page.locator("#calculation-summary")).to_contain_text("Total")
     assert detail_reads[-1] == "synthetic-calculation-001"
     page.keyboard.press("Escape")
     selection.focus()
@@ -113,6 +115,7 @@ def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_h
     page.screenshot(path=str(captures / f"keyboard-chart-{width}.png"), full_page=False)
     page.locator("#performance-chart").press("Enter")
     expect(dialog).to_be_visible()
+    expect(page.locator("#calculation-summary")).to_contain_text("Total")
     assert detail_reads[-1] == "synthetic-calculation-095"
     page.keyboard.press("Escape")
     assert daily_reads == [evidence["day"]]
@@ -359,6 +362,7 @@ def test_stacked_calculation_tooltip_combines_sections_and_rounds_seconds(
         page.mouse.up()
         dialog = page.get_by_role("dialog")
         expect(dialog).to_be_visible()
+        expect(page.locator("#calculation-summary")).to_contain_text("Total")
         assert detail_reads == ["synthetic-calculation-004"]
         improvement = hover_segment(page.locator("#improvement-chart"), 0, 0)
         assert improvement["title"] == [f"{first_time} s"]
@@ -398,6 +402,7 @@ def test_chart_modifier_shortcuts_do_not_select_or_open_calculations(daily_histo
     expect(page.locator("#performance-selected")).to_have_text(original)
     canvas.press("Enter")
     expect(page.get_by_role("dialog")).to_be_visible()
+    expect(page.locator("#calculation-summary")).to_contain_text("Total")
     assert detail_reads == ["synthetic-calculation-000"]
 
 

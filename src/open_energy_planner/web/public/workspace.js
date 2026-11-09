@@ -1,5 +1,6 @@
 /** Keep navigation mounted while the browser owns each content document and its lifecycle. */
 import {bindSettingsActions, closeSettingsNavigation} from "./settings-actions.js";
+import {guardNavigation} from "./save-bar.js";
 bindSettingsActions();
 
 const frame = document.getElementById("workspace-content");
@@ -46,21 +47,31 @@ function contentLoaded() {
 }
 frame.addEventListener("load", contentLoaded);
 
-document.querySelector(".sidebar").addEventListener("click", event => {
+document.addEventListener("click", event => {
     const link = event.target.closest("a[href]");
     if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    const target = new URL(link.href);
+    if (!link.closest(".sidebar") && link.target !== frame.name) return;
+    if (link.hasAttribute("download") || (link.target && link.target !== "_self" && link.target !== frame.name)) return;
+    const href = link.href, target = new URL(href);
     if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname)) return;
     event.preventDefault();
     target.searchParams.set("embedded", "1");
-    focusHeading = event.detail === 0;
     const current = frame.contentDocument?.URL;
     if (current && target.href.split("#")[0] === current.split("#")[0] && frame.contentDocument.readyState === "complete") {
+        focusHeading = event.detail === 0;
         frame.contentWindow.stop();
         if (target.href === current) loaded();
         else frame.contentWindow.location.hash = target.hash;
     }
-    else frame.src = target.href;
+    else {
+        const content = frame.contentDocument;
+        const navigate = () => {
+            if (content !== frame.contentDocument || !link.isConnected || link.href !== href) return false;
+            focusHeading = event.detail === 0;
+            frame.src = target.href;
+        };
+        if (!content || !guardNavigation(navigate, content)) navigate();
+    }
 });
 
 // Resolve legacy root fragments before the first content navigation to avoid flashing Planning.

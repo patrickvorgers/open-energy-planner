@@ -24,7 +24,7 @@ def test_setup_shell_is_public_but_all_settings_and_discovery_require_authentica
                 "/appliance-settings",
                 "/appliance-settings/thermal",
                 "/appliance-settings/ev",
-                "/setup/appliance-settings-navigation.js",
+                "/setup/save-bar.js",
                 "/setup/thermal-settings.js",
                 "/setup/ev-settings.js",
                 "/contract",
