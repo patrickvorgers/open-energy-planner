@@ -1,11 +1,14 @@
 """Fail before long suites when the selected packaged tests or entry modules cannot load."""
 
+import json
 import os
 import shlex
 import subprocess
 from pathlib import Path
 from time import monotonic
 
+from script.ci.browser_suites import BROWSER_WORKERS, collections
+from script.ci.check_browser import prepare_worker_reports, worker_arguments
 from script.ci.ci_scope import FUNCTIONAL_DATABASE_SUITES, PYTEST_AREAS, matrix_profile
 from script.ci.ha_suites import HA_WORKERS
 from script.ci.pytest_suites import pytest_arguments
@@ -65,7 +68,12 @@ def image_checks(profile, suites):
             ],
         )
     if "browser" in suites:
-        yield "browser", "ui-tests", pytest_arguments("browser", collect_only=True)
+        for worker in range(BROWSER_WORKERS):
+            yield (
+                f"browser-{worker}",
+                "ui-worker",
+                pytest_arguments("browser", worker=worker, collect_only=True),
+            )
 
 
 def check_images(compose, project, profile, suites):
@@ -73,7 +81,7 @@ def check_images(compose, project, profile, suites):
     output = Path("results/ci")
     output.mkdir(parents=True, exist_ok=True)
     for suite, service, arguments in image_checks(profile, suites):
-        image = f"{project}-{service}"
+        image = f"{project}-{'ui-tests' if service == 'ui-worker' else service}"
         command = [
             *compose,
             "run",
@@ -86,16 +94,44 @@ def check_images(compose, project, profile, suites):
             service,
             *arguments,
         ]
+        if service == "ui-worker":
+            worker = int(arguments[arguments.index("--browser-shard") + 1])
+            command = [*compose, *worker_arguments(output, worker, collect_only=True)]
+            prepare_worker_reports(output, worker, collect_only=True)
         print(f"::group::Packaged image check: {suite} ({image})", flush=True)
         started = monotonic()
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         elapsed = monotonic() - started
         transcript = result.stdout + result.stderr
         log = output / f"preflight-{suite}.log"
+        empty_worker = False
+        if service == "ui-worker" and result.returncode == 5:
+            try:
+                record = json.loads(
+                    (output / f"browser-{worker}" / "browser-collected.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                empty_worker = (
+                    isinstance(record, dict)
+                    and record.get("selected") == []
+                    and bool(record.get("all"))
+                )
+            except (OSError, ValueError):
+                pass
+        passed = result.returncode == 0 or empty_worker
+        collection_error = None
+        if passed and service == "ui-worker" and worker == BROWSER_WORKERS - 1:
+            try:
+                collections(output)
+            except RuntimeError as error:
+                collection_error = error
+                passed = False
+                transcript += f"\nBrowser inventory validation failed: {error}\n"
         log.write_text(shlex.join(command) + "\n" + transcript, encoding="utf-8")
-        status = "PASS" if result.returncode == 0 else "FAIL"
+        status = "PASS" if passed else "FAIL"
         print(f"{status}: {suite} in {image}, {elapsed:.2f}s. Full output: {log}", flush=True)
-        if result.returncode:
+        if not passed:
             print(transcript, flush=True)
         print("::endgroup::", flush=True)
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -105,6 +141,9 @@ def check_images(compose, project, profile, suites):
                 document.write(f"**{status}** Â· `{image}` Â· {elapsed:.2f}s\n\n")
                 document.write(f"Command: `{shlex.join(command)}`\n\n")
                 document.write(f"Full output: `{log}` in the test reports artifact.\n\n")
-                if result.returncode:
+                if not passed:
                     document.write("```text\n" + transcript[-6000:] + "\n```\n\n")
-        result.check_returncode()
+        if not passed:
+            if collection_error is not None:
+                raise collection_error
+            result.check_returncode()

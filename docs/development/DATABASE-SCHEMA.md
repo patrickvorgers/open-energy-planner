@@ -286,6 +286,33 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
 | `savings` | `SavingsRuntime` and `PlanValuations`: capture cursor, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
 
+Demand additionally owns `accuracy-pending-<family>.json` and immutable
+`accuracy-day-<family>-<YYYY-MM-DD>.json` documents. Each envelope contains a
+content digest and a capture with family, local day, timezone, aware issue time,
+ordered UTC comparison hours, per-model hourly kWh predictions and original
+forecast documents. The mutable pending key keeps the latest next-day forecast
+before midnight. A frozen day cannot be overwritten. The family binds the
+measurement boundary, algorithms and daily-selection policy. Publication history
+supplies control exclusions, so no duplicate intervention archive is introduced.
+
+New plan snapshots can contain `load_components`. Each component retains an
+optional Energy `entity_id` (null for household remainder), `forecast_version`,
+original `forecast_steps`, remaining `steps` and `unseparated_entities` on the
+household remainder. Every step has an aware `start`, positive `duration_h` in
+hours and nonnegative AC `kwh`. Remaining steps integrate to physical interval
+`load_kwh`. Separate appliance/EV/thermal schedules are added once by the solver.
+Component forecast documents also retain `separated_entities`, the exact set
+of ready Energy meters subtracted from residual training. Planning rejects a
+changed or incomplete set. EV evidence additionally retains the charge point's
+`energy_entity` for final ownership validation. Existing settings and hashes are unchanged. Historical
+plans without attribution retain their original aggregate presentation.
+Household-only publication may omit components. New cycle, EV and thermal control
+requires complete component ownership. EV source evidence must match the point,
+vehicle and session. Thermal source evidence must match the store. Missing,
+duplicate or unmatched bindings cannot authorize publication.
+An omitted optional cycle emits no schedule and does not block household-only
+publication. Its original work evidence remains in the snapshot.
+
 Bonus rule JSON includes optional boolean `prevent_battery_export` (default false).
 The false default is omitted from serialized rules and canonical version hashes,
 so pre-option bonus contracts retain their original immutable identities.
@@ -866,15 +893,14 @@ not serialized. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
 
 `consumer-forecast-<forecast-version>.json` stores the complete composite household forecast and its `components`: source identities, per-device forecast intervals (UTC start, duration in hours, kWh), residual forecast, settings version and fitted profile/Ridge parameters. Forecasts and parameters retain their original issue/training identities. No executable estimator pickle is stored. The composite has no excluded devices because residual plus device demand is already recombined. A missing component cannot be archived as zero. Selection/evaluation references stay in the existing planning documents. History streams are transient training inputs. The archived forecasts/parameters are the evidence used for planning. All these rows join existing all-table database transfer and backup procedures automatically and must be covered by the four-backend document contracts.
 
-Weather-sensitive component records additionally expose `weather_learning` with
-policy, candidate and selected model IDs, readiness status, completed/required
-windows, absolute/relative improvement thresholds, per-window MAE in kWh/hour,
-pending UTC end, training coverage and excluded training periods with their
-unavailable-input reasons, and an optional excluded comparison with its reason. Other
-consumers retain null weather learning. The component's existing `status` still
-describes household-composition activation separately from accuracy admission.
+Ready component records expose `model_selection` with the daily policy, selected
+model ID, readiness, completed/required days, improvement thresholds, matched-day
+MAE and daily energy errors in kWh, pending end and original evidence digests.
+Weather candidates additionally retain training coverage and excluded periods
+with unavailable-input reasons. `weather_features_used` reports actual temperature
+feature use. Component `status` reflects its daily selection readiness.
 
-The same `demand` namespace owns these weather-learning JSON contracts through
+The same `demand` namespace retains these research weather-learning JSON contracts through
 the existing `oep_documents` namespace/name primary key. No new SQL table,
 column, index or database engine is introduced:
 
@@ -885,12 +911,14 @@ column, index or database engine is introduced:
 | `consumer-weather-assessment-<digest>.json` | Original window identity and UTC bounds, original issue time, later actual kWh values and their timestamp/value digest, each model's hourly MAE and the derived improvement result. Source corrections append different assessments without replacing original predictions or earlier assessments. |
 | `consumer-weather-selection-<family>.json` | Mutable bounded pointer to at most three disjoint completed window digests and one pending digest, plus the latest excluded interval/reason. Family binds meter configuration, selection policy, feature schema and simpler algorithm. No stored promotion boolean grants activation. Reads validate referenced immutable evidence and recompute scores against available actual history. |
 
-Missing interior measurements exclude the comparison instead of fabricating
-zeros. Delayed final measurements remain pending. Scores require complete
-24-hour windows within 90 days and a benefit above both 5.0% and 0.001 kWh/hour
-against each simpler alternative in all three windows. The existing financial
-composition comparison remains required. Immutable source/model evidence is
-not statistically trimmed. These documents participate in the existing four-backend
+The retained `appliances/weather_learning.py` research helper still writes these
+documents using its original UTC-window comparison policy. Production component
+selection no longer calls it. Production uses `forecast_selection/accuracy.py`
+and the `accuracy-pending-*` and `accuracy-day-*` contracts described above.
+See [automatic model selection](MODEL-SELECTION.md) for current admission rules.
+Old weather pointers and financial shadow preferences do not authorize admission.
+Retained immutable source/model evidence is not rewritten or statistically trimmed.
+These documents participate in the existing four-backend
 restart and cross-backend transfer contracts without depending on the old source
 engine afterward.
 

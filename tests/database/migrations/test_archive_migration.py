@@ -75,6 +75,32 @@ def test_weather_learning_transfers_and_finishes_without_source(route):
     assert evidence["completed_windows"] == 3
 
 
+def test_daily_demand_selection_transfers_and_continues_without_source(route):
+    """Every backend transfer preserves frozen days and resumes model selection from the target alone."""
+    from open_energy_planner.forecast_selection.accuracy import choose_daily
+    from tests.app.forecast.support.daily_accuracy import START, forecasts, measurements
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    SqlPlanRepository(root / "target", engine=target)
+    documents = SqlDocuments(source, "demand")
+    for offset in range(4):
+        now = START + timedelta(days=offset)
+        choose_daily(documents, "washer", "UTC", forecasts(now), measurements(now), now)
+    preserved = list(documents.iter_prefix("accuracy-"))
+    assert preserved
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = SqlDocuments(target, "demand")
+    assert list(restored.iter_prefix("accuracy-")) == preserved
+    for offset in (4, 5):
+        now = START + timedelta(days=offset)
+        result = choose_daily(restored, "washer", "UTC", forecasts(now), measurements(now), now)
+    assert result["selected"] == "candidate"
+    assert result["completed_windows"] == 3
+
+
 def test_data_storage_migration_restarts_real_app_on_verified_target(route):
     """Real managed HTTP migration preserves history across every backend route and rejects local self-copy."""
     import asyncio

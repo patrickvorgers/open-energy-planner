@@ -83,7 +83,7 @@ def test_demand_http_startup_history_and_real_plan_evidence(tmp_path):
                 "rejected_percentage": 0,
             }
             assert learned["candidate"]["model"] == "ridge-v2"
-            assert learned["ridge_status"] == "shadow_waiting_for_decision_evidence"
+            assert learned["ridge_status"] == "collecting_forward_accuracy"
             async with session.put(
                 url + "/v1/demand",
                 json=definition(expected_version=learned["configuration"]["version"]),

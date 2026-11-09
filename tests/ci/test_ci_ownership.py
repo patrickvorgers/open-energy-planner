@@ -1021,7 +1021,13 @@ def test_pure_ci_group_and_ha_owners_have_no_process_or_workload_dependencies():
     for path in (ROOT / "script").rglob("*.py"):
         module = path.relative_to(ROOT).with_suffix("").as_posix().replace("/", ".")
         sources[module.removesuffix(".__init__")] = (path.read_text(encoding="utf-8"), module)
-    for module in ("script.ci.ci_groups", "script.ci.ha_suites", "script.ci.ha_shard"):
+    for module in (
+        "script.ci.ci_groups",
+        "script.ci.ha_suites",
+        "script.ci.ha_shard",
+        "script.ci.browser_suites",
+        "script.ci.browser_shard",
+    ):
         assert not pure_ci_dependencies(sources[module][0], module, sources), module
 
 

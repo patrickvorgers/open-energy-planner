@@ -37,7 +37,7 @@ jobs:
     if: needs.candidate.outputs.reuse != 'true'
     name: Quality and integration (AMD64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -215,6 +215,8 @@ jobs:
           name: test-reports-amd64
           path: |
             results/ci/*.xml
+            results/ci/browser-*/*.xml
+            results/ci/browser-*/*.json
             results/ci/suite-completion.json
             results/ci/phase-times*.json
             results/ci/selection.json

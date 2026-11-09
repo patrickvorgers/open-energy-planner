@@ -6,6 +6,7 @@ from os import environ
 from pathlib import Path
 from xml.etree import ElementTree
 
+from script.ci.browser_suites import execution_reports
 from script.ci.ci_scope import selected_suites
 from script.ci.ha_suites import HA_WORKERS
 from script.ci.proof_git import checkout_tree
@@ -43,6 +44,8 @@ def execution_counts(profile, directory=None):
     """Reject missing, failed, skipped or insufficient execution instead of trusting exit zero alone."""
     counts = {}
     for suite, reports in junit_reports(profile, directory).items():
+        if suite == "browser":
+            execution_reports(reports[0].parent, combined=True)
         cases = []
         try:
             for report in reports:

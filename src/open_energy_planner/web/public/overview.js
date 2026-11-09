@@ -2,7 +2,7 @@
 import "./chart_theme.js";
 import {calendarDays, calendarTime} from "./chart_days.js";
 import {money, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
-import {energyBalances, quarterBalanceSeries, QUARTER_MILLISECONDS} from "./balance.js";
+import {energyBalances, householdForecastEnergy, quarterBalanceSeries, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
@@ -54,7 +54,20 @@ const MILLISECONDS_PER_MINUTE = 60000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
 const MAX_TIME_AXIS_LABELS = 6;
 const FORECAST_PRICE_DASH = [2, 4];
+const DEVICE_PATTERN_SIZE_PX = 8;
 let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0, priceInputPlanId = null;
+
+/** Stripe reserved device use while concrete schedules retain the same device's solid color. */
+function deviceFill(color, state) {
+    if (state !== "expected") return color;
+    const tile = document.createElement("canvas");
+    tile.width = tile.height = DEVICE_PATTERN_SIZE_PX;
+    const brush = tile.getContext("2d");
+    brush.fillStyle = `${color}55`; brush.fillRect(0, 0, tile.width, tile.height);
+    brush.strokeStyle = color; brush.lineWidth = 2;
+    brush.beginPath(); brush.moveTo(0, tile.height); brush.lineTo(tile.width, 0); brush.stroke();
+    return brush.createPattern(tile, "repeat");
+}
 
 /** Render app-owned factual cards as text. Never infer reasons or interpret device names as markup. */
 function evidenceCards(parent, cards) {
@@ -75,15 +88,34 @@ function evidenceCards(parent, cards) {
         parent.append(article);
     }
 }
+/** Explain actual bar coverage and retain recorded commands only for the active optimizer view. */
+function balanceNotes(bar, id, axisTime) {
+    const notes = bar.coveredStart !== bar.start || bar.coveredEnd !== bar.end
+        ? [`Partial quarter: Mean power covers ${axisTime(bar.coveredStart)} to ${axisTime(bar.coveredEnd)} only.`] : [];
+    if (!["reference-chart", "self-consumption-chart"].includes(id)) {
+        notes.push(...new Set(inspectSteps.filter(step => step.end > bar.coveredStart && step.start < bar.coveredEnd).flatMap(step => step.commands || [])));
+    }
+    return notes;
+}
 /** Keep labels, right-aligned numbers and units in distinct columns without interpreting provider text as HTML. */
-function renderTooltip({chart: instance, tooltip}, node, balance = false) {
+function renderTooltip({chart: instance, tooltip}, node, balance = false, balanceTime = null) {
     node.hidden = !tooltip.opacity || Boolean(instance.canvas.closest("[hidden]"));
     if (node.hidden) return;
     node.replaceChildren();
-    const title = document.createElement("p"); title.className = "chart-tooltip-title";
-    title.textContent = tooltip.title.join(" - "); node.append(title);
-    const items = [...tooltip.dataPoints];
+    let items = [...tooltip.dataPoints];
+    if (balance && Number.isFinite(balanceTime)) {
+        // Narrow screens can select a nearby SoC endpoint instead of the subpixel-width bar.
+        const time = balanceTime;
+        const bars = instance.data.datasets.flatMap((dataset, index) => {
+            if (dataset.type !== "bar" || !instance.isDatasetVisible(index)) return [];
+            const point = dataset.data.find(point => point.start <= time && time < point.end && point.y != null);
+            return point ? [{dataset, raw: point, parsed: point}] : [];
+        });
+        if (bars.length) items = bars;
+    }
     const interval = balance && items.find(item => item.raw.start != null);
+    const title = document.createElement("p"); title.className = "chart-tooltip-title";
+    title.textContent = interval ? `From ${when(interval.raw.start)} to ${when(interval.raw.end)}` : tooltip.title.join(" - "); node.append(title);
     if (interval) {
         // Flow bars use midpoints. Attach only recorded start states, never interpolate a missing SoC.
         instance.data.datasets.forEach((dataset, index) => {
@@ -103,7 +135,8 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false) {
         }
         for (const item of items) {
             const line = document.createElement("tr"), label = document.createElement("td"), value = document.createElement("td"), unit = document.createElement("td");
-            const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = item.dataset.backgroundColor;
+            const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = item.dataset.swatchColor || item.dataset.backgroundColor;
+            swatch.classList.toggle("series-swatch-expected", item.dataset.deviceState === "expected");
             label.append(swatch, document.createTextNode(item.dataset.label));
             value.className = "chart-tooltip-value";
             value.textContent = valueText(item.parsed.y, item.dataset.unit);
@@ -113,9 +146,10 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false) {
         section.append(table); sections.append(section);
     }
     node.append(sections);
-    if (tooltip.afterBody.length) {
+    const notes = interval ? balanceNotes(interval.raw, instance.canvas.id, when) : tooltip.afterBody;
+    if (notes.length) {
         const explanation = document.createElement("p"); explanation.className = "chart-tooltip-explanation";
-        explanation.textContent = tooltip.afterBody.join("\n"); node.append(explanation);
+        explanation.textContent = notes.join("\n"); node.append(explanation);
     }
     const bounds = instance.canvas.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
     node.style.left = `${Math.max(margin, Math.min(bounds.left + tooltip.caretX + margin, window.innerWidth - node.offsetWidth - margin))}px`;
@@ -148,6 +182,7 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
 function chart(id, series, {utcDays = false, unit = "", minimum = null, balance = false} = {}) {
+    let balanceTime = null;
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
     $(`${id}-tooltip`)?.remove();
@@ -164,25 +199,30 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         }
         if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd})));
         const color = s.color || palette[index % palette.length];
-        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, borderColor: color, backgroundColor: color, borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
+        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
         type: "line", data: {datasets}, plugins: [intervalWidths, calendarDays],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
             interaction: {mode: "nearest", axis: "x", intersect: false},
-            plugins: {calendarDays: {utc: utcDays}, valueAxisHeadroom: {group: ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id) ? "planning-comparison" : null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => renderTooltip(context, tooltip, balance), callbacks: {
+            onHover: (event, _elements, instance) => {
+                if (balance) {
+                    const hits = instance.getElementsAtEventForMode(event, "nearest", {axis: "xy", intersect: true}, false);
+                    balanceTime = hits.some(hit => instance.data.datasets[hit.datasetIndex].tooltipGroup === "Battery state")
+                        ? null : instance.scales.x.getValueForPixel(event.x);
+                }
+            },
+            plugins: {calendarDays: {utc: utcDays}, valueAxisHeadroom: {group: ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id) ? "planning-comparison" : null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+                const time = balanceTime; balanceTime = null;
+                renderTooltip(context, tooltip, balance, time);
+            }, callbacks: {
                 title: (items) => !items.length ? "" : items[0].raw.start != null ? `From ${axisTime(items[0].raw.start)} to ${axisTime(items[0].raw.end)}` : axisTime(items[0].parsed.x),
                 label: (item) => `${item.dataset.label}: ${valueText(item.parsed.y, item.dataset.unit)} ${item.dataset.unit}`,
                 afterBody: (items) => {
                     if (balance && items.length) {
                         const bar = items.find(item => item.raw.start != null)?.raw;
                         if (!bar) return [];
-                        const notes = bar.coveredStart !== bar.start || bar.coveredEnd !== bar.end
-                            ? [`Partial quarter: Mean power covers ${axisTime(bar.coveredStart)} to ${axisTime(bar.coveredEnd)} only.`] : [];
-                        if (!["reference-chart", "self-consumption-chart"].includes(id)) {
-                            notes.push(...new Set(inspectSteps.filter(step => step.end > bar.coveredStart && step.start < bar.coveredEnd).flatMap(step => step.commands || [])));
-                        }
-                        return notes;
+                        return balanceNotes(bar, id, axisTime);
                     }
                     if (!items.length || ["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart"].includes(id)) return "";
                     const step = inspectSteps.find((step) => step.start <= items[0].parsed.x && items[0].parsed.x < step.end);
@@ -210,18 +250,32 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         }
     });
     charts.set(id, result);
+    const legendGroups = new Map();
     series.forEach((s, index) => {
+        const identity = s.legendId ?? index;
+        if (!legendGroups.has(identity)) legendGroups.set(identity, {series: s, indexes: []});
+        legendGroups.get(identity).indexes.push(index);
+    });
+    for (const {series: s, indexes} of legendGroups.values()) {
         const label = document.createElement("label"), input = document.createElement("input");
-        input.type = "checkbox"; input.checked = result.isDatasetVisible(index);
+        input.type = "checkbox"; input.checked = indexes.every(index => result.isDatasetVisible(index));
+        if (s.legendId != null) input.setAttribute("aria-describedby", `${id}-device-key`);
         input.addEventListener("change", () => {
             if (id === "price-chart") {
                 if (input.checked) hiddenPriceSeries.delete(s.name); else hiddenPriceSeries.add(s.name);
             }
-            result.setDatasetVisibility(index, input.checked); applyRange();
+            for (const index of indexes) result.setDatasetVisibility(index, input.checked);
+            applyRange();
         });
-        const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = datasets[index].backgroundColor; swatch.setAttribute("aria-hidden", "true");
-        label.append(input, swatch, document.createTextNode(s.name)); legend.append(label);
-    });
+        const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
+        label.append(input, swatch, document.createTextNode(s.legendName || s.name)); legend.append(label);
+    }
+    if (series.some(s => s.legendId != null)) {
+        const key = document.createElement("p"); key.id = `${id}-device-key`;
+        key.className = "chart-device-key";
+        key.textContent = "Striped bars show expected use. Solid bars show scheduled use. Expected use does not authorize a start.";
+        legend.append(key);
+    }
     if (!datasets.some((d) => d.data.length)) {
         const empty = document.createElement("p"); empty.textContent = "No covered data available."; legend.append(empty);
     }
@@ -513,12 +567,13 @@ async function showPlan(signal, background = false) {
                 const total = known ? prices.sell_price + rates.reduce((sum, rate) => sum + rate, 0) : null;
                 bonusSell.push([time, total, tariff?.price_kind], [end, total, tariff?.price_kind]);
             }
-            add(demandForecast, prices.duration_h > 0 && typeof prices.load_kwh === "number" ? prices.load_kwh / prices.duration_h : null);
+            const originalDemand = householdForecastEnergy(plan, prices);
+            add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
             add(solarForecast, prices.duration_h > 0 && typeof prices.pv_kwh === "number" ? prices.pv_kwh / prices.duration_h : null);
             const commands = [];
             for (const task of plan.appliance_schedule || []) {
                 const energy = task.interval_kwh[i];
-                if (energy > 0) commands.push(`Appliance ${task.entity_id}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
+                if (energy > 0) commands.push(`${plan.comparison_names?.[task.entity_id] || "Appliance"}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
             }
             for (const [index, battery] of (flow.batteries || []).entries()) {
                 const name = batteryLabels.get(battery.device_id) || `Battery ${index + 1}`;

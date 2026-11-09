@@ -11,7 +11,9 @@ from threading import Event, Lock
 import pytest
 
 from script.ci import check_images, check_suite_completion
+from script.ci.check_browser import worker_arguments
 from script.ci.ci_scope import documentation_only, main, matrix_profile, select_profile
+from tests.ci.browser_evidence import observe_browser_boundary
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "1" * 40
@@ -23,6 +25,7 @@ def isolated_image_preflight(monkeypatch):
     """Keep controller subprocess mocks separate from the independently tested image checks."""
     monkeypatch.setattr(check_images, "check_images", lambda *arguments: None)
     monkeypatch.setattr(check_suite_completion, "write_completion", lambda *arguments: None)
+    observe_browser_boundary(monkeypatch)
 
 
 def test_ha_framework_and_provisioning_share_the_exact_base_image():
@@ -66,6 +69,8 @@ def executed_suite(command):
         return None
     if command[-1] == "ha-contracts":
         return "ha-contracts"
+    if "--entrypoint" in command:
+        return command[command.index("--entrypoint") + 2]
     return command[command.index("--rm") + 1]
 
 
@@ -510,7 +515,7 @@ def test_orchestrator_preserves_scope_failure_and_cleanup(
                     "ui-tests",
                     "db-tests",
                 ],
-                ["run", "--rm", "ui-tests"],
+                *(worker_arguments(Path("results/ci"), worker) for worker in (0, 1)),
                 [
                     "run",
                     "--no-deps",
@@ -542,12 +547,17 @@ def test_orchestrator_preserves_scope_failure_and_cleanup(
                 ["run", "--rm", "provision-tests"],
             ]
         if not focused:
-            for early_suite in ("native", "ui-tests"):
-                command = ["run", "--rm", early_suite] + (
-                    ["script/ci/check_native.py", "--without-database-contracts"]
-                    if early_suite == "native"
-                    else []
-                )
+            early_commands = [
+                [
+                    "run",
+                    "--rm",
+                    "native",
+                    "script/ci/check_native.py",
+                    "--without-database-contracts",
+                ],
+                *(worker_arguments(Path("results/ci"), worker) for worker in (0, 1)),
+            ]
+            for command in early_commands:
                 assert operations.count(command) == 1
                 assert operations.index(command) < next(
                     index
@@ -670,9 +680,9 @@ def test_independent_database_and_ha_suites_overlap_and_join_before_cleanup(
     "profile,expected",
     [
         ("native", {"native"}),
-        ("frontend", {"native", "ui-tests"}),
-        ("ha", {"native", "ha-tests", "provision-tests", "ui-tests"}),
-        ("storage", {"native", "ui-tests", "db-tests", "ha-tests", "provision-tests"}),
+        ("frontend", {"native", "ui-worker"}),
+        ("ha", {"native", "ha-tests", "provision-tests", "ui-worker"}),
+        ("storage", {"native", "ui-worker", "db-tests", "ha-tests", "provision-tests"}),
     ],
 )
 def test_selected_orchestration_executes_required_suites_and_scopes_cleanup(
@@ -684,7 +694,9 @@ def test_selected_orchestration_executes_required_suites_and_scopes_cleanup(
     monkeypatch.setattr(sys, "argv", ["ci.py", "--profile", profile])
     runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
     actual = {
-        command[command.index("--rm") + 1]
+        command[command.index("--entrypoint") + 2]
+        if "--entrypoint" in command
+        else command[command.index("--rm") + 1]
         for command in calls
         if command[:2] == ["docker", "compose"] and "run" in command
     }
@@ -711,7 +723,7 @@ def test_selected_ha_failure_propagates_and_cleans_up(monkeypatch):
     assert calls[-1][-3:] == ["down", "--volumes", "--remove-orphans"]
 
 
-@pytest.mark.parametrize("failed_gate", ["ui-tests", "ha-contracts", "native"])
+@pytest.mark.parametrize("failed_gate", ["ui-worker", "ha-contracts", "native"])
 def test_early_behavior_failure_blocks_every_heavy_suite(monkeypatch, failed_gate):
     """Stale browser mocks, HA contracts and calculations stop before DB, full HA or Supervisor."""
     calls = []
@@ -782,8 +794,11 @@ def test_selected_suite_without_execution_fails_final_invariant(monkeypatch):
         runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
 
 
-@pytest.mark.parametrize("failed", [None, "native", "ui-tests"])
-def test_native_and_browser_early_gates_overlap_and_join_before_heavy_work(monkeypatch, failed):
+@pytest.mark.parametrize("failed", [None, "native", "ui-worker"])
+@pytest.mark.parametrize("profile", ["full", "selected:browser,ci,unit-app-demand"])
+def test_native_and_browser_early_gates_overlap_and_join_before_heavy_work(
+    monkeypatch, failed, profile
+):
     """Independent early stores/reports overlap; either failure blocks HA/DB until both have stopped."""
     native_started, browser_started = Event(), Event()
     native_finished, browser_finished = Event(), Event()
@@ -791,22 +806,26 @@ def test_native_and_browser_early_gates_overlap_and_join_before_heavy_work(monke
     def run(command, **options):
         """Barriers fail if the runner serializes the suites or tears down active early work."""
         if "run" in command and executed_suite(command) == "native":
+            if profile.startswith("selected:") and command[-1] != "unit-app-demand":
+                if command[-1] == "--ci-only":
+                    assert not browser_started.is_set()
+                return
             native_started.set()
             assert browser_started.wait(5)
             native_finished.set()
             if failed == "native":
                 raise subprocess.CalledProcessError(1, command)
-        elif "run" in command and executed_suite(command) == "ui-tests":
+        elif "run" in command and executed_suite(command) == "ui-worker":
             browser_started.set()
             assert native_started.wait(5)
             browser_finished.set()
-            if failed == "ui-tests":
+            if failed == "ui-worker":
                 raise subprocess.CalledProcessError(1, command)
         elif "up" in command or "down" in command or command[-1] == "ha-contracts":
             assert native_finished.is_set() and browser_finished.is_set()
 
     monkeypatch.setattr(subprocess, "run", run)
-    monkeypatch.setattr(sys, "argv", ["ci.py"])
+    monkeypatch.setattr(sys, "argv", ["ci.py", "--profile", profile])
     if failed:
         with pytest.raises(subprocess.CalledProcessError):
             runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")

@@ -3,7 +3,7 @@
 from copy import deepcopy
 from math import isclose, isfinite
 
-from .context import physical_context
+from .context import appliance_schedule, physical_context
 from .forecast import comparison
 from .model import ENERGY_TOLERANCE_KWH
 from .reference import dispatch
@@ -16,7 +16,13 @@ def scenario(plan, reference, *, without_battery=False):
     stocks and validate every retained grid/stock outcome before presenting them.
     Never overwrite original plans, costs, counters or continuous reference state.
     """
-    view = {"input_snapshot": {"problem": deepcopy(plan["input_snapshot"]["problem"])}}
+    view = {
+        "input_snapshot": {
+            "problem": deepcopy(plan["input_snapshot"]["problem"]),
+            "load_components": deepcopy(plan["input_snapshot"].get("load_components", [])),
+            "ev_evidence": deepcopy(plan["input_snapshot"].get("ev_evidence", [])),
+        }
+    }
     basis = view["input_snapshot"]["problem"]
     if basis.get("appliances") or basis.get("ev_work") or basis.get("thermal_work"):
         basis["intervals"] = deepcopy(reference["intervals"])
@@ -75,6 +81,13 @@ def scenario(plan, reference, *, without_battery=False):
             }
         )
     view["expected_flows"] = physical_flows
+    if plan["input_snapshot"]["problem"].get("appliances"):
+        basis["appliances"] = deepcopy(plan["input_snapshot"]["problem"]["appliances"])
+        view["appliance_schedule"] = appliance_schedule(plan, immediate=True)
+        for index, interval in enumerate(basis["intervals"]):
+            interval["load_kwh"] -= sum(
+                row["interval_kwh"][index] for row in view["appliance_schedule"]
+            )
     reference = deepcopy(reference)
     for costs in (reference.get("reference_costs"), reference.get("ems_costs")):
         if costs is not None:

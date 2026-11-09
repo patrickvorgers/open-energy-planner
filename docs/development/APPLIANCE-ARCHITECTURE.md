@@ -32,10 +32,14 @@ The `src/open_energy_planner/appliances/` package contains:
 | `sources.py` | Shared disjoint Energy membership and upstream validation. |
 | `forecasting.py` | Existing individual-consumer selection and forecasting, reusing demand's statistical models and reconstruction. |
 | `weather_model.py` | Bounded CPU XGBoost adapter for selected weather-sensitive consumers. Native objects remain private. Portable archives contain JSON and fixed ordered features. |
-| `weather_learning.py` | Immutable forward predictions and later comparable hourly measurements. Three disjoint complete days must improve both simpler forecasts before the nonlinear component is admitted. |
+| `weather_learning.py` | Retained research comparison helper that can write `consumer-weather-*` archives. Production selection does not call it. |
 | `cycles/` | Complete profiles, learned/manual evidence, tasks, attempts and mandatory execution feedback. |
 | `ev/` | Vehicles, charge points, explicit assignments, SoC, departures, charging limits and loss assumptions. |
 | `thermal/` | Electric-boiler heat stock, draw, losses, comfort and hard temperatures. |
+
+Production demand and device admission belongs outside this package in
+`forecast_selection/accuracy.py`. It owns local-day comparison evidence and
+control-aware admission.
 
 `demand/` retains household reconstruction, total/residual demand and shared
 statistical models. It is not another appliance category. Existing admission and
@@ -121,22 +125,10 @@ preceding-day measurements or temperature unavailable at training time. The
 initial preceding-day warmup is visible under the same rule. A valid high load
 is never itself an exclusion reason.
 
-Selection archives a 24-hour prediction starting at the next complete UTC hour.
-The candidate, current simpler component and weekday profile all predict before
-that window. The next available complete measured day scores the same hours.
-Missing interior measurements exclude a comparison. Delayed final measurements
-remain pending. Three disjoint complete windows within 90 days must each reduce
-hourly MAE against both alternatives by more than 5.0% and 0.001 kWh. Equal,
-worse, incomplete, corrupt or unavailable evidence retains the simpler model.
-Scores are recomputed from the immutable predictions and current actual history
-instead of trusting a stored promotion flag. Corrected source readings therefore
-can revoke admission without rewriting an earlier assessment. This accuracy
-gate supplements the existing financial household-composition gate.
-
-When the composition changes between Ridge/profile and nonlinear algorithms,
-its financial selection family includes the ordered device/model identities.
-The worker clears an incompatible preference immediately. Earlier families and
-their decision evidence remain archived, but cannot authorize the new algorithm.
+Production admission uses the shared preserved local-day accuracy policy in
+[automatic forecast model selection](MODEL-SELECTION.md). The measurement
+boundary and candidate algorithms identify the comparison family. Financial
+shadow comparisons do not gate household or device-model admission.
 
 Current status and waiting reasons appear beside the fixed daily device graph.
 The component model label does not claim household activation. Startup profiles
@@ -150,11 +142,13 @@ immutable archives retain their namespaces, IDs and meanings. Python module
 paths are internal ownership, not serialized class references. Backend transfer
 continues to include every OEP table and document.
 
-The existing demand document namespace also owns `consumer-weather-model-*`,
-`consumer-weather-window-*`, `consumer-weather-assessment-*` and the bounded
-`consumer-weather-selection-*` pointer. Immutable source/model evidence is
-retained. The pointer tracks at most three completed windows and one pending
-window. See the [database dictionary](DATABASE-SCHEMA.md) for their contracts.
+The demand namespace retains the historical `consumer-weather-model-*`,
+`consumer-weather-window-*`, `consumer-weather-assessment-*` and
+`consumer-weather-selection-*` documents. The retained `weather_learning.py`
+comparison helper can still write these research archives. Production component
+selection uses `forecast_selection/accuracy.py` and its `accuracy-pending-*` and
+`accuracy-day-*` evidence instead. Old weather pointers cannot authorize production
+selection. See the [database dictionary](DATABASE-SCHEMA.md) for retained contracts.
 
 Cycle start claims check expiry when the durable operation actually executes,
 after both the application-lock wait and any worker queue wait. An expired

@@ -19,10 +19,13 @@ sensitivity retain their existing forecasting behavior.
 After at least 28 days of usable paired consumption and temperature history,
 the candidate saves predictions for a future day. Later measurements score those
 original predictions. Three nonoverlapping complete days must each improve mean
-absolute hourly error against both simpler alternatives by more than 5.0% and
+absolute hourly error against the measured weekday baseline by more than 5.0% and
 0.001 kWh per hour. These are forward comparisons, not training fit or a random
-split. A tie retains the simpler model. The household composition still needs
-its existing independent decision comparison before activation.
+split. Among qualifying alternatives, the lowest mean error is selected. A tie
+with the baseline cannot qualify. If qualifying learned models tie, Ridge takes
+precedence over the weather model. Insufficient evidence, inconsistent improvement
+or unavailable inputs retain the baseline. Household and device models use the same local-day
+accuracy principle. Measurement separation does not wait for ML selection.
 
 Under **Insights > Forecast quality > Devices**, expand **Current model and
 learning** to see the component's model, pending day, comparison errors and why
@@ -217,7 +220,7 @@ Recorder data to arrive. The newest incomplete hours therefore do not force an
 otherwise usable historical comparison to wait. A damaged saved comparison
 keeps the physical forecast while learning reports the problem.
 
-Household model selection separately compares simulated decisions. Simulated
+Older household selection evidence can contain simulated decisions. Current demand model selection uses matching local-day forecast accuracy. Simulated
 decision costs are not measured savings. For actual metering and retrospective
 evaluation, use [Savings](savings.md).
 

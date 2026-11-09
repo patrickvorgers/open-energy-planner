@@ -54,6 +54,13 @@ and timing can differ. The candidate workflow additionally establishes admission
 package identity and artifact evidence on either execution route. An informal
 local success does not replace those merge or reuse gates.
 
+The hosted **Quality and integration (AMD64)** job has a 90-minute execution
+limit. This includes container setup, all selected suites, the isolated
+Supervisor lifecycle when selected, packaging and evidence preservation. It is
+an outer CI deadline. Solver, process, HTTP and individual readiness deadlines
+retain their independent limits. Increasing this allowance does not make tests
+faster or turn an interrupted run into successful candidate evidence.
+
 Wait for the active review to complete before collecting its full batch of inline
 and outside-diff findings. Evaluate every finding, apply valid corrections and run
 affected checks before publishing one tested push. Request one incremental review
@@ -1024,10 +1031,10 @@ still retain all transitive consumers. Scope labels remain informational.
 
 ### Execution, completion and reuse proof
 
-Packaged collection fails early before services or long tests start. Execution
-runs cheap policy/unit groups first, then selected browser and early HA contracts.
-Real database/HA groups follow. Actual Supervisor acceptance runs last after fast
-services have been cleaned up. Every group has its own JUnit report. Empty
+Packaged collection fails early before services or long tests start. Native and
+browser work finishes before early HA contracts and real database/HA groups.
+Actual Supervisor acceptance runs last after fast services have been cleaned up.
+Every group has its own JUnit report. Empty
 selection, collection failure, cancellation or process failure cannot count as a
 completed suite.
 
@@ -1035,6 +1042,28 @@ Full and legacy HA runs execute early contracts once, then exclude their directo
 from the remaining two-worker HA run. When the four-backend suite runs separately,
 native execution excludes database contracts instead of repeating them on SQLite.
 A legacy native-only selection still includes its original SQLite coverage.
+
+Browser execution uses two isolated containers with one CPU and 1 GiB each. Together
+they retain the original browser budget of two CPUs, 2 GiB and 512 MiB shared memory.
+Both use the selected built browser image. Packaged preflight and execution share
+the same pytest paths, filters and partition plugin. Each worker owns its reports
+and screenshots under `results/ci/browser-<worker>/`.
+
+Preflight records the complete collected inventory and its disjoint worker
+partitions. Execution records actual setup, call and teardown outcomes and embeds
+the pytest identity in each JUnit case. Completion rejects missing or duplicated
+identities, changed collections, failed or skipped phases and inconsistent worker
+reports. The canonical `ui.xml` is written only after the full union passes, so
+existing candidate and package readers retain one browser report. Every worker is
+joined before service cleanup, including after failure.
+
+Focused routes run cheap policy checks before overlapping their native unit groups
+and browser work within their separate container budgets. Full routes retain their
+existing native/browser overlap. Database and HA services start after those early
+groups finish. Browser teaching examples reuse a real solved and
+independently validated plan once per process. Each case still initializes a fresh
+database and receives its own mutable copy. No database snapshot or persistent
+fixture cache is used.
 
 The controller records successful suite commands and validates the exact selected
 set before writing `results/ci/suite-completion.json`. That record binds the profile,

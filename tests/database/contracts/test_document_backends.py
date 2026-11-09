@@ -101,6 +101,24 @@ def test_solar_raw_sum_evidence_and_local_conflicts_survive_restart(archive):
     assert SolarRuntime(SolarStore(SqlDocuments(engine, "solar"))).histories == runtime.histories
 
 
+def test_daily_demand_accuracy_preserves_originals_after_restart(archive):
+    """All four backends retain daily forecast evidence and admission after reopening documents."""
+    from open_energy_planner.forecast_selection.accuracy import choose_daily
+    from tests.app.forecast.support.daily_accuracy import START, forecasts, measurements
+
+    engine, _root = archive
+    documents = SqlDocuments(engine, "demand")
+    for offset in range(6):
+        now = START + timedelta(days=offset)
+        selected = choose_daily(documents, "washer", "UTC", forecasts(now), measurements(now), now)
+    originals = list(documents.iter_prefix("accuracy-day-"))
+    assert originals and selected["selected"] == "candidate"
+    reopened = SqlDocuments(engine, "demand")
+    result = choose_daily(reopened, "washer", "UTC", forecasts(now), measurements(now), now)
+    assert result == selected
+    assert list(reopened.iter_prefix("accuracy-day-")) == originals
+
+
 def test_solar_import_forecast_and_accuracy_contracts_survive_restart(archive):
     """All four backends retain edited geometry, original imports and immutable HA/accuracy evidence."""
     from open_energy_planner.solar.calculation.model import SolarImport, SolarPanel

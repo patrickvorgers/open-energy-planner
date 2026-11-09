@@ -132,7 +132,7 @@ def create_app(
     contracts = ContractStore(SqlDocuments(repository.engine, "contracts"))
     bonus_counters = CounterStore(SqlDocuments(repository.engine, "bonus-counters"))
     demand_store = DemandStore(SqlDocuments(repository.engine, "demand"))
-    demand = DemandRuntime(demand_store, scorer=demand_scorer)
+    demand = DemandRuntime(demand_store, scorer=demand_scorer, plans=repository)
     from open_energy_planner.appliances.cycles.service import ApplianceService
 
     appliances = ApplianceService(SqlDocuments(repository.engine, "planning"), demand.consumers)
@@ -225,6 +225,7 @@ def create_app(
                     ev.state,
                     installation.current,
                     solar.configuration,
+                    demand.consumers.selected,
                 )
                 document["currency"] = contracts.current.currency if contracts.current else None
                 document["market_area"] = (
