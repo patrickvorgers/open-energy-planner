@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover, edit_price_rule, open_primary_navigation
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    connect,
+    discover,
+    edit_price_rule,
+    open_primary_navigation,
+    show_installation_sources,
+)
 
 
 def add_vehicle_draft(content):
@@ -327,3 +334,61 @@ def test_workspace_links_opening_another_tab_do_not_request_discard(app_page):
     expect(content.get_by_role("alertdialog")).to_have_count(0)
     expect(capacity).to_have_value("74")
     expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Appliances")
+
+
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+@pytest.mark.parametrize("workspace", [False, True])
+def test_installation_rejects_consent_after_another_edit_in_the_same_dirty_category(
+    app_page, workspace
+):
+    """A newer grid-limit draft must survive consent captured while Installation was already dirty."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + ("/workspace?page=%2Fsetup" if workspace else "/setup"))
+    content = page.frame_locator("#workspace-content") if workspace else page
+    expect(content.locator("#installation-shell")).to_be_visible()
+    content.get_by_role("button", name="Continue", exact=True).click()
+    grid_limit = content.get_by_label("Maximum grid import (kW)", exact=True)
+    grid_limit.fill("6.3")
+    open_primary_navigation(page)
+    destination = page.get_by_role("link", name="Contract", exact=True)
+    destination.click()
+    confirmation = content.get_by_role("alertdialog", name="Leave without saving?", exact=True)
+    expect(confirmation).to_be_visible()
+    grid_limit.evaluate(
+        "input => { input.value = '6.7'; input.dispatchEvent(new Event('input', {bubbles: true})); }"
+    )
+    confirmation.get_by_role("button", name="Discard and leave", exact=True).click()
+    expect(grid_limit).to_have_value("6.7")
+    expect(content.locator("#installation-save-state")).to_contain_text(
+        "Settings changed while confirmation was open"
+    )
+    open_primary_navigation(page)
+    destination.click()
+    expect(confirmation).to_be_visible()
+    confirmation.get_by_role("button", name="Discard and leave", exact=True).click()
+    expect(content.get_by_role("heading", name="Contract settings", exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize("app_site", ["prices"], indirect=True)
+def test_price_preferences_reject_consent_after_a_new_choice_in_the_same_dirty_category(app_page):
+    """Source preferences changed twice remain unsaved and cannot be discarded by the first consent."""
+    page, url = app_page
+    discover(page, url)
+    connect(page)
+    show_installation_sources(page)
+    page.get_by_role("button", name="Edit installation", exact=True).click()
+    preference = page.locator("[data-price-preference]").nth(1)
+    preference.select_option("epex_predictor")
+    open_primary_navigation(page)
+    page.get_by_role("link", name="Contract", exact=True).click()
+    confirmation = page.get_by_role("alertdialog", name="Leave without saving?", exact=True)
+    expect(confirmation).to_be_visible()
+    preference.evaluate(
+        "select => { select.value = 'jeroen_nl'; select.dispatchEvent(new Event('change', {bubbles: true})); }"
+    )
+    confirmation.get_by_role("button", name="Discard and leave", exact=True).click()
+    expect(preference).to_have_value("jeroen_nl")
+    expect(page.locator("#installation-save-state")).to_contain_text(
+        "Settings changed while confirmation was open"
+    )
