@@ -911,7 +911,12 @@ new query shape or materially larger payload is introduced.
 
 ## Lifecycle and maintenance
 
-- One app instance serializes writes. SQL transactions preserve publication and
+- One app instance shares an engine-owned reentrant lifecycle guard across plan
+  publication, document transactions, lazy context creation and background backfill.
+  The guard covers the complete transaction through commit or rollback, so collection
+  cannot delete a known block while publication is preparing its new references.
+  Competing lazy readers and backfill writers cannot insert the same context twice.
+  SQL transactions preserve publication and
   result/checkpoint boundaries. SQLAlchemy does not make arbitrary concurrent app
   writers safe. SQLite uses WAL, full synchronization, enabled foreign keys and
   a bounded busy timeout. External database failures never silently select SQLite.

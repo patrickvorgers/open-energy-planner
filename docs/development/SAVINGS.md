@@ -240,6 +240,16 @@ movements. Display responses overlay current Home Assistant Energy names through
 retained source identities without rewriting finalized evidence. Changing the
 Home Assistant timezone after daily history exists pauses automatic processing.
 Existing calendar identities remain intact instead of being silently reassigned.
+The worker exposes this as an expected pause needing attention, with an instruction
+to restore the original Home Assistant timezone. Processing and maintenance resume
+automatically after restoration. While paused, thinning and other worker maintenance
+remain blocked and existing results stay readable. No generic failure traceback is
+generated for this owned condition.
+
+Each daily calculation shares one short-lived context lookup across frame accounting
+and active advice. Every distinct plan is decoded at most once during that replay.
+The next replay reads fresh hash-verified context. Missing or corrupt evidence remains
+unavailable rather than falling back to a previous replay's cached values.
 
 The current local day is excluded. For day D, recovery covers the three complete
 dates D+1, D+2 and D+3. Closure is at local midnight D+4, calculated with

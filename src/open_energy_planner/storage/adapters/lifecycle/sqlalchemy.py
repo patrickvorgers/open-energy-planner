@@ -36,6 +36,8 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
 )
 from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
 
+from .transactions import lifecycle_transaction
+
 SCHEMA_VERSION = 1
 SQLITE_BUSY_TIMEOUT_SECONDS = 5
 SQLITE_BUSY_TIMEOUT_MS = SQLITE_BUSY_TIMEOUT_SECONDS * 1000
@@ -122,8 +124,9 @@ def archive_engine(directory, url=None):
 class SqlPlanRepository:
     """Own app state and immutable plans, committing references before publication.
 
-    One application lock serializes calls, including off-loop writes. Workers receive
-    only plain plans. Callers own supplied engines. This adapter owns locally created
+    An engine-owned lifecycle guard serializes complete mutations, including lazy
+    context writes and background collection. Workers receive only plain plans.
+    Callers own supplied engines. This adapter owns locally created
     engines. Unreleased development files are deliberately not imported. Only the current
     database format and explicit complete cross-backend transfers are supported.
     """
@@ -178,7 +181,7 @@ class SqlPlanRepository:
             # create_all does not add indexes to already existing tables.
             for index in ARCHIVE_INCOMING_INDEXES:
                 index.create(self.engine, checkfirst=True)
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 version = connection.scalar(select(META.c.version).where(META.c.id == STATE_KEY))
                 if version is None:
                     if recorded:
@@ -329,7 +332,7 @@ class SqlPlanRepository:
         remain untouched until their context and every activation identity are
         durably preserved. Repeated calls safely resume an interrupted upgrade.
         """
-        with self.engine.begin() as connection:
+        with lifecycle_transaction(self.engine) as connection:
             missing = connection.scalars(
                 select(PLANS.c.plan_id)
                 .select_from(
@@ -369,7 +372,7 @@ class SqlPlanRepository:
             plan = self.state.get("plan")
             state = {key: value for key, value in self.state.items() if key != "plan"}
             payload = encode_payload(canonical(state))
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 if plan is not None:
                     self._write_plan(connection, plan)
                 previous = connection.execute(
@@ -476,7 +479,7 @@ class SqlPlanRepository:
     def get_context(self, plan_id):
         """Read a hash-verified historical calculation projection without presenting it as an original plan."""
         try:
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 row = (
                     connection.execute(
                         select(PLAN_CONTEXTS).where(PLAN_CONTEXTS.c.plan_id == plan_id)

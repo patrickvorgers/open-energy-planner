@@ -196,3 +196,29 @@ def test_daily_results_show_partial_and_unavailable_scenarios_without_false_zero
         "Chart.getChart(document.getElementById('savings-chart')).scales.x.ticks.map(tick => tick.label)"
     )
     assert labels and all("2026" in label for label in labels)
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_timezone_pause_and_recovery_keep_the_selected_daily_results(app_page):
+    """Desktop/mobile show the owned recovery action and clear it after a successful refresh without losing costs."""
+    page, url = app_page
+    data = daily_response()
+    data["issue"] = (
+        "Historical savings are paused because the Home Assistant timezone changed. Restore the original Home Assistant timezone to resume. Existing daily results are retained."
+    )
+    page.route("**/v1/savings?**", lambda route: route.fulfill(json=data))
+    page.goto(url + "/overview#savings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#coverage")).to_contain_text(
+        "Restore the original Home Assistant timezone to resume"
+    )
+    expect(page.locator("#savings-total")).to_contain_text("36.03")
+    expect(page.locator("#daily-savings-rows tr")).to_have_count(25)
+    data["issue"] = None
+    page.get_by_role("button", name="Show period").click()
+    expect(page.locator("#coverage")).not_to_contain_text(
+        "Restore the original Home Assistant timezone"
+    )
+    expect(page.locator("#savings-total")).to_contain_text("36.03")
+    expect(page.locator("#daily-savings-rows tr")).to_have_count(25)

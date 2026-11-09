@@ -40,6 +40,11 @@ MISSING_MEASUREMENTS = "Required measurements are missing. Missing energy is not
 MISSING_CONTEXT = "The historical installation context is unavailable."
 MISSING_ACCOUNT = "Required prices, counters or physical evidence are unavailable."
 UNKNOWN_REFERENCE = "Earlier missing evidence prevents a continuous battery or bonus comparison. No state was reset."
+TIMEZONE_PAUSE_MESSAGE = "Historical savings are paused because the Home Assistant timezone changed. Restore the original Home Assistant timezone to resume. Existing daily results are retained."
+
+
+class SavingsTimezoneChanged(ValueError):
+    """Pause calendar-dependent processing until the original installation timezone is restored."""
 
 
 def finalization_time(day, timezone):
@@ -161,12 +166,6 @@ class DailySavings:
         timezone = location.timezone
         zone = ZoneInfo(timezone)
         today = now.astimezone(zone).date()
-        if not self.documents.exists("daily-upgrade.json"):
-            self.documents.write(
-                "daily-upgrade.json", {"day": today.isoformat(), "timezone": timezone}
-            )
-        upgrade = self.documents.read("daily-upgrade.json")
-        initial = capture_start(datetime.fromisoformat(first))
         progress = (
             self.documents.read("daily-progress.json")
             if self.documents.exists("daily-progress.json")
@@ -174,9 +173,15 @@ class DailySavings:
         )
         if progress and progress["timezone"] != timezone:
             # Historical calendar identities cannot be silently reassigned to another day.
-            raise ValueError(
-                "Historical savings timezone changed. Existing daily evidence is retained"
+            raise SavingsTimezoneChanged
+        if self.runtime.issue == TIMEZONE_PAUSE_MESSAGE:
+            self.runtime.issue, self.runtime.attention = None, False
+        if not self.documents.exists("daily-upgrade.json"):
+            self.documents.write(
+                "daily-upgrade.json", {"day": today.isoformat(), "timezone": timezone}
             )
+        upgrade = self.documents.read("daily-upgrade.json")
+        initial = capture_start(datetime.fromisoformat(first))
         day = (
             datetime.fromisoformat(progress["next"]).date()
             if progress
@@ -261,6 +266,14 @@ class DailySavings:
         """
         self.runtime.issue, self.runtime.attention = None, False
         self.runtime.physical_issue = None
+        contexts = {}
+
+        def get_context(identity):
+            """Decode each distinct plan once during this bounded daily replay, including active advice."""
+            if identity not in contexts:
+                contexts[identity] = self.runtime.plans.get_context(identity)
+            return contexts[identity]
+
         start, end = day_window(day, timezone)
         scenarios = {kind: empty_scenario() for kind in SCENARIOS}
         cursor = max(start, initial)
@@ -315,7 +328,7 @@ class DailySavings:
                     physical_state, physical_known = None, False
                     self.runtime.physical_issue = UNKNOWN_REFERENCE
                 plan_id = self.store.context_plan(frame.start)
-                plan = self.runtime.plans.get_context(plan_id) if plan_id else None
+                plan = get_context(plan_id) if plan_id else None
                 accepted = {}
                 common_start = frame.start == initial
                 estimated = frame.quality != "recorded"
@@ -373,7 +386,7 @@ class DailySavings:
                     )
                     add_energy(energy, frame, bindings)
                     advice = active_advice(
-                        frame, self.store.activations(frame.start, frame.end), self.runtime.plans
+                        frame, self.store.activations(frame.start, frame.end), get_context
                     )
                     bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
                     previous_physical = physical_state

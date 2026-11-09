@@ -366,7 +366,7 @@ class SavingsRuntime:
                     raise PendingSettlement("No original installation plan covers this interval")
                 bindings = dict(row["context"]["bindings"])
                 advice = active_advice(
-                    frame, self.store.activations(frame.start, frame.end), self.plans
+                    frame, self.store.activations(frame.start, frame.end), self.plans.get_context
                 )
                 bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
                 state = advance(physical_context(plan), frame, bindings, state)["state"]
@@ -516,7 +516,7 @@ class SavingsRuntime:
                     problem, _ = corrected_problem(plan, contract)
                 bindings = dict(context["bindings"])
                 advice = active_advice(
-                    frame, self.store.activations(frame.start, frame.end), self.plans
+                    frame, self.store.activations(frame.start, frame.end), self.plans.get_context
                 )
                 bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
                 seeds = (

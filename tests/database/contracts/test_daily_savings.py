@@ -19,6 +19,187 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
 
 
+@pytest.mark.parametrize("damage", ["expired", "hash"])
+def test_daily_context_cache_cannot_hide_later_missing_or_corrupt_evidence(settlement, damage):
+    """A new replay must reject newly corrupt evidence or mark expired context unavailable, never reuse last replay's .60 cost."""
+    from open_energy_planner.storage.adapters.lifecycle.schema import PLAN_CONTEXTS
+
+    runtime, _store, _docs, engine, _plans = settlement
+    daily = DailySavings(runtime)
+    arguments = ("2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None)
+    assert daily.calculate(*arguments)["scenarios"]["actual"]["totals"][
+        "purchase"
+    ] == pytest.approx(0.6)
+    with engine.begin() as connection:
+        connection.execute(
+            PLAN_CONTEXTS.update()
+            .where(PLAN_CONTEXTS.c.plan_id == "original-plan")
+            .values(payload=None if damage == "expired" else "{}")
+        )
+    if damage == "hash":
+        with pytest.raises(ValueError, match="Historical calculation context hash mismatch"):
+            daily.calculate(*arguments)
+    else:
+        report = daily.calculate(*arguments)
+        assert report["scenarios"]["actual"]["totals"] is None
+        assert report["scenarios"]["actual"]["coverage_seconds"] == 0
+        assert report["savings"] is None
+
+
+def test_daily_context_reads_are_shared_with_advice_and_expire_after_calculation(
+    settlement, monkeypatch
+):
+    """Two plans bill .60 actual/.40 reference and supply .25 advice each, with one decode per plan per day replay."""
+    from copy import deepcopy
+
+    from open_energy_planner.savings import daily as daily_module
+
+    runtime, _store, _docs, engine, plans = settlement
+    original = plans.get_plan("original-plan")
+    for identity, start in (("first", START), ("second", END)):
+        document = deepcopy(original)
+        document.update(
+            plan_id=identity,
+            generated_at=start.isoformat(),
+            expected_flows=[{"grid_import": 0.25, "grid_export": 0}],
+        )
+        document["input_snapshot"]["problem"]["intervals"][0]["start"] = start.isoformat()
+        plans.state["plan"] = document
+        plans.save()
+    with engine.begin() as connection:
+        from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATION_CONTEXTS
+
+        connection.execute(ACTIVATION_CONTEXTS.delete())
+        connection.execute(ACTIVATIONS.delete())
+        connection.execute(
+            ACTIVATIONS.insert(),
+            [
+                {"activated_at": stamp(START), "plan_id": "first"},
+                {"activated_at": stamp(END), "plan_id": "second"},
+            ],
+        )
+    reads, advice = [], []
+    original_context, original_advice = plans.get_context, daily_module.active_advice
+
+    def counted_context(identity):
+        """Count actual repository decodes rather than cache dictionary accesses."""
+        reads.append(identity)
+        return original_context(identity)
+
+    def recorded_advice(*arguments, **keywords):
+        """Retain independently expected advice amounts alongside the daily financial oracle."""
+        result = original_advice(*arguments, **keywords)
+        advice.append(result)
+        return result
+
+    monkeypatch.setattr(plans, "get_context", counted_context)
+    monkeypatch.setattr(daily_module, "active_advice", recorded_advice)
+    daily = DailySavings(runtime)
+    for iteration in range(2):
+        report = daily.calculate(
+            "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+        )
+        assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
+        assert report["scenarios"]["reference"]["totals"]["economic_cost"] == pytest.approx(0.4)
+        assert report["comparison_seconds"] == 1800
+        assert reads == ["first", "second"] * (iteration + 1)
+    assert [item["import_kwh"] for item in advice] == [0.25] * 4
+    assert [item["coverage_seconds"] for item in advice] == [900] * 4
+
+
+def test_timezone_pause_is_owned_visible_and_recovers_without_rewriting_days(
+    settlement, monkeypatch, caplog
+):
+    """A timezone change preserves sealed .60 costs, blocks thinning and exposes an actionable pause until UTC is restored."""
+    import asyncio
+    import logging
+    from types import SimpleNamespace
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from open_energy_planner.savings import api as savings_api
+
+    runtime, store, docs, _engine, plans = settlement
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", contract(), None, END + timedelta(days=5), START, None
+    )
+    report["finalized_at"] = (END + timedelta(days=5)).isoformat()
+    store.put_day(report, docs, datetime.now(UTC).date().isoformat())
+    original_progress, original_day = docs.read("daily-progress.json"), store.day(latest=True)
+    maintenance = []
+    monkeypatch.setattr(savings_api, "SAVINGS_WORKER_SECONDS", 0.01)
+    monkeypatch.setattr(savings_api, "thin", lambda *_arguments: maintenance.append("thin"))
+    monkeypatch.setattr(
+        savings_api, "recompress", lambda *_arguments: maintenance.append("compress")
+    )
+    site = SimpleNamespace(value=SiteLocation(52, 6, "Europe/Amsterdam"))
+
+    async def observe():
+        """Read the real worker and HTTP projection, then restore the original timezone."""
+        app = web.Application()
+        _, worker, _ = savings_api.register(
+            app,
+            plans,
+            SimpleNamespace(current=contract()),
+            SimpleNamespace(current=None),
+            SimpleNamespace(current=None),
+            SimpleNamespace(configuration=None),
+            SimpleNamespace(configuration=None),
+            asyncio.Lock(),
+            SimpleNamespace(value=None),
+            lambda: site.value,
+            mutation_lock=asyncio.Lock(),
+        )
+        async with TestClient(TestServer(app)) as client:
+            async with asyncio.timeout(5):
+                while worker.issue is None:
+                    await asyncio.sleep(0.01)
+            assert (
+                worker.issue
+                == "Historical savings are paused because the Home Assistant timezone changed. Restore the original Home Assistant timezone to resume. Existing daily results are retained."
+            )
+            assert worker.attention is True
+            response = await client.get(
+                "/v1/savings",
+                params={"start": "2026-10-22T00:00:00+00:00", "end": "2026-10-23T00:00:00+00:00"},
+            )
+            assert response.status == 200
+            body = await response.json()
+            assert body["issue"] == worker.issue
+            assert body["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+            assert docs.read("daily-progress.json") == original_progress
+            assert store.day(latest=True) == original_day
+            assert not docs.exists("daily-upgrade.json")
+            assert maintenance == []
+            site.value = SiteLocation(52, 6, "UTC")
+            async with asyncio.timeout(5):
+                while worker.issue is not None or not maintenance:
+                    await asyncio.sleep(0.01)
+            assert worker.attention is False
+            assert (
+                store.day(before=START.replace(hour=0) + timedelta(days=1), latest=True)
+                == original_day
+            )
+            body = await (
+                await client.get(
+                    "/v1/savings",
+                    params={
+                        "start": "2026-10-22T00:00:00+00:00",
+                        "end": "2026-10-23T00:00:00+00:00",
+                    },
+                )
+            ).json()
+            assert body["issue"] is None
+            assert body["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+
+    with caplog.at_level(logging.INFO, logger="open_energy_planner.savings"):
+        asyncio.run(observe())
+    assert "usable again" in caplog.text
+    assert not any(record.exc_info for record in caplog.records)
+    assert "Settlement processing failed" not in caplog.text
+
+
 def test_daily_partial_results_keep_measured_totals_without_extrapolating(settlement):
     """Two measured quarters cost .60 actual and .40 reference, rather than pretending to cover a whole day."""
     runtime, _store, _docs, _engine, _plans = settlement

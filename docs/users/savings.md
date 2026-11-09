@@ -58,6 +58,9 @@ Savings initially selects yesterday in Home Assistant's timezone. Device labels
 follow current Home Assistant Energy names while finalized calculations remain
 unchanged. Changing the installation timezone after daily history exists pauses
 automatic processing and retains the existing calendar evidence.
+The warning asks you to restore the original Home Assistant timezone. Savings
+resumes automatically after you restore it. Existing daily results remain readable
+while processing and archive maintenance are paused.
 
 The current day is not evaluated yet. After local midnight, the previous day becomes provisional. Three complete local days remain available for missing measurements, published prices and corrections. For Monday, those are Tuesday, Wednesday and Thursday. Monday closes at Friday 00:00 in Home Assistant's timezone. Summer and winter clock changes do not shorten this calendar window.
 

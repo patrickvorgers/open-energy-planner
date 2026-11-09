@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENTS, IDENTITY_LENGTH
+from open_energy_planner.storage.adapters.lifecycle.transactions import lifecycle_transaction
 from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
 
 DOCUMENT_NAMESPACES = (
@@ -27,8 +28,9 @@ ARCHIVE_BATCH_ROWS = 128
 class SqlDocuments:
     """Borrow the single active engine, keeping versions and pointers in the same transaction.
 
-    Stores serialize writes per namespace. A thread-local connection supports the
-    existing off-loop save calls without sharing native connections across threads.
+    Complete transactions share the engine's lifecycle guard with plan publication
+    and maintenance. Domain owners still serialize their own changes. A thread-local
+    connection supports off-loop saves without sharing connections across threads.
     Bootstrap credentials, certificates and logs never enter this table.
     """
 
@@ -56,7 +58,7 @@ class SqlDocuments:
             yield
             return
         try:
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 self.pending.connection = connection
                 try:
                     yield
