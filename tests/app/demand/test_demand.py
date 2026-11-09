@@ -548,7 +548,7 @@ def test_runtime_always_forecasts_and_keeps_unvalidated_ridge_in_shadow(tmp_path
     assert runtime.install(result, now)
     assert runtime.forecast.model == "weekday-hour-v2"
     assert runtime.candidate.model == "ridge-v2"
-    assert runtime.model_status == "shadow_waiting_for_decision_evidence"
+    assert runtime.model_status == "collecting_forward_accuracy"
     runtime.configure(replace(config(), annual_kwh=4000))
     assert not runtime.install(result, now)
     assert not runtime.failed(result[0], now)

@@ -321,7 +321,15 @@ class EVService:
             if any(work.point_id == point["id"] for work in works)
         }
         entities.update(excluded_entities)
-        prepared = self.appliances.prepare(snapshot, demand, now, excluded_entities=entities)
+        windows = tuple(
+            (point["energy_entity"], work.ready_at, work.deadline)
+            for point in self.state["points"]
+            for work in works
+            if work.point_id == point["id"]
+        )
+        prepared = self.appliances.prepare(
+            snapshot, demand, now, excluded_entities=entities, replacement_windows=windows
+        )
         if entities and not prepared.appliance_evidence:
             self.issue = (
                 "Charger component forecast unavailable. Retaining measured household boundary"
@@ -338,6 +346,11 @@ class EVService:
             ev_evidence=tuple(
                 {
                     "work": asdict(work),
+                    "energy_entity": next(
+                        point["energy_entity"]
+                        for point in self.state["points"]
+                        if point["id"] == work.point_id
+                    ),
                     "soc_reading": deepcopy(self.vehicle_readings(now)[work.vehicle_id]),
                     "soc_source": {
                         field: next(

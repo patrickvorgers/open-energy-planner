@@ -248,6 +248,8 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                 "household": {
                     "model": demand.forecast.model if demand.forecast else None,
                     "status": demand.model_status,
+                    "model_selection": demand.daily_selection
+                    or (demand.consumers.result or {}).get("residual_selection"),
                     "issue": demand.issue,
                 },
                 "consumers": demand.consumers.document(),

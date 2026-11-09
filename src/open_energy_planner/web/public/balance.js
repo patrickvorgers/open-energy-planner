@@ -8,8 +8,7 @@ const BALANCE_TOLERANCE_KWH = 0.00001;
 // Match the independent physical validator's per-flow roundoff allowance. Never relax conservation to make bars fit.
 const DISPLAY_ZERO_TOLERANCE_KWH = 0.0000001;
 const SOC_COLORS = ["#324f9d", "#78541d", "#5e3979", "#22665b"];
-const APPLIANCE_COLOR = "#b55a9d";
-const EV_COLOR = "#5868b5";
+const DEVICE_COLORS = ["#b55a9d", "#5868b5", "#b9673c", "#267e78", "#8b648c", "#8f7441"];
 const THERMAL_COLORS = ["#b9673c", "#8f7441", "#a14e66", "#8b648c"];
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const energy = (value) => finite(value) && value >= -DISPLAY_ZERO_TOLERANCE_KWH;
@@ -45,13 +44,13 @@ export function quarterBalanceSeries(series) {
     });
 }
 
-/** Require exactly one model flow per frozen thermal store, without filling absent evidence. */
-function thermalEnergy(flow, work) {
+/** Require exactly one model flow per frozen controlled device, without filling absent evidence. */
+function workEnergy(flows, work, identity) {
     if (!work.length) return 0;
-    if (!Array.isArray(flow.thermal) || flow.thermal.length !== work.length
-        || new Set(work.map((store) => store.device_id)).size !== work.length
-        || !work.every((store) => flow.thermal.filter((row) => row && row.device_id === store.device_id && energy(row.ac_kwh)).length === 1)) return null;
-    return total(flow.thermal.map((row) => row.ac_kwh));
+    if (!Array.isArray(flows) || flows.length !== work.length
+        || new Set(work.map(device => device[identity])).size !== work.length
+        || !work.every(device => flows.filter(row => row && row[identity] === device[identity] && energy(row.ac_kwh)).length === 1)) return null;
+    return total(flows.map(row => row.ac_kwh));
 }
 
 /** Convert signed kWh to mean kW using duration_h. Inflows are positive, outflows negative and null values remain gaps. */
@@ -60,6 +59,77 @@ function flowSeries(name, color, intervals, values, tooltipGroup) {
         start: Date.parse(interval.start), end: Date.parse(interval.start) + interval.duration_h * MILLISECONDS_PER_HOUR,
         value: values[index] == null ? null : Math.abs(values[index]) <= DISPLAY_ZERO_TOLERANCE_KWH ? 0 : values[index] / interval.duration_h
     }))};
+}
+
+/** Retain the ISO fraction below Date's millisecond precision without rounding archived timestamps. */
+function timestampRemainder(start) {
+    const fraction = String(start).match(/\.(\d+)(?=Z|[+-]\d{2}:\d{2}$)/)?.[1] || "";
+    return Number(`0.${fraction.slice(3)}`);
+}
+
+/** Integrate archived kWh using relative times to preserve microsecond weights and avoid epoch roundoff. */
+function componentEnergy(steps, interval) {
+    const start = Date.parse(interval.start), end = interval.duration_h * MILLISECONDS_PER_HOUR;
+    if (!finite(start) || !finite(end) || end <= 0) return null;
+    const remainder = timestampRemainder(interval.start);
+    let cursor = 0, result = 0;
+    for (const step of steps || []) {
+        const sourceStart = Date.parse(step.start) - start + timestampRemainder(step.start) - remainder;
+        const sourceEnd = sourceStart + step.duration_h * MILLISECONDS_PER_HOUR;
+        if (!finite(sourceStart) || !finite(sourceEnd) || !finite(step.duration_h) || step.duration_h <= 0 || !finite(step.kwh) || step.kwh < 0) return null;
+        const left = Math.max(0, sourceStart), right = Math.min(end, sourceEnd);
+        if (right <= left) continue;
+        if (Math.abs(left - cursor) > TIMESTAMP_ROUNDOFF_MILLISECONDS) return null;
+        result += step.kwh * (right - left) / (sourceEnd - sourceStart);
+        cursor = right;
+    }
+    return Math.abs(cursor - end) <= TIMESTAMP_ROUNDOFF_MILLISECONDS ? result : null;
+}
+
+/** Show original household expectation before concrete tasks replaced part of the device forecasts. */
+export function householdForecastEnergy(plan, interval) {
+    const components = plan.input_snapshot?.load_components || [];
+    if (!components.length) return finite(interval.load_kwh) ? interval.load_kwh : null;
+    const values = components.map(component => componentEnergy(component.forecast_steps, interval));
+    return values.every(energy) ? total(values) : null;
+}
+
+/** Project each frozen device once. Expected contributions are already included in interval.load_kwh. */
+function deviceContributions(plan, intervals, labels) {
+    const problem = plan.input_snapshot?.problem || {}, components = plan.input_snapshot?.load_components || [];
+    const parts = [];
+    const chargerMeters = new Map((plan.input_snapshot?.ev_evidence || []).map(row => [row.work.point_id, row.energy_entity]));
+    const colorIds = [...new Set([...components.map(component => component.entity_id), ...(plan.appliance_schedule || []).map(task => task.entity_id || task.task_id), ...(problem.ev_work || []).map(work => chargerMeters.get(work.point_id) || work.point_id || work.session_id)].filter(Boolean))].sort();
+    const deviceColor = identity => DEVICE_COLORS[Math.max(0, colorIds.indexOf(identity)) % DEVICE_COLORS.length];
+    const identities = components.map(component => component.entity_id);
+    const valid = !components.length || (new Set(identities).size === identities.length && identities.filter(identity => identity == null).length === 1);
+    const base = intervals.map(interval => {
+        if (!valid) return null;
+        if (!components.length) return finite(interval.load_kwh) ? interval.load_kwh : null;
+        const values = components.map(component => componentEnergy(component.steps, interval));
+        if (!values.every(energy) || Math.abs(total(values) - interval.load_kwh) > BALANCE_TOLERANCE_KWH) return null;
+        return values[identities.indexOf(null)];
+    });
+    for (const component of components.filter(component => component.entity_id != null)) {
+        const name = labels.get(component.entity_id) || "Appliance";
+        parts.push({identity: component.entity_id, legendName: name, state: "expected", name: `${name}: Expected`, color: deviceColor(component.entity_id), included: true,
+            values: intervals.map((interval, index) => base[index] == null ? null : componentEnergy(component.steps, interval))});
+    }
+    for (const [index, task] of (plan.appliance_schedule || []).entries()) {
+        const name = labels.get(task.entity_id) || `Appliance ${index + 1}`;
+        parts.push({identity: task.entity_id || task.task_id, legendName: name, state: "scheduled", name: `${name}: Scheduled`, color: deviceColor(task.entity_id || task.task_id),
+            values: intervals.map((_interval, intervalIndex) => energy(task.interval_kwh?.[intervalIndex]) ? task.interval_kwh[intervalIndex] : null)});
+    }
+    for (const [index, work] of (problem.ev_work || []).entries()) {
+        const identity = chargerMeters.get(work.point_id) || work.point_id || work.session_id;
+        const name = labels.get(identity) || labels.get(work.point_id) || `Charge point ${index + 1}`;
+        parts.push({identity, legendName: name, state: "scheduled", name: `${name}: Scheduled`, color: deviceColor(identity),
+            values: intervals.map((_interval, intervalIndex) => {
+                const matches = plan.expected_flows?.[intervalIndex]?.ev?.filter(row => row?.session_id === work.session_id) || [];
+                return matches.length === 1 && energy(matches[0].ac_kwh) ? matches[0].ac_kwh : null;
+            })});
+    }
+    return {base, parts};
 }
 
 /**
@@ -94,6 +164,7 @@ function socSeries(plan, intervals, units, labels) {
 export function energyBalances(plan, labels) {
     const problem = plan.input_snapshot?.problem || {}, intervals = problem.intervals || [];
     const units = problem.batteries || [], sources = problem.pv_sources || [], inverters = problem.inverters || [];
+    const consumption = deviceContributions(plan, intervals, labels);
     const groups = [{id: "plant", name: "Installation energy balance", units},
         ...inverters.filter((inverter) => units.some((unit) => unit.inverter_id === inverter.inverter_id))
             .map((inverter, index) => ({id: inverter.inverter_id, inverter, name: `Battery converter ${index + 1}`,
@@ -114,11 +185,11 @@ export function energyBalances(plan, labels) {
                 || !group.units.every((unit) => efficiency(unit.dc_efficiency))) return null;
             const imported = !group.inverter ? flow.grid_import : conversionFlows[0]?.import_kwh;
             const exported = !group.inverter ? flow.grid_export : conversionFlows[0]?.export_kwh;
-            const load = !group.inverter ? interval.load_kwh : 0;
-            const appliance = !group.inverter ? total((plan.appliance_schedule || []).map((task) => task.interval_kwh[index])) : 0;
-            const ev = !group.inverter && problem.ev_work?.length ? (Array.isArray(flow.ev) && flow.ev.length === problem.ev_work.length && flow.ev.every((row) => energy(row.ac_kwh)) ? total(flow.ev.map((row) => row.ac_kwh)) : null) : 0;
-            const thermal = !group.inverter ? thermalEnergy(flow, problem.thermal_work || []) : 0;
-            if (!energy(ev) || !energy(thermal)) return null;
+            const load = !group.inverter ? consumption.base[index] : 0;
+            const devices = !group.inverter ? consumption.parts.map(part => part.values[index]) : [];
+            const thermal = !group.inverter ? workEnergy(flow.thermal, problem.thermal_work || [], "device_id") : 0;
+            if (!group.inverter && !energy(workEnergy(flow.ev, problem.ev_work || [], "session_id"))) return null;
+            if (!devices.every(energy) || !energy(thermal)) return null;
             if (![imported, exported, load].every(energy)) return null;
             const losses = total(converters.map((inverter, converterIndex) =>
                 conversionFlows[converterIndex].import_kwh * (1 - inverter.efficiency)
@@ -129,7 +200,7 @@ export function energyBalances(plan, labels) {
             const row = {
                 solar: total(solar), import: imported,
                 discharge: total(batteries.map((battery) => battery.discharge_kwh)),
-                load: -load, appliance: -appliance, ev: -ev, thermal: -thermal, export: -exported,
+                load: -load, devices: -total(devices), thermal: -thermal, export: -exported,
                 charge: -total(batteries.map((battery) => battery.charge_kwh)), losses: -losses
             };
             return Math.abs(total(Object.values(row))) <= BALANCE_TOLERANCE_KWH ? row : null;
@@ -138,20 +209,24 @@ export function energyBalances(plan, labels) {
         const definitions = [
             ["solar", "Used solar: DC", "Production"],
             ["import", converter ? "AC supply to converter" : "Grid import: AC", "Production"],
-            ["discharge", "Battery discharge: DC", "Production"], ["load", "Household demand: AC", "Consumption"],
-            ["appliance", "Scheduled appliances: AC", "Consumption"],
-            ["ev", "EV charging: AC", "Consumption"],
+            ["discharge", "Battery discharge: DC", "Production"], ["load", plan.input_snapshot?.load_components?.length ? plan.input_snapshot.load_components.find(part => part.entity_id == null)?.unseparated_entities?.length ? "Household remainder: AC" : "Household base: AC" : "Household demand: AC", "Consumption"],
             ["export", converter ? "Converter output to AC" : "Grid export: AC", "Consumption"],
             ["charge", "Battery charge: DC", "Consumption"], ["losses", "Conversion losses", "Consumption"]
         ];
         const series = definitions
-            .filter(([key]) => !(converter && ["load", "appliance", "ev"].includes(key)) && (key !== "appliance" || plan.appliance_schedule?.length) && (key !== "ev" || problem.ev_work?.length) && (group.units.length || !["charge", "discharge"].includes(key)))
-            .map(([key, name, tooltipGroup]) => flowSeries(name, key === "appliance" ? APPLIANCE_COLOR : key === "ev" ? EV_COLOR : FLOW_COLORS[key], intervals, rows.map((row) => row?.[key]), tooltipGroup));
+            .filter(([key]) => !(converter && key === "load") && (group.units.length || !["charge", "discharge"].includes(key)))
+            .map(([key, name, tooltipGroup]) => flowSeries(name, FLOW_COLORS[key], intervals, rows.map((row) => row?.[key]), tooltipGroup));
+        if (!converter) for (const part of consumption.parts) {
+            series.push({...flowSeries(part.name, part.color, intervals, rows.map((row, index) => row == null ? null : -part.values[index]), "Consumption"), legendId: part.identity, legendName: part.legendName, deviceState: part.state});
+        }
         series.push(...socSeries(plan, intervals, group.units, labels));
         // Thermal stores consume AC at the installation boundary, never inside a battery converter.
         if (!converter) for (const [storeIndex, work] of (problem.thermal_work || []).entries()) {
             const values = rows.map((row, index) => row == null ? null : -plan.expected_flows[index].thermal.find((item) => item.device_id === work.device_id).ac_kwh);
-            series.push(flowSeries(`${labels.get(work.device_id) || `Thermal store ${storeIndex + 1}`}: Heating AC`, THERMAL_COLORS[storeIndex % THERMAL_COLORS.length], intervals, values, "Consumption"));
+            const meter = plan.input_snapshot?.thermal_evidence?.find(row => row.configuration.id === work.device_id)?.configuration.energy_entity;
+            const name = labels.get(meter) || labels.get(work.device_id) || `Thermal store ${storeIndex + 1}`;
+            const expected = meter ? consumption.parts.find(part => part.identity === meter) : null;
+            series.push({...flowSeries(`${name}: Scheduled`, expected?.color || THERMAL_COLORS[storeIndex % THERMAL_COLORS.length], intervals, values, "Consumption"), legendId: meter || work.device_id, legendName: name, deviceState: "scheduled"});
         }
         if (!converter) for (const [vehicleIndex, work] of (problem.ev_work || []).entries()) {
             let stored = work.initial_soc * work.capacity_kwh / PERCENT;

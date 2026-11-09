@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.open_energy_planner.protocol import Plan
+from open_energy_planner.demand.calculation.composition import LoadComponent, LoadStep
 from open_energy_planner.installation.commands import execution_document, plan_document
 from open_energy_planner.installation.validation import validate
 from open_energy_planner.live_inputs import LiveInputs
@@ -19,6 +20,39 @@ from open_energy_planner.savings.forecast import comparison
 from open_energy_planner.savings.scenarios import scenario
 from open_energy_planner.synthetic import capture
 from tests.app.ev.test_ev_solver import START, problem, solve, work
+
+
+def ev_snapshot(inputs, revision):
+    """Own unchanged fixture household load and zero spontaneous EV use before scheduled charging.
+
+    These scenarios specify household kWh in the input intervals. Each charger
+    has zero expected spontaneous use, so its concrete schedule replaces no
+    forecast energy. Bind every measured source to its requested point, vehicle
+    and session without deriving ownership or energy from solved flows.
+    """
+    household = tuple(
+        LoadStep(interval.start, interval.duration_h, interval.load_kwh)
+        for interval in inputs.intervals
+    )
+    empty = tuple(LoadStep(interval.start, interval.duration_h, 0) for interval in inputs.intervals)
+    evidence = tuple(
+        {
+            "work": asdict(request),
+            "energy_entity": f"sensor.{request.point_id.replace('-', '_')}_energy",
+        }
+        for request in inputs.ev_work
+    )
+    return replace(
+        capture(START),
+        problem=inputs,
+        ev_revision=revision,
+        ev_evidence=evidence,
+        load_components=(LoadComponent(None, "fixture-household", household, household),)
+        + tuple(
+            LoadComponent(source["energy_entity"], "fixture-ev", empty, empty)
+            for source in evidence
+        ),
+    )
 
 
 @pytest.mark.parametrize("difference, expected", [(0, False), (4.99, False), (5.01, True)])
@@ -65,7 +99,7 @@ def test_tolerance_sized_minimum_power_roundoff_cannot_reject_native_plan():
         ),
     )
     costs = validate(inputs, changed)
-    snapshot = replace(capture(START), problem=inputs, ev_revision="minimum-roundoff")
+    snapshot = ev_snapshot(inputs, "minimum-roundoff")
     original = plan_document(
         snapshot, SimpleNamespace(plan=changed, status=Status.OPTIMAL), costs, START
     )
@@ -79,7 +113,7 @@ def document():
     """Publish the independently checked 0.6-kWh car target, keeping its original refined physics."""
     inputs = problem((work(),))
     plan = solve(inputs)
-    snapshot = replace(capture(START), problem=inputs, ev_revision="ev-example")
+    snapshot = ev_snapshot(inputs, "ev-example")
     return plan_document(
         snapshot, SimpleNamespace(plan=plan, status=Status.OPTIMAL), validate(inputs, plan), START
     )
@@ -161,7 +195,7 @@ def test_four_ev_mixed_horizon_produces_bounded_native_execution():
             if row.session_id == f"session-{index}"
         ) == pytest.approx(expected, abs=1e-6)
     original = plan_document(
-        replace(capture(START), problem=inputs, ev_revision="four-ev-mixed-horizon"),
+        ev_snapshot(inputs, "four-ev-mixed-horizon"),
         result,
         costs,
         START,

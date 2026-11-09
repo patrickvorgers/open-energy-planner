@@ -6,8 +6,14 @@ from itertools import pairwise
 from math import fsum
 from zoneinfo import ZoneInfo
 
+from open_energy_planner.core.calendar import day_window
 from open_energy_planner.forecast_quality.calculation.metrics import integral
-from open_energy_planner.forecast_quality.daily import day_window
+from open_energy_planner.forecast_selection.calculation.accuracy import (
+    MAX_ACCURACY_LOOKBACK_DAYS,
+    MIN_ACCURACY_DAYS,
+    comparison_hours,
+    mean_absolute_error,
+)
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.backtest import (
     BacktestStatus,
@@ -31,22 +37,7 @@ from open_energy_planner.solar.wire import document
 
 HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)
-MIN_ACCURACY_DAYS = 3
-MAX_ACCURACY_LOOKBACK_DAYS = 30
 SOURCE_POLICY = "matched-local-day-mae-v1"
-
-
-def comparison_hours(day, timezone):
-    """Use complete UTC Recorder hours inside one HA local day, including DST and fractional offsets."""
-    start, end = day_window(day.isoformat(), timezone)
-    cursor = start.replace(minute=0, second=0, microsecond=0)
-    if cursor < start:
-        cursor += HOUR
-    hours = []
-    while cursor + HOUR <= end:
-        hours.append(cursor)
-        cursor += HOUR
-    return tuple(hours), end
 
 
 def eligibility(configuration, source):
@@ -348,12 +339,14 @@ def choose_sources(
         issue = eligibility_issue or evidence_issue
         if len(cohorts) == MIN_ACCURACY_DAYS and issue is None:
             scores = {
-                model: fsum(
-                    abs(predicted - observed)
-                    for record, values in cohorts
-                    for predicted, observed in zip(record["models"][model], values, strict=True)
+                model: mean_absolute_error(
+                    [
+                        predicted
+                        for record, _values in cohorts
+                        for predicted in record["models"][model]
+                    ],
+                    [observed for _record, values in cohorts for observed in values],
                 )
-                / sum(len(values) for _record, values in cohorts)
                 for model in models
             }
         assessment = (historical_assessments or {}).get(source_id)

@@ -177,9 +177,9 @@ Open: incompatible meaning/unit migrations. Reference detection cannot guarantee
 - FORE-15: Scale the startup daily shape using a 365-day cumulative-sum difference of the Energy household balance when available. Use matching start/end references for all channels. Do not require intermediate daily rows to calculate that total. With a shorter common period, extrapolate its total using the actual elapsed days, requiring at least seven days. Show the coverage and distinguish measured annual consumption from extrapolation with possible seasonal bias. Reuse a saved estimate or ask for one kWh/year estimate only when usable history is insufficient. Include direct PV/battery supply to the home. Exclude battery charging and do not equate household demand with grid import. Mark provenance/provisional quality and improve with measured data. Specify the daily/hourly distribution during implementation.
 - FORE-02: Automatically build/improve demand forecasts in a separate local module. No mandatory external demand-forecast service.
 - FORE-03: Reuse usable HA history. Missing is unknown, never zero.
-- FORE-04: Household model activation requires consistently financially better plans across several evaluation periods within the same limits. Automatic solar source selection uses forward forecast accuracy against measured production under FORE-17. Forecast accuracy and financial decision value are separate quantities.
+- FORE-04: Household, residual and individual-consumer model selection uses preserved matching local-day forecast accuracy. Retain a suitable baseline until a challenger demonstrates consistent improvement on complete comparable days. Automatic solar source selection retains its physical eligibility and forward-accuracy policy under FORE-17. Forecast accuracy and financial decision value remain separate quantities.
 - FORE-05: Use chronological evaluation without future leakage. Hold planner, limits and other inputs fixed.
-- FORE-06: Household model selection assesses decisions/costs rather than average forecast error alone. Automatic solar source selection assesses matched forecast error. A lower solar forecast error does not prove a lower financial cost.
+- FORE-06: Use the same Home Assistant local-day comparison principle for energy forecasts. Preserve original predictions, assess matching measured intervals and report energy volume and timing errors. Controlled operation cannot establish spontaneous-use accuracy. A lower forecast error does not prove a lower financial cost.
 - FORE-07: Archive PV/demand forecasts from installation as received/used, separately from realization. Keep original provider forecasts and local corrections.
 - FORE-08: Distinguish receipt time from provider issue time. Verify the latter's availability per source.
 - FORE-09: Mark missing data and curtailment. Curtailed PV must not be learned blindly as available production.
@@ -199,7 +199,7 @@ Keep the existing appliance category navigation and configuration routes. Every 
 
 The default is forecast-only. Users explicitly permit shifting per device. Forecast-only devices contribute expected consumption without command entities. Weather-sensitive devices, such as heat pumps and air conditioners, may use weather and calendar features. Forecasting their normal consumption does not authorize thermal control or establish comfort constraints.
 
-For cycle-based appliances, learn one average cycle profile per device: energy, duration and power over elapsed cycle time. Programme recognition and separate programme profiles are not required. Use measured completed cycles. Preserve measurement resolution, missing-data status and sample/quality evidence. Never present estimated subhour shape from coarse totals as measured cycle detail. Without usable evidence, report that the profile is not ready rather than silently inventing a learned profile. Model improvement remains subject to chronological evaluation and planning benefit under FORE-04–06.
+For cycle-based appliances, learn one average cycle profile per device: energy, duration and power over elapsed cycle time. Programme recognition and separate programme profiles are not required. Use measured completed cycles. Preserve measurement resolution, missing-data status and sample/quality evidence. Never present estimated subhour shape from coarse totals as measured cycle detail. Without usable evidence, report that the profile is not ready rather than silently inventing a learned profile. Model improvement remains subject to chronological comparable evaluation under FORE-04–06.
 
 Reuse the Energy dashboard's device energy and optional power sensor for automatic cycle detection. Do not require manual start/end times or user detection thresholds. Missing power links point to Home Assistant Energy. Insufficient history remains explicit. A user may enter only duration and total kWh as a manual fallback. Label that estimate separately from learned measurements, retain it after learning becomes ready, and preserve the profile frozen into accepted tasks. Bootstrap test data must exercise the same detector with labelled simulated histories, not bypass it with learned profiles. See [automatic learning](../docs/development/APPLIANCE-LEARNING.md).
 
@@ -563,21 +563,18 @@ Contract configuration implementation: the app-owned [Contract page](../docs/dev
 
 ### Automatic forecast model selection implementation
 
-FORE-04–06 now use immutable forward shadow plan pairs for the existing demand
-ridge candidates. Both variants share physics,
-other forecasts, strategy, contract and opening planning assumptions. Independent
-sequential replay uses recorded quarters, common measured opening stock/counters,
-published prices, exact contract settlement and common ending-stock valuation.
-Three nonoverlapping near-horizon periods must each exceed the existing 1% and
-EUR 0.001 financial margins. Consumption priority cannot worsen. Old HA history
-trains models but does not invent old planning knowledge. Initial decision-evidence
-warm-up is approximately six days. Unobservable available PV, missing/estimated
-measurements, incomplete prices, failed solves or corrupt evidence cannot promote
-a model. The baseline remains available. Installation settings exposes actual model,
-preference, evidence status and evaluation time. This is simulated decision evidence,
-separate from measured savings. See the model-selection guide for boundaries.
-Automatic solar source selection follows matched forward accuracy under FORE-17. Economic
-solar comparisons remain retained research evidence.
+FORE-04–06 use retained local-day accuracy for household and device models.
+Separate measured appliances before training the household remainder. Keep
+probable use in planning even before a task exists. Concrete acknowledged work
+replaces a bounded share of that expectation, preserving additional use.
+Independent per-plan attribution and physical validation prevent duplicate load.
+The three Planning balance charts show individual expected and scheduled device
+contributions in the bars, with one identity-bound legend entry per device.
+Expected use is striped and scheduled use is solid. Tooltips distinguish both,
+and the device's legend switch toggles both contributions together.
+Physical execution still requires readiness
+and permission. See [model selection](../docs/development/MODEL-SELECTION.md) and
+[shiftable appliances](../docs/development/SHIFTABLE-APPLIANCES.md).
 
 ### Quarter-resolution forecasting increment
 

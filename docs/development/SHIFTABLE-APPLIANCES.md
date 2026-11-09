@@ -132,13 +132,33 @@ The legacy completed-cycle API remains for existing clients only.
 
 ## Forecast boundary and optimization
 
-Task readiness additionally requires usable individual/residual consumption history.
-Consumer model workers retain the ordinary historical weekday/hour component and
-residual baselines alongside ML challengers. An explicit runnable task changes the
-measurement boundary: its ordinary device forecast is replaced by the cycle profile,
-and remaining household plus non-task consumers use those historical baselines.
-This is not automatic activation of an unapproved ML challenger. Frozen baseline
-inputs and the boundary-specific model identity accompany every task plan.
+Task readiness additionally requires usable individual and residual consumption
+history. A manual cycle profile supplies duration and energy, but cannot invent
+an absent meter history or establish a safe separation from total household use.
+Ready measured components are separated even while their ML candidates await
+[local-day accuracy evidence](MODEL-SELECTION.md).
+
+Without a concrete task, expected appliance consumption remains in planning as
+probable energy demand. It is not a hard battery reserve or a start command.
+An acknowledged task replaces up to its remaining cycle energy from the expected
+energy inside its ready/deadline window. The deduction is distributed in
+proportion to the original expectation. Additional expected energy and all
+expectation outside that window remain. This is an explicit bounded replacement
+estimate, not a learned conditional probability or a claim that a particular
+forecast cycle was identified. Running work uses its fixed start and remaining
+profile. Completed work is not submitted again automatically.
+
+An admitted EV session replaces charger expectation only inside its
+ready/departure window. Later probable charging remains. An admitted thermal
+model owns the modeled horizon under its existing physical and comfort contract.
+
+Each new plan freezes `load_components` with source identity, original forecast
+steps and remaining expectation. Before publication the independent guard checks
+unique ownership, complete coverage, nonnegative replacement and the exact sum
+against every physical load interval. Cycle, EV and thermal consumers must be
+separated and cannot share a meter. The existing solver validator separately
+checks scheduled energy and AC/DC conservation. A rejected candidate is never
+published. Existing plan-validity and safe-fallback rules still apply.
 
 HiGHS receives immutable `ApplianceWork` records as part of `InstallationProblem`.
 Each candidate is one absolute UTC quarter-aligned start and the full consecutive

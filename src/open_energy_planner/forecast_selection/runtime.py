@@ -412,6 +412,6 @@ class ModelSelection:
         return {
             "policy": SELECTION_POLICY,
             "issue": self.issue,
-            "explanation": "Household model selection requires three nonoverlapping realized decision windows. Old HA history trains models but cannot invent old planning knowledge. Shadow costs are simulated decisions, not measured EMS savings. Solar source selection separately compares matched forward forecast accuracy.",
+            "explanation": "Household and appliance model selection uses original matched local-day forecast accuracy. Old HA history trains models but cannot invent uncaptured forecasts. Retained financial shadow costs are research evidence, not measured EMS savings. Solar retains its physical eligibility and source selection policy.",
             "models": [{**row, "active_model": active.get(row["scope"])} for row in self.rows],
         }

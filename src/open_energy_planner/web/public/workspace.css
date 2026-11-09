@@ -124,6 +124,8 @@
 @media(max-width:640px) { .workspace .toolbar { display:flex; } .workspace .toolbar > label { flex-basis:100%; } }
 
 .series-swatch { display:inline-block; width:14px; height:10px; border-radius:2px; flex-shrink:0; }
+.series-swatch-expected { background-image:repeating-linear-gradient(135deg,transparent 0 2px,#ffffffb3 2px 5px); }
+.chart-device-key { margin:4px 0 0; color:#64748b; font-size:0.75rem; line-height:1.5; }
 .converter-balances { margin-top:20px; }
 .balance-warning { width:100%; color:#95500d; font-size:12px; }
 .chart-tooltip { position:fixed; z-index:30; pointer-events:none; max-width:min(500px,calc(100vw - 24px)); box-sizing:border-box; padding:12px 14px; border-radius:9px; background:#122d3af5; color:#fff; box-shadow:0 5px 20px #102b3333; font-size:12px; overflow-wrap:anywhere; }

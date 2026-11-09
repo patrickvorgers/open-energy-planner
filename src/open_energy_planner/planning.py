@@ -29,6 +29,11 @@ _LOGGER = logging.getLogger(__name__)
 
 # Fixed reasons from independent installation/EV/thermal validation and command mapping.
 VALIDATION_MESSAGES = (
+    "Controlled household components overlap",
+    "Household component balance differs",
+    "Household component coverage missing",
+    "Household component identities overlap",
+    "Household component replacement differs",
     "AC conservation",
     "Appliance start identities",
     "Appliance time window",
@@ -131,6 +136,7 @@ class InputSnapshot:
     future_valid_until: datetime | None = None
     appliance_revision: str | None = None
     appliance_evidence: tuple = ()
+    load_components: tuple = ()
     ev_revision: str | None = None
     ev_evidence: tuple = ()
     thermal_revision: str | None = None

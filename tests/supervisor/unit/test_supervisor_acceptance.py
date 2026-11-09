@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import subprocess
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -139,40 +140,67 @@ def test_supervisor_cli_failure_response_is_bounded(monkeypatch):
         "fabricated_laundry",
         "short_setup",
         "gapped_setup",
-        "fallback_model",
+        "wrong_baseline",
         "missing_training",
         "pending_weather",
+        "ridge_missing",
+        "missing_composite",
+        "private_detail",
+        "additional_ready",
+        "missing_required",
+        "separation_missing",
+        "stale_archive",
     ],
 )
-def test_example_model_acceptance_retains_shadow_and_missing_history(
+def test_example_model_acceptance_retains_baseline_and_fitted_candidates(
     monkeypatch, invalid, setup_days
 ):
-    """Reject promotion, substituted history and missing training metadata. Await pending weather before accepting models."""
-    model = {
-        "model": "ridge-v2",
+    """Require fitted archived alternatives without admitting them before actual forward daily evidence."""
+    from copy import deepcopy
+
+    baseline = {
+        "model": "weekday-hour-v2",
+        "configuration_version": "device-boundary",
         "training_version": "actual-history",
         "issued_at": "2026-01-01T00:00:00+00:00",
-        "steps": [{"kwh": 0.1}],
+        "steps": [{"start": "2026-01-01T00:00:00+00:00", "duration_h": 48, "kwh": 4.8}],
     }
     records = [
         {
             "entity_id": "sensor.oep_test_" + name + "_energy",
-            "status": "shadow_waiting_for_decision_evidence",
-            "forecast": dict(model),
-            "weather_features_used": name == "heat_pump",
+            "status": "collecting_forward_accuracy",
+            "forecast": {**baseline, "configuration_version": name, "version": name + "-original"},
+            "weather_features_used": False,
+            "model_selection": {
+                "selected": "baseline",
+                "completed_windows": 0,
+                "training_quality": {"source_hours": 744, "used_hours": 720},
+            },
         }
         for name in ("heat_pump", "dishwasher")
     ]
-    if invalid == "promoted":
-        records[0]["status"] = "active"
-    elif invalid == "weather_missing":
-        records[0]["weather_features_used"] = False
-    elif invalid == "fabricated_laundry":
-        records.append({**records[1], "entity_id": "sensor.oep_test_dryer_energy"})
-    elif invalid in {"fallback_model", "pending_weather"}:
-        records[0]["forecast"]["model"] = "weekday-hour-v2"
-    elif invalid == "missing_training":
-        records[0]["forecast"]["training_version"] = None
+    archives = [
+        {
+            "baseline": record["forecast"],
+            "ridge": {**record["forecast"], "model": "ridge-v2"},
+            **(
+                {"weather": {**record["forecast"], "model": "xgboost-weather-v1"}}
+                if record["entity_id"] == "sensor.oep_test_heat_pump_energy"
+                else {}
+            ),
+        }
+        for record in records
+    ]
+    complete_archives = deepcopy(archives)
+    detail = (
+        "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+    )
+    result = {
+        "devices": records,
+        "status": "partial_history",
+        "detail": detail,
+        "separated_entities": [record["entity_id"] for record in records],
+    }
     days = 26 if invalid == "short_setup" else setup_days
     responses = {
         "setup": {
@@ -182,35 +210,57 @@ def test_example_model_acceptance_retains_shadow_and_missing_history(
                 "end": (20000 + days + (invalid == "gapped_setup")) * 86400,
             }
         },
-        "consumers": {
-            "result": {
-                "devices": records,
-                "status": "history_or_weather_not_ready",
-                "detail": "sensor.oep_test_washing_machine_energy and sensor.oep_test_dryer_energy lack seven days",
-            }
-        },
+        "consumers": {"result": result},
         "demand": {
-            "forecast": {
-                "model": "weekday-hour-v2",
-                "training_version": "actual-household-history",
-            },
-            "candidate": None,
-            "ridge_status": "history_or_weather_not_ready",
+            "forecast": {**baseline, "model": "consumer-composite-v1"},
+            "candidate": {**baseline, "model": "consumer-composite-v1"},
+            "ridge_status": "partial_history",
         },
     }
+    if invalid == "additional_ready":
+        for name in ("wallbox_a", "wallbox_b", "boiler"):
+            records.append(
+                {**deepcopy(records[1]), "entity_id": "sensor.oep_test_" + name + "_energy"}
+            )
+        result["separated_entities"] = [record["entity_id"] for record in records]
+    elif invalid == "missing_required":
+        records.pop(0)
+    elif invalid == "separation_missing":
+        result["separated_entities"].pop()
+    elif invalid == "stale_archive":
+        archives[0]["baseline"] = {**archives[0]["baseline"], "version": "older-original"}
+    elif invalid == "promoted":
+        records[0]["model_selection"]["selected"] = "weather"
+    elif invalid in {"weather_missing", "pending_weather"}:
+        del archives[0]["weather"]
+    elif invalid == "fabricated_laundry":
+        records.append({**records[1], "entity_id": "sensor.oep_test_dryer_energy"})
+    elif invalid == "wrong_baseline":
+        records[0]["forecast"] = {**records[0]["forecast"], "model": "ridge-v2"}
+    elif invalid == "missing_training":
+        records[0]["forecast"] = {**records[0]["forecast"], "training_version": None}
+    elif invalid == "ridge_missing":
+        del archives[1]["ridge"]
+    elif invalid == "missing_composite":
+        responses["demand"]["candidate"] = None
+    elif invalid == "private_detail":
+        result["detail"] = "sensor.oep_test_dryer_energy unavailable"
     monkeypatch.setattr(supervisor_smoke, "app_request", lambda route: responses[route])
+    monkeypatch.setattr(
+        supervisor_smoke, "pending_model_forecasts", lambda: archives, raising=False
+    )
 
     def wait_for_models(operation, _description):
-        """Reject incomplete snapshots. Simulate asynchronous weather arriving before the next observation."""
+        """Retain asynchronous readiness until the actual weather candidate archive is available."""
         if invalid == "pending_weather":
             assert operation() is None
-            records[0]["forecast"] = dict(model)
+            archives[:] = complete_archives
         result = operation()
         assert result is not None
         return result
 
     monkeypatch.setattr(supervisor_smoke, "wait_for", wait_for_models)
-    if invalid and invalid != "pending_weather":
+    if invalid not in (None, "pending_weather", "additional_ready"):
         with pytest.raises(AssertionError):
             supervisor_smoke.model_history()
     else:
@@ -240,6 +290,7 @@ def test_model_readiness_timeout_identifies_untrained_weather_component(monkeypa
         assert operation() is None
         raise RuntimeError("fixture readiness deadline")
 
+    monkeypatch.setattr(supervisor_smoke, "pending_model_forecasts", list, raising=False)
     monkeypatch.setattr(supervisor_smoke, "wait_for", expired)
     with pytest.raises(RuntimeError, match="Actual model readiness") as caught:
         supervisor_smoke.model_history()
@@ -579,3 +630,124 @@ def test_retained_state_detects_replaced_or_missing_administration_token(tmp_pat
     token.unlink()
     with pytest.raises(FileNotFoundError):
         supervisor_smoke.retained_state()
+
+
+@pytest.mark.parametrize("temporary_failure", ["missing_table", "locked"])
+def test_pending_forecast_sqlite_timeout_keeps_bounded_chained_diagnostics(
+    tmp_path, monkeypatch, temporary_failure
+):
+    """Real SQLite failures remain retryable without leaking raw messages through the final traceback."""
+    directory = tmp_path / "apps/data" / supervisor_smoke.APP_SLUG
+    directory.mkdir(parents=True)
+    connect = sqlite3.connect
+    writer = connect(directory / "archive.sqlite3")
+    if temporary_failure == "locked":
+        writer.execute("CREATE TABLE oep_documents (namespace TEXT, name TEXT, payload TEXT)")
+        writer.commit()
+        writer.execute("BEGIN EXCLUSIVE")
+
+    def immediate_lock_check(*arguments, **keywords):
+        """Expose the real SQLite lock immediately without changing production connection budgets."""
+        return connect(*arguments, **keywords, timeout=0)
+
+    def bounded_wait(operation, description):
+        """Exercise the real retry and timeout chain with a deterministic one-attempt deadline."""
+        return provision_supervisor.wait_for(operation, description, timeout=1)
+
+    monkeypatch.setattr(supervisor_smoke, "SUPERVISOR_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor_smoke.sqlite3, "connect", immediate_lock_check)
+    monkeypatch.setattr(
+        supervisor_smoke,
+        "app_request",
+        lambda route: (
+            {"annual_estimate": {"days": 28, "start": 0, "end": 28 * 86400}}
+            if route == "setup"
+            else {}
+        ),
+    )
+    clock = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(provision_supervisor, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(provision_supervisor, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(supervisor_smoke, "wait_for", bounded_wait)
+    try:
+        with pytest.raises(RuntimeError, match="Actual model readiness:") as caught:
+            supervisor_smoke.model_history()
+    finally:
+        writer.close()
+    timeout = caught.value.__cause__
+    assert str(timeout) == (
+        "Timed out waiting for actual history-trained appliance alternatives and daily baseline selection"
+    )
+    retryable = timeout.__cause__
+    assert str(retryable) == "Pending forecast captures are not ready."
+    assert isinstance(retryable.__context__, sqlite3.OperationalError)
+    raw_message = {
+        "missing_table": "no such table: oep_documents",
+        "locked": "database is locked",
+    }[temporary_failure]
+    assert str(retryable.__context__) == raw_message
+    diagnostic = "".join(traceback.format_exception(caught.value))
+    assert "Actual model readiness: {}" in diagnostic
+    assert str(timeout) in diagnostic
+    assert "Pending forecast captures are not ready." in diagnostic
+    assert raw_message not in diagnostic
+    assert "sqlite3.OperationalError" not in diagnostic
+    assert retryable.__cause__ is None and retryable.__suppress_context__
+
+
+@pytest.mark.parametrize("temporary_failure", ["missing_table", "locked"])
+def test_wait_for_retries_actual_pending_forecast_sqlite_read(
+    tmp_path, monkeypatch, temporary_failure
+):
+    """The existing poll retries an actual missing-table or locked read and accepts the repaired archive."""
+    directory = tmp_path / "apps/data" / supervisor_smoke.APP_SLUG
+    directory.mkdir(parents=True)
+    connect = sqlite3.connect
+    writer = connect(directory / "archive.sqlite3")
+    if temporary_failure == "locked":
+        writer.execute("CREATE TABLE oep_documents (namespace TEXT, name TEXT, payload TEXT)")
+        writer.commit()
+        writer.execute("BEGIN EXCLUSIVE")
+    expected = {"baseline": {"model": "weekday-hour-v2"}}
+    failures, repairs = [], []
+
+    def immediate_lock_check(*arguments, **keywords):
+        """Expose the real SQLite lock immediately without changing production connection budgets."""
+        return connect(*arguments, **keywords, timeout=0)
+
+    def read_pending():
+        """Observe real SQLite failures independently of the returned model document."""
+        try:
+            return supervisor_smoke.pending_model_forecasts()
+        except RuntimeError as error:
+            failures.append(type(error.__context__))
+            raise
+
+    def repair_after_first_attempt(_seconds):
+        """Publish the archive schema/row only after the first genuine failed read."""
+        assert not repairs
+        repairs.append(temporary_failure)
+        if temporary_failure == "missing_table":
+            writer.execute("CREATE TABLE oep_documents (namespace TEXT, name TEXT, payload TEXT)")
+        writer.execute(
+            "INSERT INTO oep_documents VALUES (?, ?, ?)",
+            (
+                "demand",
+                "accuracy-pending-fixture.json",
+                json.dumps({"capture": {"forecasts": expected}}),
+            ),
+        )
+        writer.commit()
+
+    monkeypatch.setattr(supervisor_smoke, "SUPERVISOR_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor_smoke.sqlite3, "connect", immediate_lock_check)
+    # The repair hook bounds retries independently of host scheduling delays.
+    monkeypatch.setattr(provision_supervisor, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(provision_supervisor, "sleep", repair_after_first_attempt)
+    try:
+        actual = provision_supervisor.wait_for(read_pending, "retained pending captures", timeout=1)
+    finally:
+        writer.close()
+    assert actual == [expected]
+    assert failures == [sqlite3.OperationalError]
+    assert repairs == [temporary_failure]

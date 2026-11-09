@@ -153,7 +153,9 @@ def summary_cards(plan, problem):
             "Forecast totals: Full planning horizon",
             [
                 fact(
-                    "Household demand forecast: AC",
+                    "Total demand forecast: AC"
+                    if plan["input_snapshot"].get("load_components")
+                    else "Household demand forecast: AC",
                     sum(interval.load_kwh for interval in problem.intervals),
                     "kWh",
                 ),
@@ -175,7 +177,9 @@ def summary_cards(plan, problem):
             "Household forecast: Whole period",
             forecast_facts(plan, "demand"),
             [
-                "This forecast includes household baseload. Separately controlled loads are excluded only when recorded in the demand configuration."
+                "The original load breakdown records expected and remaining device use. Scheduled cycles, EV charging and heating come from the plan. Each contribution is counted once."
+                if plan["input_snapshot"].get("load_components")
+                else "This forecast includes household baseload. Separately controlled loads are excluded only when recorded in the demand configuration."
             ],
         )
     )
