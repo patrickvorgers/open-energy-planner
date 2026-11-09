@@ -105,7 +105,7 @@ class HistoryBridge:
                         <= stamp
                         < end.timestamp()
                     ):
-                        return {**result, "error": "history_unavailable"}
+                        continue
                     if type(cumulative) in (int, float) and isfinite(cumulative):
                         stamps.append(stamp)
                 first = (
@@ -132,8 +132,8 @@ class HistoryBridge:
                 channels.update(
                     statistics_during_period(
                         self.hass,
-                        start,
-                        end,
+                        max(HISTORY_EPOCH, start - timedelta(hours=1)) if solar_chunk else start,
+                        end + timedelta(hours=1) if solar_chunk else end,
                         set(batch),
                         "hour",
                         {"energy": "kWh"},
@@ -163,22 +163,15 @@ class HistoryBridge:
             if (not rows and not solar_chunk) or len(rows) > MAX_HISTORY_HOURS:
                 return {**result, "error": "history_unavailable"}
             if solar_chunk:
-                if any(
-                    type(row.get("start")) not in (int, float)
-                    or not isfinite(row["start"])
-                    or row["start"] % HOUR_SECONDS
-                    or not start.timestamp() <= row["start"] < end.timestamp()
-                    for row in rows
-                ):
-                    return {**result, "error": "history_unavailable"}
-                # Absent/nonfinite endpoints stay gaps. They cannot become zero energy.
+                # The app owns alignment and admission. Preserve every finite source value.
                 rows = [
-                    row
+                    {
+                        field: row.get(field)
+                        if type(row.get(field)) in (int, float) and isfinite(row[field])
+                        else None
+                        for field in ("start", "sum", "state")
+                    }
                     for row in rows
-                    if all(
-                        type(row.get(field)) in (int, float) and isfinite(row[field])
-                        for field in ("sum", "state")
-                    )
                 ]
             if len(entities) > 1:
                 if any(
