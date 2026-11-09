@@ -261,6 +261,7 @@ function addBonusEditor(parent, period, value, isEnabled) {
     protectionLabel.append(protection, document.createTextNode("Prevent battery export during paid window")); box.append(protectionLabel);
     const protectionHelp = document.createElement("p"); protectionHelp.textContent = "Allows planned battery self-consumption, but prevents battery discharge together with grid export during this window while bonus allowance remains. Once the allowance is used, battery export is allowed from the next planning interval. A renewed allowance activates protection again. Physical enforcement requires your own inverter or Home Assistant control."; box.append(protectionHelp);
     inputs.prevent_battery_export = protection;
+    protection.addEventListener("change", changed);
     conditionEditors.set(inputs, comparisonEditor(box, value.price_condition));
 
     const zone = document.createElement("p"); zone.textContent = `Timezone: ${timezone}: Change it in Home Assistant installation settings.`; box.append(zone);

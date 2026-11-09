@@ -111,6 +111,79 @@ def test_contract_delayed_preview_cannot_validate_newer_edits(app_page):
     expect(page.locator("#contract-preview")).to_be_empty()
 
 
+def test_bonus_checkbox_only_edit_requires_fresh_preview_before_save(app_page):
+    """A saved bonus cannot reuse an older preview when only its battery restriction changes."""
+    from tests.app.contract.support.settings import settings
+
+    page, url = app_page
+    discover(page, url)
+    headers = {"Authorization": "Bearer " + TOKEN}
+    body = settings()
+    body["bonuses"] = [
+        {
+            "rule_id": "saved-bonus",
+            "effective_from": body["periods"][0]["effective_from"],
+            "rate_formula": "0.03",
+            "cap_kwh": 5000,
+            "timezone": "UTC",
+        }
+    ]
+    response = page.request.put(url + "/v1/contracts", headers=headers, data=body)
+    assert response.ok, response.text()
+    page.goto(url + "/contract")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_price_rule(page)
+    preview = page.get_by_role("button", name="Preview rates", exact=True)
+    preview.click()
+    expect(page.locator("#contract-preview .price-preview")).to_be_visible()
+    restriction = page.get_by_role(
+        "checkbox", name="Prevent battery export during paid window", exact=True
+    )
+    expect(restriction).not_to_be_checked()
+    save = page.get_by_role("button", name="Save contract", exact=True)
+    pending = []
+    page.route("**/v1/contracts/preview", lambda route: pending.append(route))
+    with page.expect_request("**/v1/contracts/preview"):
+        preview.click()
+    with page.expect_request("**/v1/contracts/preview", timeout=5000) as changed_preview:
+        restriction.check()
+    expect(save).to_be_disabled()
+    assert changed_preview.value.post_data_json["bonuses"][0]["prevent_battery_export"] is True
+    assert len(pending) == 2
+    previous_preview = pending[0].request.post_data_json
+    previous_preview["bonuses"][0]["prevent_battery_export"] = True
+    assert changed_preview.value.post_data_json == previous_preview
+    with page.expect_request_finished(predicate=lambda request: request == pending[0].request):
+        pending[0].continue_()
+    page.evaluate("() => new Promise(requestAnimationFrame)")
+    expect(save).to_be_disabled()
+    expect(page.locator("#contract-preview")).to_be_empty()
+    pending[1].continue_()
+    expect(save).to_be_enabled()
+    save.click()
+    expect(page.locator("#contract-status")).to_contain_text("Contract saved")
+    saved = page.request.get(url + "/v1/contracts", headers=headers).json()
+    assert saved["bonuses"][0]["prevent_battery_export"] is True
+    page.reload()
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_price_rule(page)
+    expect(restriction).to_be_checked()
+    with page.expect_request("**/v1/contracts/preview", timeout=5000):
+        restriction.uncheck()
+    expect(save).to_be_disabled()
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.get_by_role("button", name="Edit price rule", exact=True)).to_be_visible()
+    pending[-1].abort()
+    assert (
+        page.request.get(url + "/v1/contracts", headers=headers).json()["version"]
+        == saved["version"]
+    )
+    edit_price_rule(page)
+    expect(restriction).to_be_checked()
+
+
 def test_contract_calendar_controls_have_readable_choices_and_no_timezone_setting(app_page):
     """New price/bonus dates use HA-local midnight. Calendar/anniversary choices replace editable reset parts and timezone."""
     page, url = app_page
