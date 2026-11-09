@@ -48,8 +48,8 @@ def test_selecting_matching_device_retains_current_soc_source_and_saves(app_page
     assert saved["soc_entity"] == "sensor.synthetic_family_soc"
 
 
-def test_device_first_selects_integration_but_never_guesses_the_sensor(app_page):
-    """Account-named entries resolve through devices, with explicit ambiguity and template fallbacks."""
+def test_integration_first_selects_unique_devices_and_keeps_template_sources(app_page):
+    """Integration filters expose eligible devices, auto-select unique SoC and retain explicit template sources."""
     page, url = app_page
     body = discover(page, url)
     for entity_id, device_id, device_name, entry_id, unit, kind in (
@@ -94,9 +94,11 @@ def test_device_first_selects_integration_but_never_guesses_the_sensor(app_page)
     device = page.get_by_role("combobox", name="Home Assistant device", exact=True)
     integration = page.get_by_role("combobox", name="Home Assistant integration", exact=True)
     soc = page.get_by_label("Vehicle state of charge", exact=True)
+    integration.select_option("account")
+    expect(device).to_have_value("")
     device.select_option("zeekr")
     expect(integration).to_have_value("account")
-    expect(soc).to_have_value("")
+    expect(soc).to_have_value("sensor.synthetic_zeekr_soc")
     expect(soc.locator("option")).to_have_count(2)
     soc.select_option("sensor.synthetic_zeekr_soc")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("75")
@@ -104,7 +106,7 @@ def test_device_first_selects_integration_but_never_guesses_the_sensor(app_page)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(
-        path=f"results/ci/ev-device-first-{page.viewport_size['width']}.png", full_page=True
+        path=f"results/ci/ev-integration-first-{page.viewport_size['width']}.png", full_page=True
     )
     page.get_by_role("button", name="Save settings", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
@@ -115,25 +117,20 @@ def test_device_first_selects_integration_but_never_guesses_the_sensor(app_page)
     expect(device).to_have_value("zeekr")
     device.select_option("other-car")
     expect(integration).to_have_value("account")
-    expect(soc).to_have_value("")
+    expect(soc).to_have_value("sensor.synthetic_other_car_soc")
     expect(soc.locator("option")).to_have_count(2)
-    device.select_option("multi")
-    expect(integration).to_have_value("")
-    expect(soc.locator("option")).to_have_count(1)
+    integration.select_option("first")
+    expect(device).to_have_value("multi")
+    expect(soc).to_have_value("sensor.synthetic_multi_soc")
     integration.select_option("second")
     expect(soc.locator("option")).to_have_count(2)
     soc.select_option("sensor.synthetic_multi_other_soc")
-    device.select_option("no-soc")
-    expect(integration).to_have_value("no-soc")
-    expect(soc.locator("option")).to_have_count(1)
-    expect(
-        page.get_by_text("No matching Home Assistant sources were discovered.", exact=False)
-    ).to_be_visible()
+    expect(integration.locator('option[value="no-soc"]')).to_have_count(0)
     choose_integration(page, "template")
     soc.select_option("sensor.synthetic_template_soc")
+    integration.select_option("other")
     device.select_option("manual")
-    expect(integration).to_have_count(0)
-    expect(soc).to_have_value("")
+    expect(soc).to_have_value("sensor.synthetic_manual_soc")
     soc.select_option("sensor.synthetic_manual_soc")
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
@@ -258,15 +255,17 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     choose_integration(page, "car")
     soc = page.get_by_label("Vehicle state of charge", exact=True)
     expect(soc.locator("option")).to_have_count(2)
-    expect(soc).to_have_value("")
-    assert soc.evaluate("control => control.required && !control.validity.valid")
+    expect(soc).to_have_value("sensor.car_charge")
+    assert soc.evaluate("control => control.required && control.validity.valid")
     soc.select_option("sensor.car_charge")
     choose_integration(page, "")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
         "sensor.car_charge"
     )
     choose_integration(page, "car2")
-    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value("")
+    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
+        "sensor.second_car"
+    )
     choose_integration(page, "car")
     page.get_by_label("Vehicle state of charge", exact=True).select_option("sensor.car_charge")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
@@ -284,7 +283,9 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     )
     assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]
     choose_integration(page, "car2")
-    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value("")
+    expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
+        "sensor.second_car"
+    )
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]

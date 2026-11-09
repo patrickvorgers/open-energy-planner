@@ -32,6 +32,50 @@ def test_catalogue_retains_integration_identity_and_title_without_provider_attri
     assert catalogue.value["entities"][0]["integration_name"] == "Family car"
 
 
+def test_catalogue_separates_integration_type_account_and_service_device():
+    """Bounded public type labels and service classification survive without replacing the account identity."""
+    body = setup_metadata()
+    body["entities"][0].update(
+        integration_id="account-a",
+        integration_name="Synthetic account",
+        integration_domain="mqtt",
+        integration_display_name="MQTT",
+        device_entry_type="service",
+    )
+    catalogue = HACatalogue()
+    catalogue.receive(body, datetime.now(UTC))
+    entity = catalogue.value["entities"][0]
+    assert entity["integration_id"] == "account-a"
+    assert entity["integration_name"] == "Synthetic account"
+    assert entity["integration_domain"] == "mqtt"
+    assert entity["integration_display_name"] == "MQTT"
+    assert entity["device_entry_type"] == "service"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"integration_domain": "mqtt"},
+        {"integration_display_name": "MQTT"},
+        {"integration_domain": "", "integration_display_name": "MQTT"},
+        {"integration_domain": "mqtt", "integration_display_name": " "},
+        {"integration_domain": "mqtt", "integration_display_name": "x" * 161},
+        {"integration_domain": "x" * 161, "integration_display_name": "MQTT"},
+        {"integration_domain": "mqtt", "integration_display_name": {"private": "data"}},
+        {"device_entry_type": "vehicle"},
+        {"device_entry_type": True},
+    ],
+)
+def test_catalogue_rejects_invalid_integration_type_and_device_metadata(metadata):
+    """Incomplete, oversized, arbitrary-object or invented device classifications fail before catalogue publication."""
+    body = setup_metadata()
+    body["entities"][0].update(metadata)
+    catalogue = HACatalogue()
+    with pytest.raises(ValueError, match="Invalid setup entity metadata"):
+        catalogue.receive(body, datetime.now(UTC))
+    assert catalogue.value is None
+
+
 @pytest.mark.parametrize("write_fails", [False, True])
 def test_catalogue_cancelled_source_write_still_invalidates_consumer_model(
     tmp_path, monkeypatch, write_fails
