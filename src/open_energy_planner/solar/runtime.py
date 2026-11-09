@@ -189,8 +189,11 @@ class SolarRuntime:
         """Persist a source-bound annual transfer before installing a multi-year aggregate.
 
         Delayed replies cannot cross configuration changes. Recorder failures
-        advance to other sources until their bounded retry. Identity or overlap
-        changes retain the prior accepted cache and the original incoming evidence.
+        advance to other sources until their bounded retry. Identity changes
+        retain the prior accepted cache and the original incoming evidence.
+        Overlap conflicts and revised sums exclude affected endpoints from the
+        replacement aggregate, removing it when no usable endpoints remain.
+        Missing or changed accepted hours invalidate learned outputs.
         """
         pending = self.request(now)
         if pending is None or pending["version"] != ref:

@@ -34,7 +34,7 @@ class SolarEnergyHistory:
 
 
 class HistoryContinuityError(ValueError):
-    """Retain the last complete cache when source identity or earlier measurements change."""
+    """Prevent a changed Recorder statistics identity from replacing the accepted source cohort."""
 
 
 @dataclass(frozen=True)

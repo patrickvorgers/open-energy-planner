@@ -303,7 +303,7 @@ def test_app_solar_configuration_prefills_energy_sources_and_reads_independent_h
             if history_error == "unsupported_statistics":
                 assert entry.runtime_data.issue == "solar_history_unavailable"
             else:
-                assert entry.runtime_data.issue != "solar_history_unavailable"
+                assert entry.runtime_data.issue is None
             assert saved["request"] is None
             assert "current.json" in list_documents(root / "app", "solar")
             assert manager.data["energy_sources"] == sources
