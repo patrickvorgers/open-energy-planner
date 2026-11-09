@@ -58,6 +58,7 @@ def comparison(plan, reference_start=None, *, without_battery=False):
             **{
                 **definition,
                 **{key: tuple(definition[key]) for key in ("rates", "caps_kwh", "periods")},
+                "prevent_battery_export": tuple(definition.get("prevent_battery_export", ())),
             }
         )
         if reference_start["stored"] is not None:

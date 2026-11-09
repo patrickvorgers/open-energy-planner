@@ -252,3 +252,17 @@ def test_repricing_preserves_wholesale_evidence_beyond_command_horizon():
         ]
         == 0.9
     )
+
+
+def test_bonus_introduced_mid_plan_does_not_require_pre_activation_seed():
+    """Only the second 0.5-kWh export earns 0.015 EUR. The first predates the bonus and needs no baseline."""
+    plan = original_plan(solar=True)
+    before = deepcopy(plan)
+    selected = replace(
+        contract(buy="0.3", sell="0.1"),
+        bonuses=(BonusRule("new-bonus", END, Formula("0.03"), 5000, timezone="UTC"),),
+    )
+    assert initial_counters(plan, selected, None, None) == ({}, {})
+    result = reprice(plan, selected, None, END + timedelta(minutes=15))
+    assert result["ems_costs"]["bonus"] == pytest.approx(0.015)
+    assert plan == before

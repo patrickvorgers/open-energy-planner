@@ -21,6 +21,7 @@ def test_settings_write_failures_are_safe_and_preserve_recovery(app_page, editor
     page.get_by_role("button", name="Connect", exact=True).click()
     if editor == "ev":
         add_ev_appliance(page, "vehicle")
+        page.get_by_label("Home Assistant integration", exact=True).select_option("other")
         page.locator('[data-field="soc_entity"]').select_option("sensor.soc0")
         field = page.locator('[data-field="capacity_kwh"]')
         field.fill("64")

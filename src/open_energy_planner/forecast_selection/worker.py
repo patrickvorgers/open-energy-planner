@@ -62,6 +62,7 @@ def capture_pair(original, variant, now):
             **{
                 **definition,
                 **{key: tuple(definition[key]) for key in ("rates", "caps_kwh", "periods")},
+                "prevent_battery_export": tuple(definition.get("prevent_battery_export", ())),
             }
         )
         prior = settle(rule, tuple(row["grid_export"] for row in original["expected_flows"]))
@@ -75,6 +76,7 @@ def capture_pair(original, variant, now):
                 rates=rule.rates[first:],
                 caps_kwh=rule.caps_kwh[first:],
                 periods=rule.periods[first:],
+                prevent_battery_export=rule.prevent_battery_export[first:],
             )
         )
         opening[rule.rule_id + "|" + rule.periods[first]] = initial

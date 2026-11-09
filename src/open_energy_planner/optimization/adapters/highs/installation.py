@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from open_energy_planner.core.units import WATTS_PER_KW
+
 from ....installation.model import (
     BatteryFlow,
     InstallationFlow,
@@ -176,6 +178,20 @@ class InstallationModelFactory:
             )
             for bonus_model in models
         )
+        for bonus_model in models:
+            positive = context.binding(bonus_model.device_id).variables["positive"]
+            for interval_index, protected in enumerate(bonus_model.bonus.prevent_battery_export):
+                if not protected:
+                    continue
+                # Starting quota prevents battery export from exhausting its own guard.
+                for unit in problem.batteries:
+                    context.native.addConstr(
+                        batteries[unit.device_id]["discharge"][interval_index]
+                        <= unit.battery.discharge_limit_w
+                        * problem.intervals[interval_index].duration_h
+                        / WATTS_PER_KW
+                        * (grid["direction"][interval_index] + 1 - positive[interval_index])
+                    )
         purchase = sum(
             interval.buy_price * grid["import"][interval_index]
             for interval_index, interval in enumerate(problem.intervals)

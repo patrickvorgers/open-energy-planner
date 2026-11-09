@@ -218,6 +218,8 @@ class HistoricalBonuses:
         )
         for family, versions in BonusCompiler().families(contract).items():
             policy = versions[0]
+            if frame.start < policy.effective_from:
+                continue
             if policy.contract_start is not None and frame.start < policy.contract_start:
                 continue
             period = policy.period_start(frame.start)

@@ -34,7 +34,7 @@ def nonnegative(value):
 
 @dataclass(frozen=True)
 class BonusRule:
-    """One dated version of an additive bonus, counting all grid-export kWh.
+    """One dated version of an export bonus with optional battery-export protection.
 
     Versions of the same rule share their period definition. Price/time gates
     control payment, not counter advancement. A zero extra rate can disable a
@@ -54,6 +54,7 @@ class BonusRule:
     end_time: str | None = None
     contract_start: datetime | None = None
     monthly_schedule: tuple[ClockWindow | None, ...] = ()
+    prevent_battery_export: bool = False
 
     def __post_init__(self):
         """Validate bounded rule identity, annual boundary, formulas and exactly relevant window fields."""
@@ -62,6 +63,8 @@ class BonusRule:
             object.__setattr__(self, "contract_start", aware(self.contract_start))
             if self.contract_start > self.effective_from:
                 raise ValueError("Bonus cannot precede its contract")
+        if type(self.prevent_battery_export) is not bool:
+            raise ValueError("Battery export protection must be boolean")
         if not isinstance(self.rule_id, str) or not 1 <= len(self.rule_id) <= MAX_BONUS_ID_LENGTH:
             raise ValueError("Invalid bonus rule identity")
         if not isinstance(self.rate_formula, Formula) or (
@@ -79,7 +82,7 @@ class BonusRule:
             self.extra_rate(market, self.effective_from, check_window=False)
 
     def period_start(self, instant):
-        """Return the absolute reset instant for the configured calendar or contract year."""
+        """Return the annual reset clamped to activation. Counter owners use the first family version."""
         zone = ZoneInfo(self.timezone)
         local = aware(instant).astimezone(zone)
         candidate = datetime(local.year, self.reset_month, self.reset_day, tzinfo=zone)
@@ -90,10 +93,15 @@ class BonusRule:
         ):
             raise ValueError("Annual reset falls in a nonexistent local time")
         boundary = candidate.astimezone(UTC)
-        return (
-            max(boundary, self.contract_start)
-            if self.contract_start is not None and aware(instant) >= self.contract_start
-            else boundary
+        return max(
+            [
+                boundary,
+                *(
+                    start
+                    for start in (self.contract_start, self.effective_from)
+                    if start is not None and aware(instant) >= start
+                ),
+            ]
         )
 
     @cached_property

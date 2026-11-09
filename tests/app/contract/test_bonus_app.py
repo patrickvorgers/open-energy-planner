@@ -44,7 +44,9 @@ def test_bonus_settings_counter_seed_and_plan_over_http(tmp_path):
             body["bonuses"] = [
                 {
                     "rule_id": "solar",
-                    "effective_from": (now - timedelta(days=1)).isoformat(),
+                    "effective_from": now.replace(
+                        month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+                    ).isoformat(),
                     "rate_formula": "0.04",
                     "cap_kwh": 100,
                     "timezone": "UTC",

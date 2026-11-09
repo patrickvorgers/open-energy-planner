@@ -63,6 +63,7 @@ def _costs(plan, problem, rows, initial, start, end, reference_start=None):
             **{
                 **definition,
                 **{key: tuple(definition[key]) for key in ("rates", "caps_kwh", "periods")},
+                "prevent_battery_export": tuple(definition.get("prevent_battery_export", ())),
             }
         )
         if reference_start and reference_start["stored"] is not None:

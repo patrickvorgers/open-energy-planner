@@ -97,6 +97,9 @@ class HACatalogue:
                 "energy_name",
                 "integration_id",
                 "integration_name",
+                "integration_domain",
+                "integration_display_name",
+                "device_entry_type",
             } != {
                 "entity_id",
                 "name",
@@ -110,6 +113,16 @@ class HACatalogue:
                 not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
                 for value_item in entity.values()
             ):
+                raise ValueError("Invalid setup entity metadata")
+            if ("integration_domain" in entity) != ("integration_display_name" in entity) or (
+                "integration_domain" in entity
+                and (
+                    not entity["integration_domain"].strip()
+                    or not entity["integration_display_name"].strip()
+                )
+            ):
+                raise ValueError("Invalid setup entity metadata")
+            if "device_entry_type" in entity and entity["device_entry_type"] != "service":
                 raise ValueError("Invalid setup entity metadata")
             if ("integration_id" in entity) != ("integration_name" in entity) or (
                 "integration_id" in entity and not entity["integration_id"].strip()

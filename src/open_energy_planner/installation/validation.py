@@ -76,7 +76,11 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
     }
     purchase = sale = wear = 0
     groups = {}
-    for step, flow in zip(problem.intervals, plan.flows, strict=True):
+    settled = tuple(
+        settle(export_bonus, tuple(flow_item.grid_export for flow_item in plan.flows))
+        for export_bonus in problem.export_bonuses
+    )
+    for interval_index, (step, flow) in enumerate(zip(problem.intervals, plan.flows, strict=True)):
         duration_hours = step.duration_h
         battery_flows = {battery_entry.device_id: battery_entry for battery_entry in flow.batteries}
         inverter_flows = {
@@ -105,6 +109,22 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
         ):
             require(isfinite(value) and -tolerance <= value <= limit + tolerance, "Grid bound")
         require(min(flow.grid_import, flow.grid_export) <= tolerance, "Grid direction")
+        for bonus, result in zip(problem.export_bonuses, settled, strict=True):
+            if not bonus.prevent_battery_export or not bonus.prevent_battery_export[interval_index]:
+                continue
+            previous_counter = (
+                bonus.initial_kwh
+                if interval_index == 0
+                else result.counters_kwh[interval_index - 1]
+                if bonus.periods[interval_index] == bonus.periods[interval_index - 1]
+                else 0
+            )
+            if bonus.caps_kwh[interval_index] - previous_counter > tolerance:
+                require(
+                    min(flow.grid_export, sum(battery.discharge_kwh for battery in flow.batteries))
+                    <= tolerance,
+                    "Battery export during protected bonus window",
+                )
         require(
             close(
                 flow.grid_import
@@ -253,10 +273,6 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
             )
         purchase += step.buy_price * flow.grid_import
         sale += step.sell_price * flow.grid_export
-    settled = tuple(
-        settle(export_bonus, tuple(flow_item.grid_export for flow_item in plan.flows))
-        for export_bonus in problem.export_bonuses
-    )
     require(len(settled) == len(plan.export_bonus_results), "Missing bonus evidence")
     revenue = 0
     for rule, expected, reported in zip(

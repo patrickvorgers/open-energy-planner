@@ -263,12 +263,17 @@ class ContractAPI:
             if rule.contract_start is not None and now < rule.contract_start:
                 row["period_start"] = rule.contract_start.isoformat()
                 raise ValueError("bonus_contract_not_started")
-            row["period_start"] = rule.period_start(now).isoformat()
+            policy = BonusCompiler().families(contract)[rule.rule_id][0]
+            if now < policy.effective_from:
+                row["period_start"] = policy.effective_from.isoformat()
+                raise ValueError("bonus_not_started")
+            row["period_start"] = policy.period_start(now).isoformat()
             seed = next(
                 (
                     item
                     for item in (book.seeds if book else ())
-                    if item.rule_id == rule.rule_id and item.period_start == rule.period_start(now)
+                    if item.rule_id == rule.rule_id
+                    and item.period_start == policy.period_start(now)
                 ),
                 None,
             )
@@ -298,14 +303,13 @@ class ContractAPI:
                 or self.live.configuration is None
             ):
                 raise ValueError("bonus_configuration_or_evidence_unavailable")
-            from dataclasses import replace
-
             evidence = BonusCompiler().current_evidence(
-                replace(contract, bonuses=(rule,)),
+                contract,
                 now,
                 book,
                 self.live.configuration,
                 self.live.report,
+                identities={rule.rule_id},
             )[0]
             row.update(
                 used_kwh=evidence.initial_kwh,
@@ -448,7 +452,7 @@ class ContractAPI:
                     item
                     for item in (book.seeds if book else ())
                     if item.rule_id == chosen.rule_id
-                    and item.period_start == chosen.period_start(now)
+                    and item.period_start == versions[0].period_start(now)
                 )
                 basis = previous.statistics
                 if (

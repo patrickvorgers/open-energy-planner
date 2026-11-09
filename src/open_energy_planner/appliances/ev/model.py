@@ -217,6 +217,11 @@ def refine(problem, works):
                 rates=tuple(bonus.rates[index] for index in parents),
                 caps_kwh=tuple(bonus.caps_kwh[index] for index in parents),
                 periods=tuple(bonus.periods[index] for index in parents),
+                prevent_battery_export=tuple(
+                    bonus.prevent_battery_export[index] for index in parents
+                )
+                if bonus.prevent_battery_export
+                else (),
             )
             for bonus in problem.export_bonuses
         ),

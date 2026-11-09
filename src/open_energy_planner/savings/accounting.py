@@ -45,7 +45,9 @@ def bonus_payment(contract, start, end, market, exported, counters, seeds, meter
         chosen = contract.bonus_at(start)
         if chosen is not None and chosen.rule_id != identity:
             chosen = None
-        policy = chosen or versions[0]
+        policy = versions[0]
+        if start < policy.effective_from:
+            continue
         if policy.contract_start is not None and start < policy.contract_start:
             continue
         period = policy.period_start(start).isoformat()

@@ -82,6 +82,7 @@ def scenario(plan, reference, *, without_battery=False):
         )
     view["expected_flows"] = physical_flows
     if plan["input_snapshot"]["problem"].get("appliances"):
+        basis["appliances"] = deepcopy(plan["input_snapshot"]["problem"]["appliances"])
         view["appliance_schedule"] = appliance_schedule(plan, immediate=True)
         for index, interval in enumerate(basis["intervals"]):
             interval["load_kwh"] -= sum(
