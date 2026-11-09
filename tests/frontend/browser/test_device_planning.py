@@ -78,9 +78,20 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
     expect(totals).to_contain_text("Total demand forecast: AC")
     # Two days contain 46.6 kWh. The ready windows replace .9 kWh with 2.7 kWh of cycles.
     expect(totals.locator("dd").first).to_have_text("48.4 kWh")
+    breakdown = page.locator("#plan-evidence article").filter(
+        has_text="Household forecast: Whole period"
+    )
+    expect(breakdown).to_contain_text(
+        "The original load breakdown records expected and remaining device use. "
+        "Scheduled cycles, EV charging and heating come from the plan. "
+        "Each contribution is counted once."
+    )
     if request.node.callspec.params["app_site"] == "device_planning":
         totals.screenshot(
             path=f"results/ci/device-planning/forecast-total-{page.viewport_size['width']}.png"
+        )
+        breakdown.screenshot(
+            path=f"results/ci/device-planning/demand-breakdown-{page.viewport_size['width']}.png"
         )
 
 

@@ -39,7 +39,7 @@ def test_acceptance_bootstrap_requires_marker_and_calls_original_entrypoint(monk
 def test_acceptance_weather_feeds_real_training_and_horizon_prediction(
     monkeypatch, missing_weather_period
 ):
-    """Complete fixture weather trains Ridge. Removing past or future coverage retains the production fallback."""
+    """Fixture weather remains available, but no archived daily comparison permits learned-model admission."""
     monkeypatch.setitem(sys.modules, "acceptance_sources", sources)
     now = datetime(2026, 10, 28, 15, 45, tzinfo=UTC)
 
@@ -67,12 +67,13 @@ def test_acceptance_weather_feeds_real_training_and_horizon_prediction(
             if temperature_sample.start != omitted
         )
     configuration = DemandConfiguration("Europe/Amsterdam", 0, (EnergyTerm("sensor.fixture", 1),))
-    model, forecast = component(configuration, samples, temperatures, now, True)
-    assert forecast.model == ("ridge-v2" if missing_weather_period is None else "weekday-hour-v2")
+    model, forecast, selection = component(configuration, samples, temperatures, now, True)
+    assert forecast.model == "weekday-hour-v2"
+    assert model.model_id == "weekday-hour-v2"
+    assert selection["selected"] == "baseline"
+    assert selection["status"] == "forward_archive_required"
     assert forecast.training_version
     assert sum(step.duration_h for step in forecast.steps) == 48
-    if missing_weather_period is None:
-        assert model.temperature_enabled
 
 
 def test_only_disposable_context_contains_weather_bootstrap(tmp_path, monkeypatch):

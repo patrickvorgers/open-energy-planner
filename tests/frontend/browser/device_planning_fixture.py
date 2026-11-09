@@ -26,7 +26,15 @@ DEVICE_NAMES = {
 
 
 def seed(directory, *, fractional_boundaries=False):
-    """Keep full-day solar and prices, and solve explicit washer/dryer tasks with remaining expectations."""
+    """Keep full-day solar and prices, and solve explicit washer/dryer tasks with remaining expectations.
+
+    Args:
+        directory: Empty app data directory receiving the validated archived plan.
+        fractional_boundaries: Shift ready times forward and deadlines backward
+            by 123456 microseconds, and fix acknowledged starts at ready_at.
+            This isolates boundary precision from free-scheduling search. The
+            default retains ordinary free scheduling over the full 48 hours.
+    """
     seed_household(directory)
     repository = SqlPlanRepository(directory)
     try:

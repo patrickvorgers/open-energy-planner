@@ -177,7 +177,7 @@ def summary_cards(plan, problem):
             "Household forecast: Whole period",
             forecast_facts(plan, "demand"),
             [
-                "Remaining expectation and separately scheduled devices are recorded in the original load components. Their contributions are counted once."
+                "The original load breakdown records expected and remaining device use. Scheduled cycles, EV charging and heating come from the plan. Each contribution is counted once."
                 if plan["input_snapshot"].get("load_components")
                 else "This forecast includes household baseload. Separately controlled loads are excluded only when recorded in the demand configuration."
             ],

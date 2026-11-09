@@ -189,6 +189,8 @@ def test_real_mixed_preparation_preserves_cycle_ev_thermal_ownership_through_pub
         cycle_entity,
         "sensor.charger_energy",
     }
+    # The .1-kWh cycle and .4-kWh boiler expectations are replaced, leaving .3 kWh of household.
+    # The .2-kWh/h charger stays for 130 s: 120 s solve + 5 s worker overhead + 5 s HA handover.
     assert sum(interval.load_kwh for interval in prepared.problem.intervals) == pytest.approx(
         0.3 + 0.2 * 130 / 3600
     )
