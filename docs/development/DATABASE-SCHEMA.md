@@ -289,7 +289,9 @@ The adapter permits updates. Immutability and payload validation belong to the o
 Bonus rule JSON includes optional boolean `prevent_battery_export` (default false).
 Compiled `export_bonuses` retain an aligned boolean tuple under the same name in
 immutable plan input snapshots. True forbids simultaneous battery discharge and
-grid export for that billing segment. It does not change settlement source
+grid export for that billing segment while quota remains at its start. Exhausted
+quota releases later segments until a reset or cap increase restores quota.
+It does not change settlement source
 attribution. The first dated bonus activation starts the first counter period.
 Later revisions preserve that activation and the configured annual reset.
 

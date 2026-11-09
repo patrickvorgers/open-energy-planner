@@ -53,20 +53,6 @@ class BusGrid:
         ]
         for interval_index, step in enumerate(context.intervals):
             duration_hours = step.duration_h
-            if any(
-                bonus.prevent_battery_export and bonus.prevent_battery_export[interval_index]
-                for bonus in self.problem.export_bonuses
-            ):
-                # Reuse import direction so zero-net self-consumption remains feasible.
-                for unit in self.problem.batteries:
-                    discharge = context.binding("bat:" + unit.device_id).variables["discharge"]
-                    add_constraint(
-                        discharge[interval_index]
-                        <= unit.battery.discharge_limit_w
-                        * duration_hours
-                        / WATTS_PER_KW
-                        * grid["direction"][interval_index]
-                    )
             add_constraint(
                 grid["import"][interval_index]
                 <= self.problem.grid_import_limit_w

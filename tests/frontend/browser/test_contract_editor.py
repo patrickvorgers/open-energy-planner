@@ -1784,6 +1784,9 @@ def test_bonus_battery_export_option_round_trips_without_creating_a_second_date(
         "checkbox", name="Prevent battery export during paid window", exact=True
     )
     restriction.check()
+    expect(
+        page.get_by_text("Once the allowance is used, battery export is allowed", exact=False)
+    ).to_be_visible()
     save = page.get_by_role("button", name="Save contract", exact=True)
     expect(save).to_be_enabled()
     save.click()

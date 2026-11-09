@@ -259,7 +259,7 @@ function addBonusEditor(parent, period, value, isEnabled) {
     const protectionLabel = document.createElement("label"), protection = document.createElement("input");
     protection.type = "checkbox"; protection.checked = value.prevent_battery_export === true;
     protectionLabel.append(protection, document.createTextNode("Prevent battery export during paid window")); box.append(protectionLabel);
-    const protectionHelp = document.createElement("p"); protectionHelp.textContent = "Allows planned battery self-consumption, but never battery discharge together with grid export during this window. Applies even at zero bonus or after the allowance is used. Physical enforcement requires your own inverter or Home Assistant control."; box.append(protectionHelp);
+    const protectionHelp = document.createElement("p"); protectionHelp.textContent = "Allows planned battery self-consumption, but prevents battery discharge together with grid export during this window while bonus allowance remains. Once the allowance is used, battery export is allowed from the next planning interval. A renewed allowance activates protection again. Physical enforcement requires your own inverter or Home Assistant control."; box.append(protectionHelp);
     inputs.prevent_battery_export = protection;
     conditionEditors.set(inputs, comparisonEditor(box, value.price_condition));
 

@@ -43,7 +43,9 @@ Enable **Prevent battery export during paid window** when your terms prohibit
 using a battery to increase the bonus. During those hours, the planner allows
 batteries to cover residual local demand but prevents discharge while the
 installation exports. The restriction applies to all installation batteries,
-even when the bonus rate is zero or the annual allowance is exhausted.
+while bonus allowance remains at the start of the planning interval, even at a
+zero bonus rate. Once export exhausts the allowance, battery export is allowed
+from the next interval. An annual reset or increased cap restores protection.
 Your inverter or Home Assistant automation must enforce the same rule using
 live measurements. This setting plans the restriction. It does not configure
 or verify your physical equipment.

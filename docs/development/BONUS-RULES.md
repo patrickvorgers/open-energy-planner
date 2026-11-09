@@ -103,14 +103,18 @@ windows, available quota or actual energy.
 
 Set `prevent_battery_export` to true to prohibit planned grid export together
 with discharge from any installation battery while this rule's payment window
-is open. The default is false. This is independent of the price condition and
-remaining annual cap. Disabling the bonus also disables this restriction.
+is open and quota remains at the start of the billing segment. The default is
+false. This is independent of the price condition. Export that consumes the
+last quota keeps its whole segment protected. Protection ends in the next
+segment and resumes after a reset or cap increase restores quota. Battery
+export cannot consume the last quota to release its own segment. Disabling
+the bonus also disables this restriction.
 Batteries can cover residual local demand when the connection does not export.
 PV export and battery charging remain available. All batteries share the same
 connection restriction. Billing refinements retain it and original control groups
 still use equal battery power.
 
-The native solver reuses the grid-direction selector. Independent validation
+The native solver reuses the grid-direction and starting-quota selectors. Independent validation
 rejects a conflicting discharge/export plan before publication. Original input
 snapshots retain the per-segment restriction for replay and forecasting.
 Physical enforcement remains in the user's inverter or HA automation, using

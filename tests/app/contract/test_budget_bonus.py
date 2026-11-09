@@ -163,19 +163,98 @@ def test_battery_export_permission_rejects_nonboolean_wire_values(value):
         parse_contract(document, START)
 
 
-@pytest.mark.parametrize("rate,initial", [(0, 0), (0.03, 5000)])
-def test_protected_window_still_blocks_export_at_zero_rate_or_exhausted_cap(rate, initial):
-    """Physical export permission belongs to the paid window, not an optimizer-selected bonus claim."""
+@pytest.mark.parametrize(
+    "rate,initial,cap,export",
+    [(0, 0, 5000, 0), (0.03, 5000, 5000, 4), (0.03, 5001, 5000, 4), (0.03, 0, 0, 4)],
+)
+def test_protection_releases_only_when_quota_is_exhausted(rate, initial, cap, export):
+    """Zero-rate hours remain protected with quota. Exhausted, exceeded and zero caps permit export."""
     rule = ExportBonus(
-        "budget", (rate,), (5000,), ("year",), initial, prevent_battery_export=(True,)
+        "budget", (rate,), (cap,), ("year",), initial, prevent_battery_export=(True,)
     )
     problem = installation_problem(
         (Interval(START, 1, 1, 1),), Battery(10, 10), export_bonuses=(rule,)
     )
     plan = HighsSolver().solve(problem).plan
     validate(problem, plan)
-    assert plan.flows[0].grid_export == pytest.approx(0)
+    assert plan.flows[0].grid_export == pytest.approx(export)
+    assert plan.flows[0].batteries[0].discharge_kwh == pytest.approx(export)
+
+
+@pytest.mark.parametrize(
+    "periods,caps,expected_export",
+    [(("year", "year"), (1, 1), 4), (("year", "next"), (1, 1), 0), (("year", "year"), (1, 2), 0)],
+)
+def test_pv_exhaustion_releases_next_interval_until_reset_or_cap_increase(
+    periods, caps, expected_export
+):
+    """PV uses the last kWh. Battery export then resumes unless fresh quota opens."""
+    rule = ExportBonus("budget", (0.03, 0.03), caps, periods, 0, (True, True))
+    problem = installation_problem(
+        (Interval(START, 1, 1, 0.1, pv_kwh=1), Interval(START + timedelta(hours=1), 1, 1, 1)),
+        Battery(10, 10),
+        export_bonuses=(rule,),
+    )
+    plan = HighsSolver().solve(problem).plan
+    validate(problem, plan)
+    assert plan.flows[0].grid_export == pytest.approx(1)
     assert plan.flows[0].batteries[0].discharge_kwh == pytest.approx(0)
+    assert plan.flows[1].grid_export == pytest.approx(expected_export)
+    assert plan.flows[1].batteries[0].discharge_kwh == pytest.approx(expected_export)
+
+
+def test_battery_cannot_exhaust_last_quota_to_release_its_own_interval():
+    """Even 0.001 remaining kWh protects the whole interval from profitable battery export."""
+    rule = ExportBonus("budget", (0.03,), (5000,), ("year",), 4999.999, (True,))
+    problem = installation_problem(
+        (Interval(START, 1, 1, 1),), Battery(10, 10), export_bonuses=(rule,)
+    )
+    plan = HighsSolver().solve(problem).plan
+    validate(problem, plan)
+    assert plan.flows[0].grid_export == pytest.approx(0)
+
+
+def test_other_bonus_with_remaining_quota_keeps_protection_active():
+    """An exhausted rule cannot release protection required by another active rule."""
+    rules = (
+        ExportBonus("used", (0.03,), (1,), ("year",), 1, (True,)),
+        ExportBonus("open", (0.03,), (1,), ("year",), 0, (True,)),
+    )
+    problem = installation_problem(
+        (Interval(START, 1, 1, 1),), Battery(10, 10), export_bonuses=rules
+    )
+    plan = HighsSolver().solve(problem).plan
+    validate(problem, plan)
+    assert plan.flows[0].grid_export == pytest.approx(0)
+
+
+@pytest.mark.parametrize(
+    "periods,caps,rejected",
+    [
+        (("year", "year"), (1, 1), False),
+        (("year", "next"), (1, 1), True),
+        (("year", "year"), (1, 2), True),
+    ],
+)
+def test_validator_uses_prior_export_and_reopened_quota(periods, caps, rejected):
+    """Independent settlement permits exhausted export but rejects a plan bypassing a new allowance."""
+    rule = ExportBonus("budget", (0.03, 0.03), caps, periods, 0, (True, False))
+    problem = installation_problem(
+        (Interval(START, 1, 1, 0.1, pv_kwh=1), Interval(START + timedelta(hours=1), 1, 1, 1)),
+        Battery(10, 10),
+        export_bonuses=(rule,),
+    )
+    plan = HighsSolver().solve(problem).plan
+    assert plan.flows[0].grid_export == pytest.approx(1)
+    assert plan.flows[1].grid_export == pytest.approx(4)
+    protected = replace(
+        problem, export_bonuses=(replace(rule, prevent_battery_export=(True, True)),)
+    )
+    if rejected:
+        with pytest.raises(ValueError, match="Battery export during protected bonus window"):
+            validate(protected, plan)
+    else:
+        validate(protected, plan)
 
 
 @pytest.mark.parametrize("load,pv,expected_export,expected_discharge", [(3, 1, 0, 2), (1, 3, 2, 0)])

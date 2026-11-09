@@ -15,8 +15,9 @@ class ExportBonus:
     before the first segment. A new future period starts at zero. Rule changes
     inside one period may change the cap/rate but never reset actual volume.
     Optional aligned protection flags forbid simultaneous battery discharge and
-    grid export. Empty flags retain unrestricted planning. Settlement still
-    counts aggregate export and does not infer measured energy provenance.
+    grid export while quota remains at the segment start. Empty flags retain
+    unrestricted planning. Settlement still counts aggregate export and does
+    not infer measured energy provenance.
     """
 
     rule_id: str

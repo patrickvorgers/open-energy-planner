@@ -59,10 +59,12 @@ class ExportBonusModel:
                 variables["minimum"][interval_index],
             )
             if cap <= previous_low:
+                add_constraint(positive == 0)
                 add_constraint(remaining == 0)
                 add_constraint(credit == 0)
             elif cap >= previous_high + volume_bound:
                 # Every reachable export fits. No annual-cap selector is needed.
+                add_constraint(positive == 1)
                 add_constraint(remaining == delta)
                 add_constraint(credit == volume)
             else:

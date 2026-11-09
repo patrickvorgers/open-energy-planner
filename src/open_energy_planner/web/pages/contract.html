@@ -123,7 +123,7 @@
 <tr><td>November</td><td>08:00</td><td>17:00</td></tr>
 <tr><td>December</td><td>09:00</td><td>17:00</td></tr>
 </tbody></table>
-<dl><dt>Prevent battery export during paid window</dt><dd><code class="example-value">Enabled</code><p>The terms prohibit using a battery to obtain more bonus. This planning restriction allows batteries to cover residual local demand, but forbids discharge from any battery while the installation exports to the grid. It does not identify the source of actual export or control your hardware. Your inverter or Home Assistant automation must enforce the restriction using live measurements.</p></dd></dl>
+<dl><dt>Prevent battery export during paid window</dt><dd><code class="example-value">Enabled</code><p>The terms prohibit using a battery to obtain more bonus. This planning restriction allows batteries to cover residual local demand, but forbids discharge from any battery while the installation exports to the grid and bonus allowance remains at the start of the planning interval. After the allowance is used, battery export is allowed from the next interval until fresh allowance restores protection. It does not identify the source of actual export or control your hardware. Your inverter or Home Assistant automation must enforce the restriction using live measurements.</p></dd></dl>
 <p>Budget settles the bonus on the annual or final bill and may amend or end the action. Missing supplier meter data and supplier estimates are not reproduced by this planner. Check the supplier bill.</p>
 </section>
 <form method="dialog"><button autofocus>Close</button></form>
