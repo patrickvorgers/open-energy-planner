@@ -25,10 +25,11 @@ const installationValues = () => [[...$("wizard").elements]
     ])])];
 /** Imported Energy members need confirmation even when their prefilled controls have not changed. */
 const installationDirty = () => installationReady && (pendingSolarSources.length > 0 || JSON.stringify(installationValues()) !== installationBaseline);
+// Keep category snapshots precise so pending navigation consent cannot discard a newer draft.
 const saveState = new SaveBar({form: "wizard", bar: "installation-save-bar", save: "save", discard: "discard-installation", status: "installation-save-state", canSave: () => step === 5 ? priceSettings.dirty : step === 4 ? requestedStrategy !== null && $("strategy").value !== requestedStrategy : !layout.wizard || step === 3, read: () => [
-    ...(installationDirty() ? ["installation"] : []),
-    ...(requestedStrategy !== null && $("strategy").value !== requestedStrategy ? ["strategy"] : []),
-    ...(priceSettings.dirty ? ["price-sources"] : []),
+    ...(installationDirty() ? [["installation", installationValues(), pendingSolarSources]] : []),
+    ...(requestedStrategy !== null && $("strategy").value !== requestedStrategy ? [["strategy", $("strategy").value]] : []),
+    ...(priceSettings.dirty ? [["price-sources", priceSettings.values]] : []),
 ]});
 const layout = new InstallationLayout(saveState, value => { if (!busy) showStep(value); });
 $("edit-installation").addEventListener("click", () => { ++configurationGeneration; });

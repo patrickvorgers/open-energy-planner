@@ -638,7 +638,7 @@ def test_first_read_failure_shows_unknown_status_instead_of_a_healthy_empty_cent
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
 @pytest.mark.parametrize("workspace", [False, True])
-def test_center_navigation_keeps_unsaved_drafts_when_native_confirmation_is_cancelled(
+def test_center_navigation_keeps_unsaved_drafts_when_custom_confirmation_is_cancelled(
     app_page, workspace
 ):
     """Selecting a recovery destination cannot silently discard a direct or embedded configuration draft."""
@@ -655,7 +655,7 @@ def test_center_navigation_keeps_unsaved_drafts_when_native_confirmation_is_canc
     dialogs = []
 
     def keep_draft(dialog):
-        """Reject the browser's actual navigation prompt after notification selection."""
+        """Record unexpected browser prompts without allowing them to discard the draft."""
         dialogs.append(dialog.type)
         dialog.dismiss()
 
@@ -663,8 +663,11 @@ def test_center_navigation_keeps_unsaved_drafts_when_native_confirmation_is_canc
     page.get_by_role("dialog", name="Notifications", exact=True).get_by_role(
         "link", name="Export bonus needs attention"
     ).click(no_wait_after=True)
+    content.get_by_role("alertdialog", name="Leave without saving?", exact=True).get_by_role(
+        "button", name="Cancel", exact=True
+    ).click()
     expect(limit).to_have_value("6.3")
-    assert dialogs == ["beforeunload"]
+    assert dialogs == []
 
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)

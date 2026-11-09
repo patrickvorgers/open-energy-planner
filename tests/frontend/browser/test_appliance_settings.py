@@ -257,8 +257,11 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     page.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
         "link", name="Electric boilers", exact=True
     ).click()
+    page.get_by_role("alertdialog", name="Leave without saving?", exact=True).get_by_role(
+        "button", name="Cancel", exact=True
+    ).click()
     expect(page).to_have_url(url + "/appliance-settings/ev")
-    expect(page.locator("#dirty")).to_contain_text("Save or discard")
+    expect(page.locator("#dirty")).to_contain_text("Unsaved changes")
     page.screenshot(path=f"results/ci/ev-editing-{page.viewport_size['width']}.png", full_page=True)
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(page.locator("#ev-summary")).to_contain_text("11.001 kW")

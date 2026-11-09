@@ -1,7 +1,6 @@
 /** Type-specific configuration reuses versioned app settings and shared save controls. */
 import {SaveBar} from "./save-bar.js";
 import {confirmAction} from "./confirmation.js";
-import {bindApplianceSettingsNavigation} from "./appliance-settings-navigation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {useHomeAssistantTimezone, sourceName} from "./display.js";
 import {settingsSummary} from "./appliance-settings-detail.js";
@@ -16,7 +15,6 @@ const api = applianceSettingsApi(base, () => token);
 let selectedId = null, editOriginId = null, editing = false, conflict = false, requestGeneration = 0;
 bindSettingsActions();
 const saveState = new SaveBar({form: "thermal-settings", bar: "thermal-save-bar", save: "save-thermal", discard: "cancel-thermal", status: "thermal-save-state", read: () => draft, canSave: () => editing && !conflict && validDraft()});
-bindApplianceSettingsNavigation(saveState);
 find("cancel-thermal").textContent = "Cancel";
 
 /** Treat every provider-supplied name and diagnostic as text, never HTML. */
