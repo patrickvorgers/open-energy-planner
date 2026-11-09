@@ -56,10 +56,12 @@ Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options
         const range = visibleRange(peer, scale.id);
         minimum = Math.min(minimum, range.minimum); maximum = Math.max(maximum, range.maximum);
     }
-    const fixedMinimum = Number.isFinite(scale.options.min), fixedMaximum = Number.isFinite(scale.options.max);
     if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) { minimum = 0; maximum = 1; }
-    if (fixedMinimum) minimum = scale.options.min;
-    if (fixedMaximum) maximum = scale.options.max;
+    if (scale.options.beginAtZero) { minimum = Math.min(minimum, 0); maximum = Math.max(maximum, 0); }
+    const fixedMinimum = Number.isFinite(scale.options.min) || scale.options.beginAtZero && minimum === 0;
+    const fixedMaximum = Number.isFinite(scale.options.max) || scale.options.beginAtZero && maximum === 0 && minimum < 0;
+    if (fixedMinimum) minimum = Number.isFinite(scale.options.min) ? scale.options.min : 0;
+    if (fixedMaximum) maximum = Number.isFinite(scale.options.max) ? scale.options.max : 0;
     if (minimum === maximum) { const span = Math.abs(minimum) || 1; if (!fixedMinimum) minimum -= span / 2; if (!fixedMaximum) maximum += span / 2; }
     const freeEnds = Number(!fixedMinimum) + Number(!fixedMaximum);
     const padding = (maximum - minimum) * AXIS_MARGIN_FRACTION / (1 - freeEnds * AXIS_MARGIN_FRACTION);

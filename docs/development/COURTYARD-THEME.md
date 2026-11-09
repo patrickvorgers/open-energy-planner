@@ -95,7 +95,11 @@ identical bounds and ticks so the three scenarios are directly comparable.
 Converter-specific charts retain independent scales. Changing the time
 window, plan or series visibility recalculates the domain. Consumption, PV, appliance power/energy and forecast-quality charts fix their
 lower bound at zero and add clearance only above. Signed balances, net power,
-prices and savings retain negative values. Time axes retain
+prices and savings retain negative values. Price axes additionally include zero
+through the native `beginAtZero` option. Nonnegative prices fix the lower bound
+at zero, entirely negative prices fix the upper bound at zero, and mixed prices
+retain ten-percent clearance at both ends. Empty or all-zero price series keep
+a zero lower bound and a finite upper span. Time axes retain
 their selected window and SoC stays fixed at 0 to 100 percent. Empty data use a
 zero-to-one fallback before padding. Constant data use a finite span proportional
 to their magnitude, or one for all-zero data.
