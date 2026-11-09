@@ -104,3 +104,26 @@ Recorder database, then reads through the actual API and integration. It tests
 Wh/kWh/MWh conversion, absent Recorder, missing metadata, incomplete coverage,
 retry delay and notification recovery after manual confirmation. No production
 HA data or physical devices are accessed.
+
+
+## Demand and consumer training history
+
+`demand.request` uses `energy_history_range` for monthly availability discovery
+and `energy_history_chunk` for bounded annual cumulative-energy transfers.
+Responses echo the exact basis and request version. Both operations require one
+sensor and its Recorder `metadata_id`, `source` and original energy `unit`.
+The app accepts only the current pending request. Request size stays bounded
+at 1 MiB and each hourly response stays below 9000 rows and 367 days.
+
+The bridge reuses Solar's existing monthly discovery and annual capture path.
+It preserves raw sum/state evidence and normalizes requested energy to kWh.
+The shared app importer trains from cumulative sums. Physical meter baselines
+for financial settlement retain their existing independent validation.
+
+Available history is not limited to the most recent year. Closed annual chunks,
+empty-year coverage and checkpoints survive restart in the active database.
+A failed sensor backs off for fifteen minutes while other meters proceed.
+Household channels activate together. Consumers activate independently after
+completing their currently requested years. Invalid intervals are omitted
+without globally blocking otherwise sufficient training data. See
+[household demand forecasting](DEMAND-FORECASTING.md#full-available-history).

@@ -20,6 +20,8 @@ from open_energy_planner.demand.calculation.model import (
 )
 from open_energy_planner.demand.reconstruction import DemandReconstructor
 from open_energy_planner.demand.wire import forecast_document
+from open_energy_planner.history.importer import HistoryImport
+from open_energy_planner.history.storage import HistoryArchive
 from open_energy_planner.home_assistant.names import source_name
 
 CONSUMER_SETTINGS_POINTER = "consumer-settings.json"
@@ -58,7 +60,7 @@ class ConsumerForecasts:
         self.selected = ()
         self.options = ()
         self.catalogue_known = False
-        self.histories, self.ranges, self.failures = {}, {}, {}
+        self.histories, self.failures = {}, {}
         self.result = None
         self.issue = None
         try:
@@ -66,6 +68,27 @@ class ConsumerForecasts:
                 self.selected = parse_selection(documents.read(CONSUMER_SETTINGS_POINTER))
         except (OSError, ValueError, TypeError, KeyError):
             self.issue = "consumer_configuration_unreadable"
+        self.history_import = HistoryImport(HistoryArchive(documents))
+        self.history_import.restore(item["entity_id"] for item in self.selected)
+        self.histories = self._restore_histories()
+        self.failures.update(self.history_import.issues)
+        self.retry_after = {}
+
+    def _restore_histories(self):
+        """Restore complete accepted meters independently of unfinished yearly source checkpoints."""
+        histories = {}
+        for item in self.selected:
+            entity = item["entity_id"]
+            pointer = "consumer-history-cohort-" + digest(entity) + ".json"
+            try:
+                if self.documents.exists(pointer):
+                    references = self.documents.read(pointer)
+                    if set(references) != {entity}:
+                        raise ValueError("Invalid consumer history cohort")
+                    histories.update(self.history_import.restore_checkpoint(references))
+            except (OSError, ValueError, TypeError, KeyError):
+                self.failures[entity] = "history_cache_unreadable"
+        return histories
 
     @property
     def version(self):
@@ -108,47 +131,52 @@ class ConsumerForecasts:
             self.documents.write("consumer-settings-" + digest(selected) + ".json", list(selected))
             self.documents.write(CONSUMER_SETTINGS_POINTER, list(selected))
         self.selected, self.issue, self.result = selected, None, None
-        self.histories, self.ranges, self.failures = {}, {}, {}
+        self.history_import.restore(item["entity_id"] for item in selected)
+        self.failures, self.retry_after = dict(self.history_import.issues), {}
+        self.histories = self._restore_histories()
 
     def request(self, configuration, now):
-        """Request each selected meter once per daily cohort. Failures retry in the next cohort."""
-        from open_energy_planner.demand.runtime import HISTORY_LOOKBACK_DAYS
-
+        """Resume all selected meter years independently, backing off failed transfers."""
         if configuration is None or self.issue or not self.catalogue_known:
             return None
-        end = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)
-        start = end - timedelta(days=HISTORY_LOOKBACK_DAYS, hours=1)
         available = {item["entity_id"] for item in self.options}
         for item in self.selected:
             entity = item["entity_id"]
-            if entity in available and self.ranges.get(entity) != (start, end):
-                body = {
-                    "entity_id": entity,
-                    "start": start.isoformat(),
-                    "end": end.isoformat(),
-                    "configuration_version": digest([configuration.version, self.version]),
-                }
-                return {**body, "version": digest(body)}
+            if entity not in available or now < self.retry_after.get(entity, now):
+                continue
+            pending = self.history_import.request(
+                entity, digest([configuration.version, self.version]), now
+            )
+            if pending is not None:
+                return pending
         return None
 
-    def receive(self, pending, history=None, error=None):
-        """Install only the admitted range, or record missing evidence without inventing zero."""
-        from datetime import datetime
-
-        start, end = (datetime.fromisoformat(pending[key]) for key in ("start", "end"))
+    def receive(self, pending, report=None, error=None, *, now):
+        """Install complete meter cohorts and retain accepted history during temporary failures."""
         entity = pending["entity_id"]
-        if history is not None and (
-            history.entity_id != entity
-            or any(not start <= hour.start < end for hour in history.hours)
-        ):
-            raise ValueError("Individual consumer history outside requested range")
-        self.ranges[entity] = start, end
         if error:
-            self.histories.pop(entity, None)
+            from open_energy_planner.demand.runtime import HISTORY_RETRY_MINUTES
+
             self.failures[entity] = error
+            self.retry_after[entity] = now + timedelta(minutes=HISTORY_RETRY_MINUTES)
         else:
-            self.histories[entity] = history
+            complete = False
+            with self.history_import.transaction():
+                history = self.history_import.receive(pending, report, now)
+                complete = (
+                    history is not None
+                    and self.history_import.request(entity, pending["configuration_version"], now)
+                    is None
+                )
+                if complete:
+                    self.documents.write(
+                        "consumer-history-cohort-" + digest(entity) + ".json",
+                        self.history_import.checkpoint((entity,)),
+                    )
+            if complete:
+                self.histories[entity] = history
             self.failures.pop(entity, None)
+            self.retry_after.pop(entity, None)
 
     def inputs(self):
         """Capture immutable worker inputs without sharing mutable runtime dictionaries."""

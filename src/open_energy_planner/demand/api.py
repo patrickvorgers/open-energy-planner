@@ -8,7 +8,7 @@ from aiohttp import web
 
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.demand.wire import parse_configuration as parse_demand_configuration
-from open_energy_planner.history.wire import parse_history
+from open_energy_planner.history.importer import HistoryContinuityError, parse_report
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
 
 PUBLIC_VALIDATION_MESSAGES = (
@@ -90,9 +90,9 @@ def register(
         except (ValueError, TypeError):
             raise web.HTTPBadRequest(text="Invalid demand history") from None
         async with lock:
-            pending = demand.request(datetime.now(UTC)) or demand.consumers.request(
-                demand.configuration, datetime.now(UTC)
-            )
+            now = datetime.now(UTC)
+            household_pending = demand.request(now)
+            pending = household_pending or demand.consumers.request(demand.configuration, now)
             if pending is None or body.get("request_version") != pending["version"]:
                 raise web.HTTPConflict(text="Demand history request changed")
             if set(body) == {"request_version", "error"} and body["error"] in (
@@ -100,18 +100,25 @@ def register(
                 "history_unavailable",
                 "unsupported_statistics",
             ):
-                if pending == demand.request(datetime.now(UTC)):
-                    demand.history_issues[pending["entity_id"]] = body["error"]
+                if household_pending is not None:
+                    demand.history_failed(pending, body["error"], now)
                 else:
-                    demand.consumers.receive(pending, error=body["error"])
+                    demand.consumers.receive(pending, error=body["error"], now=now)
             else:
                 try:
-                    if pending == demand.request(datetime.now(UTC)):
-                        demand.receive(
-                            body["request_version"], parse_history(body), datetime.now(UTC)
-                        )
+                    report = parse_report(body)
+                    if household_pending is not None:
+                        demand.receive(body["request_version"], report, now)
                     else:
-                        demand.consumers.receive(pending, parse_history(body))
+                        demand.consumers.receive(pending, report, now=now)
+                except HistoryContinuityError:
+                    if household_pending is not None:
+                        demand.history_failed(pending, "history_continuity_unavailable", now)
+                    else:
+                        demand.consumers.receive(
+                            pending, error="history_continuity_unavailable", now=now
+                        )
+                    raise web.HTTPBadRequest(text="Energy history source changed") from None
                 except (ValueError, TypeError, KeyError, OverflowError, OSError):
                     raise web.HTTPBadRequest(text="Invalid household energy history") from None
         return await snapshot(request)

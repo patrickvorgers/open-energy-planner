@@ -8,7 +8,10 @@ import pytest
 from tests.custom_component.support.chain import running_chain
 
 
-def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_years(monkeypatch):
+@pytest.mark.parametrize("prefix", ["solar", "energy"])
+def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_years(
+    monkeypatch, prefix
+):
     """Monthly range discovery returns metadata, while hourly chunks keep missing values absent and never infer an end."""
     from custom_components.open_energy_planner import history
 
@@ -65,7 +68,7 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             available = await bridge.capture(
                 {
                     "version": "availability",
-                    "basis": "solar_history_range",
+                    "basis": prefix + "_history_range",
                     "entity_id": entity,
                     "start": "1970-01-01T00:00:00+00:00",
                     "end": chunk_end.isoformat(),
@@ -81,7 +84,7 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             annual = await bridge.capture(
                 {
                     "version": "year",
-                    "basis": "solar_history_chunk",
+                    "basis": prefix + "_history_chunk",
                     "entity_id": entity,
                     "start": chunk_start.isoformat(),
                     "end": chunk_end.isoformat(),
@@ -97,14 +100,14 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             empty = await bridge.capture(
                 {
                     "version": "empty-year",
-                    "basis": "solar_history_chunk",
+                    "basis": prefix + "_history_chunk",
                     "entity_id": entity,
                     "start": "2023-12-31T23:00:00+00:00",
                     "end": "2025-01-01T00:00:00+00:00",
                 }
             )
             assert empty["hours"] == []
-            assert empty["basis"] == "solar_history_chunk"
+            assert empty["basis"] == prefix + "_history_chunk"
             assert [call[2] for call in calls] == ["month", "hour", "hour"]
             assert all(call[3] == {"energy": "kWh"} for call in calls)
             assert calls[0][4] == {"sum"}
@@ -117,7 +120,9 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("basis", [None, "statistics_sum", "solar_history_chunk"])
+@pytest.mark.parametrize(
+    "basis", [None, "statistics_sum", "solar_history_chunk", "energy_history_chunk"]
+)
 def test_solar_discovery_does_not_expand_hourly_transfer_ranges(monkeypatch, basis):
     """Only explicit monthly availability discovery may span decades. Hourly finance, demand and solar stay bounded."""
     from types import SimpleNamespace

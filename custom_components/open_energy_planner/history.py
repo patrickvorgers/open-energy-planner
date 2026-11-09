@@ -59,16 +59,16 @@ class HistoryBridge:
         ):
             raise ValueError("Invalid history meter set")
         start, end = (datetime.fromisoformat(request[key]) for key in ("start", "end"))
-        solar_discovery = request.get("basis") == "solar_history_range"
-        solar_chunk = request.get("basis") == "solar_history_chunk"
-        if (solar_discovery or solar_chunk) and entities != [entity]:
-            raise ValueError("Solar history requires one meter")
+        energy_discovery = request.get("basis") in ("solar_history_range", "energy_history_range")
+        energy_chunk = request.get("basis") in ("solar_history_chunk", "energy_history_chunk")
+        if (energy_discovery or energy_chunk) and entities != [entity]:
+            raise ValueError("Energy history requires one meter")
         if (
             start.utcoffset() is None
             or end.utcoffset() is None
             or (
                 not (start == HISTORY_EPOCH and end > start)
-                if solar_discovery
+                if energy_discovery
                 else not timedelta(0) < end - start <= timedelta(days=MAX_HISTORY_REQUEST_DAYS)
             )
         ):
@@ -86,7 +86,7 @@ class HistoryBridge:
                 for item in entities
             ):
                 return {**result, "error": "unsupported_statistics"}
-            if solar_discovery:
+            if energy_discovery:
                 monthly = statistics_during_period(
                     self.hass, start, end, {entity}, "month", {"energy": "kWh"}, {"sum"}
                 ).get(entity, [])
@@ -118,7 +118,7 @@ class HistoryBridge:
                 )
                 return {
                     **result,
-                    "basis": "solar_history_range",
+                    "basis": request["basis"],
                     "entity_id": entity,
                     "statistics_identity": {
                         "metadata_id": metadata[entity][0],
@@ -132,8 +132,8 @@ class HistoryBridge:
                 channels.update(
                     statistics_during_period(
                         self.hass,
-                        max(HISTORY_EPOCH, start - timedelta(hours=1)) if solar_chunk else start,
-                        end + timedelta(hours=1) if solar_chunk else end,
+                        max(HISTORY_EPOCH, start - timedelta(hours=1)) if energy_chunk else start,
+                        end + timedelta(hours=1) if energy_chunk else end,
                         set(batch),
                         "hour",
                         {"energy": "kWh"},
@@ -160,9 +160,9 @@ class HistoryBridge:
                     ],
                 }
             rows = channels.get(entities[0], [])
-            if (not rows and not solar_chunk) or len(rows) > MAX_HISTORY_HOURS:
+            if (not rows and not energy_chunk) or len(rows) > MAX_HISTORY_HOURS:
                 return {**result, "error": "history_unavailable"}
-            if solar_chunk:
+            if energy_chunk:
                 # The app owns alignment and admission. Preserve every finite source value.
                 rows = [
                     {
@@ -210,14 +210,14 @@ class HistoryBridge:
                 ),
                 **(
                     {
-                        "basis": "solar_history_chunk",
+                        "basis": request["basis"],
                         "statistics_identity": {
                             "metadata_id": metadata[entity][0],
                             "source": metadata[entity][1]["source"],
                             "unit": metadata[entity][1]["unit_of_measurement"],
                         },
                     }
-                    if solar_chunk
+                    if energy_chunk
                     else {}
                 ),
                 "entity_id": entity,
@@ -228,7 +228,7 @@ class HistoryBridge:
         try:
             return await asyncio.wait_for(
                 get_instance(self.hass).async_add_executor_job(read),
-                HISTORY_DISCOVERY_TIMEOUT_SECONDS if solar_discovery else HISTORY_TIMEOUT_SECONDS,
+                HISTORY_DISCOVERY_TIMEOUT_SECONDS if energy_discovery else HISTORY_TIMEOUT_SECONDS,
             )
         except Exception:
             _LOGGER.warning(

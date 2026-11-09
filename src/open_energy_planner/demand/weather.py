@@ -23,9 +23,11 @@ ARCHIVE_LOOKBACK_DAYS = 367
 class OpenMeteoTemperatureSource:
     """Fetch Celsius temperatures for HA's location with bounded requests and daily historical caching."""
 
-    def __init__(self, session):
+    def __init__(self, session, history_start=None):
         """Borrow one app-owned HTTP session. No keys or HA credentials are involved."""
         self.session = session
+        self.history_start = history_start
+        self.archive = {}
         self.past_key, self.past = None, ()
 
     async def read(self, location, now):
@@ -42,18 +44,36 @@ class OpenMeteoTemperatureSource:
             "timezone": "UTC",
             "timeformat": "unixtime",
         }
-        key = location.latitude, location.longitude, now.date()
+        first = now.date() - timedelta(days=ARCHIVE_LOOKBACK_DAYS)
+        measured_start = self.history_start() if self.history_start else None
+        if measured_start is not None:
+            first = min(first, measured_start.date())
+        key = location.latitude, location.longitude, now.date(), first
         if key != self.past_key:
             end = now.date() - timedelta(days=ARCHIVE_WEATHER_LAG_DAYS)
-            self.past = await self._read(
-                "https://archive-api.open-meteo.com/v1/archive",
-                {
-                    **params,
-                    "start_date": (now.date() - timedelta(days=ARCHIVE_LOOKBACK_DAYS)).isoformat(),
-                    "end_date": end.isoformat(),
-                },
-                now,
-            )
+            past = []
+            for year in range(first.year, end.year + 1):
+                start_date = max(first, datetime(year, 1, 1).date())
+                end_date = min(end, datetime(year, 12, 31).date())
+                archive_key = location.latitude, location.longitude, start_date, end_date
+                if archive_key not in self.archive:
+                    self.archive[archive_key] = await self._read(
+                        "https://archive-api.open-meteo.com/v1/archive",
+                        {
+                            **params,
+                            "start_date": start_date.isoformat(),
+                            "end_date": end_date.isoformat(),
+                        },
+                        now,
+                    )
+                past.extend(self.archive[archive_key])
+            self.archive = {
+                archive_key: hours
+                for archive_key, hours in self.archive.items()
+                if archive_key[:2] == key[:2]
+                and (archive_key[3].year < end.year or archive_key[3] == end)
+            }
+            self.past = tuple(past)
             self.past_key = key
         recent = await self._read(
             "https://api.open-meteo.com/v1/forecast",
@@ -114,7 +134,7 @@ class OpenMeteoTemperatureSource:
 
 
 @asynccontextmanager
-async def weather_factory():
+async def weather_factory(history_start=None):
     """Share a bounded app-owned session for the selected default temperature source."""
     async with ClientSession() as session:
-        yield OpenMeteoTemperatureSource(session)
+        yield OpenMeteoTemperatureSource(session, history_start=history_start)

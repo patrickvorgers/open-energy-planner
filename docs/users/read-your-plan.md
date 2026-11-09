@@ -94,3 +94,23 @@ Power in kW is a rate. Energy in kWh is the amount across an interval. A steady 
 For a fixed stationary-battery target, positive W means discharge and negative W means charge at the battery DC terminal. Zero is a real idle target. A numeric value can be unknown because its mode has no fixed target, or unavailable because no usable command exists. Do not turn either state into zero in an automation.
 
 **Next:** [Understand Savings](savings.md), [inspect forecast quality](forecasts.md#read-forecast-quality) or [resolve a warning](troubleshooting.md).
+
+
+### A device appears in Forecast quality but not in the plan
+
+Forecast quality preserves the original prediction recorded at midnight for
+each selected day. The displayed model is that original choice. It does not
+identify the model used by the current plan or prove that weather features
+were used.
+
+The planning overview displays the components of its selected saved plan.
+Separate appliance predictions require enough usable household and device
+history to reconstruct the remaining household consumption. Until that is
+available, planning can retain the whole-house forecast while Forecast quality
+still shows the original individual prediction. A saved plan does not change
+when history is refreshed. Check the latest plan after the update completes.
+
+Training uses all available Recorder years. Missing hours and the accumulated
+counter jump across each gap are excluded. The next contiguous measured hour
+remains usable. Invalid balances are excluded individually. Their absolute
+count does not prevent training when enough usable coverage remains.

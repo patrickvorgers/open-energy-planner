@@ -69,10 +69,10 @@ def test_weather_adapter_uses_ha_location_units_receipt_time_and_daily_archive_c
         assert result[0].celsius == 5
         assert result[0].known_at == START
         await source.read(location, START)
-        assert len(session.calls) == 3
+        assert len(session.calls) == 4
         assert session.calls[0][1]["params"]["latitude"] == 52
         assert session.calls[0][1]["params"]["longitude"] == 6
-        assert session.calls[1][1]["params"]["forecast_days"] == 3
+        assert session.calls[2][1]["params"]["forecast_days"] == 3
 
     asyncio.run(scenario())
 
@@ -87,5 +87,60 @@ def test_weather_adapter_rejects_wrong_units_and_unbounded_responses(options):
             await OpenMeteoTemperatureSource(Session(**options)).read(
                 SiteLocation(52, 6, "Europe/Amsterdam"), START
             )
+
+    asyncio.run(scenario())
+
+
+def test_temperature_history_covers_all_loaded_years_with_bounded_cached_queries():
+    """Older consumer history extends weather requests without enlarging a response or backdating receipt."""
+    from datetime import UTC, datetime, timedelta
+
+    async def scenario():
+        """Generate one independent real-hour response per query and retain closed years on refresh."""
+
+        class AnnualSession:
+            """Return complete synthetic Celsius data within each requested annual interval."""
+
+            def __init__(self):
+                self.calls = []
+
+            def get(self, url, **kwargs):
+                params = kwargs["params"]
+                self.calls.append((url, dict(params)))
+                start = datetime.fromisoformat(params.get("start_date", "2026-06-01")).replace(
+                    tzinfo=UTC
+                )
+                end = datetime.fromisoformat(params.get("end_date", "2026-06-02")).replace(
+                    tzinfo=UTC
+                ) + timedelta(days=1)
+                times = [
+                    int((start + timedelta(hours=index)).timestamp())
+                    for index in range(int((end - start).total_seconds() / 3600))
+                ]
+                assert len(times) <= 9000
+                return Response(
+                    json.dumps(
+                        {
+                            "hourly_units": {"temperature_2m": "°C"},
+                            "hourly": {"time": times, "temperature_2m": [5] * len(times)},
+                        }
+                    ).encode()
+                )
+
+        session = AnnualSession()
+        source = OpenMeteoTemperatureSource(
+            session, history_start=lambda: datetime(2022, 3, 1, tzinfo=UTC)
+        )
+        now = datetime(2026, 6, 1, tzinfo=UTC)
+        location = SiteLocation(52, 6, "Europe/Amsterdam")
+        hours = await source.read(location, now)
+        assert hours[0].start == datetime(2022, 3, 1, tzinfo=UTC)
+        assert len(hours) > 3 * 365 * 24
+        assert all(hour.known_at == now for hour in hours)
+        assert len(session.calls) == 6
+        updated = await source.read(location, now + timedelta(days=1))
+        assert len(session.calls) == 8
+        assert session.calls[-2][1]["start_date"] == "2026-01-01"
+        assert updated[0] == hours[0]
 
     asyncio.run(scenario())

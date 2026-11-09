@@ -10,13 +10,15 @@ from open_energy_planner.demand.calculation.forecasting import (
     predict,
 )
 from open_energy_planner.demand.calculation.model import digest
+from open_energy_planner.history.importer import HistoryImport
+from open_energy_planner.history.storage import HistoryArchive
 
 from ..planning_policy import FINE_INTERVAL_MINUTES
 from .evaluation import compare, evaluation_cutoffs
 from .reconstruction import DemandReconstructor
 from .wire import configuration_document, forecast_document
 
-HISTORY_LOOKBACK_DAYS = 365
+HISTORY_RETRY_MINUTES = 15
 MODEL_RETRY_MINUTES = 5
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ class DemandRuntime:
         """Restore configuration. Never restore stale predictions as live evidence after restart."""
         self.store, self.scorer, self.plans = store, scorer, plans
         self.configuration = store.current
-        self.histories, self.ranges, self.data_versions = {}, {}, {}
+        self.histories, self.data_versions = {}, {}
         self.pending_histories = {}
         self.temperatures = ()
         self.weather_version = "none"
@@ -45,23 +47,53 @@ class DemandRuntime:
         self.daily_selection = None
         from open_energy_planner.appliances.forecasting import ConsumerForecasts
 
+        self.history_import = HistoryImport(HistoryArchive(store.documents))
+        self.history_retry_after = {}
+        self.pending_histories = self.history_import.restore(
+            self.configuration.entities if self.configuration else ()
+        )
+        self.histories = self._restore_cohort()
+        self.history_issues.update(self.history_import.issues)
+        self.data_versions = {
+            entity: digest(asdict(history)) for entity, history in self.histories.items()
+        }
         self.consumers = ConsumerForecasts(store.documents)
 
     def configure(self, configuration):
         """Invalidate incompatible observations/models after a persisted measurement-definition change."""
         self.configuration = configuration
-        self.histories, self.ranges, self.data_versions = {}, {}, {}
-        self.pending_histories = {}
+        self.pending_histories = self.history_import.restore(configuration.entities)
+        self.history_issues = dict(self.history_import.issues)
+        self.histories = self._restore_cohort()
+        self.data_versions = {
+            entity: digest(asdict(history)) for entity, history in self.histories.items()
+        }
+        self.history_retry_after = {}
         self.forecast = self.candidate = self.baseline = self.last_key = None
         self.learned_preferred = False
         self.candidate_features = "time"
         self.failed_key, self.retry_after = None, None
-        self.history_issues = {}
         self.history_quality = None
         self.comparison = None
         self.daily_selection = None
         self.issue = None
         self.model_status = "waiting_for_refresh"
+
+    def _restore_cohort(self):
+        """Expose only the last completely accepted household boundary after restart."""
+        if self.configuration is None:
+            return {}
+        pointer = "household-history-cohort-" + self.configuration.version + ".json"
+        try:
+            if not self.store.documents.exists(pointer):
+                return {}
+            references = self.store.documents.read(pointer)
+            if set(references) != set(self.configuration.entities):
+                raise ValueError("Invalid household history cohort")
+            return self.history_import.restore_checkpoint(references)
+        except (OSError, ValueError, TypeError, KeyError):
+            self.history_issues["household"] = "history_cache_unreadable"
+            return {}
 
     def key(self, now):
         """Coalesce quarter boundaries and input-version changes without training on each sensor poll."""
@@ -82,49 +114,58 @@ class DemandRuntime:
         )
 
     def request(self, now):
-        """Request one missing daily history channel with a bounded annual UTC range."""
+        """Discover all available years and resume one bounded source-bound transfer at a time."""
         if self.configuration is None or self.store.issue:
             return None
-        end = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)
-        start = end - timedelta(days=HISTORY_LOOKBACK_DAYS, hours=1)
         for entity in self.configuration.entities:
-            if self.ranges.get(entity) != (start, end):
-                document = {
-                    "entity_id": entity,
-                    "start": start.isoformat(),
-                    "end": end.isoformat(),
-                    "configuration_version": self.configuration.version,
-                }
-                return {**document, "version": digest(document)}
+            if entity in self.history_retry_after and now < self.history_retry_after[entity]:
+                continue
+            pending = self.history_import.request(entity, self.configuration.version, now)
+            if pending is not None:
+                return pending
         return None
 
-    def receive(self, request, history, now):
-        """Install a normalized response only for the current channel/range/configuration request."""
+    def receive(self, request, report, now):
+        """Persist an admitted chunk and install only a complete current household source cohort."""
         pending = self.request(now)
-        if (
-            pending is None
-            or request != pending["version"]
-            or history.entity_id != pending["entity_id"]
-        ):
+        if pending is None or request != pending["version"] or report is None:
             raise ValueError("Demand history request changed")
-        from datetime import datetime
-
-        start, end = (datetime.fromisoformat(pending[key]) for key in ("start", "end"))
-        if any(not start <= hour.start < end for hour in history.hours):
-            raise ValueError("Demand history outside requested range")
-        self.pending_histories[history.entity_id] = history
-        self.ranges[history.entity_id] = start, end
-        if all(self.ranges.get(entity) == (start, end) for entity in self.configuration.entities):
-            # Install one complete source cohort, not a mix of yesterday's and
-            # today's channels while Recorder responses arrive sequentially.
-            self.histories = {
-                entity: self.pending_histories[entity] for entity in self.configuration.entities
-            }
+        pending_histories = self.pending_histories.copy()
+        complete = False
+        entities = self.configuration.entities
+        with self.history_import.transaction():
+            accepted = self.history_import.receive(pending, report, now)
+            entity = pending["entity_id"]
+            if accepted is not None:
+                pending_histories[entity] = accepted
+            complete = all(entity in pending_histories for entity in entities) and all(
+                self.history_import.request(entity, self.configuration.version, now) is None
+                and entity not in self.history_import.issues
+                for entity in entities
+            )
+            if complete:
+                self.store.documents.write(
+                    "household-history-cohort-" + self.configuration.version + ".json",
+                    self.history_import.checkpoint(entities),
+                )
+        self.pending_histories = pending_histories
+        self.history_issues.pop(entity, None)
+        self.history_retry_after.pop(entity, None)
+        if complete:
+            self.histories = {entity: pending_histories[entity] for entity in entities}
             self.data_versions = {
                 entity: digest(asdict(item)) for entity, item in self.histories.items()
             }
             self.history_quality = None
-        self.history_issues.pop(history.entity_id, None)
+
+    def history_failed(self, pending, error, now):
+        """Retain accepted evidence while a failed meter backs off and independent meters proceed."""
+        if self.request(now) != pending:
+            raise ValueError("Demand history request changed")
+        self.history_issues[pending["entity_id"]] = error
+        self.history_retry_after[pending["entity_id"]] = now + timedelta(
+            minutes=HISTORY_RETRY_MINUTES
+        )
 
     def weather(self, temperatures):
         """Install typed weather. Source receipt/version interpretation stays in the weather adapter."""

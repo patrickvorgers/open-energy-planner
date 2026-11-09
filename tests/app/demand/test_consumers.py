@@ -377,7 +377,7 @@ def test_removed_consumer_and_failed_history_do_not_become_zero(tmp_path):
     )
     now = START + timedelta(days=35)
     request = consumers.request(config(), now)
-    consumers.receive(request, error="history_unavailable")
+    consumers.receive(request, error="history_unavailable", now=now)
     assert consumers.request(config(), now) is None
     assert consumers.failures["sensor.heat"] == "history_unavailable"
     consumers.sync({"entities": [], "suggestions": {"consumers": []}})
@@ -390,7 +390,7 @@ def test_removed_consumer_and_failed_history_do_not_become_zero(tmp_path):
 def test_residual_filter_retains_components_without_hiding_substantial_conflicts(
     tmp_path, bad_hours, excess_kwh
 ):
-    """Residual rounding is usable, isolated conflicts are omitted, and a day of conflicts withholds the composite."""
+    """Residual rounding is usable, isolated conflicts are omitted, and enough usable days retain the composite."""
     store = make_store(tmp_path, DemandStore)
     consumers = ConsumerForecasts(store.documents)
     consumers.sync(catalogue())
@@ -409,24 +409,16 @@ def test_residual_filter_retains_components_without_hiding_substantial_conflicts
         consumers.inputs(),
     )
     assert [record["entity_id"] for record in result["devices"]] == ["sensor.heat"]
-    if excess_kwh == 0.01 and bad_hours == 24:
-        assert candidate is None
-        assert (
-            result["detail"]
-            == "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
-        )
-        assert "residual" not in result
-    else:
-        assert candidate is not None
-        assert candidate.excluded_devices == ()
-        for step, residual, device in zip(
-            candidate.steps,
-            result["residual"]["steps"],
-            result["devices"][0]["forecast"]["steps"],
-            strict=True,
-        ):
-            assert step.kwh == pytest.approx(residual["kwh"] + device["kwh"])
-        assert result["residual"]["model"] == "weekday-hour-v2"
+    assert candidate is not None
+    assert candidate.excluded_devices == ()
+    for step, residual, device in zip(
+        candidate.steps,
+        result["residual"]["steps"],
+        result["devices"][0]["forecast"]["steps"],
+        strict=True,
+    ):
+        assert step.kwh == pytest.approx(residual["kwh"] + device["kwh"])
+    assert result["residual"]["model"] == "weekday-hour-v2"
 
 
 def test_runtime_separation_uses_baselines_and_archives_exact_components(tmp_path):
