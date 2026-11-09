@@ -9,7 +9,7 @@ from open_energy_planner.solar.storage.history import parse_report
 START = datetime(2025, 6, 1, 10, tzinfo=UTC)
 
 
-def report(rows, entity="sensor.synthetic_production"):
+def report(rows, entity="sensor.synthetic_production", *, unit="kWh"):
     """Supply an independent synthetic Recorder envelope with original cumulative endpoints."""
     return parse_report(
         {
@@ -17,7 +17,7 @@ def report(rows, entity="sensor.synthetic_production"):
             "request_version": "synthetic-request",
             "entity_id": entity,
             "statistics_identity": {"metadata_id": 7, "source": "recorder", "unit": "kWh"},
-            "unit": "kWh",
+            "unit": unit,
             "hours": rows,
         }
     )
@@ -241,3 +241,5 @@ def test_oversized_transfers_and_wrong_units_still_fail_at_the_envelope():
     """Recoverable rows do not weaken the independent transport-size or energy-unit boundary."""
     with pytest.raises(ValueError, match="history size"):
         report([[START.timestamp(), 100, None]] * 9001)
+    with pytest.raises(ValueError, match="Unsupported solar history unit"):
+        report([[START.timestamp(), 100, None]], unit="Wh")
