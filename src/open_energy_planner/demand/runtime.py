@@ -169,7 +169,8 @@ class DemandRuntime:
 
         Returns:
             A mapping from controlled consumer entity IDs to lists of local
-            YYYY-MM-DD dates. No plan repository returns an empty mapping.
+            YYYY-MM-DD dates. If no plan repository is configured, returns an
+            empty mapping.
 
         Failure Behavior:
             OSError, ValueError, KeyError or TypeError during history lookup
