@@ -112,15 +112,18 @@ function deviceContributions(plan, intervals, labels) {
     });
     for (const component of components.filter(component => component.entity_id != null)) {
         const name = labels.get(component.entity_id) || "Appliance";
-        parts.push({identity: component.entity_id, name: `${name}: Expected`, color: deviceColor(component.entity_id) + "99", included: true,
+        parts.push({identity: component.entity_id, legendName: name, state: "expected", name: `${name}: Expected`, color: deviceColor(component.entity_id), included: true,
             values: intervals.map((interval, index) => base[index] == null ? null : componentEnergy(component.steps, interval))});
     }
     for (const [index, task] of (plan.appliance_schedule || []).entries()) {
-        parts.push({identity: task.entity_id, name: `${labels.get(task.entity_id) || `Appliance ${index + 1}`}: Scheduled`, color: deviceColor(task.entity_id || task.task_id),
+        const name = labels.get(task.entity_id) || `Appliance ${index + 1}`;
+        parts.push({identity: task.entity_id || task.task_id, legendName: name, state: "scheduled", name: `${name}: Scheduled`, color: deviceColor(task.entity_id || task.task_id),
             values: intervals.map((_interval, intervalIndex) => energy(task.interval_kwh?.[intervalIndex]) ? task.interval_kwh[intervalIndex] : null)});
     }
     for (const [index, work] of (problem.ev_work || []).entries()) {
-        parts.push({identity: work.point_id, name: `${labels.get(work.point_id) || `Charge point ${index + 1}`}: Scheduled`, color: deviceColor(chargerMeters.get(work.point_id) || work.point_id || work.session_id),
+        const identity = chargerMeters.get(work.point_id) || work.point_id || work.session_id;
+        const name = labels.get(identity) || labels.get(work.point_id) || `Charge point ${index + 1}`;
+        parts.push({identity, legendName: name, state: "scheduled", name: `${name}: Scheduled`, color: deviceColor(identity),
             values: intervals.map((_interval, intervalIndex) => {
                 const matches = plan.expected_flows?.[intervalIndex]?.ev?.filter(row => row?.session_id === work.session_id) || [];
                 return matches.length === 1 && energy(matches[0].ac_kwh) ? matches[0].ac_kwh : null;
@@ -214,13 +217,16 @@ export function energyBalances(plan, labels) {
             .filter(([key]) => !(converter && key === "load") && (group.units.length || !["charge", "discharge"].includes(key)))
             .map(([key, name, tooltipGroup]) => flowSeries(name, FLOW_COLORS[key], intervals, rows.map((row) => row?.[key]), tooltipGroup));
         if (!converter) for (const part of consumption.parts) {
-            series.push(flowSeries(part.name, part.color, intervals, rows.map((row, index) => row == null ? null : -part.values[index]), "Consumption"));
+            series.push({...flowSeries(part.name, part.color, intervals, rows.map((row, index) => row == null ? null : -part.values[index]), "Consumption"), legendId: part.identity, legendName: part.legendName, deviceState: part.state});
         }
         series.push(...socSeries(plan, intervals, group.units, labels));
         // Thermal stores consume AC at the installation boundary, never inside a battery converter.
         if (!converter) for (const [storeIndex, work] of (problem.thermal_work || []).entries()) {
             const values = rows.map((row, index) => row == null ? null : -plan.expected_flows[index].thermal.find((item) => item.device_id === work.device_id).ac_kwh);
-            series.push(flowSeries(`${labels.get(work.device_id) || `Thermal store ${storeIndex + 1}`}: Heating AC`, THERMAL_COLORS[storeIndex % THERMAL_COLORS.length], intervals, values, "Consumption"));
+            const meter = plan.input_snapshot?.thermal_evidence?.find(row => row.configuration.id === work.device_id)?.configuration.energy_entity;
+            const name = labels.get(meter) || labels.get(work.device_id) || `Thermal store ${storeIndex + 1}`;
+            const expected = meter ? consumption.parts.find(part => part.identity === meter) : null;
+            series.push({...flowSeries(`${name}: Scheduled`, expected?.color || THERMAL_COLORS[storeIndex % THERMAL_COLORS.length], intervals, values, "Consumption"), legendId: meter || work.device_id, legendName: name, deviceState: "scheduled"});
         }
         if (!converter) for (const [vehicleIndex, work] of (problem.ev_work || []).entries()) {
             let stored = work.initial_soc * work.capacity_kwh / PERCENT;

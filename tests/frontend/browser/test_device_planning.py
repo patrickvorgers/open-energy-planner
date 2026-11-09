@@ -27,10 +27,20 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
     assert sorted({round(value, 4) for value in original_rates}) == [0.45, 2.2, 2.7]
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
         legend = page.locator("#" + identity + "-legend")
-        expect(legend).to_contain_text("Washing machine: Scheduled")
-        expect(legend).to_contain_text("Dryer: Scheduled")
-        expect(legend).to_contain_text("Dishwasher: Expected")
-        expect(legend).to_contain_text("Charge point: Expected")
+        for name in ("Washing machine", "Dryer", "Dishwasher", "Charge point"):
+            expect(legend.get_by_role("checkbox", name=name, exact=True)).to_have_count(1)
+        expect(legend).to_contain_text("Striped: Expected use. Solid: Scheduled use.")
+        washer = legend.get_by_role("checkbox", name="Washing machine", exact=True)
+        expect(washer).to_have_attribute("aria-describedby", identity + "-device-key")
+        washer.focus()
+        washer.press("Space")
+        assert page.evaluate(
+            """id => {const chart = Chart.getChart(document.getElementById(id));
+                return chart.data.datasets.filter(dataset => dataset.label.startsWith('Washing machine:'))
+                    .every(dataset => !chart.isDatasetVisible(chart.data.datasets.indexOf(dataset)));}""",
+            identity,
+        )
+        washer.press("Space")
         data = page.evaluate(
             """id => {
             const chart = Chart.getChart(document.getElementById(id));
@@ -43,6 +53,16 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
         assert data["end"] - data["start"] == 48 * 3600000
         assert "Household base: AC" in data["labels"]
         assert "Scheduled appliances: AC" not in data["labels"]
+        assert page.evaluate(
+            """id => {const chart = Chart.getChart(document.getElementById(id));
+                const expected = chart.data.datasets.find(dataset => dataset.label === 'Washing machine: Expected');
+                const scheduled = chart.data.datasets.find(dataset => dataset.label === 'Washing machine: Scheduled');
+                return expected.backgroundColor instanceof CanvasPattern
+                    && typeof scheduled.backgroundColor === 'string'
+                    && chart.isDatasetVisible(chart.data.datasets.indexOf(expected))
+                    && chart.isDatasetVisible(chart.data.datasets.indexOf(scheduled));}""",
+            identity,
+        )
         assert len(data["bars"][0]["values"]) >= 192
         for interval_index, values in enumerate(
             zip(*(series["values"] for series in data["bars"]), strict=True)
@@ -58,6 +78,31 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
         )
         assert any(value < 0 for value in scheduled["values"])
         assert any(value == 0 for value in scheduled["values"])
+        page.locator("#" + identity).scroll_into_view_if_needed()
+        hover = page.evaluate(
+            """async id => {const chart = Chart.getChart(document.getElementById(id));
+                const {when} = await import('./setup/display.js');
+                const datasetIndex = chart.data.datasets.findIndex(dataset => dataset.label === 'Washing machine: Scheduled');
+                const intervalIndex = chart.data.datasets[datasetIndex].data.findIndex(point => point.y < 0);
+                const bar = chart.getDatasetMeta(datasetIndex).data[intervalIndex];
+                const bounds = chart.canvas.getBoundingClientRect();
+                const pixel = Math.round(bar.x), time = chart.scales.x.getValueForPixel(pixel);
+                const quarter = chart.data.datasets[datasetIndex].data.find(point => point.start <= time && time < point.end);
+                return {x: bounds.left + pixel, y: bounds.top + (bar.y + bar.base) / 2,
+                    title: `From ${when(quarter.start)} to ${when(quarter.end)}`};}""",
+            identity,
+        )
+        page.mouse.move(hover["x"], hover["y"])
+        expect(page.locator("#" + identity + "-tooltip .chart-tooltip-title")).to_have_text(
+            hover["title"]
+        )
+        expect(page.locator("#" + identity + "-tooltip")).to_contain_text(
+            "Washing machine: Scheduled"
+        )
+        expect(page.locator("#" + identity + "-tooltip")).to_contain_text(
+            "Washing machine: Expected"
+        )
+        page.mouse.move(0, 0)
         directory = Path(
             "results/ci/device-planning-precision"
             if request.node.callspec.params["app_site"] == "device_planning_precision"
@@ -69,6 +114,13 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
             # A tall narrow viewport captures the full mobile card without a
             # sticky header crossing an offscreen element screenshot.
             page.set_viewport_size({"width": page.viewport_size["width"], "height": 1800})
+            capture.evaluate(
+                "element => element.scrollIntoView({block: 'center', behavior: 'instant'})"
+            )
+            assert (
+                capture.bounding_box()["y"]
+                >= page.locator(".settings-mobilebar").bounding_box()["height"]
+            )
         capture.screenshot(path=str(directory / f"{identity}-{page.viewport_size['width']}.png"))
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.get_by_text("Understand this plan", exact=True).click()
@@ -141,3 +193,45 @@ def test_real_component_gaps_overlaps_and_invalid_quantities_remain_unavailable(
     )
     assert result[0] == pytest.approx(0.2)
     assert result[1:] == [None] * 9
+
+
+@pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
+def test_equal_device_names_keep_independent_legend_switches(app_page):
+    """Two HA devices named Laundry keep separate atomic expected/scheduled switches in every balance."""
+    from tests.frontend.browser.documentation_fixture import START
+
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+
+    def same_friendly_names(route):
+        """Change only two display names in the actual solved comparison response."""
+        response = route.fetch()
+        document = response.json()
+        for entity in ("sensor.washer_energy", "sensor.dryer_energy"):
+            document["plan"]["comparison_names"][entity] = "Laundry"
+        route.fulfill(response=response, json=document)
+
+    page.route("**/v1/plans/*/comparison", same_friendly_names)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
+        switches = page.locator("#" + identity + "-legend").get_by_role(
+            "checkbox", name="Laundry", exact=True
+        )
+        expect(switches).to_have_count(2)
+        switches.nth(0).uncheck()
+        assert page.evaluate(
+            """id => {const chart = Chart.getChart(document.getElementById(id));
+                const devices = chart.data.datasets.filter(dataset => dataset.label.startsWith('Laundry:'));
+                return devices.length === 4 && devices.filter(dataset => chart.isDatasetVisible(chart.data.datasets.indexOf(dataset))).length === 2;}""",
+            identity,
+        )
+        switches.nth(1).uncheck()
+        assert page.evaluate(
+            """id => {const chart = Chart.getChart(document.getElementById(id));
+                return chart.data.datasets.filter(dataset => dataset.label.startsWith('Laundry:'))
+                    .every(dataset => !chart.isDatasetVisible(chart.data.datasets.indexOf(dataset)));}""",
+            identity,
+        )

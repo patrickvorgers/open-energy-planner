@@ -569,7 +569,10 @@ probable use in planning even before a task exists. Concrete acknowledged work
 replaces a bounded share of that expectation, preserving additional use.
 Independent per-plan attribution and physical validation prevent duplicate load.
 The three Planning balance charts show individual expected and scheduled device
-contributions in the bars and legend. Physical execution still requires readiness
+contributions in the bars, with one identity-bound legend entry per device.
+Expected use is striped and scheduled use is solid. Tooltips distinguish both,
+and the device's legend switch toggles both contributions together.
+Physical execution still requires readiness
 and permission. See [model selection](../docs/development/MODEL-SELECTION.md) and
 [shiftable appliances](../docs/development/SHIFTABLE-APPLIANCES.md).
 

@@ -39,7 +39,11 @@ Use **Next 6 hours**, **Next 24 hours** or **Full period** (with its available d
 The Optimizer, Self-consumption and Without battery charts show each separated
 appliance in the consumption bars and legend. **Expected** is probable remaining
 use. **Scheduled** is a concrete acknowledged cycle or charging session. Both
-are estimates until measured. Use the legend to hide or show a contribution.
+are estimates until measured. Each device has one legend entry. Its expected
+use has striped bars and its scheduled use has solid bars in the same color.
+Tap or hover over the balance to see both contributions separately. The legend
+switch hides or shows both contributions together. Devices with the same name
+remain separate devices.
 
 A scheduled cycle replaces its expected share rather than being added twice.
 Other probable use remains. Reference charts execute acknowledged cycles at their

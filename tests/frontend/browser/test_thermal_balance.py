@@ -113,16 +113,23 @@ def test_named_thermal_consumers_conserve_joint_installation_without_changing_co
     plant, converter = result["balances"]
     assert plant["missing"] == converter["missing"] == 0
     values = {row["name"]: row["values"][0] for row in result["bars"]}
-    assert values["Kitchen boiler: Heating AC"] == pytest.approx(-1.6)
-    assert values["Shower tank: Heating AC"] == pytest.approx(-0.8)
+    assert values["Kitchen boiler: Scheduled"] == pytest.approx(-1.6)
+    assert values["Shower tank: Scheduled"] == pytest.approx(-0.8)
     assert values["Appliance 1: Scheduled"] == pytest.approx(-0.4)
     assert values["Charge point 1: Scheduled"] == pytest.approx(-0.8)
     assert sum(value for value in values.values() if value > 0) == pytest.approx(6.4)
     assert sum(value for value in values.values() if value < 0) == pytest.approx(-6.4)
     assert sum(values.values()) == pytest.approx(0)
-    heater_colors = {row["color"] for row in result["bars"] if "Heating AC" in row["name"]}
+    heater_colors = {
+        row["color"]
+        for row in result["bars"]
+        if row["name"].startswith(("Kitchen boiler:", "Shower tank:"))
+    }
     assert len(heater_colors) == 2
-    assert all("Heating AC" not in row["name"] for row in converter["series"])
+    assert all(
+        not row["name"].startswith(("Kitchen boiler:", "Shower tank:"))
+        for row in converter["series"]
+    )
     converter_values = [
         row["intervals"][0]["value"] for row in converter["series"] if row.get("type") == "bar"
     ]
@@ -143,9 +150,9 @@ def test_reference_without_battery_keeps_identical_fixed_thermal_schedule(balanc
         thermal = {
             row["name"]: row["values"]
             for row in result_document["bars"]
-            if "Heating AC" in row["name"]
+            if row["name"].startswith(("Kitchen boiler:", "Shower tank:"))
         }
-        assert thermal == {"Kitchen boiler: Heating AC": [-1.6], "Shower tank: Heating AC": [-0.8]}
+        assert thermal == {"Kitchen boiler: Scheduled": [-1.6], "Shower tank: Scheduled": [-0.8]}
     assert sum(row["values"][0] for row in result["bars"]) == pytest.approx(0)
 
 
@@ -189,7 +196,7 @@ def test_nonthermal_plan_has_identical_existing_consumption_series(balance_page)
     result = render(balance_page, plan)
     assert result["balances"][0]["missing"] == 0
     values = {row["name"]: row["values"][0] for row in result["bars"]}
-    assert not any("Heating AC" in name for name in values)
+    assert not any(name.startswith(("Kitchen boiler:", "Shower tank:")) for name in values)
     assert values["Household demand: AC"] == pytest.approx(-1.6)
     assert values["Appliance 1: Scheduled"] == pytest.approx(-0.4)
     assert values["Charge point 1: Scheduled"] == pytest.approx(-0.8)

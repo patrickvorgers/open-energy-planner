@@ -192,12 +192,21 @@ owns a unique Docker project and new private inner-engine volumes. It removes
 only those temporary resources afterward. No host Docker socket is mounted.
 
 Acceptance checks clean onboarding, automatic pairing, a real history-trained
-household baseline and individual shadow models, desktop/mobile HA ingress, unchanged warm provisioning, outer
+household baseline and fitted individual candidates, desktop/mobile HA ingress, unchanged warm provisioning, outer
 stop/start and an actual Supervisor app update. The local update uses an
 explicit test-only development version with no numbered build identity. Its app
 and integration identify the same actual source revision. Every application
 table must remain exactly equal while stopped across the update. Saved settings,
 HA identities and original plans must survive when the app resumes.
+
+At first startup, daily accuracy has no completed forward comparisons. Device
+selection therefore retains weekday baselines while the app fits Ridge and
+weather alternatives from the real transferred fixture history. Acceptance reads
+the app-written pending daily capture forecasts from its isolated SQLite store
+to verify those fits without inventing past forecasts or promoting them. Short
+laundry history remains in the household remainder while ready devices are
+separated. The partial composition remains usable and its public explanation
+contains recovery advice rather than raw sensor identities.
 
 Provisioning reuses local store metadata when the app is installed and its source
 digest is unchanged. A missing app or changed app source still requires a store

@@ -29,6 +29,7 @@ from script.supervisor.provision_supervisor import (
 HTTP_TIMEOUT_SECONDS = 15
 LOCAL_UPDATE_VERSION = "0.0.0.dev1"
 MIN_SETUP_ESTIMATE_COMPLETE_DAYS = 27
+MIN_MODEL_TRAINING_HOURS = 28 * 24
 RETAINED_FINE_SAMPLE_OFFSET = timedelta(days=28)
 RETAINED_HISTORY_SAMPLE_LENGTH = timedelta(hours=1)
 
@@ -149,74 +150,119 @@ def database_rows():
     return result
 
 
-def model_history():
-    """Require actual trained appliance shadows while incomplete laundry history blocks composition.
+def pending_model_forecasts():
+    """Read original fitted alternatives from the isolated app's retained daily capture pointers.
 
-    The setup scale can lack a midnight reference awaiting Recorder compilation.
-    Its cumulative-sum reference period is separate from the ridge models below,
-    which still require at least 28 actual training days.
+    These are actual app-written predictions. Reading them neither creates
+    historical forecasts nor supplies admission evidence for a completed day.
+    """
+    database = SUPERVISOR_ROOT / "apps/data" / APP_SLUG / "archive.sqlite3"
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        connection.execute("PRAGMA query_only=ON")
+        rows = connection.execute(
+            "SELECT payload FROM oep_documents WHERE namespace = ? AND name LIKE ? ORDER BY name",
+            ("demand", "accuracy-pending-%"),
+        ).fetchall()
+    return [json.loads(row[0])["capture"]["forecasts"] for row in rows]
+
+
+def model_history():
+    """Require real fitted candidates while original forward-day evidence keeps baseline selection.
+
+    The disposable lab has 31 complete history days. Laundry has insufficient
+    history and stays inside the household remainder. Heat-pump weather fitting
+    must still succeed, independently of its deliberately unpromoted selection.
     """
     setup = app_request("setup")
     estimate = setup["annual_estimate"]
     assert estimate["days"] >= MIN_SETUP_ESTIMATE_COMPLETE_DAYS
     assert estimate["end"] - estimate["start"] == timedelta(days=estimate["days"]).total_seconds()
-
+    required = {"sensor.oep_test_heat_pump_energy", "sensor.oep_test_dishwasher_energy"}
     observed = {}
 
-    def trained():
-        """Wait for real history transfer and the complete background component-training result."""
-        result = app_request("consumers").get("result") or {}
-        records = {row["entity_id"]: row for row in result.get("devices", [])}
-        required = {"sensor.oep_test_heat_pump_energy", "sensor.oep_test_dishwasher_energy"}
-        observed.update(
-            {
-                entity: {
-                    "model": (records.get(entity, {}).get("forecast") or {}).get("model"),
-                    "trained": bool(
-                        (records.get(entity, {}).get("forecast") or {}).get("training_version")
-                    ),
-                    "weather": records.get(entity, {}).get("weather_features_used"),
-                }
-                for entity in sorted(required)
-            }
-        )
-        trained_models = all(
-            state["model"] == "ridge-v2" and state["trained"] for state in observed.values()
-        )
-        incomplete_laundry = all(
-            entity not in records and entity in result.get("detail", "")
-            for entity in ("sensor.oep_test_washing_machine_energy", "sensor.oep_test_dryer_energy")
-        )
+    def forecast_ready(forecast, model):
+        """Require actual trained prediction metadata and the complete 48-hour energy horizon."""
         return (
-            (result, records)
-            if trained_models
-            and observed["sensor.oep_test_heat_pump_energy"]["weather"] is True
-            and incomplete_laundry
-            else None
+            forecast.get("model") == model
+            and bool(forecast.get("training_version"))
+            and datetime.fromisoformat(forecast["issued_at"]) <= datetime.now(UTC)
+            and bool(forecast.get("steps"))
+            and sum(step["duration_h"] for step in forecast["steps"]) == 48
         )
 
+    def trained():
+        """Wait for archived Ridge/weather fits and the corresponding unpromoted partial composition."""
+        result = app_request("consumers").get("result") or {}
+        records = {row["entity_id"]: row for row in result.get("devices", [])}
+        archives = pending_model_forecasts()
+        ready = True
+        for entity in sorted(required):
+            record = records.get(entity, {})
+            forecast = record.get("forecast") or {}
+            selection = record.get("model_selection") or {}
+            alternatives = next(
+                (
+                    row
+                    for row in archives
+                    if row.get("baseline", {}).get("configuration_version")
+                    == forecast.get("configuration_version")
+                    and row.get("baseline", {}).get("version") == forecast.get("version")
+                ),
+                {},
+            )
+            weather = alternatives.get("weather") or {}
+            observed[entity] = {
+                "model": forecast.get("model"),
+                "trained": bool(forecast.get("training_version")),
+                "weather": forecast_ready(weather, "xgboost-weather-v1"),
+                "ridge": forecast_ready(alternatives.get("ridge") or {}, "ridge-v2"),
+            }
+            if not (
+                record.get("status") == "collecting_forward_accuracy"
+                and selection.get("selected") == "baseline"
+                and selection.get("completed_windows") == 0
+                and record.get("weather_features_used") is False
+                and forecast_ready(forecast, "weekday-hour-v2")
+                and observed[entity]["ridge"]
+            ):
+                ready = False
+            if entity == "sensor.oep_test_heat_pump_energy":
+                quality = selection.get("training_quality") or {}
+                if not (
+                    observed[entity]["weather"]
+                    and quality.get("source_hours", 0) >= MIN_MODEL_TRAINING_HOURS
+                    and quality.get("used_hours", 0) >= MIN_MODEL_TRAINING_HOURS
+                ):
+                    ready = False
+        if not ready:
+            return None
+        if not (
+            required <= set(records)
+            and not {"sensor.oep_test_washing_machine_energy", "sensor.oep_test_dryer_energy"}
+            & set(records)
+            and set(result.get("separated_entities", [])) == set(records)
+            and result.get("status") == "partial_history"
+            and result.get("detail")
+            == "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+        ):
+            return None
+        demand = app_request("demand")
+        if not (
+            demand.get("ridge_status") == "partial_history"
+            and forecast_ready(demand.get("forecast") or {}, "consumer-composite-v1")
+            and forecast_ready(demand.get("candidate") or {}, "consumer-composite-v1")
+        ):
+            return None
+        return result
+
     try:
-        result, records = wait_for(trained, "actual history-trained appliance models")
+        wait_for(
+            trained, "actual history-trained appliance alternatives and daily baseline selection"
+        )
     except RuntimeError as error:
         raise RuntimeError(
             "Actual model readiness: " + json.dumps(observed, sort_keys=True)
         ) from error
-    for entity in ("sensor.oep_test_heat_pump_energy", "sensor.oep_test_dishwasher_energy"):
-        model = records[entity]
-        assert model["status"] == "shadow_waiting_for_decision_evidence"
-        forecast = model["forecast"]
-        assert forecast["model"] == "ridge-v2" and forecast["training_version"]
-        assert datetime.fromisoformat(forecast["issued_at"]) <= datetime.now(UTC)
-        assert forecast["steps"]
-    assert records["sensor.oep_test_heat_pump_energy"]["weather_features_used"] is True
-    assert result["status"] == "history_or_weather_not_ready"
-    for entity in ("sensor.oep_test_washing_machine_energy", "sensor.oep_test_dryer_energy"):
-        assert entity not in records and entity in result["detail"]
-    demand = app_request("demand")
-    assert demand["forecast"]["model"] == "weekday-hour-v2"
-    assert demand["forecast"]["training_version"]
-    assert demand["candidate"] is None
-    assert demand["ridge_status"] == "history_or_weather_not_ready"
 
 
 def workspace_frame(page):

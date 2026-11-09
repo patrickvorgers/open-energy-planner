@@ -139,40 +139,67 @@ def test_supervisor_cli_failure_response_is_bounded(monkeypatch):
         "fabricated_laundry",
         "short_setup",
         "gapped_setup",
-        "fallback_model",
+        "wrong_baseline",
         "missing_training",
         "pending_weather",
+        "ridge_missing",
+        "missing_composite",
+        "private_detail",
+        "additional_ready",
+        "missing_required",
+        "separation_missing",
+        "stale_archive",
     ],
 )
-def test_example_model_acceptance_retains_shadow_and_missing_history(
+def test_example_model_acceptance_retains_baseline_and_fitted_candidates(
     monkeypatch, invalid, setup_days
 ):
-    """Reject promotion, substituted history and missing training metadata. Await pending weather before accepting models."""
-    model = {
-        "model": "ridge-v2",
+    """Require fitted archived alternatives without admitting them before actual forward daily evidence."""
+    from copy import deepcopy
+
+    baseline = {
+        "model": "weekday-hour-v2",
+        "configuration_version": "device-boundary",
         "training_version": "actual-history",
         "issued_at": "2026-01-01T00:00:00+00:00",
-        "steps": [{"kwh": 0.1}],
+        "steps": [{"start": "2026-01-01T00:00:00+00:00", "duration_h": 48, "kwh": 4.8}],
     }
     records = [
         {
             "entity_id": "sensor.oep_test_" + name + "_energy",
-            "status": "shadow_waiting_for_decision_evidence",
-            "forecast": dict(model),
-            "weather_features_used": name == "heat_pump",
+            "status": "collecting_forward_accuracy",
+            "forecast": {**baseline, "configuration_version": name, "version": name + "-original"},
+            "weather_features_used": False,
+            "model_selection": {
+                "selected": "baseline",
+                "completed_windows": 0,
+                "training_quality": {"source_hours": 744, "used_hours": 720},
+            },
         }
         for name in ("heat_pump", "dishwasher")
     ]
-    if invalid == "promoted":
-        records[0]["status"] = "active"
-    elif invalid == "weather_missing":
-        records[0]["weather_features_used"] = False
-    elif invalid == "fabricated_laundry":
-        records.append({**records[1], "entity_id": "sensor.oep_test_dryer_energy"})
-    elif invalid in {"fallback_model", "pending_weather"}:
-        records[0]["forecast"]["model"] = "weekday-hour-v2"
-    elif invalid == "missing_training":
-        records[0]["forecast"]["training_version"] = None
+    archives = [
+        {
+            "baseline": record["forecast"],
+            "ridge": {**record["forecast"], "model": "ridge-v2"},
+            **(
+                {"weather": {**record["forecast"], "model": "xgboost-weather-v1"}}
+                if record["entity_id"] == "sensor.oep_test_heat_pump_energy"
+                else {}
+            ),
+        }
+        for record in records
+    ]
+    complete_archives = deepcopy(archives)
+    detail = (
+        "Some appliance forecasts are unavailable. Check the energy sensors and usable history."
+    )
+    result = {
+        "devices": records,
+        "status": "partial_history",
+        "detail": detail,
+        "separated_entities": [record["entity_id"] for record in records],
+    }
     days = 26 if invalid == "short_setup" else setup_days
     responses = {
         "setup": {
@@ -182,35 +209,57 @@ def test_example_model_acceptance_retains_shadow_and_missing_history(
                 "end": (20000 + days + (invalid == "gapped_setup")) * 86400,
             }
         },
-        "consumers": {
-            "result": {
-                "devices": records,
-                "status": "history_or_weather_not_ready",
-                "detail": "sensor.oep_test_washing_machine_energy and sensor.oep_test_dryer_energy lack seven days",
-            }
-        },
+        "consumers": {"result": result},
         "demand": {
-            "forecast": {
-                "model": "weekday-hour-v2",
-                "training_version": "actual-household-history",
-            },
-            "candidate": None,
-            "ridge_status": "history_or_weather_not_ready",
+            "forecast": {**baseline, "model": "consumer-composite-v1"},
+            "candidate": {**baseline, "model": "consumer-composite-v1"},
+            "ridge_status": "partial_history",
         },
     }
+    if invalid == "additional_ready":
+        for name in ("wallbox_a", "wallbox_b", "boiler"):
+            records.append(
+                {**deepcopy(records[1]), "entity_id": "sensor.oep_test_" + name + "_energy"}
+            )
+        result["separated_entities"] = [record["entity_id"] for record in records]
+    elif invalid == "missing_required":
+        records.pop(0)
+    elif invalid == "separation_missing":
+        result["separated_entities"].pop()
+    elif invalid == "stale_archive":
+        archives[0]["baseline"] = {**archives[0]["baseline"], "version": "older-original"}
+    elif invalid == "promoted":
+        records[0]["model_selection"]["selected"] = "weather"
+    elif invalid in {"weather_missing", "pending_weather"}:
+        del archives[0]["weather"]
+    elif invalid == "fabricated_laundry":
+        records.append({**records[1], "entity_id": "sensor.oep_test_dryer_energy"})
+    elif invalid == "wrong_baseline":
+        records[0]["forecast"] = {**records[0]["forecast"], "model": "ridge-v2"}
+    elif invalid == "missing_training":
+        records[0]["forecast"] = {**records[0]["forecast"], "training_version": None}
+    elif invalid == "ridge_missing":
+        del archives[1]["ridge"]
+    elif invalid == "missing_composite":
+        responses["demand"]["candidate"] = None
+    elif invalid == "private_detail":
+        result["detail"] = "sensor.oep_test_dryer_energy unavailable"
     monkeypatch.setattr(supervisor_smoke, "app_request", lambda route: responses[route])
+    monkeypatch.setattr(
+        supervisor_smoke, "pending_model_forecasts", lambda: archives, raising=False
+    )
 
     def wait_for_models(operation, _description):
-        """Reject incomplete snapshots. Simulate asynchronous weather arriving before the next observation."""
+        """Retain asynchronous readiness until the actual weather candidate archive is available."""
         if invalid == "pending_weather":
             assert operation() is None
-            records[0]["forecast"] = dict(model)
+            archives[:] = complete_archives
         result = operation()
         assert result is not None
         return result
 
     monkeypatch.setattr(supervisor_smoke, "wait_for", wait_for_models)
-    if invalid and invalid != "pending_weather":
+    if invalid not in (None, "pending_weather", "additional_ready"):
         with pytest.raises(AssertionError):
             supervisor_smoke.model_history()
     else:
@@ -240,6 +289,7 @@ def test_model_readiness_timeout_identifies_untrained_weather_component(monkeypa
         assert operation() is None
         raise RuntimeError("fixture readiness deadline")
 
+    monkeypatch.setattr(supervisor_smoke, "pending_model_forecasts", list, raising=False)
     monkeypatch.setattr(supervisor_smoke, "wait_for", expired)
     with pytest.raises(RuntimeError, match="Actual model readiness") as caught:
         supervisor_smoke.model_history()
