@@ -790,7 +790,9 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(budget_panel.get_by_role("row")).to_have_count(13)
     check_layout(budget_panel)
     check_tabs(dialog, budget, "budget", keyboard=True)
-    budget_panel.get_by_role("table").scroll_into_view_if_needed()
+    closing_note = budget_panel.get_by_text("Budget settles the bonus", exact=False)
+    closing_note.scroll_into_view_if_needed()
+    expect(closing_note).to_be_in_viewport()
     page.screenshot(
         path=str(Path("results/ci") / f"budget-monthly-windows-{page.viewport_size['width']}.png")
     )
