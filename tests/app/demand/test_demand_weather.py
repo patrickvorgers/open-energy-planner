@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -56,6 +57,42 @@ class Session:
         return Response(b"x" * (2 * 1024 * 1024 + 1) if self.oversized else raw)
 
 
+class AnnualSession:
+    """Return complete synthetic Celsius data within each requested annual interval."""
+
+    def __init__(self):
+        """Keep exact requests and one controlled archive failure without external traffic."""
+        self.calls = []
+        self.failure_start = None
+
+    def get(self, url, **kwargs):
+        """Serve every requested historical hour with a location-specific Celsius value."""
+        params = kwargs["params"]
+        self.calls.append((url, dict(params)))
+        if self.failure_start and params.get("start_date") == self.failure_start:
+            raise OSError("Synthetic archive failure")
+        start = datetime.fromisoformat(params.get("start_date", "2026-06-01")).replace(tzinfo=UTC)
+        end = datetime.fromisoformat(params.get("end_date", "2026-06-02")).replace(
+            tzinfo=UTC
+        ) + timedelta(days=1)
+        times = [
+            int((start + timedelta(hours=index)).timestamp())
+            for index in range(int((end - start).total_seconds() / 3600))
+        ]
+        assert len(times) <= 9000
+        return Response(
+            json.dumps(
+                {
+                    "hourly_units": {"temperature_2m": "°C"},
+                    "hourly": {
+                        "time": times,
+                        "temperature_2m": [params["latitude"] - 47] * len(times),
+                    },
+                }
+            ).encode()
+        )
+
+
 def test_weather_adapter_uses_ha_location_units_receipt_time_and_daily_archive_cache():
     """Use Celsius at HA coordinates, keep the missing hour absent and fetch historical temperatures only once per day."""
 
@@ -93,39 +130,9 @@ def test_weather_adapter_rejects_wrong_units_and_unbounded_responses(options):
 
 def test_temperature_history_covers_all_loaded_years_with_bounded_cached_queries():
     """Older consumer history extends weather requests without enlarging a response or backdating receipt."""
-    from datetime import UTC, datetime, timedelta
 
     async def scenario():
         """Generate one independent real-hour response per query and retain closed years on refresh."""
-
-        class AnnualSession:
-            """Return complete synthetic Celsius data within each requested annual interval."""
-
-            def __init__(self):
-                self.calls = []
-
-            def get(self, url, **kwargs):
-                params = kwargs["params"]
-                self.calls.append((url, dict(params)))
-                start = datetime.fromisoformat(params.get("start_date", "2026-06-01")).replace(
-                    tzinfo=UTC
-                )
-                end = datetime.fromisoformat(params.get("end_date", "2026-06-02")).replace(
-                    tzinfo=UTC
-                ) + timedelta(days=1)
-                times = [
-                    int((start + timedelta(hours=index)).timestamp())
-                    for index in range(int((end - start).total_seconds() / 3600))
-                ]
-                assert len(times) <= 9000
-                return Response(
-                    json.dumps(
-                        {
-                            "hourly_units": {"temperature_2m": "°C"},
-                            "hourly": {"time": times, "temperature_2m": [5] * len(times)},
-                        }
-                    ).encode()
-                )
 
         session = AnnualSession()
         source = OpenMeteoTemperatureSource(
@@ -142,5 +149,91 @@ def test_temperature_history_covers_all_loaded_years_with_bounded_cached_queries
         assert len(session.calls) == 8
         assert session.calls[-2][1]["start_date"] == "2026-01-01"
         assert updated[0] == hours[0]
+
+    asyncio.run(scenario())
+
+
+def test_temperature_cache_remains_bounded_as_the_daily_lookback_rolls():
+    """Five daily requests retain only two annual datasets without losing a requested historical hour."""
+
+    async def scenario():
+        """Independently check the entire returned time coverage while the previous-year start advances."""
+        session = AnnualSession()
+        source = OpenMeteoTemperatureSource(session)
+        location = SiteLocation(52, 6, "Europe/Amsterdam")
+        now = datetime(2026, 6, 1, tzinfo=UTC)
+        forecast = {now + timedelta(hours=index) for index in range(48)}
+        for offset in range(5):
+            current = now + timedelta(days=offset)
+            hours = await source.read(location, current)
+            first = current - timedelta(days=367)
+            end = current - timedelta(days=7)
+            expected = {
+                first + timedelta(hours=index)
+                for index in range(int((end - first).total_seconds() / 3600))
+            }
+            assert {hour.start for hour in hours} == expected | forecast
+            assert all(hour.celsius == 5 and hour.known_at <= current for hour in hours)
+            assert len(source.archive) == 2
+
+    asyncio.run(scenario())
+
+
+def test_temperature_cache_tracks_history_start_and_location_without_losing_annual_reuse():
+    """Extend and shorten historical coverage, reuse unchanged annual requests and isolate site temperatures."""
+
+    async def scenario():
+        """Change the existing history callback and HA coordinates while observing actual bounded requests."""
+        session = AnnualSession()
+        history_start = datetime(2022, 3, 1, tzinfo=UTC)
+        source = OpenMeteoTemperatureSource(session, history_start=lambda: history_start)
+        now = datetime(2026, 6, 1, tzinfo=UTC)
+        location = SiteLocation(52, 6, "Europe/Amsterdam")
+        await source.read(location, now)
+        original = dict(source.archive)
+        history_start = datetime(2024, 3, 1, tzinfo=UTC)
+        calls_before = len(session.calls)
+        shortened = await source.read(location, now)
+        assert shortened[0].start == history_start
+        assert len(session.calls) - calls_before == 2
+        assert len(source.archive) == 3
+        assert set(source.archive.values()) & set(original.values())
+        history_start = datetime(2022, 3, 1, tzinfo=UTC)
+        extended = await source.read(location, now)
+        assert extended[0].start == history_start
+        assert len(source.archive) == 5
+        changed = await source.read(SiteLocation(53, 6, "Europe/Amsterdam"), now)
+        assert {hour.start for hour in changed} == {hour.start for hour in extended}
+        assert all(hour.celsius == 6 for hour in changed)
+        assert len(source.archive) == 5
+
+    asyncio.run(scenario())
+
+
+def test_temperature_archive_failure_keeps_last_complete_history_and_bounds_partial_retries():
+    """Failed annual refreshes preserve accepted history and cannot accumulate obsolete partial-year datasets."""
+
+    async def scenario():
+        """Fail the current-year fetch after the preceding annual response, then recover the same request."""
+        session = AnnualSession()
+        source = OpenMeteoTemperatureSource(session)
+        now = datetime(2026, 6, 1, tzinfo=UTC)
+        location = SiteLocation(52, 6, "Europe/Amsterdam")
+        await source.read(location, now)
+        accepted, accepted_key = source.past, source.past_key
+        session.failure_start = "2026-01-01"
+        for offset in (1, 2):
+            with pytest.raises(OSError, match="Synthetic archive failure"):
+                await source.read(location, now + timedelta(days=offset))
+            assert source.past == accepted and source.past_key == accepted_key
+            assert len(source.archive) <= 2
+        session.failure_start = None
+        calls_before = len(session.calls)
+        recovered = await source.read(location, now + timedelta(days=2))
+        assert len(session.calls) - calls_before == 2
+        assert source.past_key != accepted_key
+        assert recovered[0].start == now + timedelta(days=2 - 367)
+        assert all(hour.celsius == 5 for hour in recovered)
+        assert len(source.archive) == 2
 
     asyncio.run(scenario())

@@ -138,6 +138,8 @@ class DemandRuntime:
             entity = pending["entity_id"]
             if accepted is not None:
                 pending_histories[entity] = accepted
+            else:
+                pending_histories.pop(entity, None)
             complete = all(entity in pending_histories for entity in entities) and all(
                 self.history_import.request(entity, self.configuration.version, now) is None
                 and entity not in self.history_import.issues

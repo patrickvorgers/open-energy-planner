@@ -54,6 +54,17 @@ def app_site(request):
     ready, shutdown = Event(), Event()
     result = {}
     with TemporaryDirectory() as directory:
+        if getattr(request, "param", None) == "consumers_unreadable":
+            from open_energy_planner.storage.adapters.documents import SqlDocuments
+            from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+
+            repository = SqlPlanRepository(directory)
+            try:
+                SqlDocuments(repository.engine, "demand").write(
+                    "consumer-settings.json", ["invalid"]
+                )
+            finally:
+                repository.close()
         if getattr(request, "param", None) == "documentation":
             from tests.frontend.browser.documentation_fixture import seed
 

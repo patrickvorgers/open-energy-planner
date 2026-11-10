@@ -6,6 +6,7 @@ import {SaveBar} from "./save-bar.js";
 import {confirmAction} from "./confirmation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {sourceRefresh, retainInputs} from "./source-refresh.js";
+import {assignedEnergySources, pickEnergySource} from "./energy-source-picker.js";
 import {applianceSettingsApi} from "./appliance-settings-api.js";
 bindSettingsActions();
 const base = document.querySelector('meta[name="oep-api-base"]').content;
@@ -14,7 +15,7 @@ const VEHICLE_FIELDS = ["id", "soc_entity", "soc_timestamp_attribute", "capacity
 const POINT_FIELDS = ["id", "energy_entity", "power_entity", "connected_entity", "minimum_w", "maximum_w", "control", "vehicle_ids"];
 const WATTS_PER_KW = 1000;
 const NO_DEVICE = "sources-without-device";
-let token = "", current, draft, editing = false, selectedId = null, editOriginId = null;
+let token = "", current, energySources, draft, editing = false, selectedId = null, editOriginId = null;
 const api = applianceSettingsApi(base, () => token);
 const integrationSelections = new Map();
 const integrationTypeSelections = new Map();
@@ -23,13 +24,15 @@ const saveState = new SaveBar({form: "settings", bar: "ev-save-bar", save: "save
 find("refresh").textContent = "Cancel";
 find("settings").hidden = true;
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
-function changed() { saveState.update(); }
+/** Restore editor actions after SaveBar processes the same bubbling change event. */
+function changed() { saveState.update(); queueMicrotask(syncEditor); }
 /** Select one existing identity without merging vehicle and charge-point configuration models. */
 function selected() { return draft?.vehicles.find(row => row.id === selectedId) || draft?.points.find(row => row.id === selectedId); }
 /** Show precise display kW while physical configuration retains whole watts. */
 function power(value) { return Number.isFinite(value) ? (value / WATTS_PER_KW).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 3}) + " kW" : "Unavailable"; }
 /** Keep source-derived names separate from immutable OEP identities. */
 function displayName(row, vehicle) {
+    if (!vehicle) return current.energy_consumers.find(source => source.entity_id === row.energy_entity)?.name || current.points.find(saved => saved.id === row.id)?.name || "New charge point";
     const source = current.catalogue.entities.find(entity => entity.entity_id === row.soc_entity);
     return (vehicle ? current.vehicles : current.points).find(saved => saved.id === row.id)?.name || (vehicle ? sourceName({device_name: source?.device_name, entity_id: source?.entity_id}, source?.integration_name || "New vehicle") : "New charge point");
 }
@@ -59,9 +62,9 @@ function select(card, row, key, label, help, options, emptyMessage = "No matchin
     control.setAttribute("aria-label", label);
     const blank = node("option", "Select a source"); blank.value = ""; control.append(blank);
     for (const [value, text] of options) { const option = node("option", text); option.value = value; control.append(option); }
-    if (row[key] && !options.some(([value]) => value === row[key]) && ["soc_entity", "power_entity", "connected_entity"].includes(key)) {
+    if (row[key] && !options.some(([value]) => value === row[key]) && ["soc_entity", "energy_entity", "power_entity", "connected_entity"].includes(key)) {
         const source = current.catalogue.entities.find(entity => entity.entity_id === row[key]);
-        const option = node("option", `${source?.name || row[key]}: Current selection outside this list`); option.value = row[key]; control.append(option);
+        const option = node("option", `${source?.name || row[key]}: ${key === "energy_entity" ? "Current selection unavailable in Home Assistant Energy" : "Current selection outside this list"}`); option.value = row[key]; control.append(option);
     }
     control.value = row[key] || ""; control.onchange = () => { row[key] = control.value; changed(); };
     wrapper.append(control, node("small", help)); card.append(wrapper);
@@ -141,46 +144,16 @@ function vehicleSourcePicker(card, row) {
     if (editing && !row.soc_entity && entities.length === 1) row.soc_entity = entities[0].entity_id;
     return {entities};
 }
-/** Keep charge-point connection helpers and the independently configured Energy meter available. */
-function chargePointSourcePicker(card, row) {
-    const source = current.catalogue.entities.find(entity => entity.entity_id === (row.power_entity || row.connected_entity || row.energy_entity));
-    const device = deviceSelections.get(row.id) ?? source?.device_id ?? "";
-    deviceSelections.set(row.id, device);
-    const devices = new Map(current.catalogue.entities.filter(entity => entity.device_id).map(entity => [entity.device_id, entity.device_name || entity.device_id]));
-    if (device && !devices.has(device)) devices.set(device, "Previously selected device (unavailable)");
-    const deviceControl = select(card, {device}, "device", "Home Assistant device", "Choose your charge point. Without a device, choose an integration below. Power, connection helpers and the Energy meter may come from separate devices.", [...devices].sort((left, right) => left[1].localeCompare(right[1])));
-    deviceControl.required = false;
-    deviceControl.options[0].textContent = "All devices / choose an integration";
-    deviceControl.parentElement.style.gridColumn = "1 / -1";
-    deviceControl.onchange = () => {
-        deviceSelections.set(row.id, deviceControl.value);
-        integrationSelections.delete(row.id);
-        render(); changed();
-    };
-    const candidates = current.catalogue.entities.filter(entity => device ? entity.device_id === device : entity.entity_id.startsWith("binary_sensor.") || entity.device_class === "power" && ["W", "kW"].includes(entity.unit));
-    if (!candidates.some(entity => entity.integration_id)) return {device};
-    const groups = new Map(candidates.map(entity => [entity.integration_id || "other", entity.integration_name || "Other Home Assistant sources"]));
-    const selectedIntegration = integrationSelections.get(row.id) ?? (device && groups.size === 1 ? groups.keys().next().value : source && (!device || source.device_id === device) ? source.integration_id || "other" : "");
-    const selection = {integration: selectedIntegration};
-    const control = select(card, selection, "integration", "Home Assistant integration", device ? "Selected automatically when this device has one integration. For multiple integrations, choose the one that supplies the sensor." : "Choose the integration that reports the charge point's power and physical connection. Its Energy meter is selected separately.", [...groups].sort((left, right) => left[1].localeCompare(right[1])));
-    control.required = false;
-    control.parentElement.style.gridColumn = "1 / -1";
-    control.onchange = () => {
-        integrationSelections.set(row.id, control.value);
-        render(); changed();
-    };
-    return {device, integration: selectedIntegration};
-}
 /** Percentage SoC may omit HA's optional battery class, but incompatible classes remain excluded. */
 function isVehicleSoc(entity) { return entity.device_entry_type !== "service" && entity.entity_id.startsWith("sensor.") && entity.unit === "%" && ["battery", ""].includes(entity.device_class); }
 /** Filter connection candidates by visible names without guessing that any binary sensor means plugged in. */
-function connectedSource(card, row, selection) {
+function connectedSource(card, row) {
     const group = node("fieldset"); group.className = "settings-fields"; group.append(node("legend", "Physical connection")); card.append(group);
-    const candidates = metadata(entity => entity.entity_id.startsWith("binary_sensor."), selection);
+    const candidates = metadata(entity => entity.entity_id.startsWith("binary_sensor."));
     const searchLabel = node("label"), search = node("input"); searchLabel.className = "ev-field"; searchLabel.append(node("span", "Find connection sensor")); search.type = "search";
     search.setAttribute("aria-label", "Find connection sensor");
     searchLabel.append(search, node("small", "Search the device, sensor name or entity ID.")); group.append(searchLabel);
-    const control = select(group, row, "connected_entity", "Vehicle connected", "Choose a sensor that stays On while plugged in, even when charging is paused. Charging, door and fault sensors do not establish a connection.", candidates, selection?.integration === "" ? "Choose the Home Assistant integration first." : undefined);
+    const control = select(group, row, "connected_entity", "Vehicle connected", "Choose a sensor that stays On while plugged in, even when charging is paused. Charging, door and fault sensors do not establish a connection.", candidates);
     const searchable = [...control.options].filter(option => option.value).map(option => [option.value, option.textContent]);
     const result = node("small"); result.setAttribute("role", "status"); result.style.gridColumn = "1 / -1"; group.append(result);
     search.oninput = () => {
@@ -239,10 +212,12 @@ function render() {
     }
     for (const row of draft.points) {
         const card = node("section"); card.className = "settings-fields"; card.hidden = row.id !== selectedId; card.append(node("h3", "Home Assistant sources"));
-        const selection = chargePointSourcePicker(card, row);
-        select(card, row, "energy_entity", "Charging consumption meter", "Configured in Home Assistant Energy. Separate from instantaneous power.", current.energy_consumers.map((entity) => [entity.entity_id, entity.name]));
-        select(card, row, "power_entity", "Measured AC charging power", "Positive W or kW consumed by this charge point.", metadata((entity) => entity.device_class === "power" && ["W", "kW"].includes(entity.unit), selection), selection?.integration === "" ? "Choose the Home Assistant integration first." : undefined);
-        connectedSource(card, row, selection);
+        const assignedSources = assignedEnergySources(energySources);
+        const savedMeter = current.points.find(saved => saved.id === row.id)?.energy_entity;
+        const meter = select(card, row, "energy_entity", "Charging consumption meter", "Choose the device consumption meter assigned to this charge point in the Home Assistant Energy dashboard. A registered device or integration is not required.", current.energy_consumers.filter(source => source.entity_id === row.energy_entity || source.entity_id === savedMeter || !assignedSources.has(source.entity_id)).map((entity) => [entity.entity_id, entity.name]), "No device consumption meters are configured in Home Assistant Energy. Add the charge point under Individual devices, then refresh Home Assistant sources.");
+        meter.onchange = () => { if (meter.value === row.energy_entity) return; row.energy_entity = meter.value; row.power_entity = current.energy_consumers.find(source => source.entity_id === meter.value)?.power_entity || ""; retainInputs(render); changed(); };
+        select(card, row, "power_entity", "Measured AC charging power", "Selected with the Energy device when Home Assistant defines device power consumption. Otherwise choose its W or kW sensor. You can explicitly override this source.", metadata((entity) => entity.device_class === "power" && ["W", "kW"].includes(entity.unit)));
+        connectedSource(card, row);
         card.append(node("h3", "Charging limits"));
         const control = select(card, row, "control", "Control capability", "Physical actions remain in your HA automation. Measurement only never produces a charging request.", [["read_only", "Measurement only"], ["on_off", "On/off at fixed power"], ["variable", "Variable power"]]);
         control.parentElement.style.gridColumn = "1 / -1";
@@ -280,7 +255,11 @@ function renderSummary() {
 /** Reload confirmed configuration only through an explicit SaveBar transition. */
 async function load(selection = selectedId) {
     try {
-        current = await api("v1/ev"); useHomeAssistantTimezone(current.timezone);
+        const results = await Promise.allSettled([api("v1/ev"), api("v1/consumers")]);
+        const failed = results.find(result => result.status === "rejected");
+        if (failed) throw failed.reason;
+        [current, energySources] = results.map(result => result.value); useHomeAssistantTimezone(current.timezone);
+        current.energy_consumers = energySources.options;
         integrationSelections.clear();
         integrationTypeSelections.clear();
         deviceSelections.clear();
@@ -288,23 +267,52 @@ async function load(selection = selectedId) {
         selectedId = selection; editing = false; find("connect").hidden = true; find("settings").hidden = false; find("status").textContent = current.issue || ""; render(); saveState.loaded(); syncEditor();
     } catch (error) { find("status").textContent = error.message; saveState.update(error.message); }
 }
-const refreshSources = sourceRefresh(api, "ev", find("refresh-ev-sources"), find("status"), catalogue => {
-    if (saveState.busy || !current) return;
+/** Refresh energySources ownership and current.energy_consumers choices without replacing draft overrides.
+ * Discard results while settings are busy or another configuration has replaced the read's owner.
+ */
+const refreshSources = sourceRefresh(api, "ev", find("refresh-ev-sources"), find("status"), async (catalogue, signal) => {
+    const opening = current;
+    if (saveState.busy || !opening) return;
+    const refreshed = await api("v1/consumers", undefined, signal);
+    if (saveState.busy || current !== opening) return;
     current.catalogue = catalogue;
+    energySources = refreshed;
+    current.energy_consumers = refreshed.options;
     retainInputs(render);
     saveState.update();
+    syncEditor();
 });
 find("refresh-ev-sources").onclick = () => { if (!saveState.busy) return refreshSources(); };
 find("edit-ev").onclick = () => { if (!saveState.busy && selected()) { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); } };
 find("ev-device-select").onchange = event => { if (saveState.busy || editing) return; selectedId = event.target.value; render(); };
 find("add-ev").onclick = () => { if (!saveState.busy && !editing && !saveState.dirty) find("ev-add-dialog").showModal(); };
-find("continue-add-ev").onclick = () => {
+/** Lock the Energy read and leave drafts untouched on cancellation or changed configuration/edit state.
+ * Recheck energySources after the modal closes before initializing a new charge point's meter and power.
+ */
+find("continue-add-ev").onclick = async () => {
     if (saveState.busy || editing) return;
     const vehicle = document.querySelector('input[name="ev-add-kind"]:checked').value === "vehicle";
-    const row = vehicle ? {id: identity(), soc_entity: "", soc_timestamp_attribute: null, capacity_kwh: "", maximum_w: "", target_soc: 80, departure_time: "07:00"} : {id: identity(), energy_entity: "", power_entity: "", connected_entity: "", minimum_w: "", maximum_w: "", control: "read_only", vehicle_ids: []};
+    find("ev-add-dialog").close();
+    let source = null;
+    if (!vehicle) {
+        const opening = current;
+        saveState.begin("Loading Home Assistant Energy devices…"); syncEditor();
+        try { energySources = await api("v1/consumers"); current.energy_consumers = energySources.options; }
+        catch (error) { find("status").textContent = error.message; return; }
+        finally { saveState.end(); syncEditor(); }
+        if (current !== opening || editing) return;
+        find("add-ev").focus();
+        source = await pickEnergySource(find("source-dialog"), energySources, "Add charge point");
+        if (!source || current !== opening || saveState.busy || editing) return;
+        source = energySources.options.find(option => option.entity_id === source.entity_id);
+        if (!source || assignedEnergySources(energySources).has(source.entity_id)) {
+            find("status").textContent = "The selected Energy device is no longer available. Refresh Home Assistant sources and choose an available device."; return;
+        }
+    }
+    const row = vehicle ? {id: identity(), soc_entity: "", soc_timestamp_attribute: null, capacity_kwh: "", maximum_w: "", target_soc: 80, departure_time: "07:00"} : {id: identity(), energy_entity: source.entity_id, power_entity: source.power_entity || "", connected_entity: "", minimum_w: "", maximum_w: "", control: "read_only", vehicle_ids: []};
     editOriginId = selectedId;
     (vehicle ? draft.vehicles : draft.points).push(row); selectedId = row.id; editing = true;
-    find("ev-add-dialog").close(); render(); changed();
+    render(); changed();
     refreshSources();
 };
 find("remove-ev").onclick = removeSelected;

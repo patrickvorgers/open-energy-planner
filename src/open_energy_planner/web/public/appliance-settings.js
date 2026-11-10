@@ -1,3 +1,4 @@
+import {pickEnergySource} from "./energy-source-picker.js";
 import {confirmAction} from "./confirmation.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {SaveBar} from "./save-bar.js";
@@ -9,6 +10,7 @@ const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
 let token = "", consumerVersion, applianceVersion, retainedSpecialized = [], savedConsumers = "";
 const consumerChoices = new Map(), pending = new Map();
+let energySources;
 let selectedId = null, editing = false, evidenceEpoch = 0, evidenceRefreshing = false;
 bindSettingsActions();
 const saveState = new SaveBar({form: "appliance-settings", bar: "appliance-save-bar", save: "save-settings", discard: "discard-settings", status: "save-state", read: () => [...consumerChoices].map(([id, inputs]) => [id, inputs.enabled.checked, inputs.weather.checked, inputs.permission.checked, inputs.duration.value, inputs.energy.value])});
@@ -22,6 +24,7 @@ async function api(path, body, method = body ? "POST" : "GET") {
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
 /** Keep all OEP-owned source choices in Settings while preserving EV/thermal-owned selections and unresolved cycles. */
 function settings(consumers, specializedMeters, devices) {
+    energySources = consumers;
     consumerVersion = consumers.version;
     savedConsumers = JSON.stringify([...consumers.selected].sort((left, right) => left.entity_id.localeCompare(right.entity_id)));
     retainedSpecialized = consumers.selected.filter(item => specializedMeters.has(item.entity_id));
@@ -175,32 +178,15 @@ function syncEditor() {
 }
 find("appliance-select").onchange = event => { if (saveState.busy || saveState.dirty) return; selectedId = event.target.value; showAppliance(); };
 find("edit-appliance").onclick = () => { if (saveState.busy) return; editing = true; syncEditor(); };
-const sourceDialog = find("source-dialog");
-/** Filter source names and identifiers as text. Never interpolate provider values into HTML. */
-function filterSources() {
-    const search = find("source-search").value.trim().toLowerCase(), filter = find("source-filter").value;
-    const results = find("source-results"); results.replaceChildren(); let count = 0;
-    for (const [id, inputs] of consumerChoices) {
-        const added = inputs.enabled.checked;
-        if ((filter === "available" && added) || (filter === "added" && !added) || !`${inputs.device.name} ${id}`.toLowerCase().includes(search)) continue;
-        count += 1;
-        const button = node("button"), title = node("strong", inputs.device.name), state = node("small", added ? "Already added" : "Available");
-        button.type = "button"; button.className = "source-choice"; button.title = id; button.disabled = added; button.append(title, state);
-        button.onclick = () => {
-            inputs.enabled.checked = true; inputs.enabled.onchange(); selectedId = id; editing = true; sourceDialog.close(); showAppliance(); saveState.update("Configure the selected source, then Save appliance settings to add it.");
-        };
-        results.append(button);
-    }
-    if (!count) results.append(node("p", "No matching devices. Try another search or change the filter."));
-    find("source-count").textContent = `${count} of ${consumerChoices.size} sources shown. Charging points and boilers are managed in their own appliance editors.`;
-    results.scrollTop = 0;
-}
-find("add-appliance").onclick = () => {
+find("add-appliance").onclick = async () => {
     if (saveState.busy || saveState.dirty) return;
-    sourceDialog.classList.add("source-picker");
-    find("source-dialog-body").innerHTML = '<header><h2 id="source-title">Add appliance</h2><p>Choose a source from Home Assistant Energy.</p><div class="source-filters"><label>Search devices<input id="source-search" type="search" placeholder="Device name or sensor ID"></label><label>Show<select id="source-filter" aria-label="Show"><option value="available">Available</option><option value="added">Already added</option><option value="all">All sources</option></select></label></div><p id="source-count" role="status"></p></header><div id="source-results" class="source-results" role="region" aria-label="Energy sources" tabindex="0"></div><footer><p>Missing a device? Add its energy meter in Home Assistant Energy first.</p><div class="dialog-actions"><button type="button" id="close-sources">Cancel</button></div></footer>';
-    find("source-search").oninput = filterSources; find("source-filter").onchange = filterSources; find("close-sources").onclick = () => sourceDialog.close();
-    filterSources(); sourceDialog.showModal(); find("source-search").focus();
+    const opening = energySources;
+    const source = await pickEnergySource(find("source-dialog"), opening, "Add appliance");
+    if (!source || energySources !== opening || saveState.busy || saveState.dirty) return;
+    const inputs = consumerChoices.get(source.entity_id);
+    if (!inputs || inputs.enabled.checked) return;
+    inputs.enabled.checked = true; inputs.enabled.onchange(); selectedId = source.entity_id; editing = true;
+    showAppliance(); saveState.update("Configure the selected source, then Save appliance settings to add it.");
 };
 find("remove-appliance").onclick = async () => {
     find("appliance-more").open = false;

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 
 @pytest.mark.parametrize(
@@ -20,6 +20,7 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
+    wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     original_rates = page.evaluate(
         """() => Chart.getChart(document.getElementById('forecast-chart')).data.datasets.find(dataset => dataset.label === 'Household demand forecast: AC').data.map(point => point.y)"""
@@ -249,6 +250,7 @@ def test_equal_device_names_keep_independent_legend_switches(app_page):
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
+    wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
         switches = page.locator("#" + identity + "-legend").get_by_role(

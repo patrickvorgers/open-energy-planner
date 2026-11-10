@@ -51,28 +51,33 @@ class OpenMeteoTemperatureSource:
         key = location.latitude, location.longitude, now.date(), first
         if key != self.past_key:
             end = now.date() - timedelta(days=ARCHIVE_WEATHER_LAG_DAYS)
+            archive_keys = tuple(
+                (
+                    location.latitude,
+                    location.longitude,
+                    max(first, datetime(year, 1, 1).date()),
+                    min(end, datetime(year, 12, 31).date()),
+                )
+                for year in range(first.year, end.year + 1)
+            )
+            self.archive = {
+                archive_key: hours
+                for archive_key, hours in self.archive.items()
+                if archive_key in archive_keys
+            }
             past = []
-            for year in range(first.year, end.year + 1):
-                start_date = max(first, datetime(year, 1, 1).date())
-                end_date = min(end, datetime(year, 12, 31).date())
-                archive_key = location.latitude, location.longitude, start_date, end_date
+            for archive_key in archive_keys:
                 if archive_key not in self.archive:
                     self.archive[archive_key] = await self._read(
                         "https://archive-api.open-meteo.com/v1/archive",
                         {
                             **params,
-                            "start_date": start_date.isoformat(),
-                            "end_date": end_date.isoformat(),
+                            "start_date": archive_key[2].isoformat(),
+                            "end_date": archive_key[3].isoformat(),
                         },
                         now,
                     )
                 past.extend(self.archive[archive_key])
-            self.archive = {
-                archive_key: hours
-                for archive_key, hours in self.archive.items()
-                if archive_key[:2] == key[:2]
-                and (archive_key[3].year < end.year or archive_key[3] == end)
-            }
             self.past = tuple(past)
             self.past_key = key
         recent = await self._read(

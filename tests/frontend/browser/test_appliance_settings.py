@@ -16,6 +16,44 @@ from tests.frontend.browser.control_layout import assert_field_actions_aligned
 from tests.frontend.browser.helpers import TOKEN, assert_floating_save_bar, discover
 
 
+@pytest.mark.parametrize("action", ["click", "enter"])
+def test_appliance_connect_waits_for_module_initialization(app_page, action):
+    """Delayed initialization blocks native submission, then accepts clicks and Enter without navigation."""
+    page, url = app_page
+    held_modules, document_requests = [], []
+    page.on(
+        "request",
+        lambda request: (
+            document_requests.append(request.url) if request.resource_type == "document" else None
+        ),
+    )
+    page.route("**/setup/appliances.js", lambda route: held_modules.append(route))
+    with page.expect_request("**/setup/appliances.js"):
+        page.goto(url + "/appliances", wait_until="commit")
+    connect = page.get_by_role("button", name="Connect", exact=True)
+    token_field = page.get_by_label("Installation API token", exact=True)
+    try:
+        expect(connect).to_be_disabled()
+        token_field.fill(TOKEN)
+        token_field.press("Enter")
+        assert page.url == url + "/appliances"
+        assert document_requests == [url + "/appliances"]
+    finally:
+        for route in held_modules:
+            route.continue_()
+        page.unroute("**/setup/appliances.js")
+    expect(connect).to_be_enabled()
+    token_field.fill(TOKEN)
+    if action == "click":
+        connect.click()
+    else:
+        token_field.press("Enter")
+    expect(page.locator("#status")).to_contain_text("Connected")
+    assert page.url == url + "/appliances"
+    assert document_requests == [url + "/appliances"]
+    assert all(TOKEN not in request_url for request_url in document_requests)
+
+
 @pytest.mark.parametrize(
     "app_page",
     [{"width": 1280, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
@@ -188,7 +226,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
-def add_ev_appliance(page, kind):
+def add_ev_appliance(page, kind, energy_entity=None):
     """Choose one typed EV draft through the shared Add action rather than editing every device at once."""
     page.get_by_role("button", name="Add vehicle or charge point", exact=True).click()
     dialog = page.get_by_role("dialog", name="Add vehicle or charge point", exact=True)
@@ -196,6 +234,14 @@ def add_ev_appliance(page, kind):
         "radio", name=re.compile("^Vehicle" if kind == "vehicle" else "^Charge point")
     ).check()
     dialog.get_by_role("button", name="Continue", exact=True).click()
+    if kind == "point":
+        sources = page.get_by_role("dialog", name="Add charge point", exact=True)
+        choice = (
+            sources.locator(f'button.source-choice[title="{energy_entity}"]')
+            if energy_entity
+            else sources.locator("button.source-choice:enabled").first
+        )
+        choice.click()
 
 
 def discover_charging_sources(page, url):
@@ -1133,10 +1179,10 @@ def test_appliance_source_picker_searches_large_catalogue_and_preserves_ha_membe
     expect(page.locator("#source-results")).to_contain_text("No matching devices")
     search.fill("")
     page.get_by_label("Show", exact=True).select_option("added")
-    expect(page.locator(".source-choice")).to_have_count(1)
-    expect(page.locator(".source-choice")).to_be_disabled()
+    expect(page.locator(".source-choice")).to_have_count(2)
+    expect(page.locator(".source-choice:disabled")).to_have_count(2)
     page.get_by_label("Show", exact=True).select_option("all")
-    expect(page.locator(".source-choice")).to_have_count(33)
+    expect(page.locator(".source-choice")).to_have_count(34)
     before = search.bounding_box()
     footer = page.get_by_role("button", name="Cancel", exact=True).bounding_box()
     page.locator("#source-results").press("End")
@@ -1651,7 +1697,7 @@ def test_appliance_read_deadline_cancels_stalled_network_and_recovers(app_page, 
 
 def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page):
     """The real boiler route uses the approved saved/edit layout and keeps category and primary navigation."""
-    from tests.frontend.browser.test_thermal import document
+    from tests.frontend.browser.thermal_fixture import document
 
     page, url = app_page
     page.route("**/v1/thermal", lambda route: route.fulfill(json=document()))

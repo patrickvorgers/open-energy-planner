@@ -45,8 +45,24 @@ explicit at every level. Service devices and devices
 without a compatible SoC source are excluded. Sources without a registered device
 use an explicit no-device group. Automatic choices are drafts until Save. Parent
 changes clear incompatible draft sources, while matching choices, metadata refresh
-and Cancel retain their existing boundaries. Charge-point power and connection
-selectors keep their independent device/integration filters and separate Energy meter.
+and Cancel retain their existing boundaries. Charge points use the shared
+Energy-device chooser before the typed configuration draft is created. The
+Energy display name identifies the choice visually. Its `entity_id` and explicit
+`power_entity` link supply the measurement pair, including meters without a
+device registry entry. There are no device or integration prerequisites.
+Missing power links remain explicit. Manual power overrides survive refresh.
+Choosing another meter replaces the power binding with its defined link or
+clears it when no link exists. Physical connection and vehicle identity are
+never inferred. Refresh also rereads current Energy consumer options without
+replacing the configuration draft or saved version. Missing Energy meters remain
+visible as unavailable and server-side membership validation rejects them.
+
+The chooser excludes already assigned consumption devices, charge points and
+boilers by meter identity. The shared source-ownership admission checks all
+configuration writes under the settings lock before mutation. Edits retain an
+existing assignment only when both the appliance ID and meter match. Cycles
+cannot claim a specialized meter, and generic selection writes must retain the
+forecast membership required by configured charge points and boilers.
 Resolved vehicle filters remain pinned across refresh. Missing parents stay visible
 as unavailable choices, preserving the original sensor until an explicit replacement.
 

@@ -197,6 +197,33 @@ def test_consumer_selection_preserves_versions_and_rejects_overlap(tmp_path):
         )
 
 
+def test_unreadable_ownership_cannot_replace_saved_selection_before_database_restoration(tmp_path):
+    """Malformed choices remain untouched after writes, and restored choices regain normal admission."""
+    store = make_store(tmp_path, DemandStore)
+    documents = store.documents
+    malformed = ["unreadable-selection"]
+    documents.write("consumer-settings.json", malformed)
+    consumers = ConsumerForecasts(documents)
+    consumers.sync(catalogue())
+    assert consumers.document()["issue"] == "consumer_configuration_unreadable"
+    assert consumers.document()["selected"] == []
+    version = consumers.version
+    replacement = parse_selection([{"entity_id": "sensor.heat", "weather_sensitive": False}])
+    for selection in ((), replacement):
+        with pytest.raises(ValueError, match="Restore the saved database"):
+            consumers.save(selection, version)
+        assert documents.read("consumer-settings.json") == malformed
+        assert consumers.version == version
+    restored_selection = [{"entity_id": "sensor.circuit", "weather_sensitive": True}]
+    documents.write("consumer-settings.json", restored_selection)
+    restored = ConsumerForecasts(documents)
+    restored.sync(catalogue())
+    assert restored.document()["selected"] == restored_selection
+    assert restored.document()["issue"] is None
+    restored.save(replacement, restored.version)
+    assert documents.read("consumer-settings.json") == list(replacement)
+
+
 def test_composite_retains_measured_baseline_until_forward_accuracy_is_available(tmp_path):
     """Known .3-kWh residual and measured device profiles sum once before weather candidates have forward proof."""
     store = make_store(tmp_path, DemandStore)
