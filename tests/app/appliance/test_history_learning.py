@@ -377,6 +377,8 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
             SimpleNamespace(state={"enabled": False, "plan": None}),
             SimpleNamespace(refresh=lambda **values: refreshes.append(values)),
             asyncio.Lock(),
+            SimpleNamespace(state={"points": []}),
+            SimpleNamespace(state={"stores": []}),
         )
         start = (datetime.now(UTC) - timedelta(days=30)).replace(minute=0, second=0, microsecond=0)
         body = {

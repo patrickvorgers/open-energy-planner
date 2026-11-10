@@ -11,6 +11,7 @@ from tests.frontend.browser.helpers import (
     grid,
     installation_area,
     read_settings,
+    wait_for_product_reads,
 )
 
 
@@ -179,7 +180,10 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
             url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
         )
         assert response.ok, response.text()
+        # Clock jumps must not expire unfinished reads from the preceding phase.
+        wait_for_product_reads(page)
         page.clock.fast_forward(31000)
+        wait_for_product_reads(page)
 
     refresh()
     connect_solar_setup(page, url)
@@ -221,8 +225,10 @@ def test_solar_panels_follow_ha_without_losing_physical_drafts(app_page):
     providers[0]["panels"][0]["azimuth"] = 115
     refresh()
     expect(page.locator("#installation-summary")).to_contain_text("115")
+    wait_for_product_reads(page)
     with page.expect_response("**/v1/notifications"):
         page.clock.fast_forward(16000)
+    wait_for_product_reads(page)
     expiry_label = "Temporary notification. Disappears automatically after 5 minutes."
     banner = page.get_by_role("region", name="Notifications", exact=True)
     badge = banner.get_by_role("img", name=expiry_label, exact=True)

@@ -301,17 +301,14 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     assert saved_vehicle["soc_entity"] == "sensor.car_charge"
     assert saved_vehicle["capacity_kwh"] == 61
     add_ev_appliance(page, "point")
-    choose_integration(page, "empty")
-    expect(page.get_by_label("Vehicle connected", exact=True).locator("option")).to_have_count(1)
-    expect(
-        page.get_by_text("No matching Home Assistant sources were discovered.", exact=False)
-    ).to_be_visible()
-    choose_integration(page, "charger")
+    point = page.locator("#points > section:visible")
+    expect(point.get_by_label("Home Assistant integration", exact=True)).to_have_count(0)
+    expect(point.get_by_label("Home Assistant device", exact=True)).to_have_count(0)
     page.get_by_label("Charging consumption meter", exact=True).select_option("sensor.charge_meter")
     page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.charge_power")
     connected = page.get_by_label("Vehicle connected", exact=True)
     expect(connected).to_have_value("")
-    expect(connected.locator("option")).to_have_count(3)
+    expect(connected.locator("option")).to_have_count(5)
     page.get_by_label("Find connection sensor", exact=True).fill("no matching name")
     expect(page.get_by_text("No sensors match this search.", exact=True)).to_be_visible()
     page.get_by_label("Find connection sensor", exact=True).fill("plugged")
@@ -344,7 +341,6 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     assert saved["points"][0]["connected_entity"] == "binary_sensor.charge_plug"
     assert saved["points"][0]["energy_entity"] == "sensor.charge_meter"
     page.get_by_role("button", name="Edit settings", exact=True).click()
-    choose_integration(page, "empty")
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.charge_plug"
     )
@@ -368,12 +364,11 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.charge_plug"
     )
-    choose_integration(page, "helper")
+    page.get_by_label("Find connection sensor", exact=True).fill("helper")
     page.get_by_label("Vehicle connected", exact=True).select_option("binary_sensor.helper_plug")
     expect(page.get_by_label("Measured AC charging power", exact=True)).to_have_value(
         "sensor.charge_power"
     )
-    choose_integration(page, "empty")
     page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.empty_power")
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.helper_plug"

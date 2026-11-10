@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, replace
 from datetime import timedelta
 
-from open_energy_planner.appliances.sources import validate_membership
+from open_energy_planner.appliances.sources import SOURCE_OWNERSHIP_UNAVAILABLE, validate_membership
 from open_energy_planner.demand.calculation.forecasting import (
     RidgeDemandModel,
     WeekdayProfile,
@@ -98,7 +98,9 @@ class ConsumerForecasts:
             self.result = None
 
     def save(self, selected, expected_version):
-        """Validate membership/overlap and atomically retain old settings before changing the pointer."""
+        """Preserve unreadable ownership, otherwise archive checked choices before changing the pointer."""
+        if self.issue == "consumer_configuration_unreadable":
+            raise ValueError(SOURCE_OWNERSHIP_UNAVAILABLE)
         if expected_version != self.version:
             raise ValueError("Consumer settings changed. Refresh this page")
         if not self.catalogue_known:

@@ -37,6 +37,11 @@ def register(app, demand, lock, ev, thermal):
                     raise web.HTTPConflict(
                         text="Consumer configuration changed. Reload before saving"
                     )
+                reserved = {
+                    row["energy_entity"] for row in (*ev.state["points"], *thermal.state["stores"])
+                }
+                if not reserved <= {row["entity_id"] for row in selected}:
+                    raise ValueError("Retain meters assigned to charge points and electric boilers")
                 cancellation = await complete_write(
                     demand.consumers.save, selected, body["expected_version"]
                 )

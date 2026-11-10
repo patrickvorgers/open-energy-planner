@@ -13,6 +13,44 @@ SAVINGS_BROWSER_TIME_ZONE = "America/New_York"
 MOBILE_CHART_LEGEND_BREAKPOINT_PX = 640
 
 
+def discover_boiler_sources(page, url):
+    """Provide an unassigned Energy device with its explicit power link before adding a boiler."""
+    body = discover(page, url)
+    for entity, name, unit, kind, state_class in (
+        ("sensor.synthetic_boiler_energy", "Synthetic boiler", "kWh", "energy", "total_increasing"),
+        ("sensor.synthetic_boiler_power", "Synthetic boiler power", "W", "power", "measurement"),
+    ):
+        body["entities"].append(
+            {
+                "entity_id": entity,
+                "name": name,
+                "unit": unit,
+                "device_class": kind,
+                "state_class": state_class,
+                "device_id": "",
+            }
+        )
+    body["suggestions"]["consumers"] = [
+        {
+            "entity_id": "sensor.synthetic_boiler_energy",
+            "power_entity": "sensor.synthetic_boiler_power",
+            "upstream": None,
+        }
+    ]
+    assert page.request.post(
+        url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=body
+    ).ok
+    return body
+
+
+def add_thermal_appliance(page):
+    """Select an available Energy device before editing its boiler-specific physical configuration."""
+    page.get_by_role("button", name="Add electric boiler", exact=True).click()
+    page.get_by_role("dialog", name="Add electric boiler", exact=True).locator(
+        "button.source-choice:enabled"
+    ).first.click()
+
+
 def wait_for_product_reads(page):
     """Wait for actual response bodies while excluding the intentionally persistent event subscription."""
     page.evaluate("() => window.__oepProductReadsIdle()")
