@@ -1,7 +1,8 @@
 """Run early real HA contracts for setup, history conservation and command invalidation."""
 
 import asyncio
-from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -71,10 +72,9 @@ def test_changed_revision_in_observation_response_revokes_old_commands_immediate
     asyncio.run(scenario())
 
 
-def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history(monkeypatch):
-    """Complete real Recorder discovery and chunk transfers, then learn measured 0.4 kWh/hour without extending model waits."""
-    import json
-
+@asynccontextmanager
+async def _recorder_demand_forecast(monkeypatch, *, source_end=None):
+    """Import a real 169-endpoint Recorder source and retain its active HA/archive context for assertions."""
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.models import StatisticMeanType
     from homeassistant.components.recorder.statistics import async_import_statistics
@@ -92,116 +92,180 @@ def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history(monke
             and request["entity_id"] == "sensor.home_energy"
             and request.get("basis") in ("energy_history_range", "energy_history_chunk")
         ):
-            history_reports.append(report)
+            history_reports.append((dict(request), report))
         return report
 
     monkeypatch.setattr(HistoryBridge, "capture", capture)
 
-    async def scenario():
-        """Use actual app configuration, Recorder and local API without helpers, external weather or physical control."""
-        async with running_chain(live=True, recorder=True) as (hass, entry, url, root):
-            now = dt_util.utcnow()
-            end = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)
-            start = end - timedelta(days=7, hours=1)
-            async_import_statistics(
-                hass,
+    async with running_chain(live=True, recorder=True) as (hass, entry, url, root):
+        now = dt_util.utcnow()
+        target = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)
+        end = source_end if source_end is not None else target
+        start = end - timedelta(days=7, hours=1)
+        async_import_statistics(
+            hass,
+            {
+                "statistic_id": "sensor.home_energy",
+                "source": "recorder",
+                "name": None,
+                "has_sum": True,
+                "mean_type": StatisticMeanType.NONE,
+                "unit_of_measurement": "kWh",
+                "unit_class": "energy",
+            },
+            [
                 {
-                    "statistic_id": "sensor.home_energy",
-                    "source": "recorder",
-                    "name": None,
-                    "has_sum": True,
-                    "mean_type": StatisticMeanType.NONE,
-                    "unit_of_measurement": "kWh",
-                    "unit_class": "energy",
-                },
-                [
-                    {
-                        "start": start + timedelta(hours=index_item),
-                        "sum": 100 + index_item * 0.4,
-                        "state": 100 + index_item * 0.4,
-                    }
-                    for index_item in range(7 * 24 + 1)
-                ],
-            )
-            await get_instance(hass).async_block_till_done()
-            hass.states.async_set("sensor.home_energy", "200", {"unit_of_measurement": "kWh"})
-            hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
-            await configure_energy(
-                hass,
-                entry,
-                [
-                    {
-                        "type": "grid",
-                        "stat_energy_from": "sensor.home_energy",
-                        "stat_rate": "sensor.grid",
-                    }
-                ],
-            )
-            await app_write(
-                url,
-                "sources",
+                    "start": start + timedelta(hours=index_item),
+                    "sum": 100 + index_item * 0.4,
+                    "state": 100 + index_item * 0.4,
+                }
+                for index_item in range(7 * 24 + 1)
+            ],
+        )
+        await get_instance(hass).async_block_till_done()
+        hass.states.async_set("sensor.home_energy", "200", {"unit_of_measurement": "kWh"})
+        hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
+        await configure_energy(
+            hass,
+            entry,
+            [
                 {
-                    "bindings": [
-                        {"key": "grid.power", "entity_id": "sensor.grid", "quantity": "power"}
-                    ]
-                },
-            )
-            await app_write(
-                url,
-                "demand",
-                {
-                    "timezone": hass.config.time_zone,
-                    "annual_kwh": 3650,
-                    "terms": [{"entity_id": "sensor.home_energy", "sign": 1}],
-                    "exclusions": [],
-                },
-            )
-            await entry.runtime_data.sync()
-            async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session:
-                for _ in range(120):
-                    async with session.get(url + "/v1/demand") as response:
-                        demand = await response.json()
-                    if demand["forecast"] and demand["forecast"]["model"] == "weekday-hour-v2":
-                        break
-                    if demand["request"] is not None:
-                        await entry.runtime_data.sync()
-                    await asyncio.sleep(0.05)
-                else:
-                    raise AssertionError(demand)
-                assert [report["basis"] for report in history_reports] == [
-                    "energy_history_range",
-                    "energy_history_chunk",
-                ]
-                assert len(history_reports[1]["hours"]) == 169
-                assert demand["history_quality"]["usable_hours"] == 168
-                steps = demand["forecast"]["steps"]
-                first = datetime.fromisoformat(steps[0]["start"])
-                assert len(steps) == {0: 120, 15: 123, 30: 122, 45: 121}[first.minute]
-                assert sum(step["duration_h"] for step in steps) == 48
-                assert demand["forecast"]["steps"][0]["kwh"] == pytest.approx(0.1)
-                assert demand["configuration"]["timezone"] == hass.config.time_zone
-                assert "current.json" in list_documents(root / "app", "demand")
-                quality_names = [
-                    name
-                    for name in list_documents(root / "app", "demand")
-                    if name.startswith("quality-history-")
-                ]
-                assert quality_names, (
-                    "The existing Recorder transport also archives quality evidence"
+                    "type": "grid",
+                    "stat_energy_from": "sensor.home_energy",
+                    "stat_rate": "sensor.grid",
+                }
+            ],
+        )
+        await app_write(
+            url,
+            "sources",
+            {"bindings": [{"key": "grid.power", "entity_id": "sensor.grid", "quantity": "power"}]},
+        )
+        await app_write(
+            url,
+            "demand",
+            {
+                "timezone": hass.config.time_zone,
+                "annual_kwh": 3650,
+                "terms": [{"entity_id": "sensor.home_energy", "sign": 1}],
+                "exclusions": [],
+            },
+        )
+        await entry.runtime_data.sync()
+        async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session:
+            for _ in range(120):
+                async with session.get(url + "/v1/demand") as response:
+                    demand = await response.json()
+                if demand["forecast"] and demand["forecast"]["model"] == "weekday-hour-v2":
+                    break
+                if demand["request"] is not None:
+                    await entry.runtime_data.sync()
+                await asyncio.sleep(0.05)
+            else:
+                raise AssertionError(demand)
+            segments = [
+                (
+                    year,
+                    datetime(year, 1, 1, tzinfo=now.tzinfo) - timedelta(hours=1),
+                    min(datetime(year + 1, 1, 1, tzinfo=now.tzinfo), target),
                 )
-                # A partial calendar day can contain one point. Check the retained history across days.
-                quality_hours = {}
-                for quality_name in quality_names:
-                    receipt = json.loads(read_document(root / "app", "demand", quality_name))
-                    block = json.loads(read_document(root / "app", "demand", receipt["block"]))
-                    assert block["entity_id"] == "sensor.home_energy"
-                    quality_hours.update(
-                        {hour_start: total_kwh for hour_start, total_kwh, _ in block["hours"]}
-                    )
-                totals = [total_kwh for _, total_kwh in sorted(quality_hours.items())]
-                assert len(totals) > 1
-                assert totals[1] - totals[0] == pytest.approx(0.4)
-                assert not entry.options
+                for year in range(start.year, target.year + 1)
+            ]
+            assert [report["basis"] for _request, report in history_reports] == [
+                "energy_history_range",
+                *["energy_history_chunk"] * len(segments),
+            ]
+            assert (
+                history_reports[0][1]["available_start"]
+                == start.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+            )
+            assert [
+                (request["import_year"], request["start"], request["end"])
+                for request, _report in history_reports[1:]
+            ] == [
+                (year, segment_start.isoformat(), segment_end.isoformat())
+                for year, segment_start, segment_end in segments
+            ]
+            expected_hours = {
+                (start + timedelta(hours=index)).timestamp(): (
+                    100 + index * 0.4,
+                    100 + index * 0.4,
+                )
+                for index in range(7 * 24 + 1)
+            }
+            received_hours = {}
+            for (_request, report), (_year, segment_start, segment_end) in zip(
+                history_reports[1:], segments, strict=True
+            ):
+                actual_hours = {
+                    stamp: (cumulative, meter) for stamp, cumulative, meter in report["hours"]
+                }
+                assert actual_hours == {
+                    stamp: values
+                    for stamp, values in expected_hours.items()
+                    if (segment_start - timedelta(hours=1)).timestamp()
+                    <= stamp
+                    < (segment_end + timedelta(hours=1)).timestamp()
+                }
+                assert all(
+                    stamp not in received_hours or received_hours[stamp] == values
+                    for stamp, values in actual_hours.items()
+                )
+                received_hours.update(actual_hours)
+            assert received_hours == expected_hours
+            assert demand["history_quality"]["usable_hours"] == 168
+            yield hass, entry, root, demand
+
+
+def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history(monkeypatch):
+    """Learn measured demand and retain recent Forecast Quality evidence through the real HA transport."""
+    import json
+
+    async def scenario():
+        """Check the original current forecast, source identities, quality archive and saved settings."""
+        async with _recorder_demand_forecast(monkeypatch) as (hass, entry, root, demand):
+            steps = demand["forecast"]["steps"]
+            first = datetime.fromisoformat(steps[0]["start"])
+            assert len(steps) == {0: 120, 15: 123, 30: 122, 45: 121}[first.minute]
+            assert sum(step["duration_h"] for step in steps) == 48
+            assert demand["forecast"]["steps"][0]["kwh"] == pytest.approx(0.1)
+            assert demand["configuration"]["timezone"] == hass.config.time_zone
+            assert "current.json" in list_documents(root / "app", "demand")
+            quality_names = [
+                name
+                for name in list_documents(root / "app", "demand")
+                if name.startswith("quality-history-")
+            ]
+            assert quality_names, "The existing Recorder transport also archives quality evidence"
+            # A partial calendar day can contain one point. Check the retained history across days.
+            quality_hours = {}
+            for quality_name in quality_names:
+                receipt = json.loads(read_document(root / "app", "demand", quality_name))
+                block = json.loads(read_document(root / "app", "demand", receipt["block"]))
+                assert block["entity_id"] == "sensor.home_energy"
+                quality_hours.update(
+                    {hour_start: total_kwh for hour_start, total_kwh, _ in block["hours"]}
+                )
+            totals = [total_kwh for _, total_kwh in sorted(quality_hours.items())]
+            assert len(totals) > 1
+            assert totals[1] - totals[0] == pytest.approx(0.4)
+            assert not entry.options
+
+    asyncio.run(scenario())
+
+
+def test_app_demand_history_preserves_utc_year_boundary_endpoints(monkeypatch):
+    """Train on fixed historical New Year measurements while retaining every overlapping annual anchor."""
+
+    async def scenario():
+        """Use the same real import and model path without claiming recent quality evidence from old history."""
+        async with _recorder_demand_forecast(
+            monkeypatch, source_end=datetime(2026, 1, 4, 23, tzinfo=UTC)
+        ) as (_hass, _entry, _root, demand):
+            assert demand["forecast"]["model"] == "weekday-hour-v2"
+            assert demand["history_quality"]["usable_hours"] == 168
+            assert demand["forecast"]["steps"][0]["kwh"] == pytest.approx(0.1)
+            assert sum(step["duration_h"] for step in demand["forecast"]["steps"]) == 48
 
     asyncio.run(scenario())
 
