@@ -514,7 +514,6 @@ def test_market_area_hint_uses_only_unambiguous_ha_country(tmp_path, country, ex
 def test_individual_consumer_history_response_routes_and_stale_rejection(tmp_path, failed):
     """Consumer history uses its own cohort, reports errors honestly, and rejects a replayed response."""
     from copy import deepcopy
-    from datetime import timedelta
 
     async def scenario():
         """Complete the primary request first, then exercise the actual supplemental history endpoint."""
@@ -539,19 +538,17 @@ def test_individual_consumer_history_response_routes_and_stale_rejection(tmp_pat
             response = await client.put("/v1/demand", headers=headers, json=configuration)
             assert response.status == 200
             primary = (await response.json())["request"]
-            start = datetime.fromisoformat(primary["start"])
-            primary_body = {
-                "request_version": primary["version"],
-                "entity_id": "sensor.import",
-                "unit": "kWh",
-                "hours": [
-                    [start.timestamp(), 100, 100],
-                    [(start + timedelta(hours=1)).timestamp(), 100.4, 100.4],
-                ],
-            }
-            assert (
-                await client.post("/v1/demand/history", headers=headers, json=primary_body)
-            ).status == 200
+            from tests.app.demand.history_support import history_report
+            from tests.app.demand.test_demand import channel
+
+            while primary is not None:
+                primary_body = history_report(primary, channel("sensor.import", [0.4] * 48))
+                assert (
+                    await client.post("/v1/demand/history", headers=headers, json=primary_body)
+                ).status == 200
+                primary = (await (await client.get("/v1/demand", headers=headers)).json())[
+                    "request"
+                ]
             state = await (await client.get("/v1/consumers", headers=headers)).json()
             assert (
                 await client.put(
@@ -566,11 +563,7 @@ def test_individual_consumer_history_response_routes_and_stale_rejection(tmp_pat
             snapshot = await (await client.get("/v1/snapshot", headers=headers)).json()
             pending = snapshot["demand"]["request"]
             assert pending["entity_id"] == "sensor.heat"
-            body = {
-                **primary_body,
-                "request_version": pending["version"],
-                "entity_id": "sensor.heat",
-            }
+            body = history_report(pending, channel("sensor.heat", [0.2] * 48))
             if failed:
                 body = {"request_version": pending["version"], "error": "history_unavailable"}
             response = await client.post("/v1/demand/history", headers=headers, json=body)

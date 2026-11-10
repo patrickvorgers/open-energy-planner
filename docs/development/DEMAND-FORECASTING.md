@@ -76,8 +76,47 @@ endpoint are unavailable, including when the correction follows missing hours.
 This prevents a corrected spike from being learned as
 device consumption. Other complete hours remain usable. Physical counter resets
 whose normalized Recorder sums keep increasing retain their measured energy.
-All required channels are committed as one matching daily range before becoming
-training input.
+All required household channels are committed as one complete daily import cohort
+before becoming training input. The last accepted cohort survives interrupted
+refreshes and restart. Selected consumers complete independently.
+If a changed definition has no accepted cohort yet, already imported source
+checkpoints can activate it immediately. Every required source must contain
+admissible history, match the current import target and have no continuity or
+cache fault. Missing or partial sources do not establish a new cohort.
+
+## Full available history
+
+Demand and selected consumers use the same history-owned importer as Solar.
+Recorder monthly discovery starts at 1970 and identifies the first available
+month. All available years are then imported as bounded annual chunks. Every
+hourly response remains limited to 367 days and 9000 endpoints. Closed years
+are reused from the active database. The open year refreshes through the latest
+requested boundary. Empty years, missing hours and source resets never become
+zero measurements. Import checkpoints resume after restart.
+
+A gap-spanning cumulative jump at the first returned endpoint is omitted.
+The next contiguous one-hour difference is usable. A gap does not discard the
+remaining year. Model fitting uses every usable supplied year. Temperature
+history extends to the oldest loaded household or consumer measurement, using
+bounded annual provider requests. Retrieved weather retains its actual receipt
+as `known_at`. It cannot establish knowledge at an earlier decision time.
+
+Training history and original forward accuracy have separate lifecycles. More
+historical samples do not replace the required future accuracy evidence before
+a learned model is selected. Solar's existing wire values and archive identities
+remain unchanged. Financial physical-counter history retains its stricter
+independent contract.
+
+The importer reuses validated immutable annual chunks within the active runtime.
+Each cache entry binds its content reference, source identity, range and learning
+cohort. Only one version per sensor/year is retained. Explicit history restore
+and process restart revalidate durable chunks. Failed transactions restore the
+previous cache state with their source checkpoints.
+
+Demand history parsing, archive work and configuration history restoration run
+off the event loop. The async caller keeps the shared application lock through
+admission, write and installation. Repeated cancellation drains the owned work
+before that lock is released. It does not authorize concurrent conflicting saves.
 
 ### Training-only negative-balance policy
 
@@ -106,9 +145,10 @@ Retained hours feed the existing models. The historical profile still requires
 168 usable hours covering every local hour of the day. Ridge retains its existing
 sample and contiguous-history requirements. Filtering never fabricates evidence
 to pass those requirements. Appliance components and residual reconstruction use
-the same policy. A component with no usable balances or at least 24 rejected
-hours is unavailable, preserving the incumbent rather than silently dropping
-device consumption.
+the same policy. Rejected hours are excluded individually. Their absolute count
+does not block appliance separation or training when enough usable evidence
+remains. A component without sufficient usable coverage remains unavailable.
+Its consumption stays within the measured household remainder.
 
 `GET /v1/demand` exposes disposable `history_quality` counts: `usable_hours`,
 `corrected_hours`, `rejected_hours` and `rejected_percentage`. The percentage is

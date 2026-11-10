@@ -26,19 +26,28 @@ async def history_body(session, url, *, days=35, energy=0.4):
         pending = (await response.json())["request"]
     end = datetime.fromisoformat(pending["end"])
     start = end - timedelta(days=days, hours=1)
-    return {
-        "request_version": pending["version"],
-        "entity_id": pending["entity_id"],
-        "unit": "kWh",
-        "hours": [
-            [
-                (start + timedelta(hours=index)).timestamp(),
-                100 + energy * index,
-                100 + energy * index,
-            ]
+    from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint
+    from tests.app.demand.history_support import history_report
+
+    history = CumulativeHistory(
+        pending["entity_id"],
+        tuple(
+            EnergyEndpoint(start + timedelta(hours=index), 100 + energy * index)
             for index in range(days * 24 + 1)
-        ],
-    }
+        ),
+    )
+    requested_end = end
+    while (
+        pending["basis"] == "energy_history_range"
+        or datetime.fromisoformat(pending["end"]) < requested_end
+    ):
+        async with session.post(
+            url + "/v1/demand/history", json=history_report(pending, history)
+        ) as response:
+            assert response.status == 200, await response.text()
+        async with session.get(url + "/v1/demand") as response:
+            pending = (await response.json())["request"]
+    return history_report(pending, history)
 
 
 async def wait_forecast(session, url, model):

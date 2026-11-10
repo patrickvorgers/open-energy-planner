@@ -220,12 +220,14 @@ def test_missing_hours_and_exclusion_never_become_zero():
 def test_impossible_subtraction_and_duplicate_channels_are_rejected():
     """Excluding 2 kWh from a 1 kWh house is inconsistent. The same source cannot be counted twice."""
     definition = replace(config(), exclusions=(ExcludedLoad("ev", "sensor.ev"),))
-    with pytest.raises(ValueError, match="Inconsistent"):
+    assert (
         DemandReconstructor().reconstruct(
             definition,
             (channel("sensor.house", [1]), channel("sensor.ev", [2])),
             before=START + timedelta(hours=1),
         )
+        == ()
+    )
     with pytest.raises(ValueError, match="Duplicated"):
         replace(config(), terms=(EnergyTerm("sensor.house", 1), EnergyTerm("sensor.house", -1)))
 
@@ -600,19 +602,21 @@ def test_ridge_promotion_uses_consistent_realized_solver_decisions(tmp_path):
 
 def test_source_histories_commit_as_one_cohort_and_stale_requests_cannot_change_it(tmp_path):
     """Receive household and EV history sequentially. Only the complete matching range becomes training input."""
+    from tests.app.demand.history_support import receive_source
+
     store = make_store(tmp_path, DemandStore)
     definition = replace(config(), exclusions=(ExcludedLoad("ev", "sensor.ev"),))
     store.save(definition)
     runtime = DemandRuntime(store)
     now = START + timedelta(days=3)
     first = runtime.request(now)
-    runtime.receive(first["version"], channel("sensor.house", [1, 1]), now)
+    receive_source(runtime, channel("sensor.house", [1, 1]), now)
     assert not runtime.histories
     second = runtime.request(now)
     assert second["entity_id"] == "sensor.ev"
     with pytest.raises(ValueError, match="changed"):
         runtime.receive(first["version"], channel("sensor.house", [1, 1]), now)
-    runtime.receive(second["version"], channel("sensor.ev", [0.2, 0.2]), now)
+    receive_source(runtime, channel("sensor.ev", [0.2, 0.2]), now)
     assert set(runtime.histories) == {"sensor.house", "sensor.ev"}
     assert runtime.request(now) is None
     assert runtime.install(runtime.build(runtime.job(now)), now)
@@ -625,10 +629,10 @@ def test_source_histories_commit_as_one_cohort_and_stale_requests_cannot_change_
     previous_quality = runtime.history_quality
     later = now + timedelta(days=1)
     first = runtime.request(later)
-    runtime.receive(first["version"], channel("sensor.house", [1, 1, 1]), later)
+    receive_source(runtime, channel("sensor.house", [1, 1, 1]), later)
     assert runtime.history_quality == previous_quality
     second = runtime.request(later)
-    runtime.receive(second["version"], channel("sensor.ev", [0.2, 0.2, 0.2]), later)
+    receive_source(runtime, channel("sensor.ev", [0.2, 0.2, 0.2]), later)
     assert runtime.document(later)["history_quality"] is None
     job = runtime.job(later)
     assert runtime.failed(job[0], later)

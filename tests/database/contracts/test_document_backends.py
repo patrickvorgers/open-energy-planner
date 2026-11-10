@@ -34,6 +34,189 @@ from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
+@pytest.mark.parametrize("activation", ["configure", "restart"])
+def test_complete_current_history_activates_after_configuration_change(
+    archive, monkeypatch, activation
+):
+    """A settings-only version change reuses validated current meters without waiting for another transfer."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from open_energy_planner.demand import runtime as runtime_module
+    from open_energy_planner.demand.runtime import DemandRuntime
+    from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint
+    from tests.app.demand.history_support import receive_source
+
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    monkeypatch.setattr(
+        runtime_module, "datetime", SimpleNamespace(now=lambda _zone: now), raising=False
+    )
+    engine, _root = archive
+    store = DemandStore(SqlDocuments(engine, "demand"))
+    store.save(config())
+    runtime = DemandRuntime(store)
+    anchor = datetime(2026, 5, 1, tzinfo=UTC)
+    history = CumulativeHistory(
+        "sensor.house",
+        tuple(EnergyEndpoint(anchor + timedelta(hours=index), 100 + index) for index in range(4)),
+    )
+    receive_source(runtime, history, now)
+    previous = store.documents.read("household-history-cohort-" + store.current.version + ".json")
+    changed = replace(store.current, annual_kwh=5000)
+    store.save(changed)
+    if activation == "configure":
+        runtime.configure(changed)
+    else:
+        runtime = DemandRuntime(DemandStore(SqlDocuments(engine, "demand")))
+    assert runtime.request(now) is None
+    assert runtime.histories == {"sensor.house": history}
+    assert store.documents.read("household-history-cohort-" + changed.version + ".json") == previous
+    assert DemandRuntime(DemandStore(SqlDocuments(engine, "demand"))).histories == runtime.histories
+
+
+def test_empty_household_refresh_retains_accepted_cohort_until_every_source_recovers(archive):
+    """An empty current-year report cannot replace a complete cohort with stale or missing source data."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.demand.calculation.model import DemandConfiguration, EnergyTerm
+    from open_energy_planner.demand.reconstruction import DemandReconstructor
+    from open_energy_planner.demand.runtime import DemandRuntime
+    from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint, parse_report
+    from tests.app.demand.history_support import history_report, receive_source
+
+    engine, _root = archive
+    store = DemandStore(SqlDocuments(engine, "demand"))
+    configuration = DemandConfiguration(
+        "Europe/Amsterdam",
+        4000,
+        (
+            EnergyTerm("sensor.import", 1),
+            EnergyTerm("sensor.export", -1),
+        ),
+    )
+    store.save(configuration)
+    runtime = DemandRuntime(store)
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    anchor = datetime(2026, 5, 1, tzinfo=UTC)
+    histories = {
+        entity: CumulativeHistory(
+            entity,
+            tuple(
+                EnergyEndpoint(anchor + timedelta(hours=index), index * rate) for index in range(4)
+            ),
+        )
+        for entity, rate in (("sensor.import", 2), ("sensor.export", 1))
+    }
+    while pending := runtime.request(now):
+        receive_source(runtime, histories[pending["entity_id"]], now)
+    pointer = "household-history-cohort-" + configuration.version + ".json"
+    accepted_references = store.documents.read(pointer)
+    accepted = runtime.histories.copy()
+    refreshed = {
+        entity: replace(
+            history,
+            hours=history.hours
+            + (EnergyEndpoint(anchor + timedelta(hours=4), 8 if entity == "sensor.import" else 4),),
+        )
+        for entity, history in histories.items()
+    }
+    later = now + timedelta(days=1)
+    empty_entity = runtime.request(later)["entity_id"]
+    while pending := runtime.request(later):
+        body = history_report(pending, refreshed[pending["entity_id"]])
+        if pending["entity_id"] == empty_entity:
+            body["hours"] = []
+        runtime.receive(pending["version"], parse_report(body), later)
+    assert store.documents.read(pointer) == accepted_references
+    assert runtime.histories == accepted
+    restarted = DemandRuntime(DemandStore(SqlDocuments(engine, "demand")))
+    assert restarted.histories == accepted
+    assert empty_entity not in restarted.pending_histories
+    samples = DemandReconstructor().reconstruct(
+        configuration, restarted.histories.values(), before=later
+    )
+    assert [(sample.start, sample.residual_kwh) for sample in samples] == [
+        (anchor + timedelta(hours=index), 1) for index in range(1, 4)
+    ]
+    recovered_at = later + timedelta(days=1)
+    while pending := restarted.request(recovered_at):
+        receive_source(restarted, refreshed[pending["entity_id"]], recovered_at)
+    assert restarted.histories == refreshed
+    assert store.documents.read(pointer) != accepted_references
+    recovered = DemandRuntime(DemandStore(SqlDocuments(engine, "demand")))
+    assert recovered.histories == refreshed
+    samples = DemandReconstructor().reconstruct(
+        configuration, recovered.histories.values(), before=recovered_at
+    )
+    assert [(sample.start, sample.residual_kwh) for sample in samples] == [
+        (anchor + timedelta(hours=index), 1) for index in range(1, 5)
+    ]
+
+
+def test_demand_history_cohort_rollback_and_continuity_survive_restart(archive, monkeypatch):
+    """All backends retain bounded source chunks and atomic accepted cohorts after failures and restart."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.demand.runtime import DemandRuntime
+    from open_energy_planner.history.importer import (
+        CumulativeHistory,
+        EnergyEndpoint,
+        HistoryContinuityError,
+        parse_report,
+    )
+    from tests.app.demand.history_support import history_report, receive_source
+
+    engine, _root = archive
+    store = DemandStore(SqlDocuments(engine, "demand"))
+    store.save(config())
+    runtime = DemandRuntime(store)
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    anchor = datetime(2024, 1, 1, tzinfo=UTC)
+    history = CumulativeHistory(
+        "sensor.house",
+        tuple(EnergyEndpoint(anchor + timedelta(hours=index), 100 + index) for index in range(4)),
+    )
+    receive_source(runtime, history, now)
+    assert runtime.histories == {"sensor.house": history}
+    before = dict(
+        store.documents.read("household-history-cohort-" + store.current.version + ".json")
+    )
+    later = now + timedelta(days=1)
+    pending = runtime.request(later)
+    changed_source = history_report(pending, history)
+    changed_source["statistics_identity"]["metadata_id"] = 18
+    with pytest.raises(HistoryContinuityError):
+        runtime.receive(pending["version"], parse_report(changed_source), later)
+    assert runtime.histories == {"sensor.house": history}
+    quarantined = DemandRuntime(DemandStore(SqlDocuments(engine, "demand")))
+    assert quarantined.history_issues["sensor.house"] == "history_continuity_unavailable"
+    assert quarantined.histories == runtime.histories
+    original_write = store.documents.write
+
+    def fail_cohort(name, document):
+        """Fail after the new source checkpoint but before accepting the household cohort."""
+        if name.startswith("household-history-cohort-"):
+            raise OSError("Synthetic interrupted cohort write")
+        return original_write(name, document)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(store.documents, "write", fail_cohort)
+        with pytest.raises(OSError, match="Synthetic"):
+            runtime.receive(
+                pending["version"], parse_report(history_report(pending, history)), later
+            )
+    assert runtime.request(later) == pending
+    assert runtime.histories == {"sensor.house": history}
+    assert (
+        store.documents.read("household-history-cohort-" + store.current.version + ".json")
+        == before
+    )
+    restored = DemandRuntime(DemandStore(SqlDocuments(engine, "demand")))
+    assert restored.request(later) == pending
+    receive_source(restored, history, later)
+    assert restored.histories == runtime.histories
+
+
 def test_solar_raw_sum_evidence_and_local_conflicts_survive_restart(archive):
     """Every backend preserves raw endpoints, reset-safe sums and original conflict anchors across refreshes."""
     from datetime import UTC, datetime
