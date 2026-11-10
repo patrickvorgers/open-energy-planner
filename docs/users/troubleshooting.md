@@ -11,6 +11,7 @@ Start with the exact page status, affected source and requested action. A connec
 | No plan, or only an older plan | [Planning inputs and calculation](#no-plan-available) |
 | A cost or benefit is unavailable | [Contract and comparison](#cost-or-benefit-is-unavailable) |
 | Missing historical savings or a forecast score | [Coverage](#savings-or-quality-is-incomplete) |
+| Some notification sources are unavailable | [Notification source availability](#some-notification-sources-are-unavailable) |
 | A ready appliance did not start | [Execution feedback](#equipment-did-not-follow-the-plan) |
 | A storage operation was interrupted | [Storage recovery](#database-migration-was-interrupted) |
 
@@ -31,6 +32,23 @@ For a combined power sensor, inspect both constituents in HA. One missing half d
 If history is insufficient, enter a confirmed annual whole-home estimate where offered. If linked solar panel metadata cannot be refreshed, repair that link or discovery rather than editing unrelated inverter values. A temporary outage must not silently transfer ownership of linked geometry.
 
 **Success looks like:** the wizard preview accepts the complete definition and saved settings show the intended sources and ratings. See [Installation settings](installation.md).
+
+## Some notification sources are unavailable
+
+This message means a module cannot currently report its notification status.
+Its last known notifications remain visible until that source can be read again.
+It does not by itself mean a forecast or plan is missing.
+
+Solar settings being saved or restored can temporarily make the Solar notification
+source unreadable. Normal work in other modules does not. Missing Home Assistant
+location or unreadable saved Solar settings also prevent a reliable status.
+If the message persists, check the app logs and Home Assistant connection rather
+than changing unrelated settings. An expired Solar forecast has its own actionable
+notification.
+
+**Success looks like:** the source becomes readable and the availability message
+clears automatically. Any remaining forecast or planning problems retain their
+own notifications.
 
 ## No plan available
 

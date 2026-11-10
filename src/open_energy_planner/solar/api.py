@@ -89,16 +89,20 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
 
     def current_notifications():
         """Read cached forecast availability. Unreadable configuration cannot confirm recovery."""
-        # Configuration restoration owns this lock in a worker. Retain prior notices until it finishes.
-        if lock.locked() or runtime.store.issue:
+        if not runtime.configuration_lock.acquire(blocking=False):
             return None
-        return solar_forecast_notifications(
-            runtime.configuration,
-            runtime.forecast,
-            live.report.location if live and live.report else None,
-            datetime.now(UTC),
-            runtime.issue,
-        )
+        try:
+            if runtime.store.issue:
+                return None
+            return solar_forecast_notifications(
+                runtime.configuration,
+                runtime.forecast,
+                live.report.location if live and live.report else None,
+                datetime.now(UTC),
+                runtime.issue,
+            )
+        finally:
+            runtime.configuration_lock.release()
 
     app[NOTIFICATIONS].register("solar", current_notifications, explain=explain_solar_problem)
 

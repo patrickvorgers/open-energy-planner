@@ -89,6 +89,13 @@ and reports an unknown source. Other successfully read owners can update normall
 Only authenticated data enters this path. Losing access removes private content
 and leaves an explicit sign-in request.
 
+Solar notification reads use a nonblocking lock shared with Solar configuration
+persistence and restoration. An in-progress Solar configuration change is unknown
+until it finishes, retaining prior notices as stale. Unrelated work holding the
+shared application lock does not make this notification source unavailable.
+Unreadable saved settings and unknown Home Assistant location still report unknown.
+An expired forecast remains a readable Solar problem rather than a failed source.
+
 `active` means the problem remains. `recovering` means its input cause has been
 addressed but successful operation is not yet confirmed. A source confirms the
 appropriate recovery condition before omitting its notice. For planning this is
