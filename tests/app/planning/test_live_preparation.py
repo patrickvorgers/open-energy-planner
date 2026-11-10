@@ -1,0 +1,76 @@
+"""Prove worker ownership, cancellation draining and freshness at live snapshot installation."""
+
+import asyncio
+import threading
+from datetime import timedelta
+from types import SimpleNamespace
+
+import pytest
+
+from open_energy_planner.home_assistant.observation_wire import parse_report
+from open_energy_planner.live_inputs import LiveInputs
+from tests.ha_contract.test_observation_inputs import NOW, basis, configuration, report_body
+
+
+@pytest.mark.parametrize("expire", [False, True])
+def test_preparation_keeps_loop_free_and_drains_repeated_cancellation_before_unlock(expire):
+    """A cancelled worker retains its state lock and only installs still-fresh input on the loop."""
+
+    async def scenario():
+        """Gate preparation with real thread events and independently advance the input clock."""
+        entered, release = threading.Event(), threading.Event()
+        loop_thread, installed, invalidated = threading.get_ident(), [], []
+        clock = [NOW]
+
+        def submit(snapshot):
+            """Coordinator submission must never execute on the preparation thread."""
+            assert threading.get_ident() == loop_thread
+            installed.append(snapshot)
+
+        planner = SimpleNamespace(submit=submit, invalidate=invalidated.append)
+        repository = SimpleNamespace(invalidate_plan=lambda: None)
+        live = LiveInputs(
+            planner,
+            repository,
+            SimpleNamespace(current=lambda *args, **kwargs: basis()),
+            clock=lambda: clock[0],
+        )
+        live.configuration = configuration()
+        live.report = parse_report(report_body(), live.configuration, NOW)
+
+        def prepare(snapshot, _now):
+            """Simulate expensive device work without blocking the event loop."""
+            assert threading.get_ident() != loop_thread
+            entered.set()
+            assert release.wait(3)
+            return snapshot
+
+        live.prepare_snapshot = prepare
+        lock = asyncio.Lock()
+
+        async def refresh():
+            """Keep application ownership until the preparation worker has stopped."""
+            async with lock:
+                await live.refresh_async()
+
+        task = asyncio.create_task(refresh())
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert lock.locked()
+            assert not task.done()
+            if expire:
+                clock[0] += timedelta(hours=2)
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not lock.locked()
+        assert bool(installed) is not expire
+        assert (live.current_snapshot is None) is expire
+        assert bool(invalidated) is expire
+
+    asyncio.run(scenario())

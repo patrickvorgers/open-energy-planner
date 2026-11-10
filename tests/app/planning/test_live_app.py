@@ -123,6 +123,39 @@ async def wait_ready(session, url):
     return state
 
 
+def test_device_preparation_does_not_block_authenticated_plan_history(tmp_path, monkeypatch):
+    """History stays readable over real HTTP while a snapshot owns slow appliance preparation."""
+    from open_energy_planner.appliances.cycles.service import ApplianceService
+
+    entered, release = threading.Event(), threading.Event()
+    original_prepare = ApplianceService.prepare
+
+    def slow_prepare(service, *args, **kwargs):
+        """Hold the domain worker long enough to observe a concurrent history request."""
+        entered.set()
+        assert release.wait(3)
+        return original_prepare(service, *args, **kwargs)
+
+    async def scenario():
+        """Read an authenticated cheap endpoint before permitting preparation to finish."""
+        async with running_app(tmp_path, FutureSource()) as (session, url):
+            state = await configure(session, url)
+            monkeypatch.setattr(ApplianceService, "prepare", slow_prepare)
+            pending = asyncio.create_task(send(session, url, state["measurement_config"]))
+            try:
+                assert await asyncio.to_thread(entered.wait, 2)
+                async with asyncio.timeout(1):
+                    async with session.get(url + "/v1/plans?limit=1") as response:
+                        assert response.status == 200
+                        await response.json()
+                assert not pending.done()
+            finally:
+                release.set()
+            await pending
+
+    asyncio.run(scenario())
+
+
 def test_manual_strategy_switch_retains_old_plan_until_valid_replacement(tmp_path):
     """A delayed consumption solve preserves cost commands/history. Only its complete accepted replacement changes strategy."""
 

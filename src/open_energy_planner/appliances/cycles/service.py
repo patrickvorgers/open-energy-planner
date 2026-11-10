@@ -522,7 +522,7 @@ class ApplianceService:
         from open_energy_planner.demand.calculation.composition import (
             LoadComponent,
             LoadStep,
-            integral,
+            integrals,
             replace_cycle,
             scale_window,
             validate_components,
@@ -591,8 +591,13 @@ class ApplianceService:
                 )
                 for row in forecast["steps"]
             )
-            for step in problem.intervals:
-                integral(energy, step.start, step.start + timedelta(hours=step.duration_h))
+            integrals(
+                energy,
+                tuple(
+                    (step.start, step.start + timedelta(hours=step.duration_h))
+                    for step in problem.intervals
+                ),
+            )
             return energy
 
         try:
@@ -655,22 +660,34 @@ class ApplianceService:
                 )
                 if entity not in entities:
                     baseline_parts.append(forecast)
+            from bisect import bisect_left, bisect_right
+            from math import fsum
+
+            component_boundaries = sorted(
+                {part.start for component in components for part in component.steps}
+            )
+            task_windows = []
+            for work in works:
+                starts = candidates(work, problem.intervals)
+                task_windows.append(
+                    (
+                        work,
+                        min(starts),
+                        max(starts) + timedelta(seconds=work.profile.duration_seconds),
+                    )
+                )
             intervals, parents = [], []
             for parent_index, step in enumerate(problem.intervals):
                 end = step.start + timedelta(hours=step.duration_h)
                 boundaries = {step.start, end}
                 boundaries.update(
-                    part.start
-                    for component in components
-                    for part in component.steps
-                    if step.start < part.start < end
+                    component_boundaries[
+                        bisect_right(component_boundaries, step.start) : bisect_left(
+                            component_boundaries, end
+                        )
+                    ]
                 )
-                for work in works:
-                    starts = candidates(work, problem.intervals)
-                    first, last = (
-                        min(starts),
-                        max(starts) + timedelta(seconds=work.profile.duration_seconds),
-                    )
+                for work, first, last in task_windows:
                     if end <= first or step.start >= last:
                         continue
                     boundary = (
@@ -691,16 +708,24 @@ class ApplianceService:
 
                 for left, right in pairwise(sorted(boundaries)):
                     # Preserve forecast means. Refine only task windows to retain actual phase peaks.
-                    part = slice_interval(step, left, right)
-                    residual = sum(
-                        integral(component.steps, left, right) for component in components
+                    part = (
+                        step
+                        if left == step.start and right == end
+                        else slice_interval(step, left, right)
                     )
-                    from open_energy_planner.appliances.cycles.model import ENERGY_TOLERANCE_KWH
-
-                    if residual < -ENERGY_TOLERANCE_KWH:
-                        raise ValueError("Appliance forecast exceeds household boundary")
-                    intervals.append(replace(part, load_kwh=max(0, residual)))
+                    intervals.append(part)
                     parents.append(parent_index)
+            windows = tuple(
+                (part.start, part.start + timedelta(hours=part.duration_h)) for part in intervals
+            )
+            contributions = [integrals(component.steps, windows) for component in components]
+            from open_energy_planner.appliances.cycles.model import ENERGY_TOLERANCE_KWH
+
+            for index, part in enumerate(intervals):
+                residual = fsum(series[index] for series in contributions)
+                if residual < -ENERGY_TOLERANCE_KWH:
+                    raise ValueError("Appliance forecast exceeds household boundary")
+                intervals[index] = replace(part, load_kwh=max(0, residual))
             refined = replace(
                 problem,
                 intervals=tuple(intervals),

@@ -357,13 +357,11 @@ class PlanValuations:
         if queue["complete"]:
             return
         rows = self.plans.list_plans(limit=REPRICING_BATCH_SIZE, before=queue["before"])
+        versions = self.plans.contract_versions(row["plan_id"] for row in rows)
         for row in rows:
-            plan = self.plans.get_plan(row["plan_id"])
-            if (
-                isinstance(plan.get("input_snapshot"), dict)
-                and plan["input_snapshot"].get("contract_version") == contract.version
-            ):
+            if versions[row["plan_id"]] == contract.version:
                 continue
+            plan = self.plans.get_plan(row["plan_id"])
             activity_context = (
                 self.events.thread_attempt(
                     "contract-valuations",

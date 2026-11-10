@@ -286,7 +286,7 @@ class PlanningService:
             if result.status not in (Status.OPTIMAL, Status.FEASIBLE) or result.plan is None:
                 return PlanningOutcome(None, result.stop_reason, result)
             costs = await asyncio.to_thread(self.validator, snapshot.problem, result.plan)
-            metrics = evaluate_consumption(snapshot.problem, result.plan)
+            metrics = await asyncio.to_thread(evaluate_consumption, snapshot.problem, result.plan)
             if snapshot.strategy == Strategy.CONSUMPTION and (
                 result.consumption_optimum_kwh is None
                 or not isfinite(result.consumption_optimum_kwh)
@@ -298,7 +298,9 @@ class PlanningService:
             now = self.clock()
             if not snapshot.current_at(now):
                 return PlanningOutcome(None, "input_expired_during_solve", result)
-            document = CommandMapper().build(snapshot, result, costs, now)
+            document = await asyncio.to_thread(CommandMapper().build, snapshot, result, costs, now)
+            if not snapshot.current_at(self.clock()):
+                return PlanningOutcome(None, "input_expired_during_solve", result)
             if snapshot.strategy == Strategy.CONSUMPTION:
                 document["consumption_objective"] = {
                     **asdict(metrics),

@@ -135,6 +135,19 @@ Publishing commits missing blocks, the immutable plan, activation history and
 the current state in one transaction. Reading a historical plan reconstructs and
 hash-checks its original content. It does not rerun the solver or apply today's rules.
 
+Original-plan reconstruction joins each record's parts to its value payloads in
+one query per record, instead of one query per scalar or array leaf. Every decoded
+leaf and reconstructed record retains its original hash check. Returned documents
+are detached, including cache hits for shared nested records.
+
+Background plan repricing projects the `input_snapshot.contract_version` leaf
+for its bounded plan batch using the existing plan, parts and values keys. Plans
+already using the requested contract need no full reconstruction. The projection
+verifies the selected leaf hash and string-or-null contract. It does not verify
+the complete parent record. An absent optional version returns null and requires
+normal full-plan repricing. Missing plan identities, missing referenced payloads
+and corrupt contract leaves fail closed. This changes no stored schema or JSON.
+
 Daily forecast quality projects `forecast_quality_controlled` through the existing
 plan, parts and values keys for enabled activation identities. It reads no solver
 inputs and verifies each distinct control leaf's content hash and list of entity

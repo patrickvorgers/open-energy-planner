@@ -123,6 +123,29 @@ def test_background_plan_repricing_publishes_only_successful_versions(settlement
     assert plans.get_plan(original["plan_id"]) == original
 
 
+def test_background_repricing_skips_current_contract_without_loading_plans(settlement, monkeypatch):
+    """A current-contract queue entry advances without reconstructing its original plan."""
+    from open_energy_planner.savings.repricing import PlanValuations
+    from tests.app.savings.test_plan_repricing import original_plan
+
+    _runtime, _store, docs, _engine, plans = settlement
+    original = original_plan()
+    original["input_snapshot"]["contract_version"] = contract().version
+    plans.state["plan"] = original
+    plans.save()
+
+    read_original = plans.get_plan
+
+    def forbidden_read(identity):
+        """Fail if a queue skip reconstructs the entire immutable plan."""
+        assert identity != original["plan_id"], "Current-contract plan must not be reconstructed"
+        return read_original(identity)
+
+    monkeypatch.setattr(plans, "get_plan", forbidden_read)
+    PlanValuations(docs, plans).process(contract(), None, END)
+    assert docs.read("repricing.json")["complete"] is True
+
+
 def test_sparse_multi_year_query_preserves_year_bounds_and_bounded_details(settlement):
     """Ninety-seven quarters inside 2023 exclude both neighbors and retain the detail and calendar limits."""
     from datetime import UTC, datetime

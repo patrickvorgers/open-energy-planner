@@ -11,6 +11,7 @@ from open_energy_planner.demand.calculation.composition import (
     LoadComponent,
     LoadStep,
     integral,
+    integrals,
     replace_cycle,
     scale_window,
     validate_components,
@@ -19,6 +20,38 @@ from open_energy_planner.installation.model import InstallationProblem
 from open_energy_planner.optimization.domain import Interval
 
 START = datetime(2026, 11, 4, tzinfo=UTC)
+
+
+def test_many_device_integrations_visit_each_source_step_once():
+    """Thirty-four hourly device series cover 192 quarters without rescanning their source history."""
+    windows = tuple(
+        (START + timedelta(minutes=15 * index), START + timedelta(minutes=15 * (index + 1)))
+        for index in range(192)
+    )
+    for device_index in range(34):
+        visited = []
+
+        def steps(visited=visited, device_index=device_index):
+            """Count actual source traversal rather than relying on machine-dependent timing."""
+            for hour in range(48):
+                visited.append(hour)
+                yield LoadStep(START + timedelta(hours=hour), 1, (device_index + 1) / 100)
+
+        assert integrals(steps(), windows) == pytest.approx([(device_index + 1) / 400] * 192)
+        assert visited == list(range(48))
+
+
+def test_batch_integration_preserves_fractional_boundaries_and_rejects_bad_coverage():
+    """Refined windows retain fractional-second energy and reject gaps, overlaps and reordered inputs."""
+    split = START + timedelta(seconds=0.123456)
+    windows = ((START, split), (split, START + timedelta(hours=2)))
+    steps = (LoadStep(START, 1, 0.04), LoadStep(START + timedelta(hours=1), 1, 0.08))
+    assert integrals(steps, windows) == pytest.approx(
+        [0.04 * 0.123456 / 3600, 0.12 - 0.04 * 0.123456 / 3600]
+    )
+    for invalid in (steps[:1], steps[::-1], (steps[0], steps[0], steps[1])):
+        with pytest.raises(ValueError, match="coverage"):
+            integrals(invalid, windows)
 
 
 def test_fractional_second_integration_retains_energy_without_rounding_a_timedelta():
