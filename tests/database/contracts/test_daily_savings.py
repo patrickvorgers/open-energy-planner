@@ -32,6 +32,19 @@ def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_reco
     from aiohttp.test_utils import TestClient, TestServer
 
     from open_energy_planner.savings import api as savings_api
+    from open_energy_planner.savings.daily import SavingsPrerequisiteMissing
+
+    original_process = DailySavings.process
+
+    def prerequisite_with_private_exception_args(*arguments, **keywords):
+        """Exception text is not the owned prerequisite guidance used by HTTP and diagnostics."""
+        try:
+            return original_process(*arguments, **keywords)
+        except SavingsPrerequisiteMissing as error:
+            error.args = ("PRIVATE-PREREQUISITE-SENTINEL",)
+            raise
+
+    monkeypatch.setattr(DailySavings, "process", prerequisite_with_private_exception_args)
 
     runtime, store, docs, _engine, plans = settlement
     report = DailySavings(runtime).calculate(
@@ -113,6 +126,7 @@ def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_reco
     with caplog.at_level(logging.INFO, logger="open_energy_planner.savings"):
         asyncio.run(observe())
     assert not any(record.exc_info for record in caplog.records)
+    assert "PRIVATE-PREREQUISITE-SENTINEL" not in caplog.text
 
 
 def test_prerequisite_recovery_does_not_clear_an_unrelated_issue_before_a_day_can_run(settlement):

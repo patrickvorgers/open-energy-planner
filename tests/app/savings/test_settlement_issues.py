@@ -160,6 +160,7 @@ def test_savings_waiting_details_identify_safe_cause_progress_and_action(issue, 
     [
         "plan_timestamp",
         "price_timestamp",
+        "activation_timestamp",
         "pending",
         "missing_prices",
         "private_contract_reason",
@@ -195,6 +196,13 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
         connection.execute(
             ACTIVATIONS.insert().values(activated_at=stamp(START), plan_id=document["plan_id"])
         )
+        if fault == "activation_timestamp":
+            connection.execute(
+                ACTIVATIONS.insert().values(
+                    activated_at=(START + timedelta(minutes=5)).isoformat() + PRIVATE_EVIDENCE,
+                    plan_id=document["plan_id"],
+                )
+            )
         if fault != "missing_prices":
             retain(
                 connection,
@@ -268,6 +276,7 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
                 in {
                     "plan_timestamp",
                     "price_timestamp",
+                    "activation_timestamp",
                     "private_contract_reason",
                     "private_continuity_reason",
                 }

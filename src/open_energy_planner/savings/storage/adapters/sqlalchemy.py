@@ -1,7 +1,7 @@
 """Portable indexed settlement reads and atomic evidence/state commits on the app engine."""
 
 import json
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -46,6 +46,19 @@ def stamp(instant):
     if isinstance(instant, str):
         instant = datetime.fromisoformat(instant)
     return aware(instant).isoformat(timespec="microseconds")
+
+
+@contextmanager
+def _read_snapshot(engine):
+    """Borrow one repeatable read without taking the app's writer guard."""
+    with engine.connect() as connection:
+        if connection.dialect.name != "sqlite":
+            connection = connection.execution_options(isolation_level="REPEATABLE READ")
+        with connection.begin():
+            if connection.dialect.name == "sqlite":
+                # sqlite3's legacy mode otherwise begins no read transaction for SELECT.
+                connection.exec_driver_sql("BEGIN")
+            yield connection
 
 
 class SettlementStore:
@@ -166,18 +179,28 @@ class SettlementStore:
     def daily_overview(self, start, end):
         """Read mutable provisional details, SQL totals and chart bins from one repeatable database snapshot."""
         try:
-            with self.engine.connect() as connection:
-                if connection.dialect.name != "sqlite":
-                    connection = connection.execution_options(isolation_level="REPEATABLE READ")
-                with connection.begin():
-                    if connection.dialect.name == "sqlite":
-                        # sqlite3's legacy mode otherwise begins no read transaction for SELECT.
-                        connection.exec_driver_sql("BEGIN")
-                    return (
-                        self.daily_summary(start, end, _connection=connection),
-                        self.days(start, end, _connection=connection),
-                        self.daily_chart(start, end, _connection=connection),
-                    )
+            with _read_snapshot(self.engine) as connection:
+                return (
+                    self.daily_summary(start, end, _connection=connection),
+                    self.days(start, end, _connection=connection),
+                    self.daily_chart(start, end, _connection=connection),
+                )
+        except SQLAlchemyError:
+            raise OSError("Daily savings archive unavailable") from None
+
+    def daily_inputs(self, start, end, area, currency):
+        """Snapshot one day's original activation chronology and published prices for one replay.
+
+        The initial physical context may precede a disabled/null activation.
+        Price receipt identities remain intact. No forecasts or process cache are used.
+        """
+        try:
+            with _read_snapshot(self.engine) as connection:
+                return (
+                    self.context_plan(start, _connection=connection),
+                    self.activations(start, end, _connection=connection),
+                    self.published(start, end, area, currency, _connection=connection),
+                )
         except SQLAlchemyError:
             raise OSError("Daily savings archive unavailable") from None
 
@@ -304,10 +327,14 @@ class SettlementStore:
                 .limit(1)
             )
 
-    def context_plan(self, instant):
+    def context_plan(self, instant, *, _connection=None):
         """Resolve recorded activation chronology independently of solver generation time."""
         history = activation_history()
-        with self.engine.connect() as connection:
+        with (
+            nullcontext(_connection)
+            if _connection is not None
+            else self.engine.connect() as connection
+        ):
             return connection.scalar(
                 select(history.c.plan_id)
                 .where(history.c.activated_at <= stamp(instant), history.c.plan_id.is_not(None))
@@ -339,10 +366,14 @@ class SettlementStore:
             )
         return json.loads(decode_payload(payload)) if payload else None
 
-    def activations(self, start, end):
+    def activations(self, start, end, *, _connection=None):
         """Read the last advice state and subsequent changes for one metering interval."""
         history = activation_history()
-        with self.engine.connect() as connection:
+        with (
+            nullcontext(_connection)
+            if _connection is not None
+            else self.engine.connect() as connection
+        ):
             initial = (
                 connection.execute(
                     select(history)
@@ -459,9 +490,13 @@ class SettlementStore:
         except SQLAlchemyError:
             raise OSError("Settlement archive unavailable") from None
 
-    def published(self, start, end, area, currency="EUR"):
+    def published(self, start, end, area, currency="EUR", *, _connection=None):
         """Read settled wholesale prices, never forecast prices, over a bounded historical interval."""
-        with self.engine.connect() as connection:
+        with (
+            nullcontext(_connection)
+            if _connection is not None
+            else self.engine.connect() as connection
+        ):
             return [
                 dict(row)
                 for row in connection.execute(

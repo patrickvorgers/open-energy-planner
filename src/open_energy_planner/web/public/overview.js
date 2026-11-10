@@ -20,6 +20,7 @@ let periodCostPlan = null, periodCostKey = "", periodCostRequest = 0;
 const evaluationVersions = new Map();
 const DAILY_RESULTS_PAGE_SIZE = 25;
 let dailySavingsData = null, dailySavingsPage = 0;
+let overviewSessionReady = false;
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
 /** Share numeric precision across evidence cards, tooltip columns and chart axes. Units remain separate. */
@@ -845,6 +846,9 @@ async function savings(signal) {
         $("evaluation-version-info").textContent = data.revision ? `${data.corrected ? "Corrected evaluation" : "Original evaluation"}: ${data.revision.slice(0, 8)}: Original plans remain unchanged.` : "An evaluation version appears when settlement can begin.";
         $("coverage").textContent = `Quarters evaluated: ${number(coverage.evaluated)} of ${coverage.expected}: Reconstructed intervals: ${coverage.estimated}: Missing coverage is not zero savings.${data.details_truncated ? " Detail table shows the first day. Select a day to inspect later intervals. Period totals and chart cover the full selection." : ""}${data.issue ? ` ${data.issue}.` : ""}`;
         const currency = data.intervals[0]?.currency || "";
+        $("savings-chart").setAttribute("aria-label", "Evaluated savings over the selected period");
+        $("realization-chart").setAttribute("aria-label", "Recorded import compared with advice and simulated reference");
+        $("realization-chart").closest("figure").querySelector("figcaption h3").textContent = "Import: advice and realization";
         $("savings-total").textContent = coverage.evaluated ? `Evaluated benefit: ${money(data.savings)} ${currency}: Avoided gross import: ${number(data.avoided_import_kwh)} kWh: Negative results are retained.` : "No evaluated savings yet. Comparison starts when a published plan, completed metering and published prices are available.";
         $("cost-rows").replaceChildren();
         for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["grid_cash", "Net electricity cost"], ["wear", "Battery wear"], ["inventory_change", "Battery value change (estimated, not cash)"], ["economic_cost", "Economic cost"], ["import_kwh", "Gross import (kWh)"]]) row($("cost-rows"), [label, coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.actual[key]) : "-", coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.reference[key]) : "-"]);
@@ -905,7 +909,11 @@ function renderDailySavings(data) {
     for (const id of ["evaluation-rows", "realized-battery-rows", "inventory-rows"]) $(id).closest("details").hidden = true;
     const currency = data.currency || "";
     $("coverage").textContent = `${data.day_count} evaluated days: Actual coverage: ${percentage(data.coverage.actual.seconds / data.coverage.actual.expected_seconds * 100)}: Self-consumption coverage: ${percentage(data.coverage.reference.seconds / data.coverage.reference.expected_seconds * 100)}: Without battery coverage: ${percentage(data.coverage.without_battery.seconds / data.coverage.without_battery.expected_seconds * 100)}.${data.details_truncated ? " Select a shorter period to inspect later daily details. Totals and charts cover the full selection." : ""}${data.issue ? ` ${data.issue}.` : ""}`;
-    $("savings-total").textContent = data.savings === null ? "No matching measured coverage for a smart planning comparison. Missing evidence is not zero savings." : `Smart planning benefit: ${money(data.savings)} ${currency}: Benefit versus without battery: ${money(data.battery_savings)} ${currency}. Negative results are retained.`;
+    $("savings-total").textContent = [
+        data.savings === null ? "No matching measured coverage for a smart planning comparison. Missing evidence is not zero savings." : `Smart planning benefit: ${money(data.savings)} ${currency}.`,
+        data.battery_savings === null ? "No matching measured coverage for a comparison versus without battery. Missing evidence is not zero savings." : `Benefit versus without battery: ${money(data.battery_savings)} ${currency}.`,
+        "Negative results are retained."
+    ].join(" ");
     const table = $("cost-rows").closest("table");
     table.querySelector("caption").textContent = "Costs on each scenario's own measured coverage. Compare benefits only on matching coverage.";
     table.querySelector("thead tr").replaceChildren(...["Component", "Actual", "Battery self-consumption", "Without battery"].map(label => { const cell = document.createElement("th"); cell.textContent = label; return cell; }));
@@ -922,11 +930,13 @@ function renderDailySavings(data) {
         segments.at(-1).push([start, bin.savings], [end, bin.savings]); previousEnd = end;
     }
     chart("savings-chart", [{name: `Smart planning benefit (${currency})`, points: segments.flat(), segments}], {unit: currency, calendarDates: true});
-    $("savings-chart").closest("figure").querySelector("figcaption p").textContent = "Daily benefit on matching measured coverage. Partial days remain partial. Gaps indicate unavailable comparisons.";
+    $("savings-chart").setAttribute("aria-label", "Smart planning benefit on matching measured coverage");
+    $("savings-chart").closest("figure").querySelector("figcaption p").textContent = "Benefit totals for each plotted interval on matching measured coverage. Partial coverage remains partial. Gaps indicate unavailable comparisons.";
     const series = [["actual", "Actual"], ["reference", "Battery self-consumption"], ["without_battery", "Without battery"]].map(([kind, name]) => ({name, points: data.chart.flatMap(bin => [[Date.parse(bin.start), bin[`${kind}_import_kwh`] ?? null], [Date.parse(bin.end), bin[`${kind}_import_kwh`] ?? null]])}));
     chart("realization-chart", series, {unit: "kWh", minimum: 0, calendarDates: true});
     const caption = $("realization-chart").closest("figure").querySelector("figcaption");
-    caption.querySelector("h3").textContent = "Daily gross import";
+    $("realization-chart").setAttribute("aria-label", "Gross import: Actual, battery self-consumption and without battery");
+    caption.querySelector("h3").textContent = "Gross import";
     caption.querySelector("p").textContent = "Measured actual import and both simulated scenarios on their own available coverage. Inspect daily details before comparing partial days.";
     renderDailySavingsRows(!samePeriod);
 }
@@ -1029,6 +1039,7 @@ async function currentPrices(signal) {
 }
 /** Refresh independent views. Only the plan reader reports success, preserving newer selection errors. */
 async function load() {
+    if (!overviewSessionReady && !await initializeOverview()) return;
     overviewLoads++;
     try {
         const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
@@ -1078,13 +1089,25 @@ $("older-evaluations").addEventListener("click", async () => {
         evaluationCursor = data.next_evaluation; $("older-evaluations").hidden = !evaluationCursor;
     } catch (error) { $("overview-status").textContent = error.message; }
 });
-api("setup/session").then((session) => {
-    useHomeAssistantTimezone(session.timezone);
-    const completed = new Date(`${localDate()}T00:00:00Z`);
-    completed.setUTCDate(completed.getUTCDate() - 1);
-    $("period-start").value = completed.toISOString().slice(0, 10);
-    $("period-end").value = $("period-start").value;
-    watchSourceNames(() => api("setup/session"), async () => (await Promise.all([showPlan(), savings()])).every(result => result === true), session.source_names_revision);
-    if (session.ingress) { $("overview-connect").hidden = true; load(); }
-    else $("overview-status").textContent = "Connect to view your plans and savings.";
-}).catch((error) => { $("overview-status").textContent = error.message; });
+/** Initialize once after a confirmed read/render. Explicit Connect/Refresh can retry a failed attempt. */
+async function initializeOverview() {
+    const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
+    try {
+        const session = await api("setup/session", signal);
+        if (overviewSessionReady) return session;
+        useHomeAssistantTimezone(session.timezone);
+        const completed = new Date(`${localDate()}T00:00:00Z`);
+        completed.setUTCDate(completed.getUTCDate() - 1);
+        if (!$("period-start").value) $("period-start").value = completed.toISOString().slice(0, 10);
+        if (!$("period-end").value) $("period-end").value = $("period-start").value;
+        watchSourceNames(() => api("setup/session", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), async () => (await Promise.all([showPlan(), savings()])).every(result => result === true), session.source_names_revision);
+        $("overview-connect").hidden = Boolean(session.ingress);
+        if (!session.ingress) $("overview-status").textContent = "Connect to view your plans and savings.";
+        overviewSessionReady = true;
+        return session;
+    } catch {
+        $("overview-status").textContent = signal.aborted ? "This view took too long to load. Please retry." : "Cannot initialize this view: Check the connection and retry.";
+        return null;
+    }
+}
+initializeOverview().then(session => { if (session?.ingress) load(); });

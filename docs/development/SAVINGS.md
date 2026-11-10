@@ -251,6 +251,18 @@ and active advice. Every distinct plan is decoded at most once during that repla
 The next replay reads fresh hash-verified context. Missing or corrupt evidence remains
 unavailable rather than falling back to a previous replay's cached values.
 
+Each replay also reads its bounded local-day activation chronology and published
+price rows from one repeatable database snapshot. Frame starts resolve the most
+recent non-null physical context, including across disabled advice. Active advice
+still integrates only its actual enabled overlap. Price rows retain their receipt
+identities and are filtered by overlap before billing. A following replay reads
+new corrections. There is no process cache or change to finalized results.
+
+Measured energy metrics require a nonempty meter association and all its readings.
+An absent association has no measured total or coverage. An associated recorded
+zero remains a measured zero. An installation with no solar can still have an
+explicit physical/modelled zero without claiming a measured solar channel.
+
 An activated installation with no contract or location exposes an owned prerequisite
 issue requiring attention. Daily work and maintenance remain paused while stored
 results are readable. Restoring the prerequisite clears only that owned prerequisite
@@ -341,6 +353,11 @@ share actual opening evidence only at the original common start. A genuine reset
 can establish a new period, but a later backdated rule cannot borrow actual usage.
 Actual hardware inventory changes are accounted independently of reference stock.
 Valuation preserves the physical movement evidence retained in the daily report.
+
+After a measurement gap, a reference with neither batteries nor bonus rules can
+resume on later fully measured frames because it has no stock or allowance to
+carry forward. The gap remains explicit and contributes no coverage or benefit.
+Battery stock and simulated bonus usage remain fail-closed when unknown.
 
 A pending historical bonus opening does not erase already established scenario
 usage. The daily evaluator handles only this expected evidence wait locally and

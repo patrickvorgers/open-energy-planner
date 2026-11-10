@@ -128,6 +128,127 @@ def daily_response():
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize(
+    "smart,battery", [(None, 12.34), (12.34, None), (None, None), (0, 0), (-1.23, -4.56)]
+)
+def test_period_benefits_have_independent_availability(app_page, smart, battery):
+    """Missing one comparison cannot hide another. Measured zero and negative benefits remain explicit."""
+    page, url = app_page
+    data = daily_response()
+    data.update(savings=smart, battery_savings=battery)
+    page.route("**/v1/savings?**", lambda route: route.fulfill(json=data))
+    page.goto(url + "/overview#savings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    total = page.locator("#savings-total")
+    expect(total).to_contain_text(
+        "No matching measured coverage for a smart planning comparison"
+        if smart is None
+        else f"Smart planning benefit: {smart:.2f}"
+    )
+    expect(total).to_contain_text(
+        "No matching measured coverage for a comparison versus without battery"
+        if battery is None
+        else f"Benefit versus without battery: {battery:.2f}"
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_monthly_chart_bins_have_interval_neutral_accessible_labels(app_page):
+    """Monthly aggregates retain their kWh/money values without being called daily amounts."""
+    page, url = app_page
+    data = daily_response()
+    data.update(
+        start="2024-01-01T00:00:00+00:00", end="2026-01-01T00:00:00+00:00", details_truncated=True
+    )
+    data["chart"] = [
+        {
+            "start": "2024-01-01T00:00:00+00:00",
+            "end": "2024-02-01T00:00:00+00:00",
+            "savings": 31,
+            "actual_import_kwh": 310,
+            "reference_import_kwh": 280,
+            "without_battery_import_kwh": 330,
+        }
+    ]
+    page.route("**/v1/savings?**", lambda route: route.fulfill(json=data))
+    page.goto(url + "/overview#savings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(
+        page.locator("#realization-chart").locator("xpath=ancestor::figure").get_by_role("heading")
+    ).to_have_text("Gross import")
+    expect(page.locator("#savings-chart")).to_have_attribute(
+        "aria-label", "Smart planning benefit on matching measured coverage"
+    )
+    expect(page.locator("#realization-chart")).to_have_attribute(
+        "aria-label", "Gross import: Actual, battery self-consumption and without battery"
+    )
+    expect(page.locator("#savings-chart").locator("xpath=ancestor::figure")).to_contain_text(
+        "each plotted interval"
+    )
+    assert page.evaluate(
+        "Chart.getChart(document.getElementById('realization-chart')).data.datasets[0].data.map(point=>point.y)"
+    ) == [310, 310]
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_available_battery_benefit_survives_a_month_without_reference_coverage(app_page):
+    """Thirty varied days retain the actual/no-battery comparison while the independent reference is absent."""
+    page, url = app_page
+    data = daily_response()
+    data["savings"] = None
+    data["coverage"]["reference"]["seconds"] = 0
+    data["totals"]["reference"] = {key: None for key in data["totals"]["reference"]}
+    for day in data["days"]:
+        day["savings"] = None
+        day["scenarios"]["reference"].update(
+            totals=None,
+            coverage_seconds=0,
+            estimated_seconds=0,
+            status="unavailable",
+            opening=None,
+            closing=None,
+            missing=[
+                {
+                    "start": day["start"],
+                    "end": day["end"],
+                    "reason": "The independent reference has incomplete physical evidence.",
+                }
+            ],
+        )
+    for chart_bin in data["chart"]:
+        chart_bin.update(savings=None, reference_import_kwh=None)
+    page.route("**/v1/savings?**", lambda route: route.fulfill(json=data))
+    page.goto(url + "/overview#savings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.locator("#period-start").fill("2026-10-01")
+    page.locator("#period-end").fill("2026-10-30")
+    page.get_by_role("button", name="Show period", exact=True).click()
+    expect(page.locator("#savings-total")).to_contain_text(
+        "No matching measured coverage for a smart planning comparison"
+    )
+    expect(page.locator("#savings-total")).to_contain_text(
+        f"Benefit versus without battery: {data['battery_savings']:.2f}"
+    )
+    expect(page.locator("#daily-savings-rows tr").first).to_contain_text("Unavailable")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    folder = Path("results/ci/compact-review3-savings-ui")
+    folder.mkdir(parents=True, exist_ok=True)
+    page.locator("#savings-heading").evaluate(
+        "element=>window.scrollTo(0,element.getBoundingClientRect().top+window.scrollY-90)"
+    )
+    page.screenshot(
+        path=str(folder / f"daily-independent-benefit-{page.viewport_size['width']}.png")
+    )
+    if page.viewport_size["width"] == 390:
+        page.locator("#realization-chart").locator("xpath=ancestor::figure").screenshot(
+            path=str(folder / "daily-independent-import-390.png")
+        )
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_daily_results_show_partial_and_unavailable_scenarios_without_false_zero(app_page):
     """Desktop/mobile render three independent costs, 25-row pages and explicit missing ranges. API arithmetic has separate real-backend proof."""
     page, url = app_page
@@ -174,7 +295,7 @@ def test_daily_results_show_partial_and_unavailable_scenarios_without_false_zero
         "Chart.getChart(document.getElementById('realization-chart')).data.datasets.map(dataset => dataset.label)"
     ) == ["Actual", "Battery self-consumption", "Without battery"]
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-    folder = Path("results/ci/compact-savings-ui")
+    folder = Path("results/ci/compact-review3-savings-ui")
     folder.mkdir(parents=True, exist_ok=True)
     width = page.viewport_size["width"]
     last_details.locator("summary").click()

@@ -924,6 +924,11 @@ new query shape or materially larger payload is introduced.
   Borrowed settlement connections retain the caller's complete transaction instead
   of opening another. Ordinary reads and repeatable daily read snapshots do not
   take the writer guard. Async callers execute guarded writes off the event loop.
+  Daily replay borrows one repeatable-read connection for its initial physical
+  context ID, bounded activation chronology and published price rows. The same
+  snapshot pattern protects provisional report details/totals. Per-frame overlap
+  resolution and context decoding are local to that replay. The next replay
+  rereads corrections and receipt identities. No retained document format changes.
   A Contract save preserves its immutable revision and current pointer together
   while waiting for another participating writer to finish. A failed save rolls
   both back and leaves the in-memory current contract unchanged.

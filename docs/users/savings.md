@@ -69,6 +69,15 @@ The current day is not evaluated yet. After local midnight, the previous day bec
 
 Each scenario closes as **Complete**, **Partial** or **Unavailable**. Partial totals cover only the displayed measured time. They are never stretched to represent a full day. Actual costs can remain usable while a simulated scenario is unavailable. The benefit includes only intervals accepted for both scenarios being compared. A complete actual-cost total and a partial reference-cost total cannot simply be subtracted.
 
+Smart planning benefit and benefit versus without battery have independent
+coverage. One can remain available when the other is unavailable. Charts use
+day or month totals according to the selected period. Missing measured meter
+associations remain unavailable rather than appearing as zero consumption.
+
+A reference without batteries or bonus rules can resume after a gap on later
+fully measured intervals. The missing interval remains uncovered. Unknown battery
+stock or simulated bonus usage cannot be reset to make a comparison available.
+
 After finalization, the daily costs, energy totals, coverage, missing ranges, battery endpoints and calculation versions remain available. Later changes to terms or prices do not silently rewrite a finalized day. Detailed temporary quarters can then expire. **View retained day plan** opens the original daily plan when one was published that day. Its forecast is separate from the measured daily result.
 
 On upgrade, existing history receives a recovery window before old days can close. Backfill proceeds in the background. An old day appearing first does not mean the entire historical import has finished.

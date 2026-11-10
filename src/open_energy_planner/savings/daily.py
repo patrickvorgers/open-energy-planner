@@ -6,6 +6,7 @@ recovery days. Missing evidence never becomes zero or a whole-day extrapolation.
 """
 
 import json
+from bisect import bisect_left, bisect_right
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from math import fsum
@@ -31,7 +32,7 @@ from .model import POLICY_VERSION, PendingSettlement, parse_frame
 from .physical import advance
 from .repricing import corrected_problem
 from .runtime import capture_start, settlement_issue, version
-from .storage.adapters.sqlalchemy import TOTAL_KEYS
+from .storage.adapters.sqlalchemy import TOTAL_KEYS, stamp
 
 RECOVERY_CALENDAR_DAYS = 3
 DAILY_POLICY_VERSION = "daily-savings-v1"
@@ -296,6 +297,16 @@ class DailySavings:
             return contexts[identity]
 
         start, end = day_window(day, timezone)
+        initial_plan, activations, market_rows = self.store.daily_inputs(
+            start, end, contract.market_area, contract.currency
+        )
+        # Match SQL's canonical UTC ordering. Advice validates retained dates inside the frame.
+        activation_times = [row["activated_at"] for row in activations]
+        context_ids = []
+        context_id = initial_plan
+        for activation in activations:
+            context_id = activation["plan_id"] or context_id
+            context_ids.append(context_id)
         scenarios = {kind: empty_scenario() for kind in SCENARIOS}
         cursor = max(start, initial)
         if cursor > start:
@@ -348,7 +359,8 @@ class DailySavings:
                     reference_counters = None
                     physical_state, physical_known = None, False
                     self.runtime.physical_issue = UNKNOWN_REFERENCE
-                plan_id = self.store.context_plan(frame.start)
+                active_index = bisect_right(activation_times, stamp(frame.start))
+                plan_id = context_ids[active_index - 1] if active_index else initial_plan
                 plan = get_context(plan_id) if plan_id else None
                 accepted = {}
                 common_start = frame.start == initial
@@ -407,9 +419,19 @@ class DailySavings:
                     )
                     add_energy(energy, frame, bindings)
                     advice = active_advice(
-                        frame, self.store.activations(frame.start, frame.end), get_context
+                        frame,
+                        activations[
+                            max(0, active_index - 1) : bisect_left(
+                                activation_times, stamp(frame.end)
+                            )
+                        ],
+                        get_context,
                     )
                     bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
+                    if not physical_known and not problem.batteries and not contract.bonuses:
+                        # No stock or allowance can carry an unknown quantity across this gap.
+                        physical_state = state = None
+                        physical_known = reference_known = True
                     previous_physical = physical_state
                     if physical_known:
                         try:
@@ -471,9 +493,13 @@ class DailySavings:
                             json.dumps(asdict(seed), default=lambda value: value.isoformat())
                         )
                         counter_seed_evidence[version(seed_record)] = seed_record
-                    prices = self.store.published(
-                        frame.start, frame.end, contract.market_area, contract.currency
-                    )
+                    # Retained date parsing belongs inside this frame's owned failure boundary.
+                    prices = [
+                        row
+                        for row in market_rows
+                        if datetime.fromisoformat(row["start"]) < frame.end
+                        and datetime.fromisoformat(row["end"]) > frame.start
+                    ]
                     site = SiteLocation(**context["location"]) if context["location"] else None
                     if reference_known and not simulated_counters_ready(
                         contract,
@@ -765,7 +791,7 @@ def add_energy(totals, frame, bindings):
         "solar_ac": [(source["entity_id"], 1) for source in bindings["solar"]],
     }
     for key, terms in members.items():
-        if all(identity in frame.channels for identity, _sign in terms):
+        if terms and all(identity in frame.channels for identity, _sign in terms):
             amount = fsum(frame.channels[identity] * sign for identity, sign in terms)
             if amount < 0:
                 continue
