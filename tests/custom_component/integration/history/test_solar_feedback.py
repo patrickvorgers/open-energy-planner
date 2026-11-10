@@ -12,9 +12,277 @@ from homeassistant.util import dt as dt_util
 from tests.custom_component.support.chain import running_chain
 
 
+async def record_feedback(hass, entity, at, state, sample):
+    """Commit an original timestamped HA observation through Recorder's native queue barrier."""
+    from homeassistant.components.recorder.tasks import SynchronizeTask
+
+    hass.states.async_set(entity, state, {"sample": sample}, timestamp=at.timestamp())
+    observed = hass.states.get(entity)
+    assert observed.last_updated == at
+    await hass.async_block_till_done()
+    committed = hass.loop.create_future()
+    get_instance(hass).queue_task(SynchronizeTask(committed))
+    await committed
+    return observed
+
+
+@pytest.mark.parametrize(
+    "mode", ["complete", "purged", "continuous", "purged_empty", "first_valid"]
+)
+def test_real_recorder_gap_cannot_extend_an_accepted_off(mode, tmp_path):
+    """Purged coverage cannot carry archived off feedback forward, while real continuous coverage stays usable."""
+    from contextlib import closing
+    from dataclasses import replace
+
+    from homeassistant.components.recorder.db_schema import States
+    from homeassistant.components.recorder.util import session_scope
+    from sqlalchemy import delete, select, update
+
+    from custom_components.open_energy_planner.solar_feedback import capture
+    from open_energy_planner.solar.curtailment import parse_feedback, save_feedback
+    from open_energy_planner.solar.learning import unrestricted_interval
+    from open_energy_planner.solar.storage import SolarStore
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+    from tests.app.solar.support import plant
+
+    async def scenario():
+        """Use identical native observations and app append contracts with or without deleting owned old rows."""
+        async with running_chain(live=True, recorder=True) as (hass, _entry, _url, _root):
+            recorder = get_instance(hass)
+            entity = "binary_sensor.synthetic_gap_curtailment"
+            beginning = (dt_util.utcnow() - timedelta(days=3)).replace(
+                hour=8, minute=0, second=0, microsecond=0
+            )
+            cursor, end = beginning + timedelta(hours=1), beginning + timedelta(hours=6)
+            initial = "unavailable" if mode == "first_valid" else "off"
+            await record_feedback(hass, entity, beginning, initial, 1)
+            request = {
+                "entity_id": entity,
+                "configuration_version": "c" * 64,
+                "start": beginning.isoformat(),
+                "end": cursor.isoformat(),
+            }
+            first = await capture(hass, request)
+            assert first["feedback"]["readings"] == [
+                [beginning.isoformat(), None if mode == "first_valid" else False]
+            ]
+            middle = (
+                "off" if mode == "continuous" else "unavailable" if mode == "first_valid" else "on"
+            )
+            await record_feedback(hass, entity, beginning + timedelta(hours=2), middle, 2)
+            await record_feedback(hass, entity, beginning + timedelta(hours=4), "off", 3)
+            if mode == "purged_empty":
+                await record_feedback(hass, entity, dt_util.utcnow(), "unavailable", 4)
+            purged = mode in ("purged", "purged_empty", "first_valid")
+            if purged:
+
+                def purge_owned_history():
+                    """Keep the exact retained observation while deleting only this synthetic source's old rows."""
+                    with session_scope(hass=hass) as session:
+                        metadata = recorder.states_meta_manager.get(entity, session, False)
+                        rows = (
+                            session.execute(
+                                select(States.last_updated_ts)
+                                .where(
+                                    States.metadata_id == metadata,
+                                    States.last_updated_ts < end.timestamp(),
+                                )
+                                .order_by(States.last_updated_ts)
+                            )
+                            .scalars()
+                            .all()
+                        )
+                        assert rows == [
+                            beginning.timestamp(),
+                            (beginning + timedelta(hours=2)).timestamp(),
+                            (beginning + timedelta(hours=4)).timestamp(),
+                        ]
+                        session.execute(
+                            update(States)
+                            .where(States.metadata_id == metadata)
+                            .values(old_state_id=None)
+                        )
+                        cutoff = end if mode == "purged_empty" else beginning + timedelta(hours=3)
+                        removed = session.execute(
+                            delete(States).where(
+                                States.metadata_id == metadata,
+                                States.last_updated_ts < cutoff.timestamp(),
+                            )
+                        )
+                        assert removed.rowcount == (3 if mode == "purged_empty" else 2)
+
+                await recorder.async_add_executor_job(purge_owned_history)
+            response = await capture(
+                hass, {**request, "start": cursor.isoformat(), "end": end.isoformat()}
+            )
+            expected = (
+                [[cursor.isoformat(), None]]
+                if purged
+                else [[(beginning + timedelta(hours=2)).isoformat(), mode != "continuous"]]
+            )
+            if mode != "purged_empty":
+                expected.append([(beginning + timedelta(hours=4)).isoformat(), False])
+            assert response["start"] == cursor.isoformat()
+            assert response["feedback"]["checked_until"] == end.isoformat()
+            assert response["feedback"]["readings"] == expected
+            with closing(SqlPlanRepository(tmp_path / mode)) as archive:
+                store = SolarStore(SqlDocuments(archive.engine, "solar"))
+                accepted = save_feedback(
+                    store, None, parse_feedback(first["feedback"], dt_util.utcnow()), beginning
+                )
+                appended = save_feedback(
+                    store, accepted, parse_feedback(response["feedback"], dt_util.utcnow()), cursor
+                )
+                source = replace(plant().sources[0], curtailment_entity_id=entity)
+                assert unrestricted_interval(
+                    source, beginning + timedelta(hours=2), beginning + timedelta(hours=3), appended
+                ) is (mode in ("continuous", "first_valid"))
+                assert appended.first_valid == (
+                    beginning + timedelta(hours=4) if mode == "first_valid" else beginning
+                )
+                assert appended.unrestricted(beginning - timedelta(hours=1), beginning)
+                assert appended.unrestricted(
+                    beginning + timedelta(hours=4), beginning + timedelta(hours=5)
+                ) is (mode != "purged_empty")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "position", ["previous_microsecond", "round_below", "exact", "round_above", "next_microsecond"]
+)
+def test_real_recorder_start_anchor_uses_rounded_native_microseconds(position):
+    """Inclusive cursor anchors use native float rounding without hiding exact observations or duplicating unknowns."""
+    from functools import partial
+    from math import inf, nextafter
+
+    from homeassistant.components.recorder.db_schema import States
+    from homeassistant.components.recorder.util import session_scope
+    from sqlalchemy import select, update
+
+    from custom_components.open_energy_planner.solar_feedback import (
+        capture,
+        retained_feedback_bounds,
+    )
+
+    async def scenario():
+        """Perturb one committed native timestamp around a microsecond boundary and retain its true state."""
+        async with running_chain(live=True, recorder=True) as (hass, _entry, _url, _root):
+            recorder = get_instance(hass)
+            entity = "binary_sensor.synthetic_cursor_curtailment"
+            cursor = (dt_util.utcnow() - timedelta(days=2)).replace(
+                hour=12, minute=0, second=0, microsecond=123456
+            )
+            end = cursor + timedelta(hours=1)
+            await record_feedback(hass, entity, cursor, "off", 1)
+            await record_feedback(hass, entity, dt_util.utcnow(), "on", 2)
+            raw = {
+                "previous_microsecond": (cursor - timedelta(microseconds=1)).timestamp(),
+                "round_below": nextafter(cursor.timestamp(), -inf),
+                "exact": cursor.timestamp(),
+                "round_above": nextafter(cursor.timestamp(), inf),
+                "next_microsecond": (cursor + timedelta(microseconds=1)).timestamp(),
+            }[position]
+
+            def update_original_timestamp():
+                """Keep native storage precision that can round to the same transmitted microsecond."""
+                with session_scope(hass=hass) as session:
+                    metadata = recorder.states_meta_manager.get(entity, session, False)
+                    original = session.execute(
+                        select(States.state_id)
+                        .where(States.metadata_id == metadata)
+                        .order_by(States.last_updated_ts)
+                        .limit(1)
+                    ).scalar_one()
+                    session.execute(
+                        update(States)
+                        .where(States.state_id == original)
+                        .values(last_updated_ts=raw)
+                    )
+
+            await recorder.async_add_executor_job(update_original_timestamp)
+            first, covered = await recorder.async_add_executor_job(
+                partial(retained_feedback_bounds, hass, cursor, end, entity)
+            )
+            assert covered is (position != "next_microsecond")
+            expected = (
+                []
+                if position == "previous_microsecond"
+                else [[dt_util.utc_from_timestamp(raw).isoformat(), False]]
+            )
+            if position == "next_microsecond":
+                expected.insert(0, [cursor.isoformat(), None])
+            assert (first is None) is (position == "previous_microsecond")
+            if first is not None:
+                assert first.last_updated == dt_util.utc_from_timestamp(raw)
+            response = await capture(
+                hass,
+                {
+                    "entity_id": entity,
+                    "configuration_version": "c" * 64,
+                    "start": cursor.isoformat(),
+                    "end": end.isoformat(),
+                },
+            )
+            assert response["feedback"]["readings"] == expected
+            assert response["feedback"]["checked_until"] == end.isoformat()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"), [("on", True), ("off", False), ("unavailable", None)]
+)
+@pytest.mark.parametrize("at_cursor", [True, False])
+def test_current_feedback_keeps_its_actual_time_without_a_retained_anchor(
+    monkeypatch, state, expected, at_cursor
+):
+    """An exact current observation fills the boundary once, while a later one never fills its past."""
+    from homeassistant.core import State
+
+    from custom_components.open_energy_planner import solar_feedback
+
+    async def scenario():
+        """Separate absent Recorder coverage from a genuine native current-state timestamp."""
+        start = dt_util.utcnow() - timedelta(hours=1)
+        observed_at = start if at_cursor else start + timedelta(minutes=30)
+
+        async def committed():
+            """The empty Recorder fixture has no queued writes."""
+
+        async def read(_query):
+            """Return no retained metadata or cursor anchor."""
+            return {}, False
+
+        recorder = SimpleNamespace(async_block_till_done=committed, async_add_executor_job=read)
+        monkeypatch.setattr(solar_feedback, "get_instance", lambda _hass: recorder)
+        entity = "binary_sensor.synthetic_current_feedback"
+        current = State(entity, state, last_updated=observed_at)
+        hass = SimpleNamespace(
+            states=SimpleNamespace(get=lambda requested: current if requested == entity else None)
+        )
+        response = await solar_feedback.capture(
+            hass,
+            {
+                "entity_id": entity,
+                "configuration_version": "c" * 64,
+                "start": start.isoformat(),
+                "end": dt_util.utcnow().isoformat(),
+            },
+        )
+        readings = [[observed_at.isoformat(), expected]]
+        if not at_cursor:
+            readings.insert(0, [start.isoformat(), None])
+        assert response["feedback"]["readings"] == readings
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("retained_state", ["on", "off", "unavailable"])
+@pytest.mark.parametrize("maximum", [1, 2])
 def test_real_recorder_first_retained_attribute_observation_keeps_actual_time(
-    monkeypatch, retained_state
+    monkeypatch, retained_state, maximum
 ):
     """Purging the original transition must not hide the earliest retained attribute-only observation."""
     from homeassistant.components.recorder.db_schema import States
@@ -85,6 +353,7 @@ def test_real_recorder_first_retained_attribute_observation_keeps_actual_time(
             }
             response = await capture(hass, request)
             expected = [
+                [request["start"], None],
                 [stored_times[1].isoformat(), {"on": True, "off": False}.get(retained_state)],
                 [stored_times[2].isoformat(), transition.state == "on"],
             ]
@@ -95,15 +364,19 @@ def test_real_recorder_first_retained_attribute_observation_keeps_actual_time(
                 retained_state != "on"
             )
             resumed = await capture(hass, {**request, "start": stored_times[1].isoformat()})
-            assert resumed["feedback"]["readings"] == expected
-            monkeypatch.setattr(solar_feedback, "MAX_FEEDBACK_READINGS", 1)
+            assert resumed["feedback"]["readings"] == expected[1:]
+            monkeypatch.setattr(solar_feedback, "MAX_FEEDBACK_READINGS", maximum)
             bounded = await capture(hass, request)
-            assert bounded["feedback"]["readings"] == expected[:1]
-            assert bounded["feedback"]["checked_until"] == stored_times[2].isoformat()
-            continuation = await capture(
-                hass, {**request, "start": bounded["feedback"]["checked_until"]}
-            )
-            assert continuation["feedback"]["readings"] == expected[1:]
+            assert bounded["feedback"]["readings"] == expected[:maximum]
+            assert bounded["feedback"]["checked_until"] == expected[maximum][0]
+            combined = list(bounded["feedback"]["readings"])
+            while bounded["feedback"]["checked_until"] != request["end"]:
+                next_start = bounded["feedback"]["checked_until"]
+                bounded = await capture(hass, {**request, "start": next_start})
+                assert bounded["feedback"]["checked_until"] > next_start
+                assert len(bounded["feedback"]["readings"]) <= maximum
+                combined.extend(bounded["feedback"]["readings"])
+            assert combined == expected
 
     asyncio.run(scenario())
 
@@ -145,7 +418,9 @@ def test_oversized_feedback_advances_in_exact_exclusive_chunks(monkeypatch):
         monkeypatch.setattr(solar_feedback, "get_instance", lambda _hass: recorder)
         monkeypatch.setattr(solar_feedback, "get_significant_states", history, raising=False)
         monkeypatch.setattr(solar_feedback, "state_changes_during_period", history, raising=False)
-        monkeypatch.setattr(solar_feedback, "first_retained_state", lambda *_args: observations[0])
+        monkeypatch.setattr(
+            solar_feedback, "retained_feedback_bounds", lambda *_args: (observations[0], True)
+        )
         hass = SimpleNamespace(states=SimpleNamespace(get=lambda _entity: observations[-1]))
         request = {
             "entity_id": entity,
@@ -248,7 +523,7 @@ def test_timed_out_native_query_does_not_stack_or_starve_another_sensor(monkeypa
             if entity.endswith("broken"):
                 return asyncio.shield(worker)
             result = asyncio.Future()
-            result.set_result({})
+            result.set_result(({}, False))
             return result
 
         async def send(_method, _path, body):
@@ -301,7 +576,7 @@ def test_timed_out_native_query_does_not_stack_or_starve_another_sensor(monkeypa
             assert delivered == ["binary_sensor.healthy"]
         finally:
             if not worker.done():
-                worker.set_result({})
+                worker.set_result(({}, False))
             await asyncio.sleep(0)
 
     asyncio.run(scenario())
@@ -360,7 +635,7 @@ def test_real_recorder_queued_transitions_commit_before_checked_coverage(monkeyp
                         },
                     )
                     assert response["feedback"]["checked_until"] == end.isoformat()
-                    assert response["feedback"]["readings"] == [
+                    assert response["feedback"]["readings"] == [[response["start"], None]] + [
                         [row.last_updated.isoformat(), value]
                         for row, value in zip(observations, (False, True, None, False), strict=True)
                     ]
@@ -442,7 +717,8 @@ def test_real_recorder_retains_feedback_times_and_unknown_values():
             assert response["feedback"] == {
                 "entity_id": entity,
                 "checked_until": end.isoformat(),
-                "readings": [
+                "readings": [[start.isoformat(), None]]
+                + [
                     [state.last_updated.isoformat(), value]
                     for state, value in zip(observations, (False, True, None, False), strict=True)
                 ],
@@ -450,7 +726,7 @@ def test_real_recorder_retains_feedback_times_and_unknown_values():
             resumed = await capture(
                 hass, {**request, "start": observations[1].last_updated.isoformat()}
             )
-            assert resumed["feedback"]["readings"] == response["feedback"]["readings"][1:]
+            assert resumed["feedback"]["readings"] == response["feedback"]["readings"][2:]
 
     asyncio.run(scenario())
 
@@ -488,12 +764,21 @@ def test_real_recorder_native_row_limit_preserves_boundary_transition(monkeypatc
                 "end": dt_util.utcnow().isoformat(),
             }
             first = await solar_feedback.capture(hass, request)
-            assert first["feedback"]["checked_until"] == observations[2].last_updated.isoformat()
+            assert first["feedback"]["checked_until"] == observations[1].last_updated.isoformat()
             second = await solar_feedback.capture(
                 hass, {**request, "start": first["feedback"]["checked_until"]}
             )
-            assert sizes == [3, 2]
-            assert first["feedback"]["readings"] + second["feedback"]["readings"] == [
+            assert second["feedback"]["checked_until"] == observations[3].last_updated.isoformat()
+            third = await solar_feedback.capture(
+                hass, {**request, "start": second["feedback"]["checked_until"]}
+            )
+            assert third["feedback"]["checked_until"] == request["end"]
+            assert sizes == [3, 3, 1]
+            assert (
+                first["feedback"]["readings"]
+                + second["feedback"]["readings"]
+                + third["feedback"]["readings"]
+            ) == [[request["start"], None]] + [
                 [row.last_updated.isoformat(), value]
                 for row, value in zip(observations, (False, True, None, False), strict=True)
             ]

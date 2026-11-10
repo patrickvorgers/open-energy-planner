@@ -432,7 +432,7 @@ The `solar` namespace additionally owns these JSON contracts:
 | Document | Meaning |
 | --- | --- |
 | `curtailment-current-<sensor hash>.json` | Mutable checked receipt and its SHA-256 reference for one exact sensor. The receipt contains `entity_id`, exclusive aware UTC `checked_until`, segment `count` and final content hash `tail`. Empty refreshes advance only this cursor. |
-| `curtailment-segment-<sensor hash>-<index>.json` | Immutable append of original timestamp/boolean-or-null observations, source identity, sequence `index` and preceding content hash `previous`. Appends do not rewrite or hash preceding observations. In-memory ancestors retain chunks and small metadata, without retaining materialized lookup arrays for every earlier prefix. Existing training snapshots remain unchanged. Restart reads known segment names in batches of at most 128, validating source, ordering, every hash-chain link and the receipt's final tail. The retained first valid observation survives Recorder purging. |
+| `curtailment-segment-<sensor hash>-<index>.json` | Immutable append of original timestamp/boolean-or-null observations and explicit null coverage boundaries, source identity, sequence `index` and preceding content hash `previous`. A null at a requested start can mark missing retained Recorder coverage. It is not a backdated physical observation. Appends do not rewrite or hash preceding observations. In-memory ancestors retain chunks and small metadata, without retaining materialized lookup arrays for every earlier prefix. Existing training snapshots remain unchanged. Restart reads known segment names in batches of at most 128, validating source, ordering, every hash-chain link and the receipt's final tail. The retained first valid observation survives Recorder purging. |
 | `curtailment-history-<hash>.json` | Immutable copy of a checked receipt, archived when model or historical-fit evidence references it. Earlier referenced receipts remain replayable against their original observation prefix. Ordinary empty polling does not retain another unreferenced receipt or full-history manifest. |
 
 The peer route `/v1/solar/feedback` binds each response to the active configuration,
@@ -445,7 +445,12 @@ retained observation in the requested range, including an attribute-only update
 whose original state change was purged. Its original timestamp is preserved.
 Float timestamp bounds match the serialized microsecond cursor so resuming
 cannot omit that observation. Later attribute-only updates do not change the
-control state. Both reads share the same executor ownership and transfer budget. The
+control state. A second indexed single-row query checks retained coverage at or
+before the start. If that anchor is absent and no actual observation occurs at
+the exact start, a null boundary marks the unchecked gap from that start. It
+consumes one transfer slot and cannot extend an earlier off observation through
+the gap. The policy before the first valid observation remains unchanged.
+These reads share the same executor ownership and transfer budget. The
 Recorder commit barrier and query share one 20-second deadline and run outside
 command synchronization. A timed-out native read retains ownership until its
 executor finishes, preventing overlapping retries for that sensor while other

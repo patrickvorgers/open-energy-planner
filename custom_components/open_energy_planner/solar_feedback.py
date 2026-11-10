@@ -33,40 +33,60 @@ def feedback_value(value):
     return None
 
 
-def first_retained_state(hass, start, end, entity):
-    """Read one indexed original observation even when its preceding state change was purged."""
+def recorder_boundary(instant):
+    """Find the first native float timestamp that rounds to this microsecond or later."""
     # Recorder floats can round up to the microsecond cursor. Match that same datetime boundary.
-    lower = start.timestamp() - 0.5e-6
-    while dt_util.utc_from_timestamp(lower) < start:
+    lower = instant.timestamp() - 0.5e-6
+    while dt_util.utc_from_timestamp(lower) < instant:
         lower = nextafter(lower, inf)
-    while dt_util.utc_from_timestamp(previous := nextafter(lower, -inf)) >= start:
+    while dt_util.utc_from_timestamp(previous := nextafter(lower, -inf)) >= instant:
         lower = previous
+    return lower
+
+
+def retained_feedback_bounds(hass, start, end, entity):
+    """Read indexed start coverage and the first original observation in two bounded queries."""
     with session_scope(hass=hass, read_only=True) as session:
         metadata_id = get_instance(hass).states_meta_manager.get(entity, session, False)
         if metadata_id is None:
-            return None
+            return None, False
+        covered = (
+            session.execute(
+                select(States.state_id)
+                .where(
+                    States.metadata_id == metadata_id,
+                    States.last_updated_ts < recorder_boundary(start + timedelta(microseconds=1)),
+                )
+                .order_by(States.last_updated_ts.desc())
+                .limit(1)
+            ).first()
+            is not None
+        )
         row = session.execute(
             select(States.state, States.last_updated_ts)
             .where(
                 States.metadata_id == metadata_id,
-                States.last_updated_ts >= lower,
-                States.last_updated_ts < end.timestamp(),
+                States.last_updated_ts >= recorder_boundary(start),
+                States.last_updated_ts < recorder_boundary(end),
             )
             .order_by(States.last_updated_ts)
             .limit(1)
         ).first()
         if row is None:
-            return None
-        return State(
-            entity,
-            row.state or "unknown",
-            last_updated=dt_util.utc_from_timestamp(row.last_updated_ts),
+            return None, covered
+        return (
+            State(
+                entity,
+                row.state or "unknown",
+                last_updated=dt_util.utc_from_timestamp(row.last_updated_ts),
+            ),
+            covered,
         )
 
 
 def recorder_observations(hass, start, end, entity):
     """Keep the bounded first raw observation and native transitions under one executor owner."""
-    first = first_retained_state(hass, start, end, entity)
+    first, covered = retained_feedback_bounds(hass, start, end, entity)
     states = state_changes_during_period(
         hass,
         # Recorder uses a strict lower SQL bound. Retain an exact cursor observation.
@@ -79,7 +99,7 @@ def recorder_observations(hass, start, end, entity):
     )
     if first is not None:
         states.setdefault(entity, []).append(first)
-    return states
+    return states, covered
 
 
 async def capture(hass, request, *, pending_reads=None):
@@ -119,7 +139,7 @@ async def capture(hass, request, *, pending_reads=None):
         )
         pending_reads[entity] = query
         query.add_done_callback(completed)
-        states = await asyncio.shield(query)
+        states, covered = await asyncio.shield(query)
     observations = list(states.get(entity, ()))
     current = hass.states.get(entity)
     if current is not None:
@@ -132,6 +152,8 @@ async def capture(hass, request, *, pending_reads=None):
             if at in readings and readings[at] != value:
                 value = None
             readings[at] = value
+    if not covered and start not in readings:
+        readings[start] = None
     ordered = sorted(readings.items())
     if len(ordered) > MAX_FEEDBACK_READINGS:
         end = ordered[MAX_FEEDBACK_READINGS][0]

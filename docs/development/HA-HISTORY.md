@@ -128,3 +128,25 @@ Household channels activate together. Consumers activate independently after
 completing their currently requested years. Invalid intervals are omitted
 without globally blocking otherwise sufficient training data. See
 [household demand forecasting](DEMAND-FORECASTING.md#full-available-history).
+
+## Solar curtailment feedback coverage
+
+Boolean curtailment feedback uses its own bounded Recorder state-history read,
+separate from hourly energy statistics. The Recorder executor reads native
+transitions and two indexed single-row bounds through a read-only Recorder
+session. One bound retains the first actual observation in the requested range.
+The other establishes whether an observation at or before the start is retained.
+Float timestamps are compared using their serialized microsecond boundaries.
+
+If start coverage is missing, the response includes an unknown value at the
+requested start unless an actual observation already exists at that exact time.
+This marks unavailable coverage. It does not backdate the current sensor state.
+The unknown consumes one of the 10,000 transfer slots. A full response ends at
+the first omitted observation, which is included when capture resumes.
+
+After the app's first valid feedback observation, unknown coverage prevents an
+earlier off state from carrying through a purged gap into learning or accuracy
+checks. Production before the first valid observation retains the configured
+assumption that it was unrestricted. A genuine retained start anchor preserves
+continuous off coverage. A later observed state applies only from its actual
+timestamp. Neither proposed commands nor prices establish physical feedback.
