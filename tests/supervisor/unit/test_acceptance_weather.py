@@ -12,6 +12,7 @@ from open_energy_planner.demand import weather
 from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
 from script.release import package_ha_app
 from script.release.package_ha_app import package
+from script.runtime import ha_app
 from script.supervisor import acceptance_app, dev
 from tests.test_environment.support import sources
 
@@ -33,6 +34,44 @@ def test_acceptance_bootstrap_requires_marker_and_calls_original_entrypoint(monk
     monkeypatch.setenv("OEP_SUPERVISOR_SMOKE", "1")
     acceptance_app.main()
     assert calls == [acceptance_app.temperature_factory]
+
+
+def test_acceptance_bootstrap_serves_after_default_weather_lifecycle(tmp_path, monkeypatch):
+    """The real HA bootstrap and app lifecycle accept the default weather history callback."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from open_energy_planner.runtime import entrypoint
+
+    original_parse = entrypoint.argparse.ArgumentParser.parse_args
+
+    def temporary_data(parser, *args, **kwargs):
+        """Keep the real entrypoint's options while confining storage to this test directory."""
+        options = original_parse(parser, *args, **kwargs)
+        options.data = str(tmp_path)
+        return options
+
+    async def serve(application):
+        """Start both managed app layers and require the authenticated product setup response."""
+        async with TestClient(TestServer(application)) as client:
+            token = (tmp_path / "administration-token").read_text().strip()
+            response = await client.get("/v1/setup", headers={"Authorization": "Bearer " + token})
+            assert response.status == 200
+            assert isinstance(await response.json(), dict)
+
+    monkeypatch.setenv("OEP_SUPERVISOR_SMOKE", "1")
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("OEP_API_TOKEN", raising=False)
+    monkeypatch.setitem(sys.modules, "production_ha_app", ha_app)
+    monkeypatch.setitem(sys.modules, "acceptance_sources", sources)
+    monkeypatch.setattr(ha_app, "Path", lambda _name: tmp_path)
+    monkeypatch.setattr(ha_app.os, "geteuid", lambda: 10001, raising=False)
+    monkeypatch.setattr(entrypoint.argparse.ArgumentParser, "parse_args", temporary_data)
+    monkeypatch.setattr(
+        entrypoint.web, "run_app", lambda application, **_options: asyncio.run(serve(application))
+    )
+    monkeypatch.setattr(weather, "weather_factory", weather.weather_factory)
+    monkeypatch.setattr(sys, "argv", list(sys.argv))
+    acceptance_app.main()
 
 
 @pytest.mark.parametrize("missing_weather_period", [None, "past", "future"])
