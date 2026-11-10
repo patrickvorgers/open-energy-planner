@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 
 from aiohttp import ClientError
@@ -37,20 +37,25 @@ async def capture(hass, request):
         or not 0 < (end - start).total_seconds() <= MAX_FEEDBACK_RANGE_DAYS * 24 * 3600
     ):
         raise ValueError("Invalid curtailment feedback request")
-    states = await asyncio.wait_for(
-        get_instance(hass).async_add_executor_job(
+
+    async def persisted_history():
+        """Commit queued transitions before querying, sharing one deadline with the actual read."""
+        recorder = get_instance(hass)
+        await recorder.async_block_till_done()
+        return await recorder.async_add_executor_job(
             partial(
                 get_significant_states,
                 hass,
-                start,
+                # Recorder uses a strict lower SQL bound. Retain an exact cursor observation.
+                start - timedelta(microseconds=1),
                 end,
                 [entity],
                 include_start_time_state=False,
                 significant_changes_only=False,
             )
-        ),
-        FEEDBACK_TIMEOUT_SECONDS,
-    )
+        )
+
+    states = await asyncio.wait_for(persisted_history(), FEEDBACK_TIMEOUT_SECONDS)
     observations = list(states.get(entity, ()))
     current = hass.states.get(entity)
     if current is not None:
@@ -63,15 +68,17 @@ async def capture(hass, request):
             if at in readings and readings[at] != value:
                 value = None
             readings[at] = value
-    if len(readings) > MAX_FEEDBACK_READINGS:
-        raise ValueError("Curtailment feedback range exceeds transfer limit")
+    ordered = sorted(readings.items())
+    if len(ordered) > MAX_FEEDBACK_READINGS:
+        end = ordered[MAX_FEEDBACK_READINGS][0]
+        ordered = ordered[:MAX_FEEDBACK_READINGS]
     return {
         "configuration_version": request["configuration_version"],
         "start": request["start"],
         "feedback": {
             "entity_id": entity,
-            "checked_until": request["end"],
-            "readings": [[at.isoformat(), value] for at, value in sorted(readings.items())],
+            "checked_until": end.isoformat(),
+            "readings": [[at.isoformat(), value] for at, value in ordered],
         },
     }
 

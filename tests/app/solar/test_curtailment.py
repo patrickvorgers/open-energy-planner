@@ -130,6 +130,59 @@ def test_feedback_restart_preserves_the_first_observation_and_exact_sensor(tmp_p
     assert restored.unrestricted(START + timedelta(hours=2), START + timedelta(hours=3))
 
 
+def test_partial_feedback_cursor_retains_the_first_omitted_transition_after_restart(tmp_path):
+    """A partial accepted range resumes at its exclusive boundary and preserves active/unknown intervals."""
+    configuration = plant()
+    entity = "binary_sensor.curtailed"
+    configuration = replace(
+        configuration,
+        sources=(replace(configuration.sources[0], curtailment_entity_id=entity),),
+    )
+    store = make_store(tmp_path, SolarStore)
+    store.save(configuration)
+    save_feedback(store, None, CurtailmentHistory(entity, START, ()), START - timedelta(hours=1))
+    now = START + timedelta(hours=3)
+    runtime = SolarRuntime(store)
+    request = runtime.feedback_requests(now)[0]
+    cutoff = START + timedelta(hours=1)
+    runtime.receive_feedback(
+        {
+            "configuration_version": configuration.version,
+            "start": request["start"],
+            "feedback": {
+                "entity_id": entity,
+                "checked_until": cutoff.isoformat(),
+                "readings": [[START.isoformat(), False]],
+            },
+        },
+        now,
+    )
+    runtime = SolarRuntime(make_store(tmp_path, SolarStore))
+    resumed = runtime.feedback_requests(now)[0]
+    assert resumed["start"] == cutoff.isoformat()
+    runtime.receive_feedback(
+        {
+            "configuration_version": configuration.version,
+            "start": resumed["start"],
+            "feedback": {
+                "entity_id": entity,
+                "checked_until": now.isoformat(),
+                "readings": [
+                    [cutoff.isoformat(), True],
+                    [(cutoff + timedelta(minutes=30)).isoformat(), None],
+                    [(START + timedelta(hours=2)).isoformat(), False],
+                ],
+            },
+        },
+        now,
+    )
+    accepted = runtime.feedback[entity]
+    assert accepted.checked_until == now
+    assert accepted.unrestricted(START, cutoff)
+    assert not accepted.unrestricted(cutoff, START + timedelta(hours=2))
+    assert accepted.unrestricted(START + timedelta(hours=2), now)
+
+
 def test_configuration_and_runtime_reject_a_delayed_reply_after_sensor_change(tmp_path):
     """Changing the linked sensor binds a new request and prevents old feedback from reaching another source."""
     configuration = plant()

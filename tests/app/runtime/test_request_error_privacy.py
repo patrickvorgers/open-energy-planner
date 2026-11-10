@@ -44,9 +44,12 @@ def failure_route(kind, reject_operation, *, project_document=None):
         configuration_version="retained-configuration",
         configure=reject_operation,
         document=project_document,
+        state={"points": [], "stores": []},
+        consumers=SimpleNamespace(selected=[]),
     )
+    service.ev = service
     if kind == "cycles":
-        cycles_api.register(app, service, repository, None, lock)
+        cycles_api.register(app, service, repository, None, lock, service, service)
         return (
             app,
             "POST",
@@ -58,13 +61,13 @@ def failure_route(kind, reject_operation, *, project_document=None):
             },
         )
     if kind == "ev":
-        ev_api.register(app, service, catalogue, repository, None, lock)
+        ev_api.register(app, service, catalogue, repository, None, lock, service)
         return (
             app,
             "POST",
             "/v1/ev/configuration",
             {
-                "configuration": {},
+                "configuration": {"points": []},
                 "expected_version": "retained-configuration",
             },
         )
@@ -75,7 +78,7 @@ def failure_route(kind, reject_operation, *, project_document=None):
             "POST",
             "/v1/thermal/configuration",
             {
-                "configuration": {},
+                "configuration": {"stores": []},
                 "expected_version": "retained-configuration",
             },
         )

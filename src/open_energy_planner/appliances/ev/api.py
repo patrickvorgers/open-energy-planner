@@ -5,11 +5,18 @@ from datetime import UTC, datetime
 
 from aiohttp import web
 
+from open_energy_planner.appliances.sources import (
+    SOURCE_ALREADY_ASSIGNED,
+    SOURCE_OWNERSHIP_UNAVAILABLE,
+    validate_new_assignments,
+)
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
 from open_energy_planner.storage.writes import complete_write
 
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
+    SOURCE_ALREADY_ASSIGNED,
+    SOURCE_OWNERSHIP_UNAVAILABLE,
     "A charge point cannot also be a shiftable cycle appliance",
     "A fresh connected charging session is required",
     "A timezone-aware timestamp is required",
@@ -63,7 +70,7 @@ PUBLIC_VALIDATION_MESSAGES = (
 )
 
 
-def register(app, service, catalogue, repository, live, lock):
+def register(app, service, catalogue, repository, live, lock, thermal):
     """Serialize EV writes with publication and reuse the installation authentication middleware."""
 
     def timezone():
@@ -106,6 +113,12 @@ def register(app, service, catalogue, repository, live, lock):
                 }:
                     if body["expected_version"] != service.configuration_version:
                         raise ValueError("EV settings changed. Refresh before saving")
+                    validate_new_assignments(
+                        body["configuration"]["points"],
+                        service.state["points"],
+                        service.consumers.selected,
+                        thermal.state["stores"],
+                    )
                     function, arguments = (
                         service.configure,
                         (

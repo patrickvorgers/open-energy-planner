@@ -16,6 +16,10 @@ the page shows an explanation and links to **Appliances settings** and
 shiftable and non-shiftable selected consumers remain available to forecasting
 and daily comparisons in **Forecast quality** when their evidence is available.
 
+The Appliances page enables **Connect** after its form handler is ready. While
+the page is initializing, clicking Connect or pressing Enter cannot submit the
+token form through browser navigation.
+
 The virtual device exposes native HA controls alongside its sensors:
 **Finish date** (`date`), **Finish time** (`time`), **Ready for planning** (`button`) and **Cancel planning** (`button`). Add these to an
 HA dashboard using native entity controls. No input helpers are needed. Selecting a

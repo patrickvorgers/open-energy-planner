@@ -437,8 +437,10 @@ The `solar` namespace additionally owns these JSON contracts:
 
 The peer route `/v1/solar/feedback` binds each response to the active configuration,
 exact linked sensor and preceding checked cursor. Each range is at most 367 days
-and each transfer has at most 10,000 observations. Native Recorder queries have a
-20-second deadline and run outside command synchronization. Newer observations
+and each transfer has at most 10,000 observations. Dense transfers end exclusively
+at the first omitted observation, which is retained by the next query. The
+Recorder commit barrier and query share one 20-second deadline and run outside
+command synchronization. Newer observations
 cannot be applied backward. Training and historical assessment record feedback
 versions alongside the existing weather and production identities. Source
 selection uses a distinct feedback-policy family. These documents use existing

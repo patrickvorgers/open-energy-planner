@@ -112,3 +112,48 @@ def test_optional_feedback_draft_follows_existing_save_and_cancel_behavior(app_p
     page.get_by_role("button", name="Edit installation", exact=True).click()
     expect(feedback).to_have_value("")
     assert read_settings(page, url)["solar"]["sources"][0] == saved
+
+
+def test_feedback_restore_failure_publishes_only_owned_message(app_page, monkeypatch, caplog):
+    """A private storage exception becomes the existing fixed message through the real producer, API and UI."""
+    from open_energy_planner.solar import runtime
+
+    private_value = "https://private.invalid/?token=FEEDBACK_ARCHIVE_PRIVATE_SENTINEL"
+
+    def fail_restore(_documents, _entity, _now):
+        """Inject an actual restore failure without constructing a forged HTTP issue value."""
+        raise OSError(private_value)
+
+    monkeypatch.setattr(runtime, "load_feedback", fail_restore)
+    page, url = app_page
+    source = solar_setup(page, url)
+    source.get_by_label("Curtailment feedback sensor", exact=True).select_option(
+        "binary_sensor.synthetic_curtailment"
+    )
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    response = page.request.get(url + "/v1/solar", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert response.ok
+    message = "Curtailment feedback history is unreadable. Check archive storage. Production history is retained."
+    assert response.json()["feedback_issues"] == {"binary_sensor.synthetic_curtailment": message}
+    assert "FEEDBACK_ARCHIVE_PRIVATE_SENTINEL" not in response.text()
+    solar = response.json()
+    # Isolate feedback rendering from the unrelated unavailable-weather service status.
+    solar["weather_service"] = None
+    page.route(
+        "**/v1/forecast-quality/days",
+        lambda route: route.fulfill(
+            json={"days": [], "next_before": None, "current_models": {"solar": solar}}
+        ),
+    )
+    page.goto(url + "/quality")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.evaluate("window.__oepProductReadsIdle()")
+    page.get_by_role("button", name="Solar", exact=True).click()
+    current = page.locator("#quality-models .quality-current-model")
+    expect(current).to_have_count(1)
+    current.get_by_text("Current model and learning", exact=True).click()
+    expect(current).to_contain_text(message)
+    assert "FEEDBACK_ARCHIVE_PRIVATE_SENTINEL" not in page.locator("body").inner_text()
+    assert "FEEDBACK_ARCHIVE_PRIVATE_SENTINEL" not in caplog.text

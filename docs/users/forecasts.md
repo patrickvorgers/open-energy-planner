@@ -149,7 +149,9 @@ unreliable, set **Learning data from** to a suitable later date.
 
 The Home Assistant integration imports Recorder state changes in bounded
 ranges, then refreshes new feedback every five minutes. Initial history import
-can take several updates. Only successfully checked ranges are used. A failed
+can take several updates. Dense history is split into smaller checked ranges
+without dropping boundary observations. Reads wait for queued Recorder changes
+to commit before confirming coverage. Only successfully checked ranges are used. A failed
 read does not extend coverage. Accepted observations survive restart and
 Recorder purging does not move the saved first observation. The configured
 sensor must be included in Recorder. Unknown sensor values remain unknown.

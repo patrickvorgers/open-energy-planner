@@ -7,8 +7,10 @@ from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import (
     TOKEN,
+    add_thermal_appliance,
     connect,
     discover,
+    discover_boiler_sources,
     finish,
     grid,
     installation_area,
@@ -84,7 +86,7 @@ def test_ordinary_settings_reads_are_bounded_safe_and_independently_retryable(
 ):
     """Clients without an explicit source deadline bound GETs, keep drafts and never consume private HTTP errors."""
     page, url = app_page
-    body = discover(page, url)
+    body = discover_boiler_sources(page, url)
     editor = "ev" if flow.startswith("ev") else "thermal"
     page.goto(url + "/appliance-settings/" + editor)
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
@@ -96,7 +98,7 @@ def test_ordinary_settings_reads_are_bounded_safe_and_independently_retryable(
                 and response.url.endswith("/v1/ha/source-choices/thermal")
             )
         ) as pending:
-            page.get_by_role("button", name="Add electric boiler", exact=True).click()
+            add_thermal_appliance(page)
         assert page.request.post(
             url + "/v1/ha/source-choices",
             headers={"Authorization": "Bearer " + TOKEN},

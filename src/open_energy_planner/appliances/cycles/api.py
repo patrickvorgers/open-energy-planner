@@ -7,11 +7,13 @@ from aiohttp import web
 
 from open_energy_planner.appliances.cycles import history as historical
 from open_energy_planner.appliances.cycles.model import instant
+from open_energy_planner.appliances.sources import SOURCE_ALREADY_ASSIGNED
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
 from open_energy_planner.storage.writes import complete_write
 
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
+    SOURCE_ALREADY_ASSIGNED,
     "A complete measured cycle profile is required",
     "A stable completed cycle identity is required",
     "A stable readiness request identity is required",
@@ -84,7 +86,7 @@ PUBLIC_VALIDATION_MESSAGES = (
 )
 
 
-def register(app, service, repository, live, lock):
+def register(app, service, repository, live, lock, ev, thermal):
     """Serialize readiness, measurements and execution events with plan admission."""
 
     async def state(_request):
@@ -110,6 +112,11 @@ def register(app, service, repository, live, lock):
                     {"entity_id", "shiftable"},
                     {"entity_id", "shiftable", "expected_version"},
                 ):
+                    if body["shiftable"] and body["entity_id"] in {
+                        row["energy_entity"]
+                        for row in (*ev.state["points"], *thermal.state["stores"])
+                    }:
+                        raise ValueError(SOURCE_ALREADY_ASSIGNED)
                     function, arguments, keywords = (
                         service.configure,
                         (body["entity_id"], body["shiftable"]),

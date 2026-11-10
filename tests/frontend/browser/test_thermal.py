@@ -2,7 +2,6 @@
 
 import re
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,93 +9,11 @@ from urllib.parse import urlsplit
 import pytest
 from playwright.sync_api import expect
 
+from tests.frontend.browser import thermal_fixture
 from tests.frontend.browser.control_layout import assert_field_actions_aligned
+from tests.frontend.browser.helpers import add_thermal_appliance
 
 ASSETS = Path(__file__).resolve().parents[3] / "src/open_energy_planner/web"
-STORE = "00000000-0000-4000-8000-000000000101"
-
-
-def document():
-    """Declare one on/off boiler and independently specified quarter-hour chart evidence."""
-    start = datetime.now(UTC).replace(second=0, microsecond=0)
-    start -= timedelta(minutes=start.minute % 15)
-    configuration = {
-        "id": STORE,
-        "energy_entity": "sensor.boiler_energy",
-        "temperature_entity": "sensor.boiler_temperature",
-        "power_entity": "sensor.boiler_power",
-        "volume_litres": 120,
-        "minimum_c": 45,
-        "maximum_c": 65,
-        "ambient_c": 20,
-        "loss_w_per_c": 1.2,
-        "heater_w": 2000,
-        "draw_profile_kwh": [0] * 7 + [1] + [0] * 16,
-        "enabled": True,
-    }
-    return {
-        "configuration": {"stores": [configuration]},
-        "configuration_version": "a" * 64,
-        "revision": "b" * 64,
-        "timezone": "Europe/Amsterdam",
-        "issue": None,
-        "catalogue": {
-            "entities": [
-                {
-                    "entity_id": "sensor.boiler_temperature",
-                    "name": "Temperature",
-                    "device_name": "Utility boiler",
-                    "device_class": "temperature",
-                    "unit": "°C",
-                },
-                {
-                    "entity_id": "sensor.unsupported_kelvin_temperature",
-                    "name": "Unsupported temperature",
-                    "device_name": "Utility boiler",
-                    "device_class": "temperature",
-                    "unit": "K",
-                },
-                {
-                    "entity_id": "sensor.boiler_power",
-                    "name": "Heater",
-                    "device_name": "Utility boiler",
-                    "device_class": "power",
-                    "unit": "W",
-                },
-                {
-                    "entity_id": "water_heater.boiler",
-                    "name": "Tank",
-                    "device_name": "Utility boiler",
-                    "device_class": "temperature",
-                    "unit": "°C",
-                },
-            ]
-        },
-        "energy_consumers": [
-            {"entity_id": "sensor.boiler_energy", "name": "Utility boiler", "upstream": None}
-        ],
-        "devices": [
-            {
-                **configuration,
-                "name": "Utility boiler",
-                "actual": {"temperature_c": 49.25, "power_w": 0, "observed_at": start.isoformat()},
-                "issue": None,
-                "unmet_draw_kwh": 0.35,
-                "planned": [
-                    {
-                        "start": (start + timedelta(minutes=15 * index)).isoformat(),
-                        "end": (start + timedelta(minutes=15 * (index + 1))).isoformat(),
-                        "power_w": power,
-                        "end_c": temperature,
-                        "shortfall_kwh": 0,
-                    }
-                    for index, (power, temperature) in enumerate(
-                        ((2000, 52.5), (0, 52.1), (2000, 55.2))
-                    )
-                ],
-            }
-        ],
-    }
 
 
 @pytest.fixture(
@@ -112,7 +29,7 @@ def thermal_page(browser, request):
         viewport=request.param, timezone_id="America/New_York", locale="en-US"
     )
     page = context.new_page()
-    state = {"document": document(), "posts": [], "intents": [], "reject": False}
+    state = {"document": thermal_fixture.document(), "posts": [], "intents": [], "reject": False}
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
 
@@ -121,6 +38,23 @@ def thermal_page(browser, request):
         path = urlsplit(route.request.url).path
         if path == "/setup/session":
             route.fulfill(json={"ingress": True, "timezone": "Europe/Amsterdam"})
+        elif path == "/v1/consumers":
+            options = state["document"]["energy_consumers"] + [
+                {
+                    "entity_id": "sensor.spare_boiler_energy",
+                    "name": "Spare boiler",
+                    "upstream": None,
+                }
+            ]
+            meters = [row["energy_entity"] for row in state["document"]["configuration"]["stores"]]
+            route.fulfill(
+                json={
+                    "options": options,
+                    "selected": [],
+                    "charging_meters": [],
+                    "thermal_meters": meters,
+                }
+            )
         elif path == "/v1/thermal":
             route.fulfill(json=state["document"])
         elif path == "/v1/thermal/configuration":
@@ -153,14 +87,20 @@ def thermal_page(browser, request):
             route.fulfill(json=state["document"])
         elif path in ("/thermal", "/appliance-settings/thermal"):
             filename = "thermal.html" if path == "/thermal" else "appliance-settings/thermal.html"
-            html = (ASSETS / "pages" / filename).read_text().replace("__OEP_BASE__", "/")
+            html = (
+                (ASSETS / "pages" / filename)
+                .read_text(encoding="utf-8")
+                .replace("__OEP_BASE__", "/")
+            )
             html = html.replace(
                 "<!-- OEP_NAVIGATION -->",
                 '<aside class="sidebar"><nav><a href="/thermal">Thermal storage</a></nav></aside>',
             )
             html = html.replace(
                 "<!-- OEP_APPLIANCE_SETTINGS -->",
-                (ASSETS / "partials/appliance-settings-navigation.html").read_text(),
+                (ASSETS / "partials/appliance-settings-navigation.html").read_text(
+                    encoding="utf-8"
+                ),
             )
             route.fulfill(body=html, content_type="text/html")
         elif path.startswith("/setup/"):
@@ -337,13 +277,13 @@ def test_fifth_boiler_can_be_cancelled_configured_saved_and_reloaded(thermal_pag
     page.reload()
     expect(page.locator("#thermal-store-select option")).to_have_count(4)
     expect(page.locator("#add-thermal")).to_be_enabled()
-    page.locator("#add-thermal").click()
+    add_thermal_appliance(page)
     expect(page.locator('[data-field="enabled"]')).not_to_be_checked()
     expect(page.locator("#save-thermal")).to_be_disabled()
     page.locator("#cancel-thermal").click()
     expect(page.locator("#thermal-store-select option")).to_have_count(4)
     assert state["posts"] == []
-    page.locator("#add-thermal").click()
+    add_thermal_appliance(page)
     for field in ("energy_entity", "temperature_entity", "power_entity"):
         page.locator(f'[data-field="{field}"]').select_option(available[4][field])
     for field, value in (
@@ -499,7 +439,7 @@ def test_unserved_hot_water_is_distinct_from_comfort_and_ending_stock(
 def test_new_boiler_has_no_invented_physics_or_enabled_permission(thermal_page):
     """Adding a store creates a disabled draft with empty physics and an explicitly assumed draw profile."""
     page, state = thermal_page
-    page.locator("#add-thermal").click()
+    add_thermal_appliance(page)
     expect(page.locator('[data-field="enabled"]')).not_to_be_checked()
     for field in (
         "minimum_c",
@@ -626,8 +566,8 @@ def test_energy_boiler_intents_do_not_replace_configuration(thermal_monitor_page
     page.get_by_role("button", name="Apply comfort target", exact=True).click()
     expect(page.locator("#status")).to_contain_text("Request saved")
     assert state["intents"] == [
-        {"device_id": STORE, "field": "enabled", "value": False},
-        {"device_id": STORE, "field": "minimum_c", "value": 47.125},
+        {"device_id": thermal_fixture.STORE, "field": "enabled", "value": False},
+        {"device_id": thermal_fixture.STORE, "field": "minimum_c", "value": 47.125},
     ]
     original["stores"][0].update(enabled=False, minimum_c=47.125)
     assert state["document"]["configuration"] == original
@@ -791,4 +731,6 @@ def test_comfort_reset_restores_cached_target_when_refresh_fails(thermal_monitor
     page.unroute("http://thermal.test/v1/thermal")
     page.get_by_role("button", name="Apply comfort target", exact=True).click()
     expect(page.locator("#status")).to_contain_text("Request saved")
-    assert state["intents"] == [{"device_id": STORE, "field": "minimum_c", "value": 45}]
+    assert state["intents"] == [
+        {"device_id": thermal_fixture.STORE, "field": "minimum_c", "value": 45}
+    ]
