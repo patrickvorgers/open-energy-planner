@@ -8,8 +8,9 @@ from aiohttp import web
 
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.demand.wire import parse_configuration as parse_demand_configuration
-from open_energy_planner.history.wire import parse_history
+from open_energy_planner.history.importer import HistoryContinuityError, parse_report
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
+from open_energy_planner.storage.writes import complete_write
 
 PUBLIC_VALIDATION_MESSAGES = (
     "Complete the Home Assistant Energy dashboard first",
@@ -46,6 +47,19 @@ def register(
             raise cancellation
         return result
 
+    def save_demand(candidate):
+        """Persist settings and restore their source cohort in the caller-locked off-loop writer."""
+        demand_store.save(candidate)
+        demand.configure(candidate)
+
+    def accept_history(body, pending, now, household):
+        """Parse and commit one admitted source while the async caller retains its owner lock."""
+        report = parse_report(body)
+        if household:
+            demand.receive(pending["version"], report, now)
+        else:
+            demand.consumers.receive(pending, report, now=now)
+
     async def configure_demand(request):
         """Persist changed AC definitions. Identical saves preserve learned models and history."""
         if live is None:
@@ -72,9 +86,7 @@ def register(
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Demand configuration changed. Reload before saving")
             if candidate.version != current:
-                await persist_then_install(
-                    demand_store.save, candidate, demand.configure, contract_input=False
-                )
+                await persist_then_install(save_demand, candidate, contract_input=False)
                 job = demand.job(datetime.now(UTC))
                 result = await build_demand(job)
                 demand.install(result, datetime.now(UTC))
@@ -90,9 +102,9 @@ def register(
         except (ValueError, TypeError):
             raise web.HTTPBadRequest(text="Invalid demand history") from None
         async with lock:
-            pending = demand.request(datetime.now(UTC)) or demand.consumers.request(
-                demand.configuration, datetime.now(UTC)
-            )
+            now = datetime.now(UTC)
+            household_pending = demand.request(now)
+            pending = household_pending or demand.consumers.request(demand.configuration, now)
             if pending is None or body.get("request_version") != pending["version"]:
                 raise web.HTTPConflict(text="Demand history request changed")
             if set(body) == {"request_version", "error"} and body["error"] in (
@@ -100,18 +112,25 @@ def register(
                 "history_unavailable",
                 "unsupported_statistics",
             ):
-                if pending == demand.request(datetime.now(UTC)):
-                    demand.history_issues[pending["entity_id"]] = body["error"]
+                if household_pending is not None:
+                    demand.history_failed(pending, body["error"], now)
                 else:
-                    demand.consumers.receive(pending, error=body["error"])
+                    demand.consumers.receive(pending, error=body["error"], now=now)
             else:
                 try:
-                    if pending == demand.request(datetime.now(UTC)):
-                        demand.receive(
-                            body["request_version"], parse_history(body), datetime.now(UTC)
-                        )
+                    cancellation = await complete_write(
+                        accept_history, body, pending, now, household_pending is not None
+                    )
+                    if cancellation is not None:
+                        raise cancellation
+                except HistoryContinuityError:
+                    if household_pending is not None:
+                        demand.history_failed(pending, "history_continuity_unavailable", now)
                     else:
-                        demand.consumers.receive(pending, parse_history(body))
+                        demand.consumers.receive(
+                            pending, error="history_continuity_unavailable", now=now
+                        )
+                    raise web.HTTPBadRequest(text="Energy history source changed") from None
                 except (ValueError, TypeError, KeyError, OverflowError, OSError):
                     raise web.HTTPBadRequest(text="Invalid household energy history") from None
         return await snapshot(request)

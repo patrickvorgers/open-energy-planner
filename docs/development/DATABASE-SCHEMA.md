@@ -1493,3 +1493,35 @@ Receipts retain their original values when a pointer advances. Null or absent
 provider hours remain absent. The existing `(namespace, name)` key supports
 bounded reads. Both writes commit in one transaction. These documents transfer
 with the shared document table on SQLite, PostgreSQL, MariaDB and MySQL.
+
+
+### Demand training-history JSON contracts
+
+The existing `oep_documents` namespace `demand` now retains the same immutable
+history-import documents as `solar`. No table, column or external file store is
+added. The history owner manages the bounded importer and source continuity.
+Solar retains its existing namespace, wire names, content hashes and cohorts.
+
+| Document name | Meaning and usage |
+|---|---|
+| `history-import-discovery-<hash>.json` | One meter's monthly availability result with `entity_id`, Recorder `statistics_identity` (`metadata_id`, `source`, original `unit`), nullable aware UTC `available_start` and actual aware UTC `captured_at`. |
+| `history-import-chunk-<hash>.json` | Immutable annual cumulative endpoints. Fields are `entity_id`, `statistics_identity`, integer `year`, aware UTC inclusive `start`, exclusive `end`, raw `hours` triples of Unix seconds, kWh sum and physical state, and `alignment`. Transfers retain at most 9000 rows over at most 367 days. Missing physical state does not invalidate an otherwise usable training sum. |
+| `history-import-<hash>.json` | Immutable source checkpoint containing `entity_id`, `statistics_identity`, nullable `available_start`, aware `discovered_at`, annual `chunks` descriptors (`year`, `start`, `end`, immutable `reference`) and `conflicts` endpoint/value anchors. Conflicting endpoints are excluded individually without rewriting originals. |
+| `history-import-current-<meter-hash>.json` | Mutable pointer to the last committed immutable source checkpoint. Chunk/checkpoint writes precede pointer advancement within the import transaction. Hashes use the existing Solar canonical JSON SHA256 representation. |
+| `history-import-fault-<hash>.json` and `history-import-quarantine-<meter-hash>.json` | Original incompatible-source receipt and durable fault pointer. The fault records `entity_id`, `issue`, `incoming_kind` and `incoming_reference`. Source identity changes cannot mix accepted cohorts. Compatible rechecks clear quarantine to JSON null. |
+| `consumer-history-cohort-<meter-hash>.json` | One selected consumer's accepted singleton mapping from entity to immutable source-checkpoint hash. Advances atomically with the source checkpoint only after all currently requested years complete. Partial year imports resume independently without replacing the previously accepted forecast input. |
+| `household-history-cohort-<configuration-version>.json` | Atomically replaced mapping from every configured household/exclusion entity to its immutable source-checkpoint hash. Advances only when every source has completed the current import target without continuity faults. Restart reads these references rather than mixing newer partial source pointers. |
+
+Consumer settings remain in their existing documents. Selected meters restore
+accepted source history without restoring forecasts as live evidence. All these
+records migrate with the existing shared document table and remain usable after
+the source database is disconnected. Source faults and failed transfers preserve
+original chunks. No production measurements belong in public fixtures.
+
+Initialization or a changed demand definition may publish its first household
+cohort directly from validated source checkpoints when every required meter
+already satisfies the current import target without faults. An absent pointer
+does not require another transfer of unchanged complete data. Incomplete sources
+remain unavailable and a failed publication does not replace accepted evidence.
+The normalized annual chunk cache is process-local, binds the original immutable
+reference and does not add persisted fields or migration dependencies.

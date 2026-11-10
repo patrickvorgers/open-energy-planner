@@ -8,7 +8,75 @@ import pytest
 from tests.custom_component.support.chain import running_chain
 
 
-def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_years(monkeypatch):
+@pytest.mark.parametrize(
+    "basis",
+    [
+        None,
+        "energy_history_range",
+        "energy_history_chunk",
+        "solar_history_range",
+        "solar_history_chunk",
+    ],
+)
+def test_recorder_capture_failure_reports_request_effect_and_preserves_retry(
+    monkeypatch, caplog, basis
+):
+    """Actual Recorder executor failures describe energy loss or bonus fallback without changing failure and retry contracts."""
+    from custom_components.open_energy_planner import history
+
+    async def scenario():
+        """Fail a real capture's metadata read and verify same-version backoff and a new-version retry."""
+        async with running_chain(live=True, recorder=True) as (hass, _entry, _url, _root):
+            attempts = []
+
+            def fail_metadata(_hass, statistic_ids):
+                """Interrupt the Recorder read after executor admission rather than faking its response."""
+                attempts.append(statistic_ids)
+                raise RuntimeError("Synthetic Recorder read failure")
+
+            monkeypatch.setattr(history, "get_metadata", fail_metadata)
+            bridge = history.HistoryBridge(hass)
+            request = {
+                "version": "failed-history",
+                "entity_id": "sensor.synthetic_energy",
+                "start": "1970-01-01T00:00:00+00:00"
+                if basis and basis.endswith("_range")
+                else "2026-01-01T00:00:00+00:00",
+                "end": "2026-01-02T00:00:00+00:00",
+            }
+            if basis is not None:
+                request["basis"] = basis
+            caplog.clear()
+            assert await bridge.capture(request) == {
+                "request_version": "failed-history",
+                "error": "history_unavailable",
+            }
+            warnings = [
+                record.getMessage() for record in caplog.records if record.name == history.__name__
+            ]
+            assert warnings == [
+                "Recorder energy history read failed. No history was returned for this request."
+                if basis is not None
+                else "Recorder history read failed. Manual bonus baseline remains available"
+            ]
+            retry_after = bridge.retry_after
+            assert retry_after is not None
+            assert await bridge.capture(request) is None
+            assert bridge.retry_after == retry_after
+            assert len(attempts) == 1
+            assert await bridge.capture({**request, "version": "new-history"}) == {
+                "request_version": "new-history",
+                "error": "history_unavailable",
+            }
+            assert len(attempts) == 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("prefix", ["solar", "energy"])
+def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_years(
+    monkeypatch, prefix
+):
     """Monthly range discovery returns metadata, while hourly chunks keep missing values absent and never infer an end."""
     from custom_components.open_energy_planner import history
 
@@ -65,7 +133,7 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             available = await bridge.capture(
                 {
                     "version": "availability",
-                    "basis": "solar_history_range",
+                    "basis": prefix + "_history_range",
                     "entity_id": entity,
                     "start": "1970-01-01T00:00:00+00:00",
                     "end": chunk_end.isoformat(),
@@ -81,7 +149,7 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             annual = await bridge.capture(
                 {
                     "version": "year",
-                    "basis": "solar_history_chunk",
+                    "basis": prefix + "_history_chunk",
                     "entity_id": entity,
                     "start": chunk_start.isoformat(),
                     "end": chunk_end.isoformat(),
@@ -97,14 +165,14 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
             empty = await bridge.capture(
                 {
                     "version": "empty-year",
-                    "basis": "solar_history_chunk",
+                    "basis": prefix + "_history_chunk",
                     "entity_id": entity,
                     "start": "2023-12-31T23:00:00+00:00",
                     "end": "2025-01-01T00:00:00+00:00",
                 }
             )
             assert empty["hours"] == []
-            assert empty["basis"] == "solar_history_chunk"
+            assert empty["basis"] == prefix + "_history_chunk"
             assert [call[2] for call in calls] == ["month", "hour", "hour"]
             assert all(call[3] == {"energy": "kWh"} for call in calls)
             assert calls[0][4] == {"sum"}
@@ -117,7 +185,9 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("basis", [None, "statistics_sum", "solar_history_chunk"])
+@pytest.mark.parametrize(
+    "basis", [None, "statistics_sum", "solar_history_chunk", "energy_history_chunk"]
+)
 def test_solar_discovery_does_not_expand_hourly_transfer_ranges(monkeypatch, basis):
     """Only explicit monthly availability discovery may span decades. Hourly finance, demand and solar stay bounded."""
     from types import SimpleNamespace

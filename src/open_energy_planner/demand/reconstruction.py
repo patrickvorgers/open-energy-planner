@@ -7,7 +7,6 @@ from open_energy_planner.demand.calculation.model import DemandHour
 
 METER_ROUNDING_ALLOWANCE_KWH = 0.001
 BALANCE_NUMERICAL_TOLERANCE_KWH = 1e-07
-MAX_REJECTED_TRAINING_HOURS = 24
 MIN_NOTIFICATION_HISTORY_HOURS = 24
 REJECTED_HOURS_NOTIFICATION_PERCENT = 20
 
@@ -21,13 +20,6 @@ class ReconstructionResult:
     rejected_hours: int = 0
 
     @property
-    def substantial_rejection(self):
-        """Require attention after losing a day of complete balances or every complete hour."""
-        return self.rejected_hours >= MAX_REJECTED_TRAINING_HOURS or (
-            self.rejected_hours > 0 and not self.samples
-        )
-
-    @property
     def rejected_percentage(self):
         """Return the excluded share of complete assessed hours, or None without evidence."""
         assessed_hours = len(self.samples) + self.rejected_hours
@@ -37,8 +29,8 @@ class ReconstructionResult:
     def notification_required(self):
         """Notify only for at least 20 percent rejection after 24 complete assessed hours.
 
-        Missing hours are not assessed balances. Appliance model admission keeps
-        its separate conservative substantial_rejection safeguard.
+        Missing hours are not assessed balances. Model admission separately
+        requires enough complete, physically valid training hours.
         """
         assessed_hours = len(self.samples) + self.rejected_hours
         return (
@@ -60,11 +52,8 @@ class DemandReconstructor:
     """Apply explicit AC energy balances without learning battery charging as household load."""
 
     def reconstruct(self, configuration, histories, *, before):
-        """Return usable training hours, refusing substantially inconsistent component history."""
-        result = self.analyze(configuration, histories, before=before)
-        if result.substantial_rejection:
-            raise ValueError("Inconsistent household boundary or overlapping exclusions")
-        return result.samples
+        """Exclude invalid balances individually and let each model require sufficient valid coverage."""
+        return self.analyze(configuration, histories, before=before).samples
 
     def analyze(self, configuration, histories, *, before):
         """Filter complete balances independently without changing any measured history.

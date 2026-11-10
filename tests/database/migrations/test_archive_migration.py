@@ -80,6 +80,63 @@ def test_solar_feedback_transfers_without_its_original_database(route):
     assert not accepted.unrestricted(START + timedelta(hours=2), START + timedelta(hours=3))
 
 
+def test_annual_demand_cohort_transfers_and_restarts_without_source(route, monkeypatch):
+    """Every real backend route retains all annual source evidence and the exact accepted cohort independently."""
+    from contextlib import closing
+    from datetime import UTC, datetime
+
+    from open_energy_planner.demand.reconstruction import DemandReconstructor
+    from open_energy_planner.demand.runtime import DemandRuntime
+    from open_energy_planner.demand.storage import DemandStore
+    from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+    from tests.app.demand.history_support import receive_source
+    from tests.app.demand.test_demand import config
+
+    (source, target), root = route
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    history = CumulativeHistory(
+        "sensor.house",
+        tuple(
+            EnergyEndpoint(datetime(year, 1, 1, hour, tzinfo=UTC), (year - 2020) * 100 + hour)
+            for year in (2024, 2025, 2026)
+            for hour in (0, 1)
+        ),
+    )
+    with closing(SqlPlanRepository(root / "source", engine=source)):
+        store = DemandStore(SqlDocuments(source, "demand"))
+        store.save(config())
+        runtime = DemandRuntime(store)
+        receive_source(runtime, history, now)
+        pointer = "household-history-cohort-" + store.current.version + ".json"
+        references = store.documents.read(pointer)
+        migrate_archive(source, target, overwrite_target=True)
+
+        def unavailable(*_args, **_kwargs):
+            """Fail if target restoration accidentally consults its former source engine."""
+            raise AssertionError("Source engine must remain disconnected")
+
+        with monkeypatch.context() as disconnected:
+            disconnected.setattr(source, "connect", unavailable)
+            disconnected.setattr(source, "begin", unavailable)
+            transferred = DemandRuntime(DemandStore(SqlDocuments(target, "demand")))
+            assert transferred.histories == {"sensor.house": history}
+            assert transferred.store.documents.read(pointer) == references
+            assert transferred.history_import.restore_checkpoint(references) == {
+                "sensor.house": history
+            }
+            assert transferred.request(now) is None
+            samples = DemandReconstructor().reconstruct(
+                transferred.configuration, transferred.histories.values(), before=now
+            )
+            assert [(sample.start, sample.residual_kwh) for sample in samples] == [
+                (datetime(year, 1, 1, 1, tzinfo=UTC), 1) for year in (2024, 2025, 2026)
+            ]
+            assert transferred.history_import.status(("sensor.house",), transferred.histories)[
+                "sensor.house"
+            ]["loaded_years"] == [2024, 2025, 2026]
+
+
 def test_transfer_progress_reports_real_copy_and_verification_counts(route):
     """Every backend route reports monotonic bounded counts for both phases and preserves exact plans."""
     (source, target), root = route

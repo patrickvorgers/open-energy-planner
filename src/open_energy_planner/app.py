@@ -602,6 +602,26 @@ def create_app(
     app.cleanup_ctx.append(demand_lifecycle)
 
     if weather_factory is not None and live is not None:
+        from functools import partial
+
+        from .demand.weather import weather_factory as default_weather_factory
+
+        def oldest_demand_history():
+            """Extend temperature coverage to the oldest loaded household or consumer endpoint."""
+            return min(
+                (
+                    history.hours[0].start
+                    for history in (
+                        *demand.histories.values(),
+                        *demand.consumers.histories.values(),
+                    )
+                    if history.hours
+                ),
+                default=None,
+            )
+
+        if weather_factory is default_weather_factory:
+            weather_factory = partial(weather_factory, history_start=oldest_demand_history)
 
         async def weather_lifecycle(_app):
             """Fetch temperature independently from planning, with hourly success and 30-minute failure retries."""
