@@ -17,7 +17,7 @@ from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 
 
-def seed(path):
+def seed(path, *, active=False):
     """Original/alternative errors are .07/.035 kWh over 17 eligible hours. The incomplete comparable day stays unscored."""
     start = datetime(2026, 6, 15, tzinfo=UTC)
     end = start + timedelta(days=1)
@@ -154,5 +154,7 @@ def seed(path):
             ),
             start - timedelta(hours=1),
         )
+        if active:
+            solar.save(configuration)
     finally:
         with_repository.close()

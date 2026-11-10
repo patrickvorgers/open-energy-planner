@@ -36,6 +36,38 @@ def test_partial_solar_plan_accuracy_and_daily_chart_remain_distinct(app_page):
         "canvas => Chart.getChart(canvas).data.datasets.map(row => row.data.length)"
     )
     assert lengths == [24, 24, 24, 24, 24]
+    measured = source.locator("canvas").evaluate(
+        "canvas => Chart.getChart(canvas).data.datasets.find(row => row.label === 'Measured').data.map(point => point.y)"
+    )
+    assert measured == pytest.approx(
+        [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.1,
+            0.25,
+            0.5,
+            0.8,
+            1.1,
+            1.4,
+            1.5,
+            1.4,
+            1.1,
+            0.8,
+            0.5,
+            0.2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ]
+    )
+    expect(source.get_by_text("Not scored yet", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     source.get_by_text("Hourly evidence and provenance", exact=True).click()
     expect(source.locator("details table")).to_contain_text("Curtailment feedback")

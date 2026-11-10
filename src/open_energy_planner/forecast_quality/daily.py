@@ -238,7 +238,15 @@ def controlled_consumers(plans, start, end):
 
 
 def daily_evidence(
-    record, archive, demand_documents, solar_documents, now, controlled=(), *, names=None
+    record,
+    archive,
+    demand_documents,
+    solar_documents,
+    now,
+    controlled=(),
+    *,
+    names=None,
+    solar_feedback=None,
 ):
     """Score a frozen whole day only after all measurements arrive. Partial totals never imply a daily score."""
     from .evidence import evidence
@@ -261,7 +269,14 @@ def daily_evidence(
         set(context.get("forecast_quality_controlled", [])) | set(controlled)
     )
     original = evidence(
-        context, archive, demand_documents, solar_documents, now, window=(start, end), names=names
+        context,
+        archive,
+        demand_documents,
+        solar_documents,
+        now,
+        window=(start, end),
+        names=names,
+        solar_feedback=solar_feedback,
     )
     result.update(series=original["series"], issues=original["issues"])
     resolved = {source["id"] for source in result["series"]}

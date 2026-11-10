@@ -19,6 +19,177 @@ from tests.app.solar.support import START, fixture_weather, plant
 from tests.database.support.archive import list_documents, make_store
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_solar_configuration_reads_off_loop_and_finishes_before_unlock_on_cancel(
+    tmp_path, monkeypatch, cancel
+):
+    """New sensor reads run in the owned writer and cancellation cannot expose half-installed settings."""
+    from contextlib import suppress
+    from importlib import import_module
+    from threading import Event, current_thread, main_thread
+
+    from aiohttp import ClientConnectionError
+
+    from open_energy_planner.solar import runtime
+    from open_energy_planner.solar.wire import parse_configuration
+    from tests.database.support.archive import read_document
+
+    app_module = import_module("open_energy_planner.app")
+    original_write, original_read = app_module.complete_write, runtime.load_feedback
+    target_version, handler = None, None
+    release = Event()
+    threads = []
+
+    async def scenario():
+        """Exercise actual HTTP, the shared lock and repeated server-handler cancellation during native work."""
+        nonlocal target_version, handler
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+
+        def held_read(documents, entity, now):
+            """Pause only the new owned sensor's actual archive restore."""
+            if entity == "binary_sensor.new_configuration":
+                threads.append(current_thread().name)
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(8), "Synthetic restore barrier was not released"
+            return original_read(documents, entity, now)
+
+        async def observed_write(save, *arguments):
+            """Observe the real request task while preserving the original cancellation-safe writer."""
+            nonlocal handler
+            if arguments and getattr(arguments[0], "version", None) == target_version:
+                handler = asyncio.current_task()
+            return await original_write(save, *arguments)
+
+        monkeypatch.setattr(runtime, "load_feedback", held_read)
+        monkeypatch.setattr(app_module, "complete_write", observed_write)
+        async with running_forecasts(tmp_path, weather_factory=fixture_weather) as (session, url):
+            initial = configuration_document(plant())
+            initial.pop("version")
+            configured = await configure_forecasts(session, url, solar_definition=initial)
+            current = configured["solar"]["configuration"]
+            body = {
+                **current,
+                "expected_version": current["version"],
+                "sources": [
+                    {
+                        **current["sources"][0],
+                        "curtailment_entity_id": "binary_sensor.new_configuration",
+                    }
+                ],
+            }
+            target_version = parse_configuration(body).version
+            pending = asyncio.create_task(session.put(url + "/v1/solar", json=body))
+            waiting_read = None
+            try:
+                await asyncio.wait_for(entered.wait(), 5)
+                assert len(threads) == 1
+                assert threads[0] != main_thread().name
+                await asyncio.sleep(0)
+                assert handler is not None and not handler.done()
+                waiting_read = asyncio.create_task(session.get(url + "/v1/solar"))
+                await asyncio.sleep(0.02)
+                assert not waiting_read.done()
+                if cancel:
+                    handler.cancel()
+                    await asyncio.sleep(0)
+                    handler.cancel()
+                    await asyncio.sleep(0)
+                    assert not handler.done()
+            finally:
+                release.set()
+            if cancel:
+                with suppress(ClientConnectionError, asyncio.CancelledError):
+                    response = await pending
+                    response.release()
+            else:
+                response = await pending
+                assert response.status == 200, await response.text()
+            response = await waiting_read
+            assert response.status == 200
+            assert (await response.json())["configuration"]["version"] == target_version
+            assert json.loads(read_document(tmp_path, "solar", "current.json")) == target_version
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+
+
+def test_configuration_keeps_healthy_sensor_history_without_archive_reads(tmp_path, monkeypatch):
+    """A geometry edit retains immutable healthy feedback and reads only new, failed or time-invalid sensors."""
+    from open_energy_planner.solar import runtime
+
+    entity = "binary_sensor.retained"
+    configuration = plant()
+    configuration = replace(
+        configuration, sources=(replace(configuration.sources[0], curtailment_entity_id=entity),)
+    )
+    store = make_store(tmp_path, SolarStore)
+    store.save(configuration)
+    save_feedback(
+        store,
+        None,
+        CurtailmentHistory(entity, START, ((START - timedelta(hours=1), False),)),
+        START - timedelta(days=1),
+    )
+    current = SolarRuntime(store)
+    healthy = current.feedback[entity]
+    reads = []
+    original = runtime.load_feedback
+
+    def counted_read(documents, sensor, now):
+        """Count the real sensor archive reads rather than trusting a runtime counter."""
+        reads.append(sensor)
+        return original(documents, sensor, now)
+
+    monkeypatch.setattr(runtime, "load_feedback", counted_read)
+    changed = replace(configuration, sources=(replace(configuration.sources[0], capacity_w=5100),))
+    current.configure(changed)
+    assert reads == []
+    assert current.feedback[entity] is healthy
+    added = replace(
+        changed.sources[0],
+        source_id="other",
+        entity_id="sensor.other",
+        curtailment_entity_id="binary_sensor.new",
+    )
+    extended = replace(changed, sources=(*changed.sources, added))
+    current.configure(extended)
+    assert reads == ["binary_sensor.new"]
+    assert current.feedback[entity] is healthy
+    assert current.feedback["binary_sensor.new"] is None
+    reads.clear()
+    current.feedback_issues[entity] = "Synthetic unreadable evidence"
+    current.configure(extended)
+    assert reads == [entity]
+    assert not current.feedback_issues
+    assert current.feedback["binary_sensor.new"] is None
+    reads.clear()
+    current.feedback[entity] = replace(
+        healthy,
+        checked_until=runtime.datetime.now(healthy.checked_until.tzinfo) + timedelta(hours=1),
+    )
+    current.configure(extended)
+    assert reads == [entity]
+    assert current.feedback[entity].checked_until == START
+    reads.clear()
+
+    class EarlierClock(runtime.datetime):
+        """Move evaluation before the accepted archive boundary without modifying retained evidence."""
+
+        @classmethod
+        def now(cls, timezone=None):
+            return (START - timedelta(hours=1)).astimezone(timezone)
+
+    monkeypatch.setattr(runtime, "datetime", EarlierClock)
+    current.configure(extended)
+    assert reads == [entity]
+    assert entity in current.feedback_issues
+    assert current.feedback[entity] is None
+    assert current.feedback["binary_sensor.new"] is None
+
+
 @pytest.mark.parametrize("append_count", [80, 160])
 def test_repeated_fitting_retains_only_linear_feedback_lookup_arrays(tmp_path, append_count):
     """Materializing every live prefix must not retain every old lookup array through its parent chain."""

@@ -458,6 +458,15 @@ versions alongside the existing weather and production identities. Source
 selection uses a distinct feedback-policy family. These documents use existing
 tables and participate in the existing all-namespace database transfer.
 
+Forecast-quality plan and day views copy source-bound immutable feedback snapshots
+under the application lock. A snapshot must match the source, production meter and
+feedback sensor, and its checked boundary cannot be in the future. Active missing
+or unreadable feedback stays excluded without an archive fallback. Historical
+sensors that are no longer active use the retained archive reader. Configuration
+changes retain healthy feedback for unchanged sensors. New, failed or time-invalid
+sensors are restored in the existing cancellation-safe configuration writer,
+before the caller releases its application lock.
+
 Solar daily-series writers compare the expected manifest and every referenced
 block in one active-database transaction. Reads use batches of at most 128 block
 identities. Reusing an existing manifest does not bypass immutable-content or

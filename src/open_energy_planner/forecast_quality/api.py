@@ -126,6 +126,18 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
             raise web.HTTPServiceUnavailable(text="Home Assistant timezone unavailable")
         return value
 
+    def feedback_snapshot():
+        """Copy source-bound immutable feedback while the caller holds the shared state lock."""
+        return {
+            (source.source_id, source.entity_id, source.curtailment_entity_id): (
+                solar.feedback.get(source.curtailment_entity_id)
+                if source.curtailment_entity_id not in solar.feedback_issues
+                else None
+            )
+            for source in (solar.configuration.sources if solar.configuration else ())
+            if source.curtailment_entity_id
+        }
+
     async def capture_lifecycle(_app):
         """Observe midnight independently of solver success and finish durable writes before shutdown."""
         capture_logger = BackgroundLog(logging.getLogger(__name__), "Daily forecast capture")
@@ -223,7 +235,9 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
         original = await asyncio.to_thread(plans.get_plan, request.match_info["plan_id"])
         if original is None:
             raise web.HTTPNotFound(text="Original plan not found")
-        now = datetime.now(UTC)
+        async with lock:
+            now = datetime.now(UTC)
+            solar_feedback = feedback_snapshot()
         try:
             result = await asyncio.to_thread(
                 evidence,
@@ -233,6 +247,7 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                 solar.store.documents,
                 now,
                 names=energy_source_names(catalogue.value),
+                solar_feedback=solar_feedback,
             )
         except (OSError, KeyError, TypeError, ValueError):
             raise web.HTTPServiceUnavailable(text="Forecast-quality evidence unavailable") from None
@@ -287,6 +302,8 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
         """Evaluate only the frozen midnight baseline and completed-day measurements."""
         async with lock:
             zone = timezone()
+            now = datetime.now(UTC)
+            solar_feedback = feedback_snapshot()
         try:
             day_window(request.match_info["day"], zone)
         except ValueError:
@@ -307,7 +324,7 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                 archive,
                 demand.store.documents,
                 solar.store.documents,
-                datetime.now(UTC),
+                now,
                 await asyncio.to_thread(
                     controlled_consumers,
                     plans,
@@ -315,6 +332,7 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                     datetime.fromisoformat(record["end"]),
                 ),
                 names=energy_source_names(catalogue.value),
+                solar_feedback=solar_feedback,
             )
         except (OSError, KeyError, TypeError, ValueError):
             raise web.HTTPServiceUnavailable(text="Daily forecast evidence unavailable") from None

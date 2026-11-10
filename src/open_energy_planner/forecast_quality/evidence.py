@@ -105,7 +105,17 @@ def measured(archive, sources, terms, start, end):
     return result, max(receipts) if receipts else None
 
 
-def evidence(plan, archive, demand_documents, solar_documents, now, *, window=None, names=None):
+def evidence(
+    plan,
+    archive,
+    demand_documents,
+    solar_documents,
+    now,
+    *,
+    window=None,
+    names=None,
+    solar_feedback=None,
+):
     """Resolve frozen forecasts and HA evidence without rerunning models or inferring historic knowledge.
 
     Args:
@@ -119,6 +129,8 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
             hours align with measurements. Fractional-hour day edges lack actuals.
         names: Current Energy names keyed by the archived meter identity. Only
             labels change. Removed sources retain their captured name.
+        solar_feedback: Immutable runtime snapshots keyed by source, production
+            meter and feedback sensor. An active unavailable snapshot stays closed.
 
     Returns:
         Series, issues and evidence version. Daily contexts need no problem intervals
@@ -301,12 +313,21 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                 )
                 feedback = None
                 if source.get("curtailment_entity_id"):
-                    try:
-                        feedback = load_feedback(
-                            solar_documents, source["curtailment_entity_id"], now
-                        )
-                    except (OSError, KeyError, ValueError, TypeError):
-                        pass
+                    sensor = source["curtailment_entity_id"]
+                    key = identity, source["entity_id"], sensor
+                    if solar_feedback is not None and any(
+                        binding[2] == sensor for binding in solar_feedback
+                    ):
+                        feedback = solar_feedback.get(key)
+                        if feedback is not None and (
+                            feedback.entity_id != sensor or feedback.checked_until > now
+                        ):
+                            feedback = None
+                    else:
+                        try:
+                            feedback = load_feedback(solar_documents, sensor, now)
+                        except (OSError, KeyError, ValueError, TypeError):
+                            pass
                 source_definition = (
                     parse_source(source) if source.get("curtailment_entity_id") else None
                 )

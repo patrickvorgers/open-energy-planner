@@ -149,9 +149,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Solar configuration changed. Reload before saving")
             if candidate.version != current:
-                await persist(
-                    runtime.store.save, candidate, runtime.configure, contract_input=False
-                )
+                await persist(runtime.save_configuration, candidate, contract_input=False)
         return await settings(request)
 
     async def history(request):

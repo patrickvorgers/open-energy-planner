@@ -78,6 +78,11 @@ class SolarRuntime:
         self.learning = {}
         self.learning_log = BackgroundLog(_LOGGER, "Solar ML candidate update")
 
+    def save_configuration(self, configuration):
+        """Persist and restore settings in the caller-owned worker while its application lock is held."""
+        self.store.save(configuration)
+        self.configure(configuration)
+
     def configure(self, configuration):
         """Reset model state after persistence, retaining validated unchanged meter cohorts.
 
@@ -152,7 +157,16 @@ class SolarRuntime:
             entity: log for entity, log in self.feedback_logs.items() if entity in entities
         }
         now = datetime.now(UTC)
-        self.feedback, self.feedback_issues = self.read_feedback(entities, now)
+        issues = getattr(self, "feedback_issues", {})
+        retained = {
+            entity: history
+            for entity, history in self.feedback.items()
+            if entity in entities
+            and entity not in issues
+            and (history is None or history.entity_id == entity and history.checked_until <= now)
+        }
+        restored, self.feedback_issues = self.read_feedback(entities - retained.keys(), now)
+        self.feedback = {**retained, **restored}
         self.feedback_retry_after = {
             entity: now + timedelta(seconds=FEEDBACK_RESTORE_RETRY_SECONDS)
             for entity in self.feedback_issues
