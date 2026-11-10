@@ -76,6 +76,55 @@ def test_invalid_energy_bindings_do_not_abort_later_measured_quarters(settlement
     assert "PRIVATE-BINDING-SENTINEL" not in runtime.issue
 
 
+def test_malformed_price_only_invalidates_its_original_frame_overlap(settlement):
+    """A bad second-quarter price preserves .60 actual cost over the valid first and third quarters."""
+    runtime, store, _docs, engine, _plans = settlement
+    third = END + timedelta(minutes=15)
+    store.put_frames((frame(start=third),), {"bindings": bindings(), "seeds": [], "location": None})
+    with engine.begin() as connection:
+        retain(
+            connection,
+            (
+                PriceSeries(
+                    "synthetic-third-quarter",
+                    "NL",
+                    "EUR",
+                    START,
+                    None,
+                    None,
+                    (
+                        PricePoint(
+                            third, third + timedelta(minutes=15), 0.1, PriceKind.PUBLISHED, 15
+                        ),
+                    ),
+                ),
+            ),
+        )
+        connection.execute(
+            PUBLISHED_PRICES.update()
+            .where(PUBLISHED_PRICES.c.start == stamp(END))
+            .values(start="2026-10-22T10:15:PRIVATE")
+        )
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+    )
+    actual = report["scenarios"]["actual"]
+    assert actual["totals"]["purchase"] == pytest.approx(0.6)
+    assert actual["coverage_seconds"] == 1800
+    assert {
+        "start": END.isoformat(),
+        "end": third.isoformat(),
+        "reason": "Required prices, counters or physical evidence are unavailable.",
+    } in actual["missing"]
+    reference = report["scenarios"]["reference"]
+    # The valid meter-only middle quarter advances stock. Accepted costs are .20 then .30.
+    assert reference["totals"]["economic_cost"] == pytest.approx(0.5)
+    assert reference["coverage_seconds"] == 1800
+    assert report["checkpoint"]["reference_known"] is False
+    assert report["energy"]["grid_import"] == {"kwh": 3, "coverage_seconds": 2700}
+    assert "PRIVATE" not in str(report) and "PRIVATE" not in runtime.issue
+
+
 @pytest.mark.parametrize("missing", ["contract", "location"])
 def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_recovery(
     settlement, monkeypatch, caplog, missing

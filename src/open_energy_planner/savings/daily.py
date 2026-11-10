@@ -495,12 +495,12 @@ class DailySavings:
                             json.dumps(asdict(seed), default=lambda value: value.isoformat())
                         )
                         counter_seed_evidence[version(seed_record)] = seed_record
-                    # Retained date parsing belongs inside this frame's owned failure boundary.
+                    # Match the original SQL overlap before billing validates selected timestamps.
+                    frame_start_stamp, frame_end_stamp = stamp(frame.start), stamp(frame.end)
                     prices = [
                         row
                         for row in market_rows
-                        if datetime.fromisoformat(row["start"]) < frame.end
-                        and datetime.fromisoformat(row["end"]) > frame.start
+                        if row["start"] < frame_end_stamp and row["end"] > frame_start_stamp
                     ]
                     site = SiteLocation(**context["location"]) if context["location"] else None
                     if reference_known and not simulated_counters_ready(

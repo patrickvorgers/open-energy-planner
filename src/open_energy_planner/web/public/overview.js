@@ -26,8 +26,8 @@ const number = (value) => typeof value === "number" && Number.isFinite(value) ? 
 /** Share numeric precision across evidence cards, tooltip columns and chart axes. Units remain separate. */
 const valueText = (value, unit) => unit === "%" ? percentage(value, false) : unit === "W" ? Math.round(value).toLocaleString() : (isMoneyUnit(unit) ? money : number)(value);
 const statuses = {optimal: "Optimal", feasible: "Feasible"};
-/** Read authenticated JSON with owned recovery messages. Never expose transport or parser details. */
-async function api(path, signal) {
+/** Read JSON with owned guidance and a default deadline. An explicit signal owns its request group. */
+async function api(path, signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)) {
     let response;
     try {
         response = await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store", signal});

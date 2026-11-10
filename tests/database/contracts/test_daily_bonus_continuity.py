@@ -13,7 +13,11 @@ from open_energy_planner.prices.storage.adapters.published import retain
 from open_energy_planner.savings.daily import DailySavings
 from open_energy_planner.savings.storage.adapters.sqlalchemy import stamp
 from open_energy_planner.storage.adapters.lifecycle.retention import thin
-from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS, SETTLEMENT_FRAMES
+from open_energy_planner.storage.adapters.lifecycle.schema import (
+    ACTIVATIONS,
+    PUBLISHED_PRICES,
+    SETTLEMENT_FRAMES,
+)
 from tests.app.savings.support.scenarios import START, bindings, contract, frame
 
 
@@ -110,6 +114,47 @@ def export_day(settlement, *, fault=None):
         start,
         end,
     )
+
+
+def test_later_malformed_price_preserves_earlier_independent_bonus_usage(settlement):
+    """95 billable quarters retain 47.5 kWh export and .05/.15 bonuses. All 48 measured kWh advance usage."""
+    (
+        runtime,
+        _store,
+        _docs,
+        engine,
+        _plans,
+        selected,
+        counter,
+        previous,
+        _context,
+        initial,
+        start,
+        end,
+    ) = export_day(settlement)
+    with engine.begin() as connection:
+        connection.execute(
+            PUBLISHED_PRICES.update()
+            .where(PUBLISHED_PRICES.c.start == stamp(start + timedelta(hours=12)))
+            .values(start="2026-10-22T12:00:PRIVATE")
+        )
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", selected, None, end + timedelta(days=4), initial, previous
+    )
+    for kind, expected_bonus, expected_cost in (
+        ("actual", 0.05, 4.70),
+        ("without_battery", 0.15, 4.60),
+    ):
+        scenario = report["scenarios"][kind]
+        assert scenario["coverage_seconds"] == 85500
+        assert scenario["totals"]["export_kwh"] == 47.5
+        assert scenario["totals"]["bonus"] == pytest.approx(expected_bonus)
+        assert scenario["totals"]["economic_cost"] == pytest.approx(expected_cost)
+    assert report["scenarios"]["reference"]["totals"] is None
+    assert report["checkpoint"]["actual_counters"] == {counter: 49.5}
+    assert report["checkpoint"]["without_battery_counters"] == {counter: 48.5}
+    assert report["energy"]["grid_export"] == {"kwh": 48, "coverage_seconds": 86400}
+    assert "PRIVATE" not in str(report) and "PRIVATE" not in runtime.issue
 
 
 def test_pending_baseline_preserves_known_actual_billing_through_seal_and_expiry(settlement):

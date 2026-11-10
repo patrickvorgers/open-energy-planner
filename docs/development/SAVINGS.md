@@ -255,8 +255,17 @@ Each replay also reads its bounded local-day activation chronology and published
 price rows from one repeatable database snapshot. Frame starts resolve the most
 recent non-null physical context, including across disabled advice. Active advice
 still integrates only its actual enabled overlap. Price rows retain their receipt
-identities and are filtered by overlap before billing. A following replay reads
-new corrections. There is no process cache or change to finalized results.
+identities and are filtered by overlap before billing. The filter uses the original
+SQL predicate on canonical UTC timestamp strings before billing parses selected
+dates. Malformed evidence rejects its selected frame without poisoning unrelated
+frames. A following replay reads new corrections. There is no process cache or
+change to finalized results.
+
+The overview's shared JSON read function supplies a fresh five-second cancellation
+deadline when no caller signal is provided. Explicit caller signals remain
+authoritative for coordinated request groups. Automatic source-name refresh,
+manual plan selection and Savings period changes therefore cannot leave reads
+unbounded. A failed refresh retains its revision for the next independent retry.
 
 Measured energy metrics require a nonempty meter association and all its readings.
 An absent association has no measured total or coverage. An associated recorded

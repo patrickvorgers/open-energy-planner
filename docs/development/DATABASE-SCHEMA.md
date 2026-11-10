@@ -699,6 +699,9 @@ Only published facts enter them. Forecast prices never become measured settlemen
 
 This is the current projection. Corrections may replace its values. Evaluations
 retain the exact tariff/source evidence they used, so old results remain explainable.
+Daily snapshot replay selects each frame with the same canonical UTC string
+overlap predicate as SQL before billing validates selected timestamps. A malformed
+candidate rejects its own interval without invalidating unrelated prices.
 
 ### `oep_published_price_events`
 

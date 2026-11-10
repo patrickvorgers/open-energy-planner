@@ -3,7 +3,7 @@
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -72,3 +72,109 @@ def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
     assert page.evaluate(
         "new Set(window.sessionReads.map(record=>record.signal)).size===window.sessionReads.length"
     )
+
+
+def overview_read_probe(page, stalled):
+    """Stall one real overview read and observe its transport signal without replacing other responses."""
+    page.add_init_script("window.stalledOverviewKind=" + repr(stalled) + ";")
+    page.add_init_script("""(() => {
+      const fetchOriginal=window.fetch,budgets=new WeakMap();
+      window.overviewReads=[];window.armOverviewReads=false;let stalled=false;
+      AbortSignal.timeout=milliseconds=>{const controller=new AbortController();budgets.set(controller.signal,milliseconds);setTimeout(()=>controller.abort(),milliseconds);return controller.signal;};
+      window.fetch=(path,options={})=>{
+        const address=new URL(path,location.href);
+        const kind=address.pathname.endsWith('/comparison')?'plan':address.pathname.endsWith('/v1/savings')?'savings':null;
+        if(!kind)return fetchOriginal(path,options);
+        const record={kind,signal:options.signal,budget:budgets.get(options.signal),armed:window.armOverviewReads,aborted:false,completed:false};
+        window.overviewReads.push(record);
+        if(window.armOverviewReads&&!stalled&&kind===window.stalledOverviewKind){
+          stalled=true;
+          return new Promise((resolve,reject)=>options.signal?.addEventListener('abort',()=>{
+            record.aborted=true;reject(new DOMException('PRIVATE-READ-SENTINEL','AbortError'));
+          },{once:true}));
+        }
+        return fetchOriginal(path,options).then(async response=>{await response.clone().arrayBuffer();record.completed=true;return response;});
+      };
+    })();""")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("stalled", ["plan", "savings"])
+def test_source_name_refresh_bounds_both_views_and_retries_the_revision(app_page, stalled):
+    """Either stalled sibling aborts at five seconds. The same rename retries with fresh deadlines and selected dates."""
+    page, url = app_page
+    page.clock.install()
+    metadata = discover(page, url)
+    overview_read_probe(page, stalled)
+    page.goto(url + "/overview#savings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    wait_for_product_reads(page)
+    assert page.evaluate(
+        "window.overviewReads.filter(record=>!record.armed).every(record=>record.budget===5000)"
+    )
+    assert page.evaluate("window.overviewReads[0].signal===window.overviewReads[1].signal")
+    page.locator("#period-start").fill("2026-10-01")
+    page.locator("#period-end").fill("2026-10-30")
+    page.evaluate("window.armOverviewReads=true")
+    next(entry for entry in metadata["entities"] if entry["entity_id"] == "sensor.incoming")[
+        "energy_name"
+    ] = "Renamed synthetic source"
+    assert page.request.post(
+        url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=metadata
+    ).ok
+    page.clock.fast_forward(31000)
+    page.wait_for_function("() => window.overviewReads.filter(record=>record.armed).length>=2")
+    assert page.evaluate(
+        "window.overviewReads.filter(record=>record.armed).every(record=>record.budget===5000&&!record.signal.aborted)"
+    )
+    page.wait_for_function(
+        "() => window.overviewReads.some(record=>record.armed&&record.kind!==window.stalledOverviewKind&&record.completed)"
+    )
+    page.clock.fast_forward(5100)
+    page.wait_for_function("() => window.overviewReads.some(record=>record.aborted)", timeout=1500)
+    expect(page.locator("#overview-status" if stalled == "plan" else "#coverage")).to_contain_text(
+        "took too long"
+    )
+    expect(page.locator("body")).not_to_contain_text("PRIVATE-READ-SENTINEL")
+    page.clock.fast_forward(31000)
+    page.wait_for_function(
+        "() => window.overviewReads.filter(record=>record.armed&&record.completed).length>=3"
+    )
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.locator("#coverage")).not_to_contain_text("took too long")
+    expect(page.locator("#period-start")).to_have_value("2026-10-01")
+    expect(page.locator("#period-end")).to_have_value("2026-10-30")
+    assert page.evaluate(
+        "() => {const reads=window.overviewReads.filter(record=>record.armed);return new Set(reads.map(record=>record.signal)).size===reads.length;}"
+    )
+    count = page.evaluate("window.overviewReads.length")
+    page.clock.fast_forward(31000)
+    assert page.evaluate("window.overviewReads.length") == count
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_manual_plan_selection_has_a_fresh_read_deadline(app_page):
+    """A manually selected archived plan times out safely and the same selection can be retried."""
+    page, url = app_page
+    page.clock.install()
+    overview_read_probe(page, "plan")
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    wait_for_product_reads(page)
+    page.evaluate("window.armOverviewReads=true")
+    page.locator("#plan-version").select_option("browser-original-plan")
+    page.wait_for_function("() => window.overviewReads.some(record=>record.armed)")
+    assert page.evaluate("window.overviewReads.at(-1).budget===5000")
+    page.clock.fast_forward(5100)
+    page.wait_for_function("() => window.overviewReads.at(-1).aborted", timeout=1500)
+    expect(page.locator("#overview-status")).to_contain_text("took too long")
+    page.locator("#plan-version").select_option("browser-original-plan")
+    page.wait_for_function(
+        "() => window.overviewReads.at(-1).armed&&window.overviewReads.at(-1).completed"
+    )
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert page.evaluate("window.overviewReads.at(-1).signal!==window.overviewReads.at(-2).signal")
