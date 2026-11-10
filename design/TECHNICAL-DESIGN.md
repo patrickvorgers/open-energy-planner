@@ -851,7 +851,7 @@ Diagrams distinguish selected versus candidate sources, not promised free/keyles
 
 ### Settlement and visual overview
 
-The [savings boundary](../docs/development/SAVINGS.md) now composes native Recorder capture, retained original plan/advice chronology, independent reference physics, measured billing and versioned corrections. The app owns the full calculation. HA supplies only bounded normalized evidence. All records join the active database and complete cross-backend transfer. Period totals/daily charts aggregate indexed numeric columns in SQL. At most 96 interval JSON documents enter the UI. Counterfactuals, reconstructed intervals, battery value and gaps are identified explicitly. Existing development plans are retained without inventing old activation times. Older descriptions below that call settlement/reference/UI entirely unimplemented are superseded by this bounded implementation, not by a product-release claim.
+The [savings boundary](../docs/development/SAVINGS.md) composes native Recorder capture, independently retained installation/advice chronology, measured billing and continuous physical reference. Completed HA local days retain three scenario reports with independent coverage and chronological quarter-hour accounting. Three complete recovery dates precede immutable closure, including partial/unavailable days. Daily checkpoints, measured energy, inventory endpoints, quality and calculation versions survive temporary-quarter and full-plan expiry. SQL aggregates daily period totals and daily/monthly chart bins. Details are bounded to 366 days per response and 25 visible rows per page. New shared tables and their complete rows transfer across all four backends. Counterfactuals and gaps remain explicit. Retained original plans follow the [fixed age policy](../docs/development/PLAN-ARCHIVE.md#retention-and-payload-representation), without invented activation times or hindsight recalculation. Older indefinite-detail retention descriptions are superseded by REQUIREMENTS STORAGE-10–16 and the maintained Savings/archive guides.
 
 
 ### Plan archive
@@ -1337,18 +1337,18 @@ current tariff previews. SoC remains fixed at 0–100%.
 
 ### Physical reference and financial settlement separation
 
-Run a bounded counter-free physical replay before financial evaluation. Both use
-`savings/physical.py` for measured load/PV reconstruction and independent stock
-transitions. Persist the physical cursor/stocks/capacities in the shared savings
-SQLAlchemy document namespace. Bootstrap once from an existing successful stock
-continuation, then advance only contiguous original measured frames. Financial
-replay has its own revision cursor and cannot reset physical progress.
+Resolve measured load/PV and independent reference stock through `savings/physical.py`
+before financial evaluation. Daily checkpoints keep physical readiness separately
+from financial counters and accepted costs. Missing prices do not erase known
+physical progress. Missing measurements leave unknown stock rather than resetting
+it to actual SoC. Provisional-day replay starts from the preceding daily checkpoint.
+Finalized-day continuation and results remain independent of expired quarter detail.
 
-Future reference projections use this physical checkpoint and the existing bounded
-retained-forecast bridge. Use financial counters only from a matching successful
-contract/counter revision at that checkpoint. Missing bonus provenance yields null
-reference costs and benefit while retaining reproducible physical flows and an
-explicit financial issue. Frozen plans and measurements remain immutable.
+Future planning comparisons start from their own common measured state, separately
+from this continuous historical reference. Missing historical bonus provenance
+keeps affected evaluated costs unavailable. It cannot grant a fresh simulated
+budget or block an otherwise valid future plan. Retained original expectations
+are never rewritten during daily financial backfill.
 
 The native Recorder bridge looks back one hour for historical SoC. Unknown or
 unavailable spans up to one hour require identical valid percentages before and

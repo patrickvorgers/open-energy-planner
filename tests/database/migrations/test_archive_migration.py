@@ -92,6 +92,107 @@ def test_transfer_progress_reports_real_copy_and_verification_counts(route):
     assert restored.state == original.state
 
 
+def test_final_daily_results_and_controls_survive_every_transfer_route_without_source(route):
+    """A sealed partial day's .60 cost and -.20 benefit remain usable after full plans, raw quarters and source schema disappear."""
+    from dataclasses import asdict
+
+    from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
+    from open_energy_planner.prices.storage.adapters.published import retain
+    from open_energy_planner.savings.daily import DailySavings
+    from open_energy_planner.savings.runtime import SavingsRuntime
+    from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore, stamp
+    from open_energy_planner.storage.adapters.lifecycle.retention import collect_blocks, thin
+    from open_energy_planner.storage.adapters.lifecycle.schema import (
+        ACTIVATIONS,
+        PLAN_CONTEXTS,
+        PLANS,
+    )
+    from tests.app.savings.support.scenarios import END, START, bindings, contract, frame, problem
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    identity = "daily-transfer-original"
+    original.state["plan"] = {
+        "plan_id": identity,
+        "generated_at": START.isoformat(),
+        "strategy": "minimize cost",
+        "solution_status": "optimal",
+        "forecast_quality_controlled": ["sensor.synthetic_dishwasher"],
+        "input_snapshot": {
+            "problem": json.loads(
+                json.dumps(asdict(problem()), default=lambda value: value.isoformat())
+            )
+        },
+        "steps": [],
+    }
+    original.save()
+    store, documents = SettlementStore(source), SqlDocuments(source, "savings")
+    with source.begin() as connection:
+        connection.execute(ACTIVATIONS.insert().values(activated_at=stamp(START), plan_id=identity))
+        retain(
+            connection,
+            (
+                PriceSeries(
+                    "published",
+                    "NL",
+                    "EUR",
+                    START - timedelta(hours=1),
+                    None,
+                    None,
+                    tuple(
+                        PricePoint(
+                            START + timedelta(minutes=index * 15),
+                            START + timedelta(minutes=(index + 1) * 15),
+                            0.1,
+                            PriceKind.PUBLISHED,
+                            15,
+                        )
+                        for index in range(2)
+                    ),
+                ),
+            ),
+        )
+    store.put_frames(
+        (frame(), frame(start=END)), {"bindings": bindings(), "seeds": [], "location": None}
+    )
+    runtime = SavingsRuntime(store, documents, original)
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", contract(), None, END + timedelta(days=4), START, None
+    )
+    report["finalized_at"] = (END + timedelta(days=4)).isoformat()
+    store.put_day(report, documents, "2026-10-23")
+    thin(original, documents, END + timedelta(days=5), "UTC")
+    assert store.frames() == []
+    original.preserve_history()
+    original.state["plan"] = None
+    original.save()
+    with source.begin() as connection:
+        connection.execute(
+            ACTIVATIONS.update().where(ACTIVATIONS.c.plan_id == identity).values(plan_id=None)
+        )
+        connection.execute(
+            PLAN_CONTEXTS.update().where(PLAN_CONTEXTS.c.plan_id == identity).values(payload=None)
+        )
+        connection.execute(PLANS.delete().where(PLANS.c.plan_id == identity))
+        collect_blocks(connection)
+    migrate_archive(source, target, overwrite_target=True)
+    SCHEMA.drop_all(source)
+    restored_plans = SqlPlanRepository(root / "target", engine=target)
+    restored_store = SettlementStore(target)
+    assert restored_store.day(finalized=True) == report
+    assert restored_plans.get_plan(identity) is None
+    assert restored_plans.get_context(identity) is None
+    assert restored_store.context_plan(START) == identity
+    assert restored_plans.controlled_entities([identity]) == ["sensor.synthetic_dishwasher"]
+    restored = DailySavings(
+        SavingsRuntime(restored_store, SqlDocuments(target, "savings"), restored_plans)
+    )
+    result = restored.overview(START.replace(hour=0), START.replace(hour=0) + timedelta(days=1))
+    assert result["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+    assert result["savings"] == pytest.approx(-0.2)
+    assert result["days"][0]["scenarios"]["actual"]["status"] == "partial"
+
+
 def test_weather_learning_transfers_and_finishes_without_source(route):
     """Every backend transfer retains native model JSON and forward evidence after the source closes."""
     from tests.app.forecast.support.weather_learning import forecast_day

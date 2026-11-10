@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 
-def active_advice(frame, activations, plans):
+def active_advice(frame, activations, get_context):
     """Integrate each accepted plan only over its active, enabled and valid portion of the interval."""
     imported = exported = covered = 0.0
     sources = []
@@ -17,7 +17,9 @@ def active_advice(frame, activations, plans):
         )
         if not activation["enabled"] or not activation["plan_id"] or left >= right:
             continue
-        plan = plans.get_plan(activation["plan_id"])
+        plan = get_context(activation["plan_id"])
+        if plan is None:
+            raise ValueError("Historical calculation context is unavailable")
         right = (
             min(right, datetime.fromisoformat(plan["valid_until"]))
             if plan.get("valid_until")

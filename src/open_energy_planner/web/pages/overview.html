@@ -36,7 +36,7 @@
         <details><summary>Expected solar production and commands</summary><p>These are internal DC forecasts. Measured production below is at the configured AC boundary.</p><div class="table-scroll"><table><thead><tr><th>Time</th><th>Solar source</th><th>Available DC kWh</th><th>Used DC kWh</th><th>Production command</th></tr></thead><tbody id="plan-solar-rows"></tbody></table></div></details>
     </section>
     <section id="savings-view" class="view" aria-labelledby="savings-heading" hidden><h2 id="savings-heading">Evaluated savings</h2>
-        <p>Actual EMS costs use recorded meters. The reference is simulated self-consumption without price optimization.</p>
+        <p>Actual costs come from recorded meters. The other scenarios simulate battery self-consumption and the same household without storage.</p>
         <label>Evaluation version<select id="evaluation-version"><option value="">Latest evaluated costs</option></select></label>
         <button id="older-evaluations" type="button" hidden>Load older evaluations</button>
         <p id="evaluation-version-info"></p>
@@ -45,6 +45,12 @@
 
         <div class="chart-grid"><figure class="chart-card"><figcaption><h3>Benefit over time</h3><p>Evaluated interval benefit. Negative values mean the EMS cost more than the reference. Gaps mean missing coverage.</p></figcaption><div class="chart-wrap"><canvas id="savings-chart" role="img" aria-label="Evaluated savings over the selected period"></canvas></div><div id="savings-chart-legend" class="chart-legend"></div><p id="savings-chart-range" class="muted"></p></figure><figure class="chart-card"><figcaption><h3>Import: advice and realization</h3><p>Recorded EMS import versus simulated reference and original advice. Missing advice stays absent.</p></figcaption><div class="chart-wrap"><canvas id="realization-chart" role="img" aria-label="Recorded import compared with advice and simulated reference"></canvas></div><div id="realization-chart-legend" class="chart-legend"></div></figure></div>
         <details><summary>Cost breakdown</summary><div class="table-scroll"><table><caption>Costs for intervals with complete comparison coverage</caption><thead><tr><th>Component</th><th>Actual EMS</th><th>Simulated reference</th></tr></thead><tbody id="cost-rows"></tbody></table></div></details>
+        <section id="daily-savings-details" hidden aria-labelledby="daily-savings-heading">
+            <h3 id="daily-savings-heading">Daily results</h3>
+            <p>Completed days are recalculated during three full recovery days, then finalized with their measured coverage. Partial results are never extrapolated. Benefit compares only matching measured intervals. The current day is not yet evaluated.</p>
+            <div class="table-scroll"><table><caption>Daily costs and coverage for each scenario</caption><thead><tr><th>Day</th><th>State</th><th>Actual cost</th><th>Self-consumption cost</th><th>Without battery cost</th><th>Smart planning benefit</th><th>Details</th></tr></thead><tbody id="daily-savings-rows"></tbody></table></div>
+            <div class="toolbar" aria-label="Daily results pages"><button id="daily-savings-previous" type="button" class="secondary">Previous</button><span id="daily-savings-page" role="status"></span><button id="daily-savings-next" type="button" class="secondary">Next</button></div>
+        </section>
         <details><summary>Advice, realization and evaluation evidence</summary>
         <div class="table-scroll"><table><caption>Advice, realization and evaluation evidence</caption><thead><tr><th>Interval</th><th>Active advice</th><th>Measured load kWh</th><th>Measured PV AC kWh</th><th>Advised import kWh</th><th>Actual import kWh</th><th>Reference import kWh</th><th>Benefit</th><th>Quality</th><th>Evaluated at</th></tr></thead><tbody id="evaluation-rows"></tbody></table></div></details>
         <details><summary>Realized and reference battery state</summary><div class="table-scroll"><table><thead><tr><th>Time</th><th>Battery</th><th>Measured stored kWh</th><th>Reference stored kWh</th></tr></thead><tbody id="realized-battery-rows"></tbody></table></div></details>

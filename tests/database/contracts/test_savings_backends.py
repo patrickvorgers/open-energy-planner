@@ -324,15 +324,15 @@ def test_pending_capture_reuses_only_one_archived_binding_projection(settlement,
     from types import SimpleNamespace
 
     runtime, _store, _docs, _engine, plans = settlement
-    original = plans.get_plan
+    original = plans.get_context
     read_ids = []
 
     def counted(plan_id):
-        """Count expensive archive reconstructions while keeping real stored plan semantics."""
+        """Count compact context reads while keeping real stored projection semantics."""
         read_ids.append(plan_id)
         return original(plan_id)
 
-    monkeypatch.setattr(plans, "get_plan", counted)
+    monkeypatch.setattr(plans, "get_context", counted)
     for _ in range(2):
         assert runtime.request(
             END + timedelta(hours=1),

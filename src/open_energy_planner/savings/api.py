@@ -12,11 +12,22 @@ from open_energy_planner.contracts.bonus_statistics import (
     parse_statistics,
 )
 from open_energy_planner.history.wire import parse_history
-from open_energy_planner.home_assistant.names import display_plan
-from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, request_error_message
+from open_energy_planner.home_assistant.names import display_plan, energy_source_names
+from open_energy_planner.runtime.diagnostics.logging import (
+    BackgroundLog,
+    failure_trace,
+    request_error_message,
+)
 
 from ..storage.adapters.documents import SqlDocuments
+from ..storage.adapters.lifecycle.retention import recompress, thin
 from ..storage.writes import complete_write
+from .daily import (
+    TIMEZONE_PAUSE_MESSAGE,
+    DailySavings,
+    SavingsPrerequisiteMissing,
+    SavingsTimezoneChanged,
+)
 from .evidence import evidence
 from .forecast import comparison
 from .repricing import PlanValuations
@@ -93,6 +104,7 @@ def register(
     runtime = SavingsRuntime(
         SettlementStore(plans.engine), SqlDocuments(plans.engine, "savings"), plans
     )
+    daily = DailySavings(runtime)
 
     valuations = PlanValuations(runtime.documents, plans)
     from ..activities.api import EVENTS
@@ -241,6 +253,22 @@ def register(
                 or end != quarter(end)
             ):
                 raise ValueError
+            use_daily = not request.query.get("revision") and await asyncio.to_thread(
+                runtime.documents.exists, "daily-progress.json"
+            )
+            if use_daily:
+                result = await asyncio.to_thread(daily.overview, start, end)
+                current_names = energy_source_names(catalogue.value)
+                for day in result["days"]:
+                    day["device_names"] = {
+                        **day.get("device_names", {}),
+                        **{
+                            identity: current_names[entity]
+                            for identity, entity in day.get("display_sources", {}).items()
+                            if entity in current_names
+                        },
+                    }
+                return web.json_response(result, headers={"Cache-Control": "no-store"})
             result = await asyncio.to_thread(
                 runtime.overview, start, end, request.query.get("revision")
             )
@@ -248,7 +276,7 @@ def register(
             for interval in result["intervals"]:
                 plan_id = interval.get("plan_id")
                 if plan_id and plan_id not in plan_names:
-                    original = await asyncio.to_thread(plans.get_plan, plan_id)
+                    original = await asyncio.to_thread(plans.get_context, plan_id)
                     plan_names[plan_id] = (display_plan(original, catalogue.value) or {}).get(
                         "comparison_names", {}
                     )
@@ -260,9 +288,15 @@ def register(
             raise web.HTTPNotFound(text="Evaluation version not found") from None
         except OSError:
             raise web.HTTPServiceUnavailable(text="Settlement archive unavailable") from None
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as error:
             raise web.HTTPBadRequest(
-                text="Choose an increasing range of aligned, timezone-aware dates"
+                text=request_error_message(
+                    error,
+                    logger=_LOGGER,
+                    operation="Daily savings period",
+                    safe_messages=("Choose a period with one historical currency",),
+                    fallback="Choose an increasing range of aligned, timezone-aware dates",
+                )
             ) from None
         return web.json_response(result, headers={"Cache-Control": "no-store"})
 
@@ -355,13 +389,15 @@ def register(
         """Advance at most one day per round. Keep errors visible without stopping planning."""
         settlement_logger = BackgroundLog(_LOGGER, "Settlement processing")
         last_state = None
+        last_maintenance_failure = None
         while True:
+            financial_ready = False
             try:
                 async with lock:
-                    contract, book = contracts.current, counters.current
+                    contract, book, site = contracts.current, counters.current, location()
                 async with mutation_lock:
                     cancelled = await complete_write(
-                        runtime.process, contract, datetime.now(UTC), book
+                        daily.process, contract, book, datetime.now(UTC), site
                     )
                     if cancelled:
                         raise cancelled
@@ -370,6 +406,7 @@ def register(
                     )
                     if cancelled:
                         raise cancelled
+                financial_ready = True
                 state = runtime.issue, runtime.attention
                 if state != last_state:
                     if runtime.issue:
@@ -389,6 +426,16 @@ def register(
                     settlement_logger.success(
                         "Measured settlement processing is running independently of planning."
                     )
+            except SavingsPrerequisiteMissing as error:
+                runtime.issue, runtime.attention = error.issue, True
+                if last_state != (runtime.issue, runtime.attention):
+                    _LOGGER.warning("Settlement needs attention: %s", runtime.issue)
+                last_state = runtime.issue, runtime.attention
+            except SavingsTimezoneChanged:
+                runtime.issue, runtime.attention = TIMEZONE_PAUSE_MESSAGE, True
+                if last_state != (runtime.issue, runtime.attention):
+                    _LOGGER.warning("Settlement paused: %s", TIMEZONE_PAUSE_MESSAGE)
+                last_state = runtime.issue, runtime.attention
             except Exception:
                 runtime.issue = "Settlement processing failed. Inspect application logs"
                 runtime.attention = True
@@ -397,6 +444,34 @@ def register(
                     "The last successful financial results are retained. Planning continues independently. Check settlement and storage diagnostics.",
                     retry_seconds=SAVINGS_WORKER_SECONDS,
                 )
+            if financial_ready:
+                try:
+                    async with mutation_lock:
+                        if site:
+                            cancelled = await complete_write(
+                                thin, plans, runtime.documents, datetime.now(UTC), site.timezone
+                            )
+                            if cancelled:
+                                raise cancelled
+                        cancelled = await complete_write(recompress, runtime.documents)
+                        if cancelled:
+                            raise cancelled
+                    if last_maintenance_failure is not None:
+                        _LOGGER.info(
+                            "Archive maintenance recovered. Bounded background processing continues."
+                        )
+                    last_maintenance_failure = None
+                except Exception as error:  # noqa: BLE001 - Isolate maintenance failures and log only sanitized traces.
+                    trace = failure_trace(error)
+                    failure = type(error), trace
+                    _LOGGER.log(
+                        logging.ERROR if failure != last_maintenance_failure else logging.DEBUG,
+                        "Archive maintenance failed (%s). Unprocessed records remain retained. Daily results and planning continue independently. Inspect storage diagnostics. Next check in %d seconds.\n%s",
+                        type(error).__name__,
+                        SAVINGS_WORKER_SECONDS,
+                        trace if failure != last_maintenance_failure else "",
+                    )
+                    last_maintenance_failure = failure
             await asyncio.sleep(SAVINGS_WORKER_SECONDS)
 
     async def evaluations(request):

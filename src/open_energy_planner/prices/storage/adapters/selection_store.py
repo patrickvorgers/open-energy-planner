@@ -19,6 +19,7 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
     SCHEMA,
     SELECTION_TABLES,
 )
+from open_energy_planner.storage.adapters.lifecycle.transactions import lifecycle_transaction
 
 SQLITE_BUSY_TIMEOUT_SECONDS = 5
 
@@ -27,7 +28,7 @@ class SqlAlchemySelectionStore:
     """Own connections/SQL, keeping native database objects out of source-selection policy.
 
     A supplied SQLAlchemy Engine selects the backend. There is no silent local
-    fallback on server failures. Only one serialized application worker writes.
+    fallback on server failures. Writes share the app engine's complete writer guard.
     Schema creation is idempotent and uses only OEP-prefixed tables. Runtime updates use a single transaction across all tables.
     """
 
@@ -63,15 +64,20 @@ class SqlAlchemySelectionStore:
 
         Existing tables are skipped by create_all. Replace an older index definition
         before serving queries. Failed DDL is reported through the public storage calls.
-        Only the serialized application worker initializes this adapter.
+        Initialization uses the same guarded connection as its DDL and inspection.
+        Ordinary reads remain independent once initialization has committed.
         """
         if not self.initialized:
-            SCHEMA.create_all(self.engine, tables=SELECTION_TABLES)
-            expected = [column.name for column in PRICE_PAIR_TARGETS.columns]
-            for index in inspect(self.engine).get_indexes(PAIRS.name):
-                if index["name"] == PRICE_PAIR_TARGETS.name and index["column_names"] != expected:
-                    PRICE_PAIR_TARGETS.drop(self.engine)
-            PRICE_PAIR_TARGETS.create(self.engine, checkfirst=True)
+            with lifecycle_transaction(self.engine) as connection:
+                SCHEMA.create_all(connection, tables=SELECTION_TABLES)
+                expected = [column.name for column in PRICE_PAIR_TARGETS.columns]
+                for index in inspect(connection).get_indexes(PAIRS.name):
+                    if (
+                        index["name"] == PRICE_PAIR_TARGETS.name
+                        and index["column_names"] != expected
+                    ):
+                        PRICE_PAIR_TARGETS.drop(connection)
+                PRICE_PAIR_TARGETS.create(connection, checkfirst=True)
             self.initialized = True
 
     def _scope(self, table):
@@ -92,7 +98,7 @@ class SqlAlchemySelectionStore:
         pair_table, decision_table = self.pairs, self.decisions
         try:
             self._initialize()
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 for actual in actuals:
                     key = (ACTUALS.c.area == area) & (ACTUALS.c.target == actual.target.isoformat())
                     values = {"price": actual.price, "version": actual.version}

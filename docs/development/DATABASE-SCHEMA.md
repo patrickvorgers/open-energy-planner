@@ -3,7 +3,7 @@
 This guide describes the implemented app database, not Home Assistant Recorder.
 The authoritative SQLAlchemy Core registry is
 [`storage/adapters/lifecycle/schema.py`](../../src/open_energy_planner/storage/adapters/lifecycle/schema.py).
-All 19 tables use the same app-owned engine: SQLite by default, or PostgreSQL,
+All registered tables use the same app-owned engine: SQLite by default, or PostgreSQL,
 MariaDB or MySQL. The HA integration exchanges API messages and never reads SQL.
 See [the plan archive guide](PLAN-ARCHIVE.md) for deployment, backup and cross-backend transfer.
 
@@ -28,6 +28,10 @@ See [the plan archive guide](PLAN-ARCHIVE.md) for deployment, backup and cross-b
   Market prices and MAE are
   EUR/kWh. Settlement money is in the evaluation's currency. Negative prices and
   negative financial results are valid. Missing evidence is not replaced by zero.
+- JSON payload columns accept plain original JSON or the versioned `oep:gzip:1:`
+  lossless envelope. Hashes always cover decoded original canonical JSON. The
+  shared bounded decoder verifies the envelope before domain validation. See
+  [compression and retention](PLAN-ARCHIVE.md#retention-and-payload-representation).
 - The schema is shared by runtime and backend transfer. There is no ORM object
   graph, database per module or direct connection to HA Recorder. A test-only
   selection-store constructor can create isolated SQLite. App runtime does not use it.
@@ -68,7 +72,9 @@ volume. Equality passes. A low reading takes precedence over partial measurement
 failure. Otherwise status is `unavailable` on measurement failure, `unknown` when
 capacity cannot be measured, or `ok`. This is an on-demand warning in the storage
 page, not background monitoring or an HA notification. Refresh retries failures
-and removes stale evidence. No data is deleted or automatically compacted.
+and removes stale evidence. This read endpoint deletes no data. Independent
+background plan/Savings retention follows the archive policy. No blocking
+automatic database-file compaction is performed.
 
 ## Activity history table
 
@@ -110,6 +116,8 @@ erDiagram
     oep_archive_parts }o--o| oep_archive_values : value_ref
     oep_archive_state }o--o| oep_archive_plans : plan_id
     oep_plan_activations }o--o| oep_archive_plans : plan_id
+    oep_activation_contexts }o--|| oep_plan_activations : activated_at
+    oep_activation_contexts }o--|| oep_plan_contexts : plan_id
     oep_settlement_evaluations }o--|| oep_settlement_frames : start
 ```
 
@@ -133,7 +141,10 @@ inputs and verifies each distinct control leaf's content hash and list of entity
 IDs. Missing plans and missing or corrupt referenced values fail the read. An
 absent optional field contributes no controls, matching older full-plan reads.
 This projection verifies the selected leaf rather than the complete plan hash.
-No tables, columns or stored plan documents change.
+After deliberate full-plan thinning, the separately hash-checked control list in
+`oep_plan_contexts` supplies the same ownership evidence. Activation identities
+resolve through `oep_activation_contexts`. Missing or corrupt evidence still fails
+closed rather than making previously controlled loads appear uncontrolled.
 
 ### Current plan JSON and archived evidence
 
@@ -249,7 +260,7 @@ time and activation time serve different purposes. Settlement needs activation t
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |
 | `activated_at` | String(40), PK | UTC time the app commits the change. Not proof of physical execution or an HA acknowledgement. |
-| `plan_id` | String(128), nullable, FK → oep_archive_plans.plan_id | Plan associated with the change. Null for removal/invalidation. |
+| `plan_id` | String(128), nullable, FK → oep_archive_plans.plan_id | Complete plan associated with the change. Null for removal/invalidation or after deliberate thinning. Durable logical identity then remains in `oep_activation_contexts`. |
 | `enabled` | Integer, default 1 | Boolean flag encoded as 0/1. Whether execution was enabled. |
 | `context_hash` | String(64), default empty string | Hash of comparison bindings to detect installation/source changes. Empty when no plan. |
 
@@ -259,6 +270,33 @@ context. Clearing commands therefore does not erase that historical context.
 This does not make the preceding advice active: `active_advice()` reads the full
 activation timeline, including null/disabled rows, and clips advice to plan validity.
 An interval without active advice can still be settled from its measurements.
+
+### `oep_plan_contexts`
+
+Owned by `SqlPlanRepository`. Independent historical calculation projections and
+permanent control ownership. This is not a reconstructed original plan API.
+Existing complete plans are hash-verified before bounded backfill. New publication
+writes its projection in the original plan transaction.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `plan_id` | String(128), PK, binary collation | Original logical plan identity, independent of full-plan retention. |
+| `generated_at` | String(40) | Fixed-width UTC generation time. Indexed with plan ID by `oep_plan_context_chronology`. |
+| `controls` | Text / LONGTEXT | Permanent finite JSON list of controlled consumer entity IDs for Forecast Quality. |
+| `controls_hash` | String(64) | Canonical decoded control-list SHA-256. |
+| `payload` | Text / LONGTEXT, nullable | Temporary independent calculation projection: identity, strategy, names/bindings, commands, appliance schedule, physical problem, expected flows and original tariff evidence. Null only after daily finalization permits expiry. |
+| `payload_hash` | String(64), nullable | SHA-256 of the original decoded projection. Retained after payload expiry. |
+
+### `oep_activation_contexts`
+
+Preserves historical advice and configuration identity when the old full-plan
+foreign key must be cleared before deleting an intermediate original plan.
+Logical resolution coalesces the full-plan ID and this preserved context ID.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `activated_at` | String(40), PK, FK → oep_plan_activations.activated_at | Exact original recorded activation time. Never regenerated during backfill. |
+| `plan_id` | String(128), FK → oep_plan_contexts.plan_id, binary collation | Permanent logical context identity. Does not reactivate disabled or expired advice. |
 
 ## Durable documents
 
@@ -679,6 +717,9 @@ Only published facts enter them. Forecast prices never become measured settlemen
 
 This is the current projection. Corrections may replace its values. Evaluations
 retain the exact tariff/source evidence they used, so old results remain explainable.
+Daily snapshot replay selects each frame with the same canonical UTC string
+overlap predicate as SQL before billing validates selected timestamps. A malformed
+candidate rejects its own interval without invalidating unrelated prices.
 
 ### `oep_published_price_events`
 
@@ -778,15 +819,100 @@ double-counting after retries or restart.
 | `revision` | String(64), PK | Logical evaluation identity shared with evaluations/documents. No SQL FK. |
 | `payload` | Text | Continuous actual/reference battery inventory, bonus counters and other continuation state used by the evaluator. |
 
+### `oep_savings_days`
+
+Owned by `savings/daily.py` and `SettlementStore`. One HA local calendar day per
+UTC start key. Publication updates provisional reports only. A non-null
+`finalized_at` makes the row immutable. Its report/checkpoint and ingestion cursor
+commit together. There is no dependency on a complete original plan or raw frame.
+All monetary columns use `currency`. Energy is kWh and coverage is elapsed seconds.
+Null costs mean unavailable, while a measured/evaluated zero is stored as zero.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `start` | String(40), PK | Inclusive fixed-width UTC start of the original local day. |
+| `end` | String(40) | Exclusive fixed-width UTC end, including 23/25-hour DST days. |
+| `day` | String(40) | HA local ISO calendar date, used for daily/monthly SQL chart bins. |
+| `timezone` | String(128) | HA timezone defining this historical calendar identity. |
+| `currency` | String(32) | Financial currency. Mixed-currency period totals are rejected. |
+| `market_area` | String(32) | Historical bidding area used by billing. |
+| `finalized_at` | String(40), nullable | UTC closure time after three complete recovery dates and finalized predecessors. Null means provisional. |
+| `payload` | Text / LONGTEXT | Compact report and continuation described below, optionally compressed. |
+| `payload_hash` | String(64) | SHA-256 of the decoded canonical report, checked before reuse or detail expiry. |
+| `actual_purchase` | Double, nullable | Actual accepted-interval grid import cost. |
+| `actual_sale` | Double, nullable | Actual export income before bonus. |
+| `actual_bonus` | Double, nullable | Actual bonus income with its own chronological counter. |
+| `actual_grid_cash` | Double, nullable | Actual purchase minus sale minus bonus. |
+| `actual_wear` | Double, nullable | Measured battery discharge wear cost. |
+| `actual_inventory_change` | Double, nullable | Actual closing minus opening battery value, excluding installation movements. |
+| `actual_economic_cost` | Double, nullable | Actual grid cash plus wear minus inventory change. |
+| `actual_import_kwh` | Double, nullable | Gross actual grid import on financially accepted coverage. |
+| `actual_export_kwh` | Double, nullable | Gross actual grid export on financially accepted coverage. |
+| `actual_coverage_seconds` | Double, nullable | Duration of accepted actual-cost intervals. Zero when unavailable. |
+| `reference_purchase` | Double, nullable | Simulated self-consumption import cost. |
+| `reference_sale` | Double, nullable | Simulated self-consumption export income before bonus. |
+| `reference_bonus` | Double, nullable | Self-consumption bonus income with its independent counter. |
+| `reference_grid_cash` | Double, nullable | Self-consumption purchase minus sale minus bonus. |
+| `reference_wear` | Double, nullable | Simulated self-consumption battery wear cost. |
+| `reference_inventory_change` | Double, nullable | Independent reference inventory-value change excluding installation movements. |
+| `reference_economic_cost` | Double, nullable | Self-consumption grid cash plus wear minus inventory change. |
+| `reference_import_kwh` | Double, nullable | Gross simulated self-consumption import on accepted coverage. |
+| `reference_export_kwh` | Double, nullable | Gross simulated self-consumption export on accepted coverage. |
+| `reference_coverage_seconds` | Double, nullable | Duration of accepted self-consumption-cost intervals. Zero when unavailable. |
+| `without_battery_purchase` | Double, nullable | Simulated import cost without storage, using the same measured load and available-PV basis. |
+| `without_battery_sale` | Double, nullable | Simulated without-battery export income before bonus. |
+| `without_battery_bonus` | Double, nullable | Without-battery bonus income with its independent counter. |
+| `without_battery_grid_cash` | Double, nullable | Without-battery purchase minus sale minus bonus. |
+| `without_battery_wear` | Double, nullable | Zero on accepted without-battery intervals. Null if unavailable. |
+| `without_battery_inventory_change` | Double, nullable | Zero on accepted without-battery intervals. Null if unavailable. |
+| `without_battery_economic_cost` | Double, nullable | Without-battery grid cash. |
+| `without_battery_import_kwh` | Double, nullable | Gross simulated without-battery import on accepted coverage. |
+| `without_battery_export_kwh` | Double, nullable | Gross simulated without-battery export on accepted coverage. |
+| `without_battery_coverage_seconds` | Double, nullable | Duration of accepted without-battery-cost intervals. Zero when unavailable. |
+| `savings` | Double, nullable | Sum of self-consumption minus actual economic cost on pairwise matching quarters only. |
+| `avoided_import_kwh` | Double, nullable | Self-consumption minus actual gross import on those matching quarters. |
+| `comparison_seconds` | Double | Pairwise accepted actual/self-consumption duration, or zero. |
+| `battery_savings` | Double, nullable | Without-battery minus actual economic cost on pairwise matching quarters. |
+| `battery_comparison_seconds` | Double | Pairwise accepted actual/without-battery duration, or zero. |
+| `self_consumption_savings` | Double, nullable | Without-battery minus self-consumption economic cost on matching quarters. |
+| `self_consumption_comparison_seconds` | Double | Pairwise accepted self-consumption/without-battery duration, or zero. |
+
+The report contains each scenario's `complete`, `partial` or `unavailable` status,
+cost breakdown, accepted and estimated seconds, coalesced missing UTC ranges with
+owned reasons, and opening/closing battery stock and value. `energy` retains
+measured gross import/export, household and AC solar kWh with independent coverage
+even when the original accounting context or financial prices are missing.
+Associations are validated before any metric in a frame is added. Invalid
+associations cannot partially contribute energy or coverage. Captured installation definitions,
+contract/counter versions, published price versions, policy versions, evaluation
+time, recovery deadline and optional retained daily-plan ID remain permanent.
+
+`checkpoint` contains independent physical stock/readiness, financial reference
+state/readiness, actual inventory, and separate actual/reference/without-battery counters. An unknown
+continuation is explicit. The public daily overview omits this internal checkpoint.
+Missing physical coverage never initializes a replacement reference from actual SoC.
+
+`counter_seed_evidence` retains the opening counter records keyed by content hash.
+`inventory_movements` retains timestamped external battery additions, removals and
+capacity corrections with their kWh and value. `display_sources` maps frozen device
+identities to Energy source identities for current-name display without rewriting
+the archived day. The actual inventory checkpoint includes stored kWh, capacities,
+valuation curves and closing value independently of reference availability.
+
 ## Indexes and query ownership
 
 Primary keys provide the lookup/order prefixes below. The schema also declares
-three secondary indexes. No per-JSON-field or speculative index is implied.
+the secondary indexes listed here. No per-JSON-field or speculative index is implied.
 
 | Key / index | Query it supports |
 | --- | --- |
 | Plan PK `plan_id` | Exact original plan lookup and activation/state references. |
 | `oep_plan_chronology(generated_at, plan_id)` | Newest-first plan summaries and stable keyset pagination, including equal timestamps. |
+| `oep_plan_record_reference(record_ref)` | Indexed incoming plan edges for shared-block garbage collection. Added explicitly to existing archives at startup if missing. |
+| `oep_part_record_reference(record_ref)` | Indexed incoming nested-record edges. Prevents quadratic graph collection. |
+| `oep_part_value_reference(value_ref)` | Indexed incoming leaf edges. Referenced values never expire. |
+| `oep_plan_context_chronology(generated_at, plan_id)` | Historical cursor lookup and bounded detailed-context expiry. |
+| `oep_savings_day_finalization(finalized_at, start)` | Provisional/final calendar checkpoint selection. |
 | Value/record PK `digest`. Parts PK `(owner, field)` | Batched block reuse and field reconstruction of one retained plan. |
 | Document PK `(namespace, name)` | Exact configuration/version/current-pointer reads. |
 | Activation PK `activated_at` | Last activation at/before an interval, subsequent changes and configuration-boundary scans. |
@@ -808,7 +934,32 @@ new query shape or materially larger payload is introduced.
 
 ## Lifecycle and maintenance
 
-- One app instance serializes writes. SQL transactions preserve publication and
+- One app instance shares an engine-owned reentrant lifecycle guard across plan
+  publication, document transactions, activity writes/retention/restart, settlement
+  writes, price-selection updates, lazy context creation and background backfill.
+  Price-selection schema and index initialization also use one guarded connection.
+  Initialization is acknowledged only after that transaction succeeds.
+  The guard starts before the first SQL and covers commit or rollback, so collection
+  cannot delete a known block while publication is preparing its new references.
+  Competing lazy readers and backfill writers cannot insert the same context twice.
+  Existing context rows are read and hash-verified without taking the lifecycle
+  guard. A lazy miss acquires the guard and rereads the row before any insertion.
+  Borrowed settlement connections retain the caller's complete transaction instead
+  of opening another. Ordinary reads and repeatable daily read snapshots do not
+  take the writer guard. Async callers execute guarded writes off the event loop.
+  Daily replay borrows one repeatable-read connection for its initial physical
+  context ID, bounded activation chronology and published price rows. The same
+  snapshot pattern protects provisional report details/totals. Per-frame overlap
+  resolution and context decoding are local to that replay. The next replay
+  rereads corrections and receipt identities. No retained document format changes.
+  A Contract save preserves its immutable revision and current pointer together
+  while waiting for another participating writer to finish. A failed save rolls
+  both back and leaves the in-memory current contract unchanged.
+  The guard coordinates one process and engine. It cannot serialize external
+  writers or multiple application processes. No retry layer or larger database
+  timeout is implied. Archive startup and unpublished migration-candidate checks
+  finish before ordinary runtime workers use their engine.
+  SQL transactions preserve publication and
   result/checkpoint boundaries. SQLAlchemy does not make arbitrary concurrent app
   writers safe. SQLite uses WAL, full synchronization, enabled foreign keys and
   a bounded busy timeout. External database failures never silently select SQLite.
@@ -816,9 +967,10 @@ new query shape or materially larger payload is introduced.
   a 30-second statement timeout and five-second lock timeout. MariaDB/MySQL use
   30-second socket read/write timeouts. Runtime and backend migration share these
   limits per operation, rather than a timeout for the entire migration.
-- There is no automatic pruning of plans, measurement frames, evaluations or
-  referenced content. Mutable pointers, checkpoints and current projections can
-  advance. Historical plan reconstruction and revaluation are different operations.
+- Plan thinning follows the fixed age policy. Temporary financial frames,
+  interval evaluations and detailed contexts expire only behind a verified final
+  day. Referenced shared content, active state and permanent daily reports remain
+  protected. Historical plan reconstruction and revaluation are distinct operations.
 - Cross-backend transfer rebuilds the target's OEP tables only after explicit
   consent, copies **every registered table** in dependency order, and verifies
   retained data. The stopped source is retained. After successful switching the
@@ -1111,7 +1263,7 @@ Forecast-quality reads snapshot the bounded daily-pointer set in one SQL stateme
 
 ### Counter-free physical checkpoint
 
-The `savings` document `physical-reference.json` persists one chronological physical
+The legacy `savings` document `physical-reference.json` persists one chronological physical
 continuation independently of evaluation revisions. `end` is the ISO interval end.
 `reference_stored` and `actual_stored` map battery IDs to kWh. `capacities` maps the
 same IDs to usable capacity in kWh. Original measurement frames and activation
@@ -1119,6 +1271,9 @@ chronology establish its provenance. It has no contract foreign key or bonus bud
 Existing successful continuation supplies its initial independent stock once.
 Each validated measured frame advances it atomically under the settlement lock.
 Financial corrections cannot rewind it. Missing physical intervals cannot be skipped.
+The daily worker instead stores separate physical and financial continuation in
+`oep_savings_days.payload.checkpoint`. Known physical progress can outlive a
+financial outage, while a finalized physical gap leaves an explicit unknown state.
 The normal document archive and backend transfer include it on SQLite, PostgreSQL,
 MariaDB and MySQL. No additional table or database connection is introduced.
 
