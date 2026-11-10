@@ -284,7 +284,12 @@ def test_boiler_energy_pair_override_refresh_and_cancel_match_charge_point_behav
 def test_pending_refresh_updates_authoritative_choice_before_typed_draft(
     app_page, category, change
 ):
-    """A refresh completed while the picker is open updates power or rejects a vanished or claimed choice."""
+    """Apply refreshed ownership and power before opening the typed editor.
+
+    Linked choices open the editor with refreshed power. Unlinked choices open
+    with no power. Removed and claimed choices are rejected without an editor.
+    The configuration version remains unchanged in every case.
+    """
     page, url = app_page
     body, headers = prepare_charge_point(page, url)
     editor = "ev" if category == "point" else "thermal"
@@ -313,7 +318,7 @@ def test_pending_refresh_updates_authoritative_choice_before_typed_draft(
             response.request.method == "POST"
             and response.url.endswith("/v1/ha/source-choices/" + editor)
         )
-    ) as pending:
+    ) as refresh_response:
         page.get_by_role("button", name="Refresh Home Assistant sources", exact=True).click()
     picker = open_sources(page, category)
     chosen = picker.locator('button[title="sensor.charger_energy"]')
@@ -347,7 +352,7 @@ def test_pending_refresh_updates_authoritative_choice_before_typed_draft(
     assert page.request.post(
         url + "/v1/ha/source-choices",
         headers=headers,
-        data={"scope": editor, "id": pending.value.json()["id"], "page": changed},
+        data={"scope": editor, "id": refresh_response.value.json()["id"], "page": changed},
     ).ok
     expect(page.locator("#status")).to_contain_text("sources refreshed")
     expect(picker).to_be_visible()
