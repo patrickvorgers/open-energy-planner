@@ -89,7 +89,8 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
 
     def current_notifications():
         """Read cached forecast availability. Unreadable configuration cannot confirm recovery."""
-        if runtime.store.issue:
+        # Configuration restoration owns this lock in a worker. Retain prior notices until it finishes.
+        if lock.locked() or runtime.store.issue:
             return None
         return solar_forecast_notifications(
             runtime.configuration,
@@ -291,13 +292,14 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                     forecast_logger.success("A new solar forecast is available.")
                                 if live:
                                     live.refresh()
+                            if activity:
+                                usable = installed and forecast_usable(
+                                    runtime.configuration,
+                                    runtime.forecast,
+                                    runtime.location,
+                                    datetime.now(UTC),
+                                )
                         if activity:
-                            usable = installed and forecast_usable(
-                                runtime.configuration,
-                                runtime.forecast,
-                                runtime.location,
-                                datetime.now(UTC),
-                            )
                             await events.finish(
                                 activity,
                                 Outcome.COMPLETED
@@ -338,47 +340,52 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                         retry_seconds=max(SOLAR_WORKER_POLL_SECONDS, round(retry_seconds)),
                     )
                 if events:
-                    current = datetime.now(UTC)
-                    usable = bool(
-                        runtime.configuration
-                        and runtime.configuration.sources
-                        and not runtime.store.issue
-                        and forecast_usable(
-                            runtime.configuration, runtime.forecast, runtime.location, current
+                    async with lock:
+                        current = datetime.now(UTC)
+                        usable = bool(
+                            runtime.configuration
+                            and runtime.configuration.sources
+                            and not runtime.store.issue
+                            and forecast_usable(
+                                runtime.configuration, runtime.forecast, runtime.location, current
+                            )
                         )
-                    )
-                    no_sources = bool(
-                        runtime.configuration
-                        and not runtime.configuration.sources
-                        and not runtime.store.issue
-                    )
-                    events.availability(
-                        "solar",
-                        Health.AVAILABLE
-                        if usable or no_sources
-                        else Health.UNAVAILABLE
-                        if runtime.configuration
-                        else Health.UNKNOWN,
-                        "No solar forecast is required for this installation."
-                        if no_sources
-                        else "A current solar forecast is available."
-                        if usable
-                        else "Waiting for a usable solar forecast.",
-                    )
-                    retry = (
-                        runtime.retry_after
-                        if not no_sources
-                        and runtime.retry_after
-                        and runtime.retry_after > current
-                        and runtime.failed_key == runtime.key(current)
-                        else None
-                    )
+                        no_sources = bool(
+                            runtime.configuration
+                            and not runtime.configuration.sources
+                            and not runtime.store.issue
+                        )
+                        availability = (
+                            Health.AVAILABLE
+                            if usable or no_sources
+                            else Health.UNAVAILABLE
+                            if runtime.configuration
+                            else Health.UNKNOWN
+                        )
+                        detail = (
+                            "No solar forecast is required for this installation."
+                            if no_sources
+                            else "A current solar forecast is available."
+                            if usable
+                            else "Waiting for a usable solar forecast."
+                        )
+                        retry = (
+                            runtime.retry_after
+                            if not no_sources
+                            and runtime.retry_after
+                            and runtime.retry_after > current
+                            and runtime.failed_key == runtime.key(current)
+                            else None
+                        )
+                        due = next_update(current, retry) if usable or retry else None
+                        context = activity_context(runtime.configuration)
+                    events.availability("solar", availability, detail)
                     events.scheduled(
                         "solar",
                         "training",
                         "Update solar forecast",
-                        next_update(current, retry) if usable or retry else None,
-                        context=activity_context(runtime.configuration),
+                        due,
+                        context=context,
                     )
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 

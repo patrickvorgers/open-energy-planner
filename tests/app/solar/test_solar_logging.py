@@ -60,6 +60,151 @@ def solar_app(runtime, *, live=None, weather_factory=None, membership=None):
     return app
 
 
+@pytest.mark.parametrize("surface", ["activity", "notifications"])
+def test_configuration_worker_does_not_publish_mixed_solar_status(tmp_path, monkeypatch, surface):
+    """Actual HTTP saves cannot expose a new configuration with the previous forecast during restoration."""
+    from threading import Event
+
+    from open_energy_planner.activities.events import Events, Outcome
+    from open_energy_planner.solar.wire import configuration_document, parse_configuration
+    from tests.app.forecast.support.http import configure_forecasts, running_forecasts
+    from tests.app.solar.support import fixture_weather
+
+    original_init = SolarRuntime.__init__
+    original_restore = SolarRuntime.restore_feedback
+    original_finish = Events.finish
+    original_usable = solar_api.forecast_usable
+    instances, mixed, completed = [], [], []
+    release_worker = Event()
+    target_version = None
+
+    async def scenario():
+        nonlocal target_version
+        loop = asyncio.get_running_loop()
+        finish_waiting, finish_release, finish_returned, restoring = (
+            asyncio.Event() for _ in range(4)
+        )
+        held = False
+
+        def capture_runtime(current, *arguments, **options):
+            original_init(current, *arguments, **options)
+            instances.append(current)
+
+        def held_restore(current):
+            if current.configuration and current.configuration.version == target_version:
+                loop.call_soon_threadsafe(restoring.set)
+                assert release_worker.wait(10), "Synthetic configuration barrier was not released"
+            return original_restore(current)
+
+        async def held_finish(events, identity, *arguments, **options):
+            nonlocal held
+            if not held and events.running.get(identity, {}).get("owner") == "solar":
+                held = True
+                finish_waiting.set()
+                await finish_release.wait()
+                result = await original_finish(events, identity, *arguments, **options)
+                completed.append((arguments[0], options.get("usable")))
+                finish_returned.set()
+                return result
+            return await original_finish(events, identity, *arguments, **options)
+
+        def observed_usable(configuration, forecast, location, now):
+            if restoring.is_set() and not release_worker.is_set():
+                mixed.append(
+                    (configuration.version, forecast.configuration_version if forecast else None)
+                )
+            return original_usable(configuration, forecast, location, now)
+
+        monkeypatch.setattr(SolarRuntime, "__init__", capture_runtime)
+        monkeypatch.setattr(SolarRuntime, "restore_feedback", held_restore)
+        monkeypatch.setattr(Events, "finish", held_finish)
+        monkeypatch.setattr(solar_api, "forecast_usable", observed_usable)
+        monkeypatch.setattr(solar_api, "SOLAR_WORKER_POLL_SECONDS", 0.01)
+        async with running_forecasts(tmp_path, weather_factory=fixture_weather) as (session, url):
+            initial = configuration_document(plant())
+            initial.pop("version")
+            configured = await configure_forecasts(session, url, solar_definition=initial)
+            pending = None
+            try:
+                await asyncio.wait_for(finish_waiting.wait(), 15)
+                current = instances[0]
+                old_forecast = current.forecast
+                assert old_forecast is not None
+                assert old_forecast.configuration_version == current.configuration.version
+                baseline = await session.get(url + "/v1/notifications")
+                assert baseline.status == 200
+                assert not [
+                    row
+                    for row in (await baseline.json())["notifications"]
+                    if row["owner"] == "solar"
+                ]
+                definition = configured["solar"]["configuration"]
+                body = {
+                    **definition,
+                    "expected_version": definition["version"],
+                    "sources": [{**definition["sources"][0], "capacity_w": 1100}],
+                }
+                target_version = parse_configuration(body).version
+                pending = asyncio.create_task(session.put(url + "/v1/solar", json=body))
+                await asyncio.wait_for(restoring.wait(), 5)
+                assert current.configuration.version == target_version
+                assert current.forecast is old_forecast
+                finish_release.set()
+                await asyncio.wait_for(finish_returned.wait(), 5)
+                await asyncio.sleep(0)
+                assert completed == [(Outcome.COMPLETED, True)]
+                if surface == "activity":
+                    assert mixed == []
+                else:
+                    response = await asyncio.wait_for(session.get(url + "/v1/notifications"), 2)
+                    assert response.status == 200
+                    document = await response.json()
+                    assert not [row for row in document["notifications"] if row["owner"] == "solar"]
+                    assert "solar" in document["unavailable_sources"]
+            finally:
+                finish_release.set()
+                release_worker.set()
+                if pending is not None:
+                    response = await pending
+                    assert response.status == 200, await response.text()
+                    assert (await response.json())["configuration"]["version"] == target_version
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release_worker.set()
+
+
+def test_notification_guard_retains_active_warning_until_coherent_recovery(tmp_path, monkeypatch):
+    """A busy writer preserves the existing notice as stale and only an unlocked usable state clears it."""
+    runtime = SolarRuntime(make_store(tmp_path, SolarStore))
+    runtime.configure(plant())
+    runtime.set_weather(SITE, weather())
+
+    async def scenario():
+        controlled_poll(monkeypatch)
+        lock = asyncio.Lock()
+        app = web.Application()
+        center = NotificationCenter()
+        app[NOTIFICATIONS] = center
+        live = SimpleNamespace(report=SimpleNamespace(location=SITE))
+        solar_api.register(app, runtime, live, lock, None, None, None, None)
+        initial = center.document()
+        assert len(initial["notifications"]) == 1
+        notice = initial["notifications"][0]
+        assert notice["owner"] == "solar" and not notice["stale"]
+        result = await asyncio.to_thread(runtime.build, runtime.job(START))
+        async with lock:
+            assert runtime.install(result, START)
+            during = center.document()
+            assert len(during["notifications"]) == 1
+            assert during["notifications"][0] == {**notice, "stale": True}
+            assert during["unavailable_sources"] == ["solar"]
+        assert center.document() == {"notifications": [], "unavailable_sources": []}
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("superseded", [False, True])
 def test_failed_worker_reports_only_the_backoff_it_actually_recorded(
     superseded, tmp_path, monkeypatch, caplog

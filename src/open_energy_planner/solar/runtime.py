@@ -86,7 +86,8 @@ class SolarRuntime:
     def configure(self, configuration):
         """Reset model state after persistence, retaining validated unchanged meter cohorts.
 
-        This install callback runs under the app lock on the event loop. Geometry,
+        Production writes run this method in the storage worker while their caller
+        holds the app lock. Geometry,
         control declarations and forecast preferences do not change immutable
         meter history. Only unchanged source/entity/learning-date bindings with
         an accepted importer state may reuse their already validated aggregate.
