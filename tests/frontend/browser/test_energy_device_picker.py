@@ -13,7 +13,7 @@ from tests.frontend.browser.test_charge_point_energy_selection import (
     prepare_charge_point,
     publish_choices,
 )
-from tests.frontend.browser.test_thermal import document as thermal_document
+from tests.frontend.browser.thermal_fixture import document as thermal_document
 
 
 def assigned_devices(page, url):

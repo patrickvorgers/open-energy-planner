@@ -1659,7 +1659,7 @@ def test_appliance_read_deadline_cancels_stalled_network_and_recovers(app_page, 
 
 def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page):
     """The real boiler route uses the approved saved/edit layout and keeps category and primary navigation."""
-    from tests.frontend.browser.test_thermal import document
+    from tests.frontend.browser.thermal_fixture import document
 
     page, url = app_page
     page.route("**/v1/thermal", lambda route: route.fulfill(json=document()))

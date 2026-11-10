@@ -12,7 +12,7 @@ from tests.frontend.browser.helpers import (
 )
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 from tests.frontend.browser.test_charge_point_energy_selection import prepare_charge_point
-from tests.frontend.browser.test_thermal import document as thermal_document
+from tests.frontend.browser.thermal_fixture import document as thermal_document
 
 
 @pytest.mark.parametrize("editor", ["ev", "thermal"])
