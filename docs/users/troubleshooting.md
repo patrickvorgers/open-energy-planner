@@ -66,7 +66,7 @@ before adding devices. Edit the existing device rather
 than adding it again. If the device is absent from Energy, configure it there
 first. A removed selected meter is shown as unavailable. If its power sensor is
 not defined in Energy, explicitly choose a compatible W or kW source.
-Then search the connection binary sensors by device name, sensor name or entity ID.
+For a charge point, search the connection binary sensors by device name, sensor name or entity ID.
 Use a sensor that stays On while plugged in, including when charging is paused.
 A charging-active sensor is not equivalent. Check the sensor in Home Assistant
 if its purpose is unclear. The power sensor, Energy meter and connection helper

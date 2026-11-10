@@ -7,19 +7,26 @@ stratified tanks or brand-specific hardware drivers.
 
 ## Configuration and authority
 
-Open **Settings > Appliances > Electric boilers**, choose **Add electric boiler**
-and select an unassigned device from the shared Home Assistant Energy chooser.
-The display name identifies the choice visually. Its consumption meter and
-explicit device power link are selected together. An already added consumption
-device, charge point or boiler cannot be selected again. The server rechecks
-ownership under the settings lock before writing, while preserving edits to the
-same existing appliance and meter. If no power link is configured, select the
-electrical power sensor explicitly. Manual overrides survive source refresh.
+1. Open **Settings > Appliances > Electric boilers** and choose **Add electric boiler**.
+2. Select an unassigned device by its display name in the shared Home Assistant
+   Energy chooser, then check its consumption meter.
+3. Select the temperature entity independently from the Home Assistant catalogue.
+   A `water_heater` entity may provide `current_temperature`.
+4. Check the selected electrical power sensor. Select one explicitly if Energy
+   defines no device power link.
+5. Complete the boiler limits and hot-water assumptions described below, then
+   save the configuration.
+
+The consumption meter and explicit device power link are selected together.
 Changing the Energy device applies its power link or clears the previous one.
-Select the temperature entity independently from the Home Assistant catalogue.
-A `water_heater` entity may provide
-`current_temperature`. Sensor readings support Celsius or Fahrenheit. Electrical
-power supports W or kW. The UI uses kW for the heater rating and stores whole watts.
+Manual overrides survive source refresh. Sensor readings support Celsius or
+Fahrenheit. Electrical power supports W or kW. The UI uses kW for the heater
+rating and stores whole watts.
+
+An already added consumption device, charge point or boiler cannot be selected
+again. The server rechecks ownership under the settings lock before writing,
+while preserving edits to the same existing appliance and meter.
+
 The virtual device uses the Energy display name, falling back to the Home
 Assistant device or sensor name when necessary.
 

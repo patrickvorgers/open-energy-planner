@@ -149,6 +149,8 @@ def test_claim_checks_expiry_after_lock_and_worker_waits(tasks, monkeypatch, wai
             SimpleNamespace(state={"enabled": True, "plan": plan}),
             None,
             ObservedLock() if waiting_at == "lock" else asyncio.Lock(),
+            SimpleNamespace(state={"points": []}),
+            SimpleNamespace(state={"stores": []}),
         )
         async with TestClient(TestServer(app)) as client:
             pending = asyncio.create_task(

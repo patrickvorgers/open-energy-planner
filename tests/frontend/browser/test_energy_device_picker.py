@@ -277,3 +277,103 @@ def test_boiler_energy_pair_override_refresh_and_cancel_match_charge_point_behav
     cancel.click()
     after = page.request.get(url + "/v1/thermal", headers=headers).json()
     assert after["configuration"] == configuration
+
+
+@pytest.mark.parametrize("category", ["point", "boiler"])
+@pytest.mark.parametrize("change", ["linked", "unlinked", "removed", "claimed"])
+def test_pending_refresh_updates_authoritative_choice_before_typed_draft(
+    app_page, category, change
+):
+    """A refresh completed while the picker is open updates power or rejects a vanished or claimed choice."""
+    page, url = app_page
+    body, headers = prepare_charge_point(page, url)
+    editor = "ev" if category == "point" else "thermal"
+    if category == "boiler":
+        thermal = page.request.get(url + "/v1/thermal", headers=headers).json()
+        configuration = thermal_document()["configuration"]
+        configuration["stores"][0].update(
+            energy_entity="sensor.second_meter",
+            power_entity="sensor.grid",
+            temperature_entity="sensor.temperature",
+        )
+        assert page.request.post(
+            url + "/v1/thermal/configuration",
+            headers=headers,
+            data={
+                "configuration": configuration,
+                "expected_version": thermal["configuration_version"],
+            },
+        ).ok
+        page.goto(url + "/appliance-settings/thermal")
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    before = page.request.get(url + "/v1/" + editor, headers=headers).json()
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST"
+            and response.url.endswith("/v1/ha/source-choices/" + editor)
+        )
+    ) as pending:
+        page.get_by_role("button", name="Refresh Home Assistant sources", exact=True).click()
+    picker = open_sources(page, category)
+    chosen = picker.locator('button[title="sensor.charger_energy"]')
+    expect(chosen).to_be_enabled()
+    changed = deepcopy(body)
+    meter = next(
+        row
+        for row in changed["suggestions"]["consumers"]
+        if row["entity_id"] == "sensor.charger_energy"
+    )
+    if change == "linked":
+        meter["power_entity"] = "sensor.grid"
+    elif change == "unlinked":
+        meter.pop("power_entity")
+    elif change == "removed":
+        changed["suggestions"]["consumers"].remove(meter)
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=changed).ok
+    if change == "claimed":
+        consumers = page.request.get(url + "/v1/consumers", headers=headers).json()
+        assert page.request.put(
+            url + "/v1/consumers",
+            headers=headers,
+            data={
+                "selected": [
+                    *consumers["selected"],
+                    {"entity_id": "sensor.charger_energy", "weather_sensitive": False},
+                ],
+                "expected_version": consumers["version"],
+            },
+        ).ok
+    assert page.request.post(
+        url + "/v1/ha/source-choices",
+        headers=headers,
+        data={"scope": editor, "id": pending.value.json()["id"], "page": changed},
+    ).ok
+    expect(page.locator("#status")).to_contain_text("sources refreshed")
+    expect(picker).to_be_visible()
+    chosen.click()
+    power = page.get_by_label(
+        "Measured AC charging power" if category == "point" else "Measured heater power",
+        exact=False,
+    )
+    if change in ("linked", "unlinked"):
+        expect(
+            page.locator("#ev-editor" if category == "point" else "#thermal-editor")
+        ).to_be_visible()
+        expect(power).to_have_value("sensor.grid" if change == "linked" else "")
+    else:
+        expect(page.locator("#status")).to_contain_text("no longer available")
+        expect(
+            page.locator("#ev-editor" if category == "point" else "#thermal-editor")
+        ).not_to_be_visible()
+        expect(
+            page.get_by_role(
+                "button",
+                name="Add vehicle or charge point"
+                if category == "point"
+                else "Add electric boiler",
+                exact=True,
+            )
+        ).to_be_enabled()
+    after = page.request.get(url + "/v1/" + editor, headers=headers).json()
+    assert after["configuration_version"] == before["configuration_version"]

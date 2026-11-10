@@ -88,7 +88,9 @@ function renderEditor() {
     if (!store) { syncEditor(); return; }
     find("thermal-title").textContent = displayName(store);
     const sources = node("div"); sources.className = "settings-fields"; sources.append(node("h3", "Home Assistant sources"));
-    const meter = sourceSelect(sources, store, "energy_entity", "Boiler consumption meter", "Choose its Home Assistant Energy meter. Individual history is requested automatically. Heating commands wait until the separate consumption baseline is available. Planned heating replaces that baseline.", (current.energy_consumers || []).filter(source => source.entity_id === store.energy_entity || source.entity_id === current.configuration.stores.find(saved => saved.id === store.id)?.energy_entity || !assignedEnergySources(energySources).has(source.entity_id)).map(source => [source.entity_id, source.name]));
+    const assignedSources = assignedEnergySources(energySources);
+    const savedMeter = current.configuration.stores.find(saved => saved.id === store.id)?.energy_entity;
+    const meter = sourceSelect(sources, store, "energy_entity", "Boiler consumption meter", "Choose its Home Assistant Energy meter. Individual history is requested automatically. Heating commands wait until the separate consumption baseline is available. Planned heating replaces that baseline.", (current.energy_consumers || []).filter(source => source.entity_id === store.energy_entity || source.entity_id === savedMeter || !assignedSources.has(source.entity_id)).map(source => [source.entity_id, source.name]));
     meter.onchange = () => { if (meter.value === store.energy_entity) return; store.energy_entity = meter.value; store.power_entity = current.energy_consumers.find(source => source.entity_id === meter.value)?.power_entity || ""; retainInputs(renderEditor); saveState.update(); queueMicrotask(syncEditor); };
     sourceSelect(sources, store, "temperature_entity", "Measured water temperature", "Use a temperature sensor or water heater reporting °C or °F. Home Assistant report time determines freshness.", metadata(source => (source.entity_id.startsWith("sensor.") || source.entity_id.startsWith("water_heater.")) && source.device_class === "temperature" && ["°C", "°F"].includes(source.unit)));
     sourceSelect(sources, store, "power_entity", "Measured heater power", "Use the boiler's own electrical power sensor in W or kW.", metadata(source => source.entity_id.startsWith("sensor.") && source.device_class === "power" && ["W", "kW"].includes(source.unit)));
@@ -168,6 +170,7 @@ const refreshSources = sourceRefresh(api, "thermal", find("refresh-thermal-sourc
 });
 find("refresh-thermal-sources").onclick = () => { if (!saveState.busy) return refreshSources(); };
 find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); };
+/** Recheck the latest Energy snapshot after the modal closes without replacing existing drafts or saved configuration. */
 find("add-thermal").onclick = async () => {
     if (saveState.busy || editing || saveState.dirty) return;
     const opening = current;
@@ -177,8 +180,12 @@ find("add-thermal").onclick = async () => {
     finally { saveState.end(); syncEditor(); }
     if (current !== opening || editing) return;
     find("add-thermal").focus();
-    const source = await pickEnergySource(find("source-dialog"), energySources, "Add electric boiler");
-    if (!source || current !== opening || saveState.busy || editing) return;
+    const chosen = await pickEnergySource(find("source-dialog"), energySources, "Add electric boiler");
+    if (!chosen || current !== opening || saveState.busy || editing) return;
+    const source = energySources.options.find(option => option.entity_id === chosen.entity_id);
+    if (!source || assignedEnergySources(energySources).has(source.entity_id)) {
+        find("status").textContent = "The selected Energy device is no longer available. Refresh Home Assistant sources and choose an available device."; return;
+    }
     const store = {id: identity(), energy_entity: source.entity_id, temperature_entity: "", power_entity: source.power_entity || "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false};
     editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); refreshSources();
 };

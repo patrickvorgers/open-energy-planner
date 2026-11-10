@@ -24,6 +24,7 @@ const saveState = new SaveBar({form: "settings", bar: "ev-save-bar", save: "save
 find("refresh").textContent = "Cancel";
 find("settings").hidden = true;
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
+/** Restore editor actions after SaveBar processes the same bubbling change event. */
 function changed() { saveState.update(); queueMicrotask(syncEditor); }
 /** Select one existing identity without merging vehicle and charge-point configuration models. */
 function selected() { return draft?.vehicles.find(row => row.id === selectedId) || draft?.points.find(row => row.id === selectedId); }
@@ -211,7 +212,9 @@ function render() {
     }
     for (const row of draft.points) {
         const card = node("section"); card.className = "settings-fields"; card.hidden = row.id !== selectedId; card.append(node("h3", "Home Assistant sources"));
-        const meter = select(card, row, "energy_entity", "Charging consumption meter", "Choose the device consumption meter assigned to this charge point in the Home Assistant Energy dashboard. A registered device or integration is not required.", current.energy_consumers.filter(source => source.entity_id === row.energy_entity || source.entity_id === current.points.find(saved => saved.id === row.id)?.energy_entity || !assignedEnergySources(energySources).has(source.entity_id)).map((entity) => [entity.entity_id, entity.name]), "No device consumption meters are configured in Home Assistant Energy. Add the charge point under Individual devices, then refresh Home Assistant sources.");
+        const assignedSources = assignedEnergySources(energySources);
+        const savedMeter = current.points.find(saved => saved.id === row.id)?.energy_entity;
+        const meter = select(card, row, "energy_entity", "Charging consumption meter", "Choose the device consumption meter assigned to this charge point in the Home Assistant Energy dashboard. A registered device or integration is not required.", current.energy_consumers.filter(source => source.entity_id === row.energy_entity || source.entity_id === savedMeter || !assignedSources.has(source.entity_id)).map((entity) => [entity.entity_id, entity.name]), "No device consumption meters are configured in Home Assistant Energy. Add the charge point under Individual devices, then refresh Home Assistant sources.");
         meter.onchange = () => { if (meter.value === row.energy_entity) return; row.energy_entity = meter.value; row.power_entity = current.energy_consumers.find(source => source.entity_id === meter.value)?.power_entity || ""; retainInputs(render); changed(); };
         select(card, row, "power_entity", "Measured AC charging power", "Selected with the Energy device when Home Assistant defines device power consumption. Otherwise choose its W or kW sensor. You can explicitly override this source.", metadata((entity) => entity.device_class === "power" && ["W", "kW"].includes(entity.unit)));
         connectedSource(card, row);
@@ -264,6 +267,9 @@ async function load(selection = selectedId) {
         selectedId = selection; editing = false; find("connect").hidden = true; find("settings").hidden = false; find("status").textContent = current.issue || ""; render(); saveState.loaded(); syncEditor();
     } catch (error) { find("status").textContent = error.message; saveState.update(error.message); }
 }
+/** Refresh energySources ownership and current.energy_consumers choices without replacing draft overrides.
+ * Discard results while settings are busy or another configuration has replaced the read's owner.
+ */
 const refreshSources = sourceRefresh(api, "ev", find("refresh-ev-sources"), find("status"), async (catalogue, signal) => {
     const opening = current;
     if (saveState.busy || !opening) return;
@@ -280,6 +286,9 @@ find("refresh-ev-sources").onclick = () => { if (!saveState.busy) return refresh
 find("edit-ev").onclick = () => { if (!saveState.busy && selected()) { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); } };
 find("ev-device-select").onchange = event => { if (saveState.busy || editing) return; selectedId = event.target.value; render(); };
 find("add-ev").onclick = () => { if (!saveState.busy && !editing && !saveState.dirty) find("ev-add-dialog").showModal(); };
+/** Lock the Energy read and leave drafts untouched on cancellation or changed configuration/edit state.
+ * Recheck energySources after the modal closes before initializing a new charge point's meter and power.
+ */
 find("continue-add-ev").onclick = async () => {
     if (saveState.busy || editing) return;
     const vehicle = document.querySelector('input[name="ev-add-kind"]:checked').value === "vehicle";
@@ -295,6 +304,10 @@ find("continue-add-ev").onclick = async () => {
         find("add-ev").focus();
         source = await pickEnergySource(find("source-dialog"), energySources, "Add charge point");
         if (!source || current !== opening || saveState.busy || editing) return;
+        source = energySources.options.find(option => option.entity_id === source.entity_id);
+        if (!source || assignedEnergySources(energySources).has(source.entity_id)) {
+            find("status").textContent = "The selected Energy device is no longer available. Refresh Home Assistant sources and choose an available device."; return;
+        }
     }
     const row = vehicle ? {id: identity(), soc_entity: "", soc_timestamp_attribute: null, capacity_kwh: "", maximum_w: "", target_soc: 80, departure_time: "07:00"} : {id: identity(), energy_entity: source.entity_id, power_entity: source.power_entity || "", connected_entity: "", minimum_w: "", maximum_w: "", control: "read_only", vehicle_ids: []};
     editOriginId = selectedId;
