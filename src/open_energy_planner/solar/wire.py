@@ -114,7 +114,12 @@ def configuration_document(value):
     body = document(value)
     # Omit absent optional dates and empty panel names from the canonical document.
     for source in body["sources"]:
-        for field in ("unrestricted_history_start", "unrestricted_history_end", "learning_start"):
+        for field in (
+            "unrestricted_history_start",
+            "unrestricted_history_end",
+            "learning_start",
+            "curtailment_entity_id",
+        ):
             if source[field] is None:
                 source.pop(field)
         for group in (source, *source["ha_imports"]):

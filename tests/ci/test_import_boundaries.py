@@ -19,17 +19,49 @@ MEASUREMENT_FORBIDDEN = (
 )
 
 
+def import_targets(node):
+    """Collect the module and qualified imported names from one syntax node."""
+    if isinstance(node, ast.Import):
+        yield from (name.name for name in node.names)
+    elif isinstance(node, ast.ImportFrom):
+        if node.module:
+            yield node.module
+        for name in node.names:
+            yield f"{node.module}.{name.name}" if node.module else name.name
+
+
 def modules(path):
     """Collect import targets from Python syntax for framework/adapter boundary assertions."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            yield from (name.name for name in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                yield node.module
-            for name in node.names:
-                yield f"{node.module}.{name.name}" if node.module else name.name
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        yield from import_targets(node)
+
+
+def forbidden_integration_imports(relative_path, source):
+    """Allow only the native Recorder adapter's exact read-query constructor import."""
+    for node in ast.walk(ast.parse(source)):
+        if (
+            relative_path == "solar_feedback.py"
+            and isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module == "sqlalchemy"
+            and len(node.names) == 1
+            and node.names[0].name == "select"
+            and node.names[0].asname is None
+        ):
+            continue
+        for target in import_targets(node):
+            if target.startswith(
+                (
+                    "open_energy_planner",
+                    "oep_probe",
+                    "highspy",
+                    "sqlalchemy",
+                    "pvlib",
+                    "numpy",
+                    "pandas",
+                )
+            ):
+                yield target
 
 
 @pytest.mark.parametrize("name", ["calculation/model.py", "learning.py", "basis.py", "wire.py"])
@@ -49,22 +81,40 @@ def test_app_does_not_import_home_assistant_or_integration():
 
 
 def test_integration_does_not_import_app_solver_or_orm():
-    """Inspect integration imports. Require the thin adapter to avoid app, solver and storage implementation packages."""
-    for path in (ROOT / "custom_components/open_energy_planner").rglob("*.py"):
-        assert not any(
-            module_name.startswith(
-                (
-                    "open_energy_planner",
-                    "oep_probe",
-                    "highspy",
-                    "sqlalchemy",
-                    "pvlib",
-                    "numpy",
-                    "pandas",
-                )
+    """Keep app/solver/ORM ownership out of the adapter, except its exact native Recorder read import."""
+    integration = ROOT / "custom_components/open_energy_planner"
+    for path in integration.rglob("*.py"):
+        assert not list(
+            forbidden_integration_imports(
+                path.relative_to(integration).as_posix(), path.read_text(encoding="utf-8")
             )
-            for module_name in modules(path)
-        )
+        ), path
+
+
+@pytest.mark.parametrize(
+    "relative_path,source,allowed",
+    [
+        ("solar_feedback.py", "from sqlalchemy import select", True),
+        ("solar_feedback.py", "import sqlalchemy", False),
+        ("solar_feedback.py", "from sqlalchemy import select, create_engine", False),
+        ("solar_feedback.py", "from sqlalchemy.orm import Session", False),
+        ("solar_feedback.py", "from sqlalchemy import select as query", False),
+        ("history.py", "from sqlalchemy import select", False),
+        ("nested/solar_feedback.py", "from sqlalchemy import select", False),
+        ("solar_feedback.py", "from open_energy_planner.storage import Store", False),
+        ("solar_feedback.py", "from highspy import Highs", False),
+        (
+            "solar_feedback.py",
+            "from sqlalchemy import select\nfrom sqlalchemy import create_engine",
+            False,
+        ),
+    ],
+)
+def test_native_recorder_import_exception_does_not_admit_other_storage_or_app_imports(
+    relative_path, source, allowed
+):
+    """An allowed query constructor cannot conceal another forbidden import or authorize another adapter."""
+    assert (not list(forbidden_integration_imports(relative_path, source))) is allowed
 
 
 def test_wire_and_schedule_have_no_framework_dependencies():

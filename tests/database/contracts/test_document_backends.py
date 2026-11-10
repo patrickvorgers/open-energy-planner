@@ -34,6 +34,95 @@ from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
+def test_solar_feedback_receipts_reuse_segments_and_survive_restart(archive, monkeypatch):
+    """Every backend retains exact boolean/unknown feedback and atomically rejects an interrupted pointer update."""
+    from open_energy_planner.solar.curtailment import (
+        CurtailmentHistory,
+        archive_feedback,
+        load_feedback,
+        save_feedback,
+    )
+    from tests.app.solar.support import START
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    source = replace(plant().sources[0], curtailment_entity_id="binary_sensor.curtailed")
+    configuration = replace(plant(), sources=(source,))
+    store.save(configuration)
+    first = CurtailmentHistory(
+        source.curtailment_entity_id, START + timedelta(hours=1), ((START, False),)
+    )
+    accepted = save_feedback(store, None, first, START - timedelta(hours=1))
+    first_accepted = accepted
+    first_reference = archive_feedback(store, accepted)
+    blocks = list(store.documents.iter_prefix("curtailment-segment-"))
+    assert len(blocks) == 1
+    following = CurtailmentHistory(source.curtailment_entity_id, START + timedelta(hours=2), ())
+    accepted = save_feedback(store, accepted, following, first.checked_until)
+    assert list(store.documents.iter_prefix("curtailment-segment-")) == blocks
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    assert restored.current == configuration
+    assert (
+        load_feedback(
+            restored.documents,
+            source.curtailment_entity_id,
+            START + timedelta(hours=3),
+            reference=first_reference,
+        )
+        == first_accepted
+    )
+    assert (
+        load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=3))
+        == accepted
+    )
+    original_write = store.documents.write
+
+    def interrupted(name, value):
+        """Fail at publication after the new immutable receipt has been prepared."""
+        if name.startswith("curtailment-current-"):
+            raise OSError("synthetic interrupted feedback write")
+        original_write(name, value)
+
+    monkeypatch.setattr(store.documents, "write", interrupted)
+    next_read = CurtailmentHistory(
+        source.curtailment_entity_id,
+        START + timedelta(hours=3),
+        ((START + timedelta(hours=2), None),),
+    )
+    with pytest.raises(OSError):
+        save_feedback(store, accepted, next_read, following.checked_until)
+    assert sorted(
+        json.dumps(segment, sort_keys=True)
+        for segment in store.documents.iter_prefix("curtailment-segment-")
+    ) == sorted(json.dumps(segment, sort_keys=True) for segment in blocks)
+    assert (
+        load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=4))
+        == accepted
+    )
+    readings, times = accepted.readings, accepted.times
+    monkeypatch.setattr(store.documents, "write", original_write)
+    appended = save_feedback(store, accepted, next_read, following.checked_until)
+    assert accepted.readings is readings
+    assert accepted.times is times
+    assert appended.parent.observations is accepted.observations
+    assert "readings" not in appended.parent.__dict__
+    assert "times" not in appended.parent.__dict__
+    assert not appended.unrestricted(START + timedelta(hours=2), START + timedelta(hours=3))
+    assert (
+        load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=4))
+        == appended
+    )
+    assert (
+        load_feedback(
+            restored.documents,
+            source.curtailment_entity_id,
+            START + timedelta(hours=4),
+            reference=first_reference,
+        )
+        == first_accepted
+    )
+
+
 @pytest.mark.parametrize("activation", ["configure", "restart"])
 def test_complete_current_history_activates_after_configuration_change(
     archive, monkeypatch, activation

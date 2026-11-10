@@ -1,6 +1,7 @@
 """Solar HTTP and background lifecycle composition, separate from forecast calculations."""
 
 import asyncio
+import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from open_energy_planner.solar.storage.history import parse_report
 from open_energy_planner.storage.writes import complete_write
 
 from .basis import forecast_usable
+from .curtailment import FeedbackRequestError
 from .ha_forecasts import parse_ha_predictions
 from .notifications import explain_solar_problem, solar_forecast_notifications
 from .weather import OpenMeteoSolarSource
@@ -29,6 +31,7 @@ SOLAR_WORKER_POLL_SECONDS = 5
 WEATHER_RETRY_MINUTES = 30
 WEATHER_REFRESH_HOURS = 1
 MAX_HA_FORECAST_BODY_BYTES = 32 * BYTES_PER_KIB * BYTES_PER_KIB
+MAX_FEEDBACK_BODY_BYTES = BYTES_PER_KIB * BYTES_PER_KIB
 PUBLIC_VALIDATION_MESSAGES = (
     "Complete the Home Assistant Energy dashboard first",
     "Device membership is managed in the Home Assistant Energy dashboard",
@@ -85,16 +88,25 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
         return {"label": ", ".join(labels) or "Solar production"}
 
     def current_notifications():
-        """Read cached forecast availability. Unreadable configuration cannot confirm recovery."""
-        if runtime.store.issue:
+        """Read cached forecast availability without waiting for configuration work.
+
+        Unreadable configuration or a held Solar configuration lock returns None.
+        Neither state confirms recovery.
+        """
+        if not runtime.configuration_lock.acquire(blocking=False):
             return None
-        return solar_forecast_notifications(
-            runtime.configuration,
-            runtime.forecast,
-            live.report.location if live and live.report else None,
-            datetime.now(UTC),
-            runtime.issue,
-        )
+        try:
+            if runtime.store.issue:
+                return None
+            return solar_forecast_notifications(
+                runtime.configuration,
+                runtime.forecast,
+                live.report.location if live and live.report else None,
+                datetime.now(UTC),
+                runtime.issue,
+            )
+        finally:
+            runtime.configuration_lock.release()
 
     app[NOTIFICATIONS].register("solar", current_notifications, explain=explain_solar_problem)
 
@@ -146,9 +158,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Solar configuration changed. Reload before saving")
             if candidate.version != current:
-                await persist(
-                    runtime.store.save, candidate, runtime.configure, contract_input=False
-                )
+                await persist(runtime.save_configuration, candidate, contract_input=False)
         return await settings(request)
 
     async def history(request):
@@ -188,6 +198,37 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
             except ValueError:
                 raise web.HTTPBadRequest(text="Invalid solar history source/range") from None
         return await snapshot(request)
+
+    async def feedback(request):
+        """Accept only configured feedback through the authenticated Home Assistant peer route."""
+        try:
+            try:
+                body = await request.clone(client_max_size=MAX_FEEDBACK_BODY_BYTES).json()
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise web.HTTPBadRequest(text="Invalid solar curtailment feedback JSON") from None
+            async with lock:
+                try:
+                    cancellation = await complete_write(
+                        runtime.receive_feedback, body, datetime.now(UTC)
+                    )
+                except FeedbackRequestError:
+                    raise web.HTTPBadRequest(
+                        text="Invalid or outdated solar curtailment feedback"
+                    ) from None
+                if cancellation:
+                    raise cancellation
+            return await settings(request)
+        except web.HTTPException:
+            raise
+        except Exception as error:  # noqa: BLE001 - Sanitize unknown failures even after commit.
+            raise web.HTTPServiceUnavailable(
+                text=request_error_message(
+                    error,
+                    logger=_LOGGER,
+                    operation="Solar curtailment feedback update",
+                    fallback="Curtailment feedback could not be updated or displayed. Retained evidence is preserved. Check storage and retry the background refresh.",
+                )
+            ) from None
 
     async def ha_forecasts(request):
         """Accept only current selected Energy providers, independently of changing physical meter values."""
@@ -233,6 +274,14 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                 activity = None
                 try:
                     async with lock:
+                        recovery = runtime.feedback_restore_job(datetime.now(UTC))
+                    if recovery:
+                        recovered = await asyncio.to_thread(
+                            runtime.read_feedback, recovery[1], datetime.now(UTC)
+                        )
+                        async with lock:
+                            runtime.install_feedback_restore(recovery, recovered)
+                    async with lock:
                         job = runtime.job(datetime.now(UTC))
                         context = activity_context(job[1]) if job else None
                     if job:
@@ -251,13 +300,14 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                     forecast_logger.success("A new solar forecast is available.")
                                 if live:
                                     live.refresh()
+                            if activity:
+                                usable = installed and forecast_usable(
+                                    runtime.configuration,
+                                    runtime.forecast,
+                                    runtime.location,
+                                    datetime.now(UTC),
+                                )
                         if activity:
-                            usable = installed and forecast_usable(
-                                runtime.configuration,
-                                runtime.forecast,
-                                runtime.location,
-                                datetime.now(UTC),
-                            )
                             await events.finish(
                                 activity,
                                 Outcome.COMPLETED
@@ -298,47 +348,52 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                         retry_seconds=max(SOLAR_WORKER_POLL_SECONDS, round(retry_seconds)),
                     )
                 if events:
-                    current = datetime.now(UTC)
-                    usable = bool(
-                        runtime.configuration
-                        and runtime.configuration.sources
-                        and not runtime.store.issue
-                        and forecast_usable(
-                            runtime.configuration, runtime.forecast, runtime.location, current
+                    async with lock:
+                        current = datetime.now(UTC)
+                        usable = bool(
+                            runtime.configuration
+                            and runtime.configuration.sources
+                            and not runtime.store.issue
+                            and forecast_usable(
+                                runtime.configuration, runtime.forecast, runtime.location, current
+                            )
                         )
-                    )
-                    no_sources = bool(
-                        runtime.configuration
-                        and not runtime.configuration.sources
-                        and not runtime.store.issue
-                    )
-                    events.availability(
-                        "solar",
-                        Health.AVAILABLE
-                        if usable or no_sources
-                        else Health.UNAVAILABLE
-                        if runtime.configuration
-                        else Health.UNKNOWN,
-                        "No solar forecast is required for this installation."
-                        if no_sources
-                        else "A current solar forecast is available."
-                        if usable
-                        else "Waiting for a usable solar forecast.",
-                    )
-                    retry = (
-                        runtime.retry_after
-                        if not no_sources
-                        and runtime.retry_after
-                        and runtime.retry_after > current
-                        and runtime.failed_key == runtime.key(current)
-                        else None
-                    )
+                        no_sources = bool(
+                            runtime.configuration
+                            and not runtime.configuration.sources
+                            and not runtime.store.issue
+                        )
+                        availability = (
+                            Health.AVAILABLE
+                            if usable or no_sources
+                            else Health.UNAVAILABLE
+                            if runtime.configuration
+                            else Health.UNKNOWN
+                        )
+                        detail = (
+                            "No solar forecast is required for this installation."
+                            if no_sources
+                            else "A current solar forecast is available."
+                            if usable
+                            else "Waiting for a usable solar forecast."
+                        )
+                        retry = (
+                            runtime.retry_after
+                            if not no_sources
+                            and runtime.retry_after
+                            and runtime.retry_after > current
+                            and runtime.failed_key == runtime.key(current)
+                            else None
+                        )
+                        due = next_update(current, retry) if usable or retry else None
+                        context = activity_context(runtime.configuration)
+                    events.availability("solar", availability, detail)
                     events.scheduled(
                         "solar",
                         "training",
                         "Update solar forecast",
-                        next_update(current, retry) if usable or retry else None,
-                        context=activity_context(runtime.configuration),
+                        due,
+                        context=context,
                     )
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
@@ -532,4 +587,5 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
     app.router.add_get("/v1/solar", settings)
     app.router.add_put("/v1/solar", configure)
     app.router.add_post("/v1/solar/history", history)
+    app.router.add_post("/v1/solar/feedback", feedback)
     app.router.add_post("/v1/solar/ha-forecasts", ha_forecasts)

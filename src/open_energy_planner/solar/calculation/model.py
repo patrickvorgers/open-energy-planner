@@ -127,11 +127,19 @@ class SolarSource:
     unrestricted_history_start: str | None = None
     unrestricted_history_end: str | None = None
     learning_start: str | None = None
+    curtailment_entity_id: str | None = None
 
     def __post_init__(self):
         """Validate minimum inputs and make default tilt and measurement boundary explicit."""
         identity(self.source_id)
         identity(self.inverter_id)
+        if self.curtailment_entity_id is not None and (
+            not isinstance(self.curtailment_entity_id, str)
+            or not re.fullmatch(
+                r"(?:binary_sensor|sensor)\.[a-z0-9_]{1,120}", self.curtailment_entity_id
+            )
+        ):
+            raise ValueError("Solar curtailment feedback requires a sensor")
         if not isinstance(self.entity_id, str) or not re.fullmatch(
             r"sensor\.[a-z0-9_]{1,120}", self.entity_id
         ):
@@ -257,6 +265,7 @@ class SolarConfiguration:
                 "unrestricted_history_start",
                 "unrestricted_history_end",
                 "learning_start",
+                "curtailment_entity_id",
             ):
                 if not source[field]:
                     source.pop(field)

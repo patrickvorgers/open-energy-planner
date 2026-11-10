@@ -23,7 +23,9 @@ def validation_route(kind, reject_validation, tmp_path, monkeypatch):
     """Use real registered handlers and parsing, replacing only the validation service that fails."""
     app = web.Application()
     lock = asyncio.Lock()
-    service = SimpleNamespace(configuration=None, job=lambda _now: None)
+    service = SimpleNamespace(
+        configuration=None, job=lambda _now: None, feedback_restore_job=lambda _now: None
+    )
     catalogue = SimpleNamespace(
         validate_membership=reject_validation,
         validate_panel_settings=reject_validation if kind == "solar-panels" else None,

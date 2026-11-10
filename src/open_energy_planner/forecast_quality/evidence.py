@@ -8,7 +8,9 @@ from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.forecast_quality.calculation.metrics import series
 from open_energy_planner.forecast_quality.radiation import original_radiation, radiation_view
 
-from ..solar.learning import INVERTER_CLIPPING_THRESHOLD
+from ..solar.curtailment import load_feedback
+from ..solar.learning import INVERTER_CLIPPING_THRESHOLD, unrestricted_interval
+from ..solar.wire import parse_source
 
 ENERGY_TOLERANCE_KWH = 1e-7
 MAX_VIEW_HOURS = 168
@@ -28,6 +30,7 @@ def alternatives(
     issue=None,
     field=None,
     maximum=None,
+    hourly_issues=None,
 ):
     """Resolve same-issue archived candidates on the original measurement boundary."""
     path = "quality-candidates-" + original["version"] + ".json"
@@ -73,6 +76,7 @@ def alternatives(
                 receipt=receipt,
                 issue=issue,
                 maximum_comparable_kwh=maximum,
+                hourly_issues=hourly_issues,
             )
         )
     return result
@@ -101,7 +105,17 @@ def measured(archive, sources, terms, start, end):
     return result, max(receipts) if receipts else None
 
 
-def evidence(plan, archive, demand_documents, solar_documents, now, *, window=None, names=None):
+def evidence(
+    plan,
+    archive,
+    demand_documents,
+    solar_documents,
+    now,
+    *,
+    window=None,
+    names=None,
+    solar_feedback=None,
+):
     """Resolve frozen forecasts and HA evidence without rerunning models or inferring historic knowledge.
 
     Args:
@@ -115,11 +129,19 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
             hours align with measurements. Fractional-hour day edges lack actuals.
         names: Current Energy names keyed by the archived meter identity. Only
             labels change. Removed sources retain their captured name.
+        solar_feedback: Immutable runtime snapshots keyed by source, production
+            meter and feedback sensor. An active unavailable snapshot stays closed.
 
     Returns:
         Series, issues and evidence version. Daily contexts need no problem intervals
         and return None for their absent plan_id and generated_at.
     """
+    feedback_by_source = solar_feedback or {}
+    unavailable_sensors = {
+        binding[2]
+        for binding, history in feedback_by_source.items()
+        if history is None or history.entity_id != binding[2] or history.checked_until > now
+    }
     result = {
         "plan_id": plan.get("plan_id"),
         "generated_at": plan.get("generated_at"),
@@ -295,9 +317,34 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                     )
                     > 1
                 )
+                feedback = None
+                if source.get("curtailment_entity_id"):
+                    sensor = source["curtailment_entity_id"]
+                    key = identity, source["entity_id"], sensor
+                    if sensor not in unavailable_sensors:
+                        if key in feedback_by_source:
+                            feedback = feedback_by_source[key]
+                        else:
+                            try:
+                                feedback = load_feedback(solar_documents, sensor, now)
+                            except (OSError, KeyError, ValueError, TypeError):
+                                pass
+                source_definition = (
+                    parse_source(source) if source.get("curtailment_entity_id") else None
+                )
+                hourly_issues = {}
+                hour = start
+                while source_definition and hour < end:
+                    if not unrestricted_interval(
+                        source_definition, hour, hour + timedelta(hours=1), feedback
+                    ):
+                        hourly_issues[hour] = (
+                            "Curtailment feedback does not establish unrestricted production for this hour"
+                        )
+                    hour += timedelta(hours=1)
                 issue = (
                     "Available production is not independently comparable with curtailed, hybrid or shared-inverter metering"
-                    if source["can_curtail"] or inverter["hybrid"] or shared
+                    if inverter["hybrid"] or shared
                     else None
                 )
                 maximum = (
@@ -323,6 +370,7 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                     issue=issue,
                     receipt=receipt,
                     maximum_comparable_kwh=maximum,
+                    hourly_issues=hourly_issues,
                 )
                 row["measurement_boundary"] = boundary.upper()
 
@@ -340,6 +388,7 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                         issue=issue,
                         field=field,
                         maximum=maximum,
+                        hourly_issues=hourly_issues,
                     )
                 except (FileNotFoundError, OSError, KeyError, TypeError, ValueError):
                     row["alternatives"] = []

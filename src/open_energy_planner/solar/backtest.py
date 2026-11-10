@@ -15,6 +15,7 @@ from math import fsum, isfinite
 from open_energy_planner.planning_policy import PLANNING_HORIZON_HOURS
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.calculation.model import version
+from open_energy_planner.solar.curtailment import archive_feedback
 from open_energy_planner.solar.forecast_weather import (
     FORECAST_WEATHER_MODEL,
     FORECAST_WEATHER_POLICY,
@@ -102,6 +103,7 @@ def evidence_family(configuration, source, location, model_policy):
             "model_policy": model_policy,
             "weather_policy": FORECAST_WEATHER_POLICY,
             "backtest_policy": BACKTEST_POLICY,
+            "curtailment_policy": "observed-feedback-v1",
         }
     )
 
@@ -282,7 +284,17 @@ class HistoricalForecastAssessment:
 
 
 def assess_forecasts(
-    configuration, source, location, history, runs, now, model_policy, store, *, histories=None
+    configuration,
+    source,
+    location,
+    history,
+    runs,
+    now,
+    model_policy,
+    store,
+    *,
+    histories=None,
+    feedback=None,
 ):
     """Compare four predetermined runs at both origins, retaining original fits and actual clocks."""
     from open_energy_planner.solar.boosting import (
@@ -317,6 +329,23 @@ def assess_forecasts(
             "history": bounded_history,
             "runs": [run.version for run in relevant_runs],
             "shared_histories": shared_histories,
+            "curtailment_policy": "observed-feedback-v1",
+            "feedback": {
+                entity: None
+                if value is None
+                else {
+                    "checked_until": min(value.checked_until, last_end).isoformat(),
+                    "readings": [
+                        [at.isoformat(), state] for at, state in value.readings if at < last_end
+                    ],
+                }
+                for entity, value in (feedback or {}).items()
+                if any(
+                    other.curtailment_entity_id == entity
+                    and other.inverter_id == source.inverter_id
+                    for other in configuration.sources
+                )
+            },
         }
     )
     pointer = "historical-assessment-current-" + identity + ".json"
@@ -353,7 +382,7 @@ def assess_forecasts(
     for initialized in initializations:
         run = run_by_init.get(initialized)
         if run is None:
-            issue = "Original forecast runs are still being imported. No new three-day wait is needed once the historical comparison is complete."
+            issue = "Original forecast runs are still being imported. Historical assessment continues when the required forecasts are available."
             break
         for delay in SIMULATION_DELAYS_HOURS:
             origin = initialized + timedelta(hours=delay)
@@ -361,7 +390,12 @@ def assess_forecasts(
             if any(
                 instant not in actual
                 or not learning_interval(source, instant, instant + HOUR)
-                or not unrestricted_interval(source, instant, instant + HOUR)
+                or not unrestricted_interval(
+                    source,
+                    instant,
+                    instant + HOUR,
+                    (feedback or {}).get(source.curtailment_entity_id),
+                )
                 for instant in instants
             ):
                 issue = "The predetermined historical forecast windows need complete usable production measurements within the selected learning period."
@@ -378,6 +412,7 @@ def assess_forecasts(
                 forecast_runs=relevant_runs,
                 forecast_physical=physical,
                 known_at=now,
+                feedback=(feedback or {}).get(source.curtailment_entity_id),
             )
             if result.challenger is None:
                 issue = "Earlier original forecasts and measurements are insufficient to train the historical models."
@@ -407,6 +442,7 @@ def assess_forecasts(
                     forecast_runs=relevant_runs,
                     forecast_physical=physical,
                     known_at=now,
+                    feedback=(feedback or {}).get(other.curtailment_entity_id),
                 )
                 if other_result.model:
                     raw_models[other.source_id] = other_result.model
@@ -449,6 +485,16 @@ def assess_forecasts(
                 "summary": document(result.summary),
                 "cutoff": origin.isoformat(),
                 "run_references": [row.version for row in relevant_runs],
+                "curtailment_feedback_references": {
+                    entity: archive_feedback(store, value)
+                    for entity, value in (feedback or {}).items()
+                    if value is not None
+                    and any(
+                        other.curtailment_entity_id == entity
+                        and other.inverter_id == source.inverter_id
+                        for other in configuration.sources
+                    )
+                },
             }
             reference = version(training_record)
             store.archive("historical-fit", reference, training_record)

@@ -398,15 +398,18 @@ catalogue contract and does not add tables, columns or a second source registry.
 
 Solar source objects also contain `forecast_source`, one of `automatic`, `pvwatts`,
 `ha` or `ml`. Its default `automatic` is omitted from the canonical configuration
-hash. Optional `unrestricted_history_start` and `unrestricted_history_end` retain
-an explicit user declaration of unrestricted production for a curtailable source.
-Both aware UTC ISO endpoints are required together and ordered. The end is
-exclusive and endpoints cannot be in the future. They participate in the
-configuration version, use the existing settings concurrency check, and are
-stored through the active engine. Their absence does not establish curtailment
-or unrestricted history. Unknown periods cannot establish training or forward
-accuracy for a curtailable source. No hardware command or automatic detection
-is implied. Forecast documents may contain `valid_until`, an exclusive aware UTC provider
+hash. Optional `curtailment_entity_id` links a sensor or binary sensor whose
+actual state describes curtailment. An absent value is omitted from both the
+configuration document and canonical hash. A present value participates in
+configuration and source-family identity. The original optional
+`unrestricted_history_start` and `unrestricted_history_end` fields remain readable
+and versioned for immutable archive replay. Their former manual interval does
+not override the observed-feedback policy and is no longer edited in setup.
+Without a feedback link, and before the first valid linked feedback observation,
+otherwise eligible production is assumed unrestricted. After the first valid
+observation, active or unknown control excludes the affected measurement interval.
+No command, price or statistical anomaly establishes actual control state.
+Forecast documents may contain `valid_until`, an exclusive aware UTC provider
 freshness deadline. Null leaves the existing OEP forecast age policy authoritative.
 Selected HA forecasts must pass both deadlines. `weather_version` is `none` when
 an explicit all-HA forecast was built without independent weather.
@@ -414,7 +417,7 @@ an explicit all-HA forecast was built without independent weather.
 The optional source `learning_start` is an aware UTC ISO instant. The UI edits a
 calendar date beginning at midnight in the Home Assistant installation timezone.
 Future cutoffs are rejected. An absent value is omitted from canonical hashing.
-Unset `learning_start`, `unrestricted_history_start` and
+Unset `learning_start`, `curtailment_entity_id`, `unrestricted_history_start` and
 `unrestricted_history_end` are omitted from the saved configuration document.
 Saving the same current configuration reuses its exact immutable document.
 Setting or clearing a learning date retains the other versions. No conversion of
@@ -422,9 +425,54 @@ earlier development document layouts is provided.
 A present value participates in the configuration and comparison-family identity
 and limits admitted training, validation and accuracy cohorts. Earlier raw
 history, original plans, models and evidence remain stored. This setting is
-independent of the source's confirmed unrestricted production interval.
+independent of the source's curtailment feedback.
 
 The `solar` namespace additionally owns these JSON contracts:
+
+| Document | Meaning |
+| --- | --- |
+| `curtailment-current-<sensor hash>.json` | Mutable checked receipt and its SHA-256 reference for one exact sensor. The receipt contains `entity_id`, exclusive aware UTC `checked_until`, segment `count` and final content hash `tail`. Empty refreshes advance only this cursor. |
+| `curtailment-segment-<sensor hash>-<index>.json` | Immutable append of original timestamp/boolean-or-null observations and explicit null coverage boundaries, source identity, sequence `index` and preceding content hash `previous`. A null at a requested start can mark missing retained Recorder coverage. It is not a backdated physical observation. Appends do not rewrite or hash preceding observations. In-memory ancestors retain chunks and small metadata, without retaining materialized lookup arrays for every earlier prefix. Existing training snapshots remain unchanged. Restart reads known segment names in batches of at most 128, validating source, ordering, every hash-chain link and the receipt's final tail. The retained first valid observation survives Recorder purging. |
+| `curtailment-history-<hash>.json` | Immutable copy of a checked receipt, archived when model or historical-fit evidence references it. Earlier referenced receipts remain replayable against their original observation prefix. Ordinary empty polling does not retain another unreferenced receipt or full-history manifest. |
+
+The peer route `/v1/solar/feedback` binds each response to the active configuration,
+exact linked sensor and preceding checked cursor. Each range is at most 367 days
+and each transfer has at most 10,000 observations. Dense transfers end exclusively
+at the first omitted observation, which is retained by the next query. Native
+Recorder state-change queries enforce a 10,001-row SQL limit before materializing
+the result. A separate indexed native Recorder query reads at most one earliest
+retained observation in the requested range, including an attribute-only update
+whose original state change was purged. Its original timestamp is preserved.
+Float timestamp bounds match the serialized microsecond cursor so resuming
+cannot omit that observation. Later attribute-only updates do not change the
+control state. A second indexed single-row query checks retained coverage at or
+before the start. If that anchor is absent and no actual observation occurs at
+the exact start, a null boundary marks the unchecked gap from that start. It
+consumes one transfer slot and cannot extend an earlier off observation through
+the gap. The policy before the first valid observation remains unchanged.
+These reads share the same executor ownership and transfer budget. The
+Recorder commit barrier and query share one 20-second deadline and run outside
+command synchronization. A timed-out native read retains ownership until its
+executor finishes, preventing overlapping retries for that sensor while other
+sensors can continue. Restore failures remain fail-closed and retry through the
+background lifecycle at a five-minute minimum interval. Status rendering does
+not perform those reads. Diagnostics retain bounded failure types and stack
+locations without private exception values. Newer observations cannot be applied
+backward. Training and historical assessment record feedback
+versions alongside the existing weather and production identities. Source
+selection uses a distinct feedback-policy family. These documents use existing
+tables and participate in the existing all-namespace database transfer.
+
+Forecast-quality plan and day views copy source-bound immutable feedback snapshots
+under the application lock. A snapshot must match the source, production meter and
+feedback sensor, and its checked boundary cannot be in the future. Active missing
+or unreadable feedback stays excluded without an archive fallback. Historical
+source, meter and sensor bindings absent from the current configuration use the
+retained archive reader, even if the same healthy feedback sensor remains linked
+elsewhere. A known unavailable sensor cannot be bypassed this way. Configuration
+changes retain healthy feedback for unchanged sensors. New, failed or time-invalid
+sensors are restored in the existing cancellation-safe configuration writer,
+before the caller releases its application lock.
 
 Solar daily-series writers compare the expected manifest and every referenced
 block in one active-database transaction. Reads use batches of at most 128 block

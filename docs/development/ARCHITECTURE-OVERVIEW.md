@@ -48,6 +48,8 @@ Paths within the app are relative to `src/open_energy_planner/`. Check actual im
 
 Every OEP table belongs to the shared schema and active app-owned engine. A new store must participate in the dictionary and real SQLite/PostgreSQL/MariaDB/MySQL transfer contracts. A private domain connection or file-based configuration archive would break this ownership.
 
+The HA solar-feedback adapter may use exactly `from sqlalchemy import select` to construct its bounded native Recorder read. That read uses only Home Assistant's existing read-only session and Recorder schema. It does not create a connection, engine, ORM session or OEP store. Other direct SQLAlchemy imports remain prohibited in the integration. Native Recorder timestamps and normalized observations cross the app boundary, not database objects.
+
 Tests are grouped by behavior and required environment. App-side HA contracts can run without starting HA. Actual integration/Recorder behavior needs real HA tests. Installation and lifecycle changes need their provisioning and Supervisor evidence. Splitting a test file or moving production code does not authorize dropping those contracts.
 
 Before implementing a change, identify the affected sources, consumers, durable formats, API boundaries and test groups. Use [review and CI stages](CI-STAGES.md#change-based-candidate-matrix) to understand the immutable whole-PR matrix. The selector complements semantic review. It does not prove every dynamic dependency.

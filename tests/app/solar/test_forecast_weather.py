@@ -468,9 +468,10 @@ def test_new_background_runs_do_not_discard_usable_jobs_and_remain_coalesced(tmp
     runtime.set_weather(SITE, weather, service=source.service)
     captured = []
 
-    def candidates(*arguments):
+    def candidates(*arguments, feedback=None):
         """Record exactly the immutable forecast-run snapshot passed to the learning worker."""
         captured.append(arguments[-1])
+        assert feedback == {}
         return {}
 
     monkeypatch.setattr(runtime, "_learned_candidates", candidates)
@@ -505,7 +506,7 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
     from tests.app.solar.support import plant, weather
 
     monkeypatch.setattr("open_energy_planner.solar.api.SOLAR_WORKER_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(SolarRuntime, "_learned_candidates", lambda *_arguments: {})
+    monkeypatch.setattr(SolarRuntime, "_learned_candidates", lambda *_arguments, **_options: {})
 
     async def scenario():
         """Publish a usable forecast through authenticated HTTP while an independent history request stays pending."""
@@ -685,7 +686,7 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
     store.save(plant())
     runtime = SolarRuntime(store)
     runtime.set_weather(SITE, original_weather, service=original_service)
-    monkeypatch.setattr(runtime, "_learned_candidates", lambda *_arguments: {})
+    monkeypatch.setattr(runtime, "_learned_candidates", lambda *_arguments, **_options: {})
 
     def candidate(configuration, location, weather, issued_at, _models):
         """Supply a distinct deterministic candidate only to exercise its independent archive projection."""
@@ -756,7 +757,7 @@ def test_live_49_hour_guard_covers_the_final_partial_planning_hour(tmp_path, mon
     store.save(plant())
     runtime = SolarRuntime(store)
     runtime.set_weather(SITE, selected, service=source.service)
-    monkeypatch.setattr(runtime, "_learned_candidates", lambda *_arguments: {})
+    monkeypatch.setattr(runtime, "_learned_candidates", lambda *_arguments, **_options: {})
     now = received + timedelta(minutes=minute)
     queued = runtime.job(now)
     assert queued is not None

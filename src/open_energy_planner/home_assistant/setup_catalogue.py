@@ -209,7 +209,7 @@ class SetupDiscovery:
             if candidate != current:
                 try:
                     await self.persist(
-                        self.solar.store.save, candidate, self.solar.configure, contract_input=False
+                        self.solar.save_configuration, candidate, contract_input=False
                     )
                 finally:
                     # A drained write can become authoritative before cancellation propagates.
