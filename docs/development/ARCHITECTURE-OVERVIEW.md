@@ -25,7 +25,8 @@ the installation basis and appliance, EV and thermal snapshots. Coordinator
 invalidation, snapshot installation and submission remain on the event loop.
 Cancellation drains the preparation worker before releasing the state lock,
 including repeated cancellation. Installation rechecks measurement and future
-input expiry after the worker finishes. The synchronous domain entry points
+input expiry after the worker finishes. A closed coordinator discards completed
+preparation without submitting more work. The synchronous domain entry points
 remain available for isolated callers and startup without observations.
 
 Component coverage and balance checks integrate ordered target windows with a

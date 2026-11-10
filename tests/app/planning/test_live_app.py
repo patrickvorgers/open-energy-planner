@@ -233,12 +233,13 @@ def test_publication_revalidates_inputs_without_logging_expected_invalidation_as
             archives = list_plans(tmp_path)
             build = CommandMapper.build
             mapped = asyncio.Event()
+            loop = asyncio.get_running_loop()
 
             def invalidate_after_mapping(mapper, *args):
                 """Remove future inputs only once the candidate has passed independent checks."""
                 document = build(mapper, *args)
                 future.available = False
-                mapped.set()
+                loop.call_soon_threadsafe(mapped.set)
                 return document
 
             monkeypatch.setattr(CommandMapper, "build", invalidate_after_mapping)

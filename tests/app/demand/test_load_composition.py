@@ -41,8 +41,8 @@ def test_many_device_integrations_visit_each_source_step_once():
         assert visited == list(range(48))
 
 
-def test_batch_integration_preserves_fractional_boundaries_and_rejects_bad_coverage():
-    """Refined windows retain fractional-second energy and reject gaps, overlaps and reordered inputs."""
+def test_batch_integration_preserves_fractional_boundaries_and_rejects_bad_source_coverage():
+    """Refined windows retain fractional-second energy and reject gaps, overlaps and reordered source steps."""
     split = START + timedelta(seconds=0.123456)
     windows = ((START, split), (split, START + timedelta(hours=2)))
     steps = (LoadStep(START, 1, 0.04), LoadStep(START + timedelta(hours=1), 1, 0.08))
@@ -52,6 +52,21 @@ def test_batch_integration_preserves_fractional_boundaries_and_rejects_bad_cover
     for invalid in (steps[:1], steps[::-1], (steps[0], steps[0], steps[1])):
         with pytest.raises(ValueError, match="coverage"):
             integrals(invalid, windows)
+    with pytest.raises(ValueError, match="out of order"):
+        integrals(steps[::-1], windows)
+
+
+@pytest.mark.parametrize(
+    "offsets", [((0, 60), (30, 120)), ((0, 0),), ((60, 0),), ((60, 120), (0, 60))]
+)
+def test_batch_integration_rejects_overlapping_empty_and_reversed_windows(offsets):
+    """Source coverage does not make overlapping, empty or reversed target windows valid."""
+    windows = tuple(
+        (START + timedelta(minutes=left), START + timedelta(minutes=right))
+        for left, right in offsets
+    )
+    with pytest.raises(ValueError, match="windows"):
+        integrals((LoadStep(START, 2, 2),), windows)
 
 
 def test_fractional_second_integration_retains_energy_without_rounding_a_timedelta():

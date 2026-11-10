@@ -142,12 +142,22 @@ class LiveInputs:
                 if worker.cancelled():
                     raise
                 cancellation = error
-        self._install(prepared, force=force)
+        if not self.planner.closed:
+            self._install(prepared, force=force)
         if cancellation is not None:
             raise cancellation
 
     def _prepare(self):
-        """Build current physical inputs without mutating the event-loop-owned coordinator."""
+        """Build inputs without mutating the event-loop-owned coordinator.
+
+        ``refresh_async`` runs this on a worker. Its caller retains the app state
+        lock because the basis source and appliance preparation borrow mutable
+        domain services, including their readiness issues.
+
+        Returns:
+            An InputsUnavailable value when prerequisites are missing or expired.
+            Otherwise the (now, basis, snapshot) tuple consumed by _install.
+        """
         now = self.clock()
         try:
             issue = self.strategy_issue() or self.configuration_issue()

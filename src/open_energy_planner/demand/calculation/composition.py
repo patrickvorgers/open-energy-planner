@@ -59,12 +59,28 @@ def integral(steps, start, end):
 
 
 def integrals(steps, windows):
-    """Integrate ordered, nonoverlapping windows in one sweep through exact source coverage."""
+    """Integrate windows in one sweep through exact source coverage.
+
+    Args:
+        steps: Ordered nonoverlapping LoadSteps containing nonnegative AC kWh.
+        windows: Ordered nonoverlapping (start, end) half-open datetime pairs.
+            Each end must be later than its start.
+
+    Returns:
+        A tuple of AC kWh sums in the supplied window order.
+
+    Raises:
+        ValueError: Source steps are reordered or overlap, windows are invalid
+            or overlap, or a window has missing source coverage.
+    """
     spans = tuple(
         (step.start, step.start + timedelta(hours=step.duration_h), step.kwh) for step in steps
     )
-    if any(previous[1] > current[0] for previous, current in pairwise(spans)):
-        raise ValueError("Household component coverage overlaps")
+    for previous, current in pairwise(spans):
+        if previous[0] > current[0]:
+            raise ValueError("Household component coverage out of order")
+        if previous[1] > current[0]:
+            raise ValueError("Household component coverage overlaps")
     source_index, previous_end, result = 0, None, []
     for start, end in windows:
         if end <= start or (previous_end is not None and start < previous_end):

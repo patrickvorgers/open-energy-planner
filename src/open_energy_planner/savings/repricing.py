@@ -357,17 +357,26 @@ class PlanValuations:
         if queue["complete"]:
             return
         rows = self.plans.list_plans(limit=REPRICING_BATCH_SIZE, before=queue["before"])
-        versions = self.plans.contract_versions(row["plan_id"] for row in rows)
+        try:
+            versions = self.plans.contract_versions(row["plan_id"] for row in rows)
+        except ValueError:
+            # Isolate corrupt evidence through the normal per-plan failure path.
+            versions = {}
+            for row in rows:
+                try:
+                    versions.update(self.plans.contract_versions((row["plan_id"],)))
+                except ValueError:
+                    continue
         for row in rows:
-            if versions[row["plan_id"]] == contract.version:
+            if versions.get(row["plan_id"]) == contract.version:
                 continue
-            plan = self.plans.get_plan(row["plan_id"])
+            context = plan_activity_context(row)
             activity_context = (
                 self.events.thread_attempt(
                     "contract-valuations",
                     "settlement",
                     "Recalculate plan value",
-                    context=plan_activity_context(plan),
+                    context=context,
                     failure=REPRICING_ACTIVITY_FAILURE,
                 )
                 if self.events
@@ -378,6 +387,10 @@ class PlanValuations:
                 pointer = "planvalue-" + key(row["plan_id"]) + ".json"
                 status_document = "valueissue-" + key(row["plan_id"]) + ".json"
                 try:
+                    plan = self.plans.get_plan(row["plan_id"])
+                    if plan is None:
+                        raise ValueError("Archived plan unavailable")
+                    context = plan_activity_context(plan)
                     result = reprice(plan, contract, book, now)
                     result = json.loads(
                         json.dumps(result, default=lambda value: value.isoformat(), allow_nan=False)
@@ -403,6 +416,7 @@ class PlanValuations:
                             activity,
                             Outcome.FAILED,
                             REPRICING_ACTIVITY_FAILURE,
+                            context=context,
                         )
                     continue
                 with self.documents.transaction():
@@ -421,6 +435,7 @@ class PlanValuations:
                         Outcome.COMPLETED,
                         "The updated plan valuation was saved. The original plan remains unchanged.",
                         usable=True,
+                        context=context,
                     )
         queue.update(
             before=rows[-1]["plan_id"] if rows else queue["before"],

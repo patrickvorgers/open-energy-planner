@@ -1,8 +1,10 @@
 """Durable application authority for appliance tasks, attempts, feedback and cycle evidence."""
 
+from bisect import bisect_left, bisect_right
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, time, timedelta
+from math import fsum
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -530,7 +532,7 @@ class ApplianceService:
 
         problem = snapshot.problem
         self.issue = None
-        works, entities = [], set(excluded_entities)
+        works, task_windows, entities = [], [], set(excluded_entities)
         for entity, task in self.state["tasks"].items():
             if task["status"] not in OPEN_STATUSES:
                 continue
@@ -552,9 +554,17 @@ class ApplianceService:
                 profile(task["profile"]),
                 fixed,
             )
-            if fixed is not None or candidates(work, problem.intervals):
+            starts = candidates(work, problem.intervals)
+            if starts:
                 works.append(work)
                 entities.add(entity)
+                task_windows.append(
+                    (
+                        work,
+                        min(starts),
+                        max(starts) + timedelta(seconds=work.profile.duration_seconds),
+                    )
+                )
         if not works and not entities and not self.consumers.selected:
             return replace(snapshot, appliance_revision=self.revision)
         result = self.consumers.result or {}
@@ -660,22 +670,9 @@ class ApplianceService:
                 )
                 if entity not in entities:
                     baseline_parts.append(forecast)
-            from bisect import bisect_left, bisect_right
-            from math import fsum
-
             component_boundaries = sorted(
                 {part.start for component in components for part in component.steps}
             )
-            task_windows = []
-            for work in works:
-                starts = candidates(work, problem.intervals)
-                task_windows.append(
-                    (
-                        work,
-                        min(starts),
-                        max(starts) + timedelta(seconds=work.profile.duration_seconds),
-                    )
-                )
             intervals, parents = [], []
             for parent_index, step in enumerate(problem.intervals):
                 end = step.start + timedelta(hours=step.duration_h)

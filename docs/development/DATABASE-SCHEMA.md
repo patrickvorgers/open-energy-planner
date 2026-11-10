@@ -147,6 +147,10 @@ verifies the selected leaf hash and string-or-null contract. It does not verify
 the complete parent record. An absent optional version returns null and requires
 normal full-plan repricing. Missing plan identities, missing referenced payloads
 and corrupt contract leaves fail closed. This changes no stored schema or JSON.
+If a batch projection finds corrupt evidence, repricing isolates the affected
+plan, records its safe failure status and retains its last successful valuation.
+Healthy plans continue and the bounded queue can advance. Database connection
+failures still abort the round rather than treating unavailable evidence as valid.
 
 Daily forecast quality projects `forecast_quality_controlled` through the existing
 plan, parts and values keys for enabled activation identities. It reads no solver
