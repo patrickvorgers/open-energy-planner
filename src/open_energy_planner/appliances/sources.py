@@ -4,6 +4,9 @@ SOURCE_ALREADY_ASSIGNED = (
     "This Energy device is already added as an appliance. "
     "Edit or remove it in its existing category first."
 )
+SOURCE_OWNERSHIP_UNAVAILABLE = (
+    "Consumer configuration unreadable. Restore the saved database before editing"
+)
 
 
 def validate_new_assignments(requested, retained, selected, reserved):

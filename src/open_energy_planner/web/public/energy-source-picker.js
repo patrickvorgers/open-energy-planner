@@ -1,11 +1,13 @@
 /** Keep source identity, rather than display names, authoritative across all appliance categories. */
 export function assignedEnergySources(consumers) {
+    if (consumers.issue === "consumer_configuration_unreadable") return new Set(consumers.options.map(source => source.entity_id));
     return new Set([...consumers.selected.map(source => source.entity_id), ...consumers.charging_meters, ...consumers.thermal_meters]);
 }
 
 /** Reuse one Energy-device chooser across consumption, charging and electric-boiler settings. */
 export function pickEnergySource(dialog, consumers, title) {
     const added = assignedEnergySources(consumers);
+    const unavailable = consumers.issue === "consumer_configuration_unreadable";
     dialog.classList.add("source-picker");
     dialog.replaceChildren(document.createElement("div"));
     const body = dialog.firstElementChild;
@@ -24,12 +26,12 @@ export function pickEnergySource(dialog, consumers, title) {
             count += 1;
             const button = document.createElement("button"), name = document.createElement("strong"), state = document.createElement("small");
             button.type = "button"; button.className = "source-choice"; button.title = source.entity_id; button.disabled = used;
-            name.textContent = source.name; state.textContent = used ? "Already added" : "Available"; button.append(name, state);
+            name.textContent = source.name; state.textContent = unavailable ? "Ownership unavailable" : used ? "Already added" : "Available"; button.append(name, state);
             button.onclick = () => { selected = source; dialog.close(); };
             results.append(button);
         }
         if (!count) { const empty = document.createElement("p"); empty.textContent = "No matching devices. Try another search or change the filter."; results.append(empty); }
-        find("source-count").textContent = `${count} of ${consumers.options.length} sources shown. Devices already added in any appliance category cannot be selected again.`;
+        find("source-count").textContent = unavailable ? "Device assignments could not be read. Restore the saved database and reload before adding devices." : `${count} of ${consumers.options.length} sources shown. Devices already added in any appliance category cannot be selected again.`;
         results.scrollTop = 0;
     }
     find("source-search").oninput = render; find("source-filter").onchange = render; find("close-sources").onclick = () => dialog.close();

@@ -252,7 +252,10 @@ function renderSummary() {
 /** Reload confirmed configuration only through an explicit SaveBar transition. */
 async function load(selection = selectedId) {
     try {
-        [current, energySources] = await Promise.all([api("v1/ev"), api("v1/consumers")]); useHomeAssistantTimezone(current.timezone);
+        const results = await Promise.allSettled([api("v1/ev"), api("v1/consumers")]);
+        const failed = results.find(result => result.status === "rejected");
+        if (failed) throw failed.reason;
+        [current, energySources] = results.map(result => result.value); useHomeAssistantTimezone(current.timezone);
         current.energy_consumers = energySources.options;
         integrationSelections.clear();
         integrationTypeSelections.clear();

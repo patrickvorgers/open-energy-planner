@@ -60,7 +60,9 @@ For a charge point or electric boiler, first choose the device from the shared
 Home Assistant Energy list. Its consumption and configured device power sensors
 are selected together. A registered device or integration is not required. If
 no devices appear, check the search and **Show** filter. Already added devices
-are disabled across all appliance categories. Edit the existing device rather
+are disabled across all appliance categories. If saved device assignments cannot
+be read, all choices remain unavailable. Restore the saved database and reload
+before adding devices. Edit the existing device rather
 than adding it again. If the device is absent from Energy, configure it there
 first. A removed selected meter is shown as unavailable. If its power sensor is
 not defined in Energy, explicitly choose a compatible W or kW source.

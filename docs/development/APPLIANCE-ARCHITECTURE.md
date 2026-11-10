@@ -23,6 +23,15 @@ editable. Generic selection retains specialized forecast memberships and cannot
 enable a charge point or boiler as a shiftable cycle appliance. These rules use
 existing identities and archives without adding another device registry.
 
+Unreadable consumer choices mean ownership is unknown. The shared chooser keeps
+every source unavailable, and the consumer selection owner rejects replacement
+writes from every category until the saved database is restored. It never
+interprets the empty fallback selection as proof that a source is free.
+
+EV and boiler settings settle both their configuration and consumer reads before
+applying either result or releasing the shared save lock. Failed reads retain
+the draft and the existing bounded, sanitized request behavior.
+
 ## Independent dimensions
 
 | Dimension | Existing ownership and meaning |

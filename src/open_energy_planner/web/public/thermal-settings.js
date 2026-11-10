@@ -128,8 +128,11 @@ function renderSummary(store) {
 /** Load settings only on explicit transitions. Background evidence never replaces an edited draft. */
 async function load(selection = selectedId) {
     const generation = ++requestGeneration;
-    const [data, consumers] = await Promise.all([api("v1/thermal"), api("v1/consumers")]);
+    const results = await Promise.allSettled([api("v1/thermal"), api("v1/consumers")]);
     if (generation !== requestGeneration) return false;
+    const failed = results.find(result => result.status === "rejected");
+    if (failed) throw failed.reason;
+    const [data, consumers] = results.map(result => result.value);
     energySources = consumers; data.energy_consumers = consumers.options;
     current = data; useHomeAssistantTimezone(data.timezone || data.catalogue?.timezone);
     draft = structuredClone(data.configuration || {stores: []}); savedVersion = data.configuration_version; selectedId = selection;
