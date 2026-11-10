@@ -11,6 +11,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.storage.adapters.published import retain
 from open_energy_planner.savings import api as savings_api
@@ -31,6 +32,55 @@ from tests.app.savings.support.scenarios import END, START, bindings, contract, 
 PRIVATE_EVIDENCE = (
     "postgresql://private-user:SECRET_PASSWORD@private.invalid/archive?token=SECRET_TOKEN"
 )
+
+
+def test_archive_maintenance_failure_does_not_report_a_financial_failure(
+    tmp_path, monkeypatch, caplog
+):
+    """An isolated compression failure retains usable financial status and logs locations without secret exception values."""
+    repository = SqlPlanRepository(tmp_path)
+
+    def failed_compression(_documents):
+        """Exercise the actual worker's unexpected maintenance-error boundary with private-value sentinels."""
+        raise RuntimeError(PRIVATE_EVIDENCE)
+
+    monkeypatch.setattr(savings_api, "recompress", failed_compression)
+
+    async def observe_worker():
+        """Wait for the real maintenance attempt rather than substituting financial execution."""
+        app = web.Application()
+        _, runtime, _ = savings_api.register(
+            app,
+            repository,
+            SimpleNamespace(current=None),
+            SimpleNamespace(current=None),
+            SimpleNamespace(current=None),
+            SimpleNamespace(configuration=None),
+            SimpleNamespace(configuration=None),
+            asyncio.Lock(),
+            SimpleNamespace(value=None),
+            lambda: None,
+            mutation_lock=asyncio.Lock(),
+        )
+        async with TestServer(app):
+            async with asyncio.timeout(3):
+                while not any(
+                    record.name == savings_api.__name__
+                    and record.getMessage().startswith("Archive maintenance failed")
+                    for record in caplog.records
+                ):
+                    await asyncio.sleep(0.01)
+            assert runtime.issue is None
+            assert runtime.attention is False
+
+    try:
+        with caplog.at_level(logging.INFO, logger=savings_api.__name__):
+            asyncio.run(observe_worker())
+        assert "failed_compression" in caplog.text
+        assert "SECRET_PASSWORD" not in caplog.text
+        assert "SECRET_TOKEN" not in caplog.text
+    finally:
+        repository.close()
 
 
 @pytest.mark.parametrize(
@@ -110,6 +160,7 @@ def test_savings_waiting_details_identify_safe_cause_progress_and_action(issue, 
     [
         "plan_timestamp",
         "price_timestamp",
+        "activation_timestamp",
         "pending",
         "missing_prices",
         "private_contract_reason",
@@ -145,6 +196,13 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
         connection.execute(
             ACTIVATIONS.insert().values(activated_at=stamp(START), plan_id=document["plan_id"])
         )
+        if fault == "activation_timestamp":
+            connection.execute(
+                ACTIVATIONS.insert().values(
+                    activated_at=(START + timedelta(minutes=5)).isoformat() + PRIVATE_EVIDENCE,
+                    plan_id=document["plan_id"],
+                )
+            )
         if fault != "missing_prices":
             retain(
                 connection,
@@ -192,7 +250,7 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
             SimpleNamespace(configuration=None),
             asyncio.Lock(),
             SimpleNamespace(value=None),
-            lambda: None,
+            lambda: SiteLocation(52, 6, "UTC"),
             mutation_lock=asyncio.Lock(),
         )
         async with TestServer(app):
@@ -218,6 +276,7 @@ def test_settlement_process_and_worker_keep_untrusted_evidence_out_of_status_and
                 in {
                     "plan_timestamp",
                     "price_timestamp",
+                    "activation_timestamp",
                     "private_contract_reason",
                     "private_continuity_reason",
                 }

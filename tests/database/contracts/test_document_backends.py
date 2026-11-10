@@ -256,6 +256,35 @@ def test_archive_prefix_is_literal_and_namespace_bound(archive):
         list(planning.iter_prefix("../escape"))
 
 
+def test_compressed_and_original_documents_share_all_read_paths(archive):
+    """Each backend reopens compressed documents alongside unchanged original JSON using every read path."""
+    engine, _root = archive
+    original = {"intervals": [{"kwh": 0.30000000000000004, "source": "synthetic"}] * 300}
+    documents = SqlDocuments(engine, "planning")
+    documents.write("compression-new", original)
+    with engine.begin() as connection:
+        encoded = connection.scalar(
+            select(DOCUMENTS.c.payload).where(
+                DOCUMENTS.c.namespace == "planning", DOCUMENTS.c.name == "compression-new"
+            )
+        )
+        assert encoded.startswith("oep:gzip:1:")
+        assert len(encoded) < len(json.dumps(original)) / 4
+        connection.execute(
+            DOCUMENTS.insert().values(
+                namespace="planning", name="compression-old", payload=json.dumps(original)
+            )
+        )
+    reopened = SqlDocuments(engine, "planning")
+    assert reopened.read("compression-new") == original
+    assert reopened.read("compression-old") == original
+    assert reopened.read_many(["compression-old", "compression-new"]) == {
+        "compression-old": original,
+        "compression-new": original,
+    }
+    assert list(reopened.iter_prefix("compression-")) == [original, original]
+
+
 @pytest.fixture(params=BACKENDS, ids=[name for name, _ in BACKENDS])
 def archive(request, tmp_path):
     """Own one disposable four-backend archive with every table initialized and no archive file writes."""

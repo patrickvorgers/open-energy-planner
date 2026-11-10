@@ -8,6 +8,25 @@ The active database contains OEP configuration, rules, source/model versions, or
 
 Connection credentials and private bootstrap/recovery files remain outside the database. Preserve the complete OEP data directory as well as the active database when planning a backup. A database-only export is not automatically a complete installation backup.
 
+### Plan history and daily Savings
+
+Complete original plans are thinned automatically. The current active plan is always protected.
+
+| Plan age | Complete original plans retained |
+| --- | --- |
+| Less than 24 hours | All publications, including ad-hoc recalculations |
+| 24 hours to 3 days | The first publication in each UTC quarter-hour |
+| 3 to 14 days | The first publication in each UTC hour |
+| Older than 14 days | The first publication in each Home Assistant local calendar day |
+
+Kept plans preserve their exact original contents. Thinning removes complete versions between those anchors. Separate activation and control evidence remains available, so pruning cannot falsely make an appliance appear uncontrolled in Forecast quality.
+
+[Finalized daily Savings](savings.md#provisional-and-finalized-days) remain independent of full old plans. Temporary measurements and detailed calculation context expire only after their daily report and continuation are safely stored. Configuration, contracts and source/model archives have their own ownership. This policy does not change Home Assistant Recorder retention.
+
+Large stored JSON is compressed without rounding or changing its meaning. Background maintenance handles existing records in small restartable batches. SQLite can reuse freed pages without reducing its displayed file size. A smaller live dataset therefore does not guarantee an immediate smaller database file. No blocking automatic file compaction is performed.
+
+Keep a consistent backup before upgrading or downgrading. Older app versions cannot read the new compressed representation. Restoring the complete matching app/database backup is the rollback route. Expired original plan versions and temporary quarters cannot be recovered from compact daily totals.
+
 ## Inspect capacity
 
 For local SQLite, the page can show database size and available volume space. It warns below 1 GiB or 5.0% free. External database server free space remains unknown. OEP's local free-space figure must not be read as that server's capacity.

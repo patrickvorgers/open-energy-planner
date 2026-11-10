@@ -180,7 +180,7 @@ def test_slow_settlement_does_not_hold_plan_publication_lock(tmp_path, monkeypat
     """A blocked settlement database round leaves the authenticated HA snapshot immediately readable."""
     from threading import Event
 
-    from open_energy_planner.savings.runtime import SavingsRuntime
+    from open_energy_planner.savings.daily import DailySavings
 
     entered, release = Event(), Event()
 
@@ -189,7 +189,7 @@ def test_slow_settlement_does_not_hold_plan_publication_lock(tmp_path, monkeypat
         entered.set()
         assert release.wait(10)
 
-    monkeypatch.setattr(SavingsRuntime, "process", slow_process)
+    monkeypatch.setattr(DailySavings, "process", slow_process)
 
     async def scenario():
         """Use the actual worker and HTTP boundary. Release the blocked writer before cleanup."""
@@ -217,7 +217,7 @@ def test_price_fetch_is_free_but_retention_waits_for_financial_publication(tmp_p
 
     from open_energy_planner.prices.service import PriceService
     from open_energy_planner.prices.storage.adapters.store import PriceStore
-    from open_energy_planner.savings.runtime import SavingsRuntime
+    from open_energy_planner.savings.daily import DailySavings
     from open_energy_planner.storage.adapters.documents import SqlDocuments
     from tests.app.price.test_prices import published
 
@@ -229,7 +229,7 @@ def test_price_fetch_is_free_but_retention_waits_for_financial_publication(tmp_p
         assert release.wait(10)
         published_finance.set()
 
-    monkeypatch.setattr(SavingsRuntime, "process", financial_publication)
+    monkeypatch.setattr(DailySavings, "process", financial_publication)
 
     async def scenario():
         """Use the actual app lifecycle, shared engine and price acceptance instead of acquiring a test-only lock."""
