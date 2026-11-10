@@ -71,13 +71,31 @@ def test_changed_revision_in_observation_response_revokes_old_commands_immediate
     asyncio.run(scenario())
 
 
-def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history():
-    """Configure one household counter and annual estimate. Forecast immediately, then learn measured 0.4 kWh/hour through real Recorder."""
+def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history(monkeypatch):
+    """Complete real Recorder discovery and chunk transfers, then learn measured 0.4 kWh/hour without extending model waits."""
     import json
 
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.models import StatisticMeanType
     from homeassistant.components.recorder.statistics import async_import_statistics
+
+    from custom_components.open_energy_planner.history import HistoryBridge
+
+    original_capture = HistoryBridge.capture
+    history_reports = []
+
+    async def capture(bridge, request):
+        """Retain actual demand transfer evidence without replacing Recorder or changing admission."""
+        report = await original_capture(bridge, request)
+        if (
+            report is not None
+            and request["entity_id"] == "sensor.home_energy"
+            and request.get("basis") in ("energy_history_range", "energy_history_chunk")
+        ):
+            history_reports.append(report)
+        return report
+
+    monkeypatch.setattr(HistoryBridge, "capture", capture)
 
     async def scenario():
         """Use actual app configuration, Recorder and local API without helpers, external weather or physical control."""
@@ -145,9 +163,17 @@ def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history():
                         demand = await response.json()
                     if demand["forecast"] and demand["forecast"]["model"] == "weekday-hour-v2":
                         break
+                    if demand["request"] is not None:
+                        await entry.runtime_data.sync()
                     await asyncio.sleep(0.05)
                 else:
                     raise AssertionError(demand)
+                assert [report["basis"] for report in history_reports] == [
+                    "energy_history_range",
+                    "energy_history_chunk",
+                ]
+                assert len(history_reports[1]["hours"]) == 169
+                assert demand["history_quality"]["usable_hours"] == 168
                 steps = demand["forecast"]["steps"]
                 first = datetime.fromisoformat(steps[0]["start"])
                 assert len(steps) == {0: 120, 15: 123, 30: 122, 45: 121}[first.minute]
