@@ -63,7 +63,11 @@ class DemandRuntime:
         """Invalidate incompatible observations/models after a persisted measurement-definition change."""
         self.configuration = configuration
         self.pending_histories = self.history_import.restore(configuration.entities)
-        self.history_issues = dict(self.history_import.issues)
+        self.history_issues = {
+            entity: self.history_import.issues[entity]
+            for entity in configuration.entities
+            if entity in self.history_import.issues
+        }
         self.histories = self._restore_cohort()
         self.data_versions = {
             entity: digest(asdict(history)) for entity, history in self.histories.items()

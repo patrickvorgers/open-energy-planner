@@ -113,7 +113,8 @@ and `energy_history_chunk` for bounded annual cumulative-energy transfers.
 Responses echo the exact basis and request version. Both operations require one
 sensor and its Recorder `metadata_id`, `source` and original energy `unit`.
 The app accepts only the current pending request. Request size stays bounded
-at 1 MiB and each hourly response stays below 9000 rows and 367 days.
+at 1 MiB. Each hourly response contains at most 9000 rows. Each hourly
+request covers at most 367 days.
 
 The bridge reuses Solar's existing monthly discovery and annual capture path.
 It preserves raw sum/state evidence and normalizes requested energy to kWh.

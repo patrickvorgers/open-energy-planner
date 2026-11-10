@@ -134,7 +134,12 @@ class ConsumerForecasts:
             self.documents.write(CONSUMER_SETTINGS_POINTER, list(selected))
         self.selected, self.issue, self.result = selected, None, None
         self.history_import.restore(item["entity_id"] for item in selected)
-        self.failures, self.retry_after = dict(self.history_import.issues), {}
+        self.failures = {
+            item["entity_id"]: self.history_import.issues[item["entity_id"]]
+            for item in selected
+            if item["entity_id"] in self.history_import.issues
+        }
+        self.retry_after = {}
         self.histories = self._restore_histories()
 
     def request(self, configuration, now):

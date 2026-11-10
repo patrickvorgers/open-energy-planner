@@ -7,8 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from open_energy_planner.appliances.forecasting import ConsumerForecasts, parse_selection
 from open_energy_planner.demand import runtime as runtime_module
-from open_energy_planner.demand.calculation.model import EnergyTerm
+from open_energy_planner.demand.calculation.model import EnergyTerm, ExcludedLoad, digest
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.history.importer import (
@@ -25,6 +26,113 @@ from tests.app.demand.test_demand import config
 from tests.database.contracts.test_document_backends import archive
 
 __all__ = ["archive"]
+
+
+@pytest.mark.parametrize("owner", ["consumer", "household", "exclusion"])
+@pytest.mark.parametrize("damage", ["quarantined", "unreadable"])
+def test_removed_meter_warnings_follow_selection_without_erasing_durable_faults(
+    archive, owner, damage
+):
+    """Hide removed-meter faults while retaining selected warnings and recovering faults on reselection and restart."""
+    engine, _root = archive
+    store = DemandStore(SqlDocuments(engine, "demand"))
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    entities = ("sensor.kept", "sensor.removed")
+    importer = HistoryImport(HistoryArchive(store.documents))
+    evidence = {}
+    for entity in entities:
+        history = CumulativeHistory(
+            entity, (EnergyEndpoint(datetime(2026, 5, 1, tzinfo=UTC), 100),)
+        )
+        pending = importer.request(entity, "synthetic-selection", now)
+        report = history_report(pending, history)
+        importer.receive(pending, parse_report(report), now)
+        if damage == "quarantined":
+            changed = deepcopy(report)
+            changed["statistics_identity"]["metadata_id"] = 18
+            with pytest.raises(HistoryContinuityError):
+                importer.receive(pending, parse_report(changed), now)
+            pointer = "history-import-quarantine-" + digest(entity) + ".json"
+            reference = store.documents.read(pointer)
+            name = "history-import-fault-" + reference + ".json"
+        else:
+            pointer = "history-import-current-" + digest(entity) + ".json"
+            reference = store.documents.read(pointer)
+            name = "history-import-" + reference + ".json"
+            damaged = store.documents.read(name)
+            damaged["entity_id"] = "sensor.incompatible"
+            store.documents.write(name, damaged)
+        evidence[pointer] = store.documents.read(pointer)
+        evidence[name] = store.documents.read(name)
+    issue = (
+        "history_continuity_unavailable" if damage == "quarantined" else "history_cache_unreadable"
+    )
+    if owner == "consumer":
+        runtime = ConsumerForecasts(store.documents)
+        runtime.sync(
+            {
+                "entities": [{"entity_id": entity} for entity in entities],
+                "suggestions": {
+                    "consumers": [{"entity_id": entity, "upstream": None} for entity in entities]
+                },
+            }
+        )
+
+        def select(selected_entities):
+            """Save actual Energy membership through the consumer runtime's public operation."""
+            runtime.save(
+                parse_selection(
+                    [
+                        {"entity_id": entity, "weather_sensitive": False}
+                        for entity in selected_entities
+                    ]
+                ),
+                runtime.version,
+            )
+
+        def status():
+            """Read the actual consumer document rather than its private importer cache."""
+            return runtime.document()["history_issues"]
+
+        select(entities)
+    else:
+        runtime = DemandRuntime(store)
+
+        def select(selected_entities):
+            """Persist and configure household terms or exclusions without editing source faults."""
+            if owner == "household":
+                configuration = replace(
+                    config(), terms=tuple(EnergyTerm(entity, 1) for entity in selected_entities)
+                )
+            else:
+                configuration = replace(
+                    config(),
+                    exclusions=tuple(
+                        ExcludedLoad("synthetic-" + str(index), entity)
+                        for index, entity in enumerate(selected_entities)
+                    ),
+                )
+            store.save(configuration)
+            runtime.configure(configuration)
+
+        def status():
+            """Read the current demand document, including the configured measurement boundary."""
+            return runtime.document(now)["history_issues"]
+
+        select(entities)
+    assert status() == {entity: issue for entity in entities}
+    select(("sensor.kept",))
+    assert status() == {"sensor.kept": issue}
+    select(entities)
+    assert status() == {entity: issue for entity in entities}
+    restarted = (
+        ConsumerForecasts(store.documents)
+        if owner == "consumer"
+        else DemandRuntime(DemandStore(store.documents))
+    )
+    public = restarted.document() if owner == "consumer" else restarted.document(now)
+    assert public["history_issues"] == {entity: issue for entity in entities}
+    assert all(store.documents.read(name) == value for name, value in evidence.items())
 
 
 def current_history(archive, monkeypatch):

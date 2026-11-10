@@ -232,7 +232,9 @@ class HistoryBridge:
             )
         except Exception:
             _LOGGER.warning(
-                "Recorder history read failed. Manual bonus baseline remains available",
+                "Recorder energy history read failed. No history was returned for this request."
+                if energy_discovery or energy_chunk
+                else "Recorder history read failed. Manual bonus baseline remains available",
                 exc_info=True,
             )
             return {**result, "error": "history_unavailable"}
