@@ -237,6 +237,54 @@ def test_dependabot_keeps_existing_review_exception_and_other_checks(candidate):
         check(event, REPOSITORY, Evidence(current, checks))
 
 
+@pytest.mark.parametrize("check_name", ["Quick checks", "GitHub Verified PR commits", "CodeQL"])
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped", "neutral", None])
+def test_dependabot_exception_keeps_all_nonreview_prerequisites(candidate, check_name, conclusion):
+    """An exempt bot still needs successful cheap checks, signatures and CodeQL on its exact revision."""
+    event, current, checks = candidate
+    current["user"]["login"] = "dependabot[bot]"
+    checks[:] = [row for row in checks if row["name"] != "CodeRabbit"]
+    blocked = next(row for row in checks if row["name"] == check_name)
+    blocked.update(
+        conclusion=conclusion, status="in_progress" if conclusion is None else "completed"
+    )
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, Evidence(current, checks))
+
+
+@pytest.mark.parametrize("action", ["opened", "synchronize", "reopened"])
+def test_bot_updates_with_retained_label_do_not_request_a_candidate(candidate, action):
+    """Preserving bot readiness cannot turn a new commit or old label into candidate authorization."""
+    event, current, checks = candidate
+    event["action"] = action
+    current["user"]["login"] = "dependabot[bot]"
+    current["labels"] = [{"name": "ci: run"}]
+    checks.pop(2)
+    with pytest.raises(VerificationError, match="Ready for review or a ci: run retry"):
+        check(event, REPOSITORY, Evidence(current, checks))
+
+
+def test_dependabot_candidate_still_rejects_unresolved_findings(candidate):
+    """The review-provider exception cannot dismiss an existing unresolved review finding."""
+    event, current, checks = candidate
+    current["user"]["login"] = "dependabot[bot]"
+    checks.pop(2)
+
+    class OpenFindingEvidence(Evidence):
+        """Report one independent unresolved review thread for the bot revision."""
+
+        def post(self, path, payload):
+            """Retain the normal API envelope while returning a real blocking discussion."""
+            response = super().post(path, payload)
+            response["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] = [
+                {"id": "unresolved-dependency-finding", "isResolved": False}
+            ]
+            return response
+
+    with pytest.raises(VerificationError, match="Open or invalid review threads remain"):
+        check(event, REPOSITORY, OpenFindingEvidence(current, checks))
+
+
 @pytest.mark.parametrize(
     "action,label",
     [

@@ -32,6 +32,8 @@ findings and batching corrections. The trusted base workflow returns newly
 opened, reopened, revised or retargeted PRs to Draft. This includes PRs opened
 with GitHub's normal Ready option. Title and description edits do not reset
 readiness. The transition does not change source, labels or review history.
+Dependabot retains its existing readiness state under the dependency-review
+exception described below. Its candidates still require a deliberate request.
 
 Run `python script/ci/check_native.py --quick` and the affected regression tests
 locally before pushing. Review findings remain evidence to assess. Fix valid
@@ -361,7 +363,14 @@ the operator must also check the actual review scope and exclusions.
 
 Dependabot retains its documented CodeRabbit exception. Do not request manual
 CodeRabbit reviews for it. Its file limit, signatures, CodeQL, compatibility and
-required CI evidence still apply.
+required CI evidence still apply. The trusted readiness workflow reads the current
+PR author and preserves Dependabot's existing readiness state instead of converting
+it to Draft. Other authors still return to Draft after source changes. This
+exception does not request tests, approve the upgrade or dismiss review findings.
+After assessing compatibility and regression coverage, explicitly apply `ci: run`
+to the frozen, non-Draft revision. If that label is already present, remove it and
+apply it again. A retained label never requests tests for a newer commit. A bot PR
+already in Draft can instead use Ready for review after the same assessment.
 
 ## Kody-ai alternative
 
