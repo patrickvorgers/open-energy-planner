@@ -88,7 +88,11 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
         return {"label": ", ".join(labels) or "Solar production"}
 
     def current_notifications():
-        """Read cached forecast availability. Unreadable configuration cannot confirm recovery."""
+        """Read cached forecast availability without waiting for configuration work.
+
+        Unreadable configuration or a held Solar configuration lock returns None.
+        Neither state confirms recovery.
+        """
         if not runtime.configuration_lock.acquire(blocking=False):
             return None
         try:
