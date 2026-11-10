@@ -1,5 +1,7 @@
 """Overview initialization contains rendering faults and recovers independently from stalled reads."""
 
+from datetime import UTC, datetime
+
 import pytest
 from playwright.sync_api import expect
 
@@ -75,15 +77,19 @@ def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
 
 
 def overview_read_probe(page, stalled):
-    """Stall one real overview read and observe its transport signal without replacing other responses."""
+    """Observe full-view reads separately from financial period slices and stall one real response."""
     page.add_init_script("window.stalledOverviewKind=" + repr(stalled) + ";")
     page.add_init_script("""(() => {
       const fetchOriginal=window.fetch,budgets=new WeakMap();
-      window.overviewReads=[];window.armOverviewReads=false;let stalled=false;
+      window.overviewReads=[];window.overviewPeriodReads=[];window.armOverviewReads=false;let stalled=false;
       AbortSignal.timeout=milliseconds=>{const controller=new AbortController();budgets.set(controller.signal,milliseconds);setTimeout(()=>controller.abort(),milliseconds);return controller.signal;};
       window.fetch=(path,options={})=>{
         const address=new URL(path,location.href);
-        const kind=address.pathname.endsWith('/comparison')?'plan':address.pathname.endsWith('/v1/savings')?'savings':null;
+        const comparison=address.pathname.endsWith('/comparison');
+        const start=address.searchParams.get('start'),end=address.searchParams.get('end');
+        const periodSlice=comparison&&address.searchParams.size===2&&Number.isFinite(Date.parse(start))&&Date.parse(end)>Date.parse(start);
+        if(periodSlice){window.overviewPeriodReads.push({start,end,budget:budgets.get(options.signal)});return fetchOriginal(path,options);}
+        const kind=comparison?'plan':address.pathname.endsWith('/v1/savings')?'savings':null;
         if(!kind)return fetchOriginal(path,options);
         const record={kind,signal:options.signal,budget:budgets.get(options.signal),armed:window.armOverviewReads,aborted:false,completed:false};
         window.overviewReads.push(record);
@@ -98,12 +104,31 @@ def overview_read_probe(page, stalled):
     })();""")
 
 
+def test_overview_probe_retains_unexpected_comparison_queries(app_page):
+    """Only a valid start/end period slice is separate from full-plan refresh evidence."""
+    page, url = app_page
+    overview_read_probe(page, "none")
+    page.goto(url + "/setup")
+    page.evaluate("""async () => {
+      const path='/v1/plans/browser-original-plan/comparison';
+      await Promise.all([
+        '?start=2026-11-10T12:00:00Z&end=2026-11-10T12:15:00Z',
+        '?unexpected=1',
+        '?start=2026-11-10T12:00:00Z',
+        '?start=invalid&end=2026-11-10T12:15:00Z',
+        '?start=2026-11-10T12:00:00Z&end=2026-11-10T12:15:00Z&unexpected=1',
+      ].map(query=>fetch(path+query)));
+    }""")
+    assert page.evaluate("window.overviewReads.map(record=>record.kind)") == ["plan"] * 4
+    assert page.evaluate("window.overviewPeriodReads.length") == 1
+
+
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("stalled", ["plan", "savings"])
 def test_source_name_refresh_bounds_both_views_and_retries_the_revision(app_page, stalled):
-    """Either stalled sibling aborts at five seconds. The same rename retries with fresh deadlines and selected dates."""
+    """Abort either stalled view at five seconds and retry names across a UTC-quarter cost refresh."""
     page, url = app_page
-    page.clock.install()
+    page.clock.install(time=datetime(2026, 11, 10, 12, 13, 30, tzinfo=UTC))
     metadata = discover(page, url)
     overview_read_probe(page, stalled)
     page.goto(url + "/overview#savings")
@@ -152,6 +177,9 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(app_page
     count = page.evaluate("window.overviewReads.length")
     page.clock.fast_forward(31000)
     assert page.evaluate("window.overviewReads.length") == count
+    assert page.evaluate("""window.overviewPeriodReads.some(record=>
+      record.start==='2026-11-10T12:15:00.000Z'&&record.end==='2026-11-10T12:30:00.000Z'&&record.budget===5000
+    )""")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
