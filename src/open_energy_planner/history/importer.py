@@ -157,11 +157,12 @@ class HistoryImport:
         self.states = {}
         self.issues = {}
         self.learning_starts = {}
+        self._chunks = {}
 
     @contextmanager
     def transaction(self):
         """Commit source and accepted-cohort pointers together, retaining continuity faults on rejection."""
-        states, issues = self.states.copy(), self.issues.copy()
+        states, issues, chunks = self.states.copy(), self.issues.copy(), self._chunks.copy()
         continuity_error = None
         try:
             with self.store.transaction():
@@ -170,7 +171,7 @@ class HistoryImport:
                 except HistoryContinuityError as error:
                     continuity_error = error
         except BaseException:
-            self.states, self.issues = states, issues
+            self.states, self.issues, self._chunks = states, issues, chunks
             raise
         if continuity_error is not None:
             raise continuity_error
@@ -193,6 +194,7 @@ class HistoryImport:
             if entity in starts and self.learning_starts.get(entity) == starts[entity]
         }
         self.learning_starts = starts
+        self._chunks = {key: value for key, value in self._chunks.items() if key[0] in starts}
 
     def _cohort_key(self, entity):
         """Keep default meter pointers stable and bind explicit dates to separate pointer families."""
@@ -348,6 +350,17 @@ class HistoryImport:
 
     def _chunk(self, state, descriptor):
         """Verify a bounded immutable chunk before admitting any cached measurement."""
+        key = state["entity_id"], descriptor["year"]
+        binding = (
+            descriptor["reference"],
+            descriptor["start"],
+            descriptor["end"],
+            version(state["statistics_identity"]),
+            state.get("learning_start"),
+        )
+        cached = self._chunks.get(key)
+        if cached is not None and cached[0] == binding:
+            return cached[1]
         body = self.store.documents.read(
             "history-import-chunk-" + descriptor["reference"] + ".json"
         )
@@ -382,13 +395,15 @@ class HistoryImport:
             if report.history
             else ()
         )
-        return replace(
+        admitted = replace(
             report,
             history=CumulativeHistory(state["entity_id"], hours) if hours else None,
             excluded_starts=frozenset(
                 instant for instant in report.excluded_starts if start <= instant < end
             ),
         )
+        self._chunks[key] = binding, admitted
+        return admitted
 
     def _history(self, state):
         """Merge matching overlapping endpoints while preserving every absent hour as a gap."""
@@ -406,6 +421,8 @@ class HistoryImport:
 
     def restore(self, entities):
         """Restore complete accepted chunks for selected meter identities and isolate cache faults."""
+        entities = tuple(entities)
+        self._chunks = {key: value for key, value in self._chunks.items() if key[0] not in entities}
         histories = {}
         for entity in entities:
             try:

@@ -1474,3 +1474,11 @@ accepted source history without restoring forecasts as live evidence. All these
 records migrate with the existing shared document table and remain usable after
 the source database is disconnected. Source faults and failed transfers preserve
 original chunks. No production measurements belong in public fixtures.
+
+Initialization or a changed demand definition may publish its first household
+cohort directly from validated source checkpoints when every required meter
+already satisfies the current import target without faults. An absent pointer
+does not require another transfer of unchanged complete data. Incomplete sources
+remain unavailable and a failed publication does not replace accepted evidence.
+The normalized annual chunk cache is process-local, binds the original immutable
+reference and does not add persisted fields or migration dependencies.

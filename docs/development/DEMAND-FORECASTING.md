@@ -79,6 +79,10 @@ whose normalized Recorder sums keep increasing retain their measured energy.
 All required household channels are committed as one complete daily import cohort
 before becoming training input. The last accepted cohort survives interrupted
 refreshes and restart. Selected consumers complete independently.
+If a changed definition has no accepted cohort yet, already imported source
+checkpoints can activate it immediately. Every required source must contain
+admissible history, match the current import target and have no continuity or
+cache fault. Missing or partial sources do not establish a new cohort.
 
 ## Full available history
 
@@ -102,6 +106,17 @@ historical samples do not replace the required future accuracy evidence before
 a learned model is selected. Solar's existing wire values and archive identities
 remain unchanged. Financial physical-counter history retains its stricter
 independent contract.
+
+The importer reuses validated immutable annual chunks within the active runtime.
+Each cache entry binds its content reference, source identity, range and learning
+cohort. Only one version per sensor/year is retained. Explicit history restore
+and process restart revalidate durable chunks. Failed transactions restore the
+previous cache state with their source checkpoints.
+
+Demand history parsing, archive work and configuration history restoration run
+off the event loop. The async caller keeps the shared application lock through
+admission, write and installation. Repeated cancellation drains the owned work
+before that lock is released. It does not authorize concurrent conflicting saves.
 
 ### Training-only negative-balance policy
 

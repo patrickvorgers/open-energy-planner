@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from open_energy_planner.demand.calculation.forecasting import (
     RidgeDemandModel,
@@ -80,17 +80,33 @@ class DemandRuntime:
         self.model_status = "waiting_for_refresh"
 
     def _restore_cohort(self):
-        """Expose only the last completely accepted household boundary after restart."""
+        """Restore accepted evidence or activate fully current source checkpoints for this definition."""
         if self.configuration is None:
             return {}
         pointer = "household-history-cohort-" + self.configuration.version + ".json"
         try:
-            if not self.store.documents.exists(pointer):
+            entities = self.configuration.entities
+            if self.store.documents.exists(pointer):
+                references = self.store.documents.read(pointer)
+                if set(references) != set(entities):
+                    raise ValueError("Invalid household history cohort")
+                histories = self.history_import.restore_checkpoint(references)
+                if set(histories) != set(entities):
+                    raise ValueError("Incomplete household history cohort")
+                return histories
+            if not entities or not all(entity in self.pending_histories for entity in entities):
                 return {}
-            references = self.store.documents.read(pointer)
-            if set(references) != set(self.configuration.entities):
-                raise ValueError("Invalid household history cohort")
-            return self.history_import.restore_checkpoint(references)
+            now = datetime.now(UTC)
+            with self.history_import.transaction():
+                if any(
+                    entity in self.history_import.issues
+                    or self.history_import.request(entity, self.configuration.version, now)
+                    is not None
+                    for entity in entities
+                ):
+                    return {}
+                self.store.documents.write(pointer, self.history_import.checkpoint(entities))
+            return {entity: self.pending_histories[entity] for entity in entities}
         except (OSError, ValueError, TypeError, KeyError):
             self.history_issues["household"] = "history_cache_unreadable"
             return {}

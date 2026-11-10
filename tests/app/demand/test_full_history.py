@@ -10,6 +10,61 @@ from open_energy_planner.history.model import EnergyHistory, EnergyHour
 from tests.database.support.archive import make_store
 
 
+def test_annual_import_validates_each_immutable_chunk_once(tmp_path, monkeypatch, request):
+    """Three annual receipts require three chunk reads and six normalizations, including their wire reports."""
+    import json
+
+    from sqlalchemy import event
+
+    from open_energy_planner.history import importer
+    from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint
+    from tests.app.demand.history_support import receive_source
+
+    store = make_store(tmp_path, DemandStore)
+    store.save(DemandConfiguration("Europe/Amsterdam", 4000, (EnergyTerm("sensor.house", 1),)))
+    runtime = DemandRuntime(store)
+    history = CumulativeHistory(
+        "sensor.house",
+        tuple(
+            EnergyEndpoint(datetime(year, 1, 1, hour, tzinfo=UTC), (year - 2020) * 100 + hour)
+            for year in (2024, 2025, 2026)
+            for hour in (0, 1)
+        ),
+    )
+    counts = {"chunk_reads": 0, "chunk_queries": 0, "normalizations": 0}
+    original_read, original_normalize = store.documents.read, importer._normalized_hours
+
+    def read(name):
+        """Count actual source-chunk document reads without changing returned evidence."""
+        if name.startswith("history-import-chunk-"):
+            counts["chunk_reads"] += 1
+        return original_read(name)
+
+    def normalize(rows):
+        """Count each full normalization, including incoming wire data."""
+        counts["normalizations"] += 1
+        return original_normalize(rows)
+
+    def query(_connection, _cursor, statement, parameters, _context, _many):
+        """Count real SELECTs bound to a chunk, including its immutable existence check."""
+        values = parameters.values() if isinstance(parameters, dict) else parameters
+        if statement.lstrip().upper().startswith("SELECT") and any(
+            isinstance(value, str) and value.startswith("history-import-chunk-") for value in values
+        ):
+            counts["chunk_queries"] += 1
+
+    monkeypatch.setattr(store.documents, "read", read)
+    monkeypatch.setattr(importer, "_normalized_hours", normalize)
+    event.listen(store.documents.engine, "before_cursor_execute", query)
+    try:
+        receive_source(runtime, history, datetime(2026, 6, 1, tzinfo=UTC))
+    finally:
+        event.remove(store.documents.engine, "before_cursor_execute", query)
+    request.node.user_properties.append(("observed_import_counts", json.dumps(counts)))
+    assert runtime.histories == {"sensor.house": history}
+    assert counts == {"chunk_reads": 3, "chunk_queries": 9, "normalizations": 6}
+
+
 def test_consumer_import_resumes_without_activating_partial_years(tmp_path):
     """One meter completes all years before activation and restores its accepted cohort on restart."""
     from open_energy_planner.appliances.forecasting import ConsumerForecasts

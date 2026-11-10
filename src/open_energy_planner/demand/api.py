@@ -10,6 +10,7 @@ from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.demand.wire import parse_configuration as parse_demand_configuration
 from open_energy_planner.history.importer import HistoryContinuityError, parse_report
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
+from open_energy_planner.storage.writes import complete_write
 
 PUBLIC_VALIDATION_MESSAGES = (
     "Complete the Home Assistant Energy dashboard first",
@@ -46,6 +47,19 @@ def register(
             raise cancellation
         return result
 
+    def save_demand(candidate):
+        """Persist settings and restore their source cohort in the caller-locked off-loop writer."""
+        demand_store.save(candidate)
+        demand.configure(candidate)
+
+    def accept_history(body, pending, now, household):
+        """Parse and commit one admitted source while the async caller retains its owner lock."""
+        report = parse_report(body)
+        if household:
+            demand.receive(pending["version"], report, now)
+        else:
+            demand.consumers.receive(pending, report, now=now)
+
     async def configure_demand(request):
         """Persist changed AC definitions. Identical saves preserve learned models and history."""
         if live is None:
@@ -72,9 +86,7 @@ def register(
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Demand configuration changed. Reload before saving")
             if candidate.version != current:
-                await persist_then_install(
-                    demand_store.save, candidate, demand.configure, contract_input=False
-                )
+                await persist_then_install(save_demand, candidate, contract_input=False)
                 job = demand.job(datetime.now(UTC))
                 result = await build_demand(job)
                 demand.install(result, datetime.now(UTC))
@@ -106,11 +118,11 @@ def register(
                     demand.consumers.receive(pending, error=body["error"], now=now)
             else:
                 try:
-                    report = parse_report(body)
-                    if household_pending is not None:
-                        demand.receive(body["request_version"], report, now)
-                    else:
-                        demand.consumers.receive(pending, report, now=now)
+                    cancellation = await complete_write(
+                        accept_history, body, pending, now, household_pending is not None
+                    )
+                    if cancellation is not None:
+                        raise cancellation
                 except HistoryContinuityError:
                     if household_pending is not None:
                         demand.history_failed(pending, "history_continuity_unavailable", now)

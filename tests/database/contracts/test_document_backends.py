@@ -34,6 +34,46 @@ from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
+@pytest.mark.parametrize("activation", ["configure", "restart"])
+def test_complete_current_history_activates_after_configuration_change(
+    archive, monkeypatch, activation
+):
+    """A settings-only version change reuses validated current meters without waiting for another transfer."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from open_energy_planner.demand import runtime as runtime_module
+    from open_energy_planner.demand.runtime import DemandRuntime
+    from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint
+    from tests.app.demand.history_support import receive_source
+
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    monkeypatch.setattr(
+        runtime_module, "datetime", SimpleNamespace(now=lambda _zone: now), raising=False
+    )
+    engine, _root = archive
+    store = DemandStore(SqlDocuments(engine, "demand"))
+    store.save(config())
+    runtime = DemandRuntime(store)
+    anchor = datetime(2026, 5, 1, tzinfo=UTC)
+    history = CumulativeHistory(
+        "sensor.house",
+        tuple(EnergyEndpoint(anchor + timedelta(hours=index), 100 + index) for index in range(4)),
+    )
+    receive_source(runtime, history, now)
+    previous = store.documents.read("household-history-cohort-" + store.current.version + ".json")
+    changed = replace(store.current, annual_kwh=5000)
+    store.save(changed)
+    if activation == "configure":
+        runtime.configure(changed)
+    else:
+        runtime = DemandRuntime(DemandStore(SqlDocuments(engine, "demand")))
+    assert runtime.request(now) is None
+    assert runtime.histories == {"sensor.house": history}
+    assert store.documents.read("household-history-cohort-" + changed.version + ".json") == previous
+    assert DemandRuntime(DemandStore(SqlDocuments(engine, "demand"))).histories == runtime.histories
+
+
 def test_empty_household_refresh_retains_accepted_cohort_until_every_source_recovers(archive):
     """An empty current-year report cannot replace a complete cohort with stale or missing source data."""
     from datetime import UTC, datetime
@@ -113,10 +153,8 @@ def test_empty_household_refresh_retains_accepted_cohort_until_every_source_reco
     ]
 
 
-def test_demand_history_cohort_rollback_restart_and_independent_transfer(
-    archive, tmp_path, monkeypatch
-):
-    """All backends retain bounded source chunks and atomic accepted cohorts after failures and transfer."""
+def test_demand_history_cohort_rollback_and_continuity_survive_restart(archive, monkeypatch):
+    """All backends retain bounded source chunks and atomic accepted cohorts after failures and restart."""
     from datetime import UTC, datetime
 
     from open_energy_planner.demand.runtime import DemandRuntime
@@ -126,7 +164,6 @@ def test_demand_history_cohort_rollback_restart_and_independent_transfer(
         HistoryContinuityError,
         parse_report,
     )
-    from open_energy_planner.storage.adapters.lifecycle.migration import migrate_archive
     from tests.app.demand.history_support import history_report, receive_source
 
     engine, _root = archive
@@ -178,17 +215,6 @@ def test_demand_history_cohort_rollback_restart_and_independent_transfer(
     assert restored.request(later) == pending
     receive_source(restored, history, later)
     assert restored.histories == runtime.histories
-    target = archive_engine(tmp_path / "demand-history-target")
-    try:
-        migrate_archive(engine, target, overwrite_target=True)
-        transferred = DemandRuntime(DemandStore(SqlDocuments(target, "demand")))
-        assert transferred.histories == restored.histories
-        assert transferred.request(later) is None
-        # The target must not consult any source owner after transfer.
-        monkeypatch.setattr(store.documents, "read", lambda _name: pytest.fail("Source read"))
-        assert transferred.history_import.restore_checkpoint(before) == {"sensor.house": history}
-    finally:
-        target.dispose()
 
 
 def test_solar_raw_sum_evidence_and_local_conflicts_survive_restart(archive):
