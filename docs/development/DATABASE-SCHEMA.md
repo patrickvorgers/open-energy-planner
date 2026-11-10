@@ -912,12 +912,25 @@ new query shape or materially larger payload is introduced.
 ## Lifecycle and maintenance
 
 - One app instance shares an engine-owned reentrant lifecycle guard across plan
-  publication, document transactions, lazy context creation and background backfill.
-  The guard covers the complete transaction through commit or rollback, so collection
+  publication, document transactions, activity writes/retention/restart, settlement
+  writes, price-selection updates, lazy context creation and background backfill.
+  Price-selection schema and index initialization also use one guarded connection.
+  Initialization is acknowledged only after that transaction succeeds.
+  The guard starts before the first SQL and covers commit or rollback, so collection
   cannot delete a known block while publication is preparing its new references.
   Competing lazy readers and backfill writers cannot insert the same context twice.
   Existing context rows are read and hash-verified without taking the lifecycle
   guard. A lazy miss acquires the guard and rereads the row before any insertion.
+  Borrowed settlement connections retain the caller's complete transaction instead
+  of opening another. Ordinary reads and repeatable daily read snapshots do not
+  take the writer guard. Async callers execute guarded writes off the event loop.
+  A Contract save preserves its immutable revision and current pointer together
+  while waiting for another participating writer to finish. A failed save rolls
+  both back and leaves the in-memory current contract unchanged.
+  The guard coordinates one process and engine. It cannot serialize external
+  writers or multiple application processes. No retry layer or larger database
+  timeout is implied. Archive startup and unpublished migration-candidate checks
+  finish before ordinary runtime workers use their engine.
   SQL transactions preserve publication and
   result/checkpoint boundaries. SQLAlchemy does not make arbitrary concurrent app
   writers safe. SQLite uses WAL, full synchronization, enabled foreign keys and

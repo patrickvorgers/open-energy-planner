@@ -12,9 +12,12 @@ _engine_locks = WeakKeyDictionary()
 def lifecycle_transaction(engine):
     """Hold one reentrant engine guard until commit or rollback, including lazy context writes.
 
-    Plan publication, document-backed maintenance and context backfill must not
-    interleave existence checks with deletion or insertion. Independent engines
-    remain independent. Multiple writable app processes are not supported.
+    Plan publication, document stores, activity retention, settlement and price
+    selection must not interleave existence checks with another writer. The guard
+    starts before the first SQL and covers commit or rollback. Borrowed connections
+    remain owned by their caller and ordinary reads do not take this guard.
+    Independent engines remain independent. This guard cannot serialize another
+    process or external database writer. Multiple writable app processes are not supported.
     """
     with _registry_lock:
         guard = _engine_locks.get(engine)

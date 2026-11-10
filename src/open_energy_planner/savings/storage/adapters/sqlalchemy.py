@@ -19,6 +19,7 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
     SETTLEMENT_STATE,
 )
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import canonical, digest
+from open_energy_planner.storage.adapters.lifecycle.transactions import lifecycle_transaction
 from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
 
 MAX_DETAIL_INTERVALS = 96
@@ -48,7 +49,11 @@ def stamp(instant):
 
 
 class SettlementStore:
-    """Borrow the active engine. Never open another database or hide a storage failure."""
+    """Borrow the active engine and its writer guard. Never hide a storage failure.
+
+    Borrowed connections remain inside their caller's complete transaction.
+    Independent read snapshots do not acquire the writer guard.
+    """
 
     def __init__(self, engine):
         """Keep native connections inside the storage boundary."""
@@ -259,7 +264,7 @@ class SettlementStore:
         with (
             nullcontext(active_connection)
             if active_connection is not None
-            else self.engine.begin() as connection
+            else lifecycle_transaction(self.engine) as connection
         ):
             for frame in frames:
                 key, payload = (
@@ -364,7 +369,7 @@ class SettlementStore:
 
     def commit(self, revision, result, state):
         """Commit an interval and both scenarios' continuation together. Retries cannot double-count."""
-        with self.engine.begin() as connection:
+        with lifecycle_transaction(self.engine) as connection:
             current = self.published(
                 datetime.fromisoformat(result["start"]),
                 datetime.fromisoformat(result["end"]),

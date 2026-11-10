@@ -7,11 +7,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from .lifecycle.schema import ACTIVITIES
+from .lifecycle.transactions import lifecycle_transaction
 from .payloads import decode_payload, encode_payload
 
 
 class ActivityStore:
-    """One serialized writer borrows the active engine. Transfers include the shared table."""
+    """Borrow the active engine and share its complete writer guard. Transfers include the shared table."""
 
     def __init__(self, engine):
         """Keep connection ownership with the app."""
@@ -22,7 +23,7 @@ class ActivityStore:
         values = {key: row[key] for key in ("id", "started_at", "owner", "kind", "state")}
         values["payload"] = encode_payload(json.dumps(row, allow_nan=False))
         try:
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 connection.execute(
                     delete(ACTIVITIES).where(
                         ACTIVITIES.c.started_at < (now - timedelta(days=7)).isoformat()
@@ -68,7 +69,7 @@ class ActivityStore:
     def prune(self, now):
         """Expire idle installations too, without requiring a new execution or a UI read."""
         try:
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 connection.execute(
                     delete(ACTIVITIES).where(
                         ACTIVITIES.c.started_at < (now - timedelta(days=7)).isoformat()
@@ -98,7 +99,7 @@ class ActivityStore:
 
     def _restart(self, now):
         """A lost process cannot claim completion or failure for its unfinished work."""
-        with self.engine.begin() as connection:
+        with lifecycle_transaction(self.engine) as connection:
             connection.execute(
                 delete(ACTIVITIES).where(
                     ACTIVITIES.c.started_at < (now - timedelta(days=7)).isoformat()
