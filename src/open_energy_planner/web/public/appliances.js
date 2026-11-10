@@ -173,4 +173,5 @@ async function load() {
 find("profile-device").onchange = profile;
 find("refresh").onclick = load;
 find("connect").onsubmit = (event) => { event.preventDefault(); token = find("token").value; load(); };
+find("connect").querySelector("button").disabled = false;
 api("setup/session").then(session => { if (session.ingress) load(); }).catch(() => { find("status").textContent = "Session information could not be loaded. Refresh this page and try again."; });

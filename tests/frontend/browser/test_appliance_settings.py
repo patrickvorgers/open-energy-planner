@@ -16,6 +16,44 @@ from tests.frontend.browser.control_layout import assert_field_actions_aligned
 from tests.frontend.browser.helpers import TOKEN, assert_floating_save_bar, discover
 
 
+@pytest.mark.parametrize("action", ["click", "enter"])
+def test_appliance_connect_waits_for_module_initialization(app_page, action):
+    """Delayed initialization blocks native submission, then accepts clicks and Enter without navigation."""
+    page, url = app_page
+    held_modules, document_requests = [], []
+    page.on(
+        "request",
+        lambda request: (
+            document_requests.append(request.url) if request.resource_type == "document" else None
+        ),
+    )
+    page.route("**/setup/appliances.js", lambda route: held_modules.append(route))
+    with page.expect_request("**/setup/appliances.js"):
+        page.goto(url + "/appliances", wait_until="commit")
+    connect = page.get_by_role("button", name="Connect", exact=True)
+    token_field = page.get_by_label("Installation API token", exact=True)
+    try:
+        expect(connect).to_be_disabled()
+        token_field.fill(TOKEN)
+        token_field.press("Enter")
+        assert page.url == url + "/appliances"
+        assert document_requests == [url + "/appliances"]
+    finally:
+        for route in held_modules:
+            route.continue_()
+        page.unroute("**/setup/appliances.js")
+    expect(connect).to_be_enabled()
+    token_field.fill(TOKEN)
+    if action == "click":
+        connect.click()
+    else:
+        token_field.press("Enter")
+    expect(page.locator("#status")).to_contain_text("Connected")
+    assert page.url == url + "/appliances"
+    assert document_requests == [url + "/appliances"]
+    assert all(TOKEN not in request_url for request_url in document_requests)
+
+
 @pytest.mark.parametrize(
     "app_page",
     [{"width": 1280, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
