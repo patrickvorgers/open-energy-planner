@@ -89,12 +89,27 @@ PLANS = archive_table(
     Column("solution_status", String(IDENTITY_LENGTH), nullable=False),
 )
 Index("oep_plan_chronology", PLANS.c.generated_at, PLANS.c.plan_id)
+ARCHIVE_INCOMING_INDEXES = (
+    Index("oep_plan_record_reference", PLANS.c.record_ref),
+    Index("oep_part_record_reference", PARTS.c.record_ref),
+    Index("oep_part_value_reference", PARTS.c.value_ref),
+)
 STATE = archive_table(
     "oep_archive_state",
     Column("id", Integer, primary_key=True),
     Column("payload", Text().with_variant(LONGTEXT(), "mysql", "mariadb"), nullable=False),
     Column("plan_id", text_key(IDENTITY_LENGTH), ForeignKey(PLANS.c.plan_id)),
 )
+PLAN_CONTEXTS = archive_table(
+    "oep_plan_contexts",
+    Column("plan_id", text_key(IDENTITY_LENGTH), primary_key=True),
+    Column("generated_at", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("controls", Text().with_variant(LONGTEXT(), "mysql", "mariadb"), nullable=False),
+    Column("controls_hash", text_key(HASH_LENGTH), nullable=False),
+    Column("payload", Text().with_variant(LONGTEXT(), "mysql", "mariadb")),
+    Column("payload_hash", text_key(HASH_LENGTH)),
+)
+Index("oep_plan_context_chronology", PLAN_CONTEXTS.c.generated_at, PLAN_CONTEXTS.c.plan_id)
 
 
 def price_pair_columns():
@@ -185,6 +200,18 @@ ACTIVATIONS = archive_table(
     Column("enabled", Integer, nullable=False, server_default="1"),
     Column("context_hash", text_key(HASH_LENGTH), nullable=False, server_default=""),
 )
+ACTIVATION_CONTEXTS = archive_table(
+    "oep_activation_contexts",
+    Column(
+        "activated_at",
+        String(TIMESTAMP_LENGTH),
+        ForeignKey(ACTIVATIONS.c.activated_at),
+        primary_key=True,
+    ),
+    Column(
+        "plan_id", text_key(IDENTITY_LENGTH), ForeignKey(PLAN_CONTEXTS.c.plan_id), nullable=False
+    ),
+)
 SETTLEMENT_FRAMES = archive_table(
     "oep_settlement_frames",
     Column("start", String(TIMESTAMP_LENGTH), primary_key=True),
@@ -223,6 +250,42 @@ SETTLEMENT_STATE = archive_table(
     Column("revision", text_key(HASH_LENGTH), primary_key=True),
     Column("payload", Text().with_variant(LONGTEXT(), "mysql", "mariadb"), nullable=False),
 )
+SAVINGS_DAYS = archive_table(
+    "oep_savings_days",
+    Column("start", String(TIMESTAMP_LENGTH), primary_key=True),
+    Column("end", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("day", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("timezone", String(IDENTITY_LENGTH), nullable=False),
+    Column("currency", String(AREA_LENGTH), nullable=False),
+    Column("market_area", String(AREA_LENGTH), nullable=False),
+    Column("finalized_at", String(TIMESTAMP_LENGTH)),
+    Column("payload", Text().with_variant(LONGTEXT(), "mysql", "mariadb"), nullable=False),
+    Column("payload_hash", text_key(HASH_LENGTH), nullable=False),
+    *(
+        Column(f"{scenario}_{key}", Double)
+        for scenario in ("actual", "reference", "without_battery")
+        for key in (
+            "purchase",
+            "sale",
+            "bonus",
+            "grid_cash",
+            "wear",
+            "inventory_change",
+            "economic_cost",
+            "import_kwh",
+            "export_kwh",
+            "coverage_seconds",
+        )
+    ),
+    Column("savings", Double),
+    Column("avoided_import_kwh", Double),
+    Column("comparison_seconds", Double, nullable=False),
+    Column("battery_savings", Double),
+    Column("battery_comparison_seconds", Double, nullable=False),
+    Column("self_consumption_savings", Double),
+    Column("self_consumption_comparison_seconds", Double, nullable=False),
+)
+Index("oep_savings_day_finalization", SAVINGS_DAYS.c.finalized_at, SAVINGS_DAYS.c.start)
 PUBLISHED_PRICES = archive_table(
     "oep_published_prices",
     Column("area", String(AREA_LENGTH), primary_key=True),

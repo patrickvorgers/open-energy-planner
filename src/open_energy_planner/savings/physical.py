@@ -30,44 +30,60 @@ def transition(problem, frame, previous):
     Raises:
         ValueError: Measured battery energy exceeds its configured capacity.
     """
-    capacities = {battery.device_id: battery.battery.capacity_kwh for battery in problem.batteries}
+    reference, movements = {}, []
+    for scenario in ("actual", "reference"):
+        stored, changed = transition_scenario(problem, frame, previous, scenario)
+        movements.extend(changed)
+        if scenario == "reference":
+            reference = stored
+    return reference, movements
+
+
+def transition_scenario(problem, frame, previous, scenario):
+    """Track one scenario's hardware changes without requiring the other scenario's stock.
+
+    All stocks, capacities and signed movement quantities are kWh. ``previous``
+    contains actual_stored and capacities, plus reference_stored only when the
+    reference is requested. None initializes the explicitly common measured start.
+    The result is (remaining stock, external movements). Added/replaced capacity
+    receives only the measured introduced energy. Inputs remain unchanged.
+    """
+    capacities = {unit.device_id: unit.battery.capacity_kwh for unit in problem.batteries}
     for key, capacity in capacities.items():
         if max(frame.battery_start[key], frame.battery_end[key]) > capacity + ENERGY_TOLERANCE_KWH:
             raise ValueError("Measured battery energy exceeds capacity")
     if previous is None:
         return dict(frame.battery_start), []
-    reference, movements = {}, []
-    for scenario in ("actual", "reference"):
-        old = previous["actual_stored"] if scenario == "actual" else previous["reference_stored"]
-        for key in old.keys() | capacities.keys():
-            before = old.get(key, 0)
-            if key not in capacities:
-                after = 0
-            elif key not in old:
-                after = frame.battery_start[key]
-            elif capacities[key] != previous["capacities"][key]:
-                introduced = frame.battery_start[key] - min(
-                    previous["actual_stored"][key], capacities[key]
-                )
-                after = min(capacities[key], max(0, min(before, capacities[key]) + introduced))
-            else:
-                after = before
-            delta = after - before
-            if scenario == "reference" and key in capacities:
-                reference[key] = after
-            if delta:
-                movements.append(
-                    {
-                        "device_id": key,
-                        "scenario": scenario,
-                        "kwh": delta,
-                        "before": before,
-                        "after": after,
-                        "acquisition_cost": 0,
-                        "reason": "installation_change",
-                    }
-                )
-    return reference, movements
+    old = previous["actual_stored"] if scenario == "actual" else previous["reference_stored"]
+    stored, movements = {}, []
+    for key in old.keys() | capacities.keys():
+        before = old.get(key, 0)
+        if key not in capacities:
+            after = 0
+        elif key not in old:
+            after = frame.battery_start[key]
+        elif capacities[key] != previous["capacities"][key]:
+            introduced = frame.battery_start[key] - min(
+                previous["actual_stored"][key], capacities[key]
+            )
+            after = min(capacities[key], max(0, min(before, capacities[key]) + introduced))
+        else:
+            after = before
+        if key in capacities:
+            stored[key] = after
+        if after != before:
+            movements.append(
+                {
+                    "device_id": key,
+                    "scenario": scenario,
+                    "kwh": after - before,
+                    "before": before,
+                    "after": after,
+                    "acquisition_cost": 0,
+                    "reason": "installation_change",
+                }
+            )
+    return stored, movements
 
 
 def advance(problem, frame, bindings, previous):
@@ -95,6 +111,33 @@ def advance(problem, frame, bindings, previous):
             or dispatch breaches a physical grid limit. Callers retain the last
             valid checkpoint when handling these failures.
     """
+    step, estimated_pv = measured_step(problem, frame, bindings)
+    if previous and previous["end"] != frame.start.isoformat():
+        raise ValueError("Reference continuity requires the missing interval first")
+    reference_stored, movements = transition(problem, frame, previous)
+    reference = dispatch(problem, step, reference_stored)
+    return {
+        "reference": reference,
+        "reference_start": reference_stored,
+        "movements": movements,
+        "load_kwh": step.load_kwh,
+        "estimated_pv": estimated_pv,
+        "state": {
+            "end": frame.end.isoformat(),
+            "reference_stored": reference["stored"],
+            "actual_stored": frame.battery_end,
+            "capacities": {unit.device_id: unit.battery.capacity_kwh for unit in problem.batteries},
+        },
+    }
+
+
+def measured_step(problem, frame, bindings):
+    """Resolve measured demand and available PV independently of a reference battery's state.
+
+    Meter channels are AC kWh. Source energy in the returned interval is DC kWh.
+    Original forecasts may only supply explicitly labelled unavailable/curtailed
+    PV potential, never replace measured household load or grid imports.
+    """
     channels = frame.channels
     required = (
         {energy_term["entity_id"] for energy_term in bindings["terms"]}
@@ -114,9 +157,6 @@ def advance(problem, frame, bindings, previous):
     ids = {battery.device_id for battery in problem.batteries}
     if set(frame.battery_start) != ids or set(frame.battery_end) != ids:
         raise ValueError("Battery endpoint coverage is missing")
-    if previous and previous["end"] != frame.start.isoformat():
-        raise ValueError("Reference continuity requires the missing interval first")
-    reference_stored, movements = transition(problem, frame, previous)
     pv = []
     estimated_pv = False
     inverters = {inverter.inverter_id: inverter for inverter in problem.inverters}
@@ -163,17 +203,4 @@ def advance(problem, frame, bindings, previous):
         fsum(value for _, value in pv),
         pv_sources=tuple(pv),
     )
-    reference = dispatch(problem, step, reference_stored)
-    return {
-        "reference": reference,
-        "reference_start": reference_stored,
-        "movements": movements,
-        "load_kwh": load,
-        "estimated_pv": estimated_pv,
-        "state": {
-            "end": frame.end.isoformat(),
-            "reference_stored": reference["stored"],
-            "actual_stored": frame.battery_end,
-            "capacities": {unit.device_id: unit.battery.capacity_kwh for unit in problem.batteries},
-        },
-    }
+    return step, estimated_pv

@@ -83,20 +83,22 @@ def corrupt_document(directory, namespace, name, raw_payload):
 
 
 def read_document(directory, namespace, name):
-    """Read exact persisted text so immutable evidence tests do not depend on filesystem layout."""
+    """Read exact decoded JSON text so immutable evidence assertions remain independent of lossless storage encoding."""
     from sqlalchemy import select
 
     from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENTS
+    from open_energy_planner.storage.adapters.payloads import decode_payload
 
     with (
         closing(SqlPlanRepository(directory)) as archive,
         archive.engine.connect() as connection,
     ):
-        return connection.scalar(
+        payload = connection.scalar(
             select(DOCUMENTS.c.payload).where(
                 DOCUMENTS.c.namespace == namespace, DOCUMENTS.c.name == name
             )
         )
+        return decode_payload(payload) if payload is not None else None
 
 
 def make_store(directory, store_type):

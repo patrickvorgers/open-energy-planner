@@ -80,6 +80,39 @@ def test_backend_exact_reconstruction_reuse_and_restart(archive):
         assert connection.scalar(select(func.count()).select_from(PLANS)) == 2
 
 
+def test_backend_compression_preserves_original_hash_and_shared_blocks(archive):
+    """Large unchanged arrays share their original identity despite compressed physical storage on every backend."""
+    from hashlib import sha256
+
+    repository, engine, root = archive
+    original = plan()
+    intervals = [{"start": "2026-10-22T10:00:00Z", "kwh": 0.30000000000000004}] * 300
+    original["input_snapshot"]["problem"]["intervals"] = intervals
+    repository.state["plan"] = original
+    repository.save()
+    serialized = json.dumps(intervals, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    expected_digest = sha256(serialized.encode()).hexdigest()
+    with engine.connect() as connection:
+        encoded = connection.scalar(
+            select(VALUES.c.payload).where(VALUES.c.digest == expected_digest)
+        )
+        assert encoded.startswith("oep:gzip:1:")
+        assert len(encoded) < len(serialized) / 4
+    second = {**original, "plan_id": "compressed-second"}
+    repository.state["plan"] = second
+    repository.save()
+    reopened = SqlPlanRepository(root, engine=engine)
+    assert reopened.get_plan(original["plan_id"]) == original
+    assert reopened.get_plan(second["plan_id"]) == second
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                select(func.count()).select_from(VALUES).where(VALUES.c.digest == expected_digest)
+            )
+            == 1
+        )
+
+
 def test_backend_control_projection_skips_full_plans_and_reuses_shared_blocks(archive, monkeypatch):
     """One indexed query reads original controls across plans without reconstructing solver inputs."""
     repository, engine, _root = archive
