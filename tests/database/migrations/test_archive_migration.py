@@ -56,13 +56,20 @@ def test_solar_feedback_transfers_without_its_original_database(route):
     )
     accepted = save_feedback(store, None, feedback, START - timedelta(hours=1))
     reference = archive_feedback(store, accepted)
-    original_documents = list(store.documents.iter_prefix("curtailment-"))
+
+    def feedback_documents(documents):
+        """Compare complete feedback payloads without relying on database row order."""
+        return sorted(
+            json.dumps(row, sort_keys=True) for row in documents.iter_prefix("curtailment-")
+        )
+
+    original_documents = feedback_documents(store.documents)
     migrate_archive(source, target, overwrite_target=True)
     original.close()
     source.dispose()
     restored = SolarStore(SqlDocuments(target, "solar"))
     assert restored.current == configuration
-    assert list(restored.documents.iter_prefix("curtailment-")) == original_documents
+    assert feedback_documents(restored.documents) == original_documents
     accepted = load_feedback(
         restored.documents, "binary_sensor.curtailed", START + timedelta(hours=4)
     )

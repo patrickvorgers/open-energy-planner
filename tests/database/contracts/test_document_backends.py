@@ -91,6 +91,10 @@ def test_solar_feedback_receipts_reuse_segments_and_survive_restart(archive, mon
     )
     with pytest.raises(OSError):
         save_feedback(store, accepted, next_read, following.checked_until)
+    assert sorted(
+        json.dumps(segment, sort_keys=True)
+        for segment in store.documents.iter_prefix("curtailment-segment-")
+    ) == sorted(json.dumps(segment, sort_keys=True) for segment in blocks)
     assert (
         load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=4))
         == accepted

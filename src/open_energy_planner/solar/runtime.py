@@ -175,7 +175,14 @@ class SolarRuntime:
         self.feedback_revision += 1
 
     def read_feedback(self, entities, now):
-        """Read selected archives outside status rendering and sanitize/deduplicate failures per source."""
+        """Read archives without installing feedback and return restored histories and issues.
+
+        Startup calls this before publication. Configuration calls it in the storage
+        worker with the caller's application lock held. Background retries use a
+        worker without that lock. Only per-source feedback_logs are created or
+        updated here. self.feedback is never changed. Expected read errors become
+        sanitized issues and deduplicated logs instead of propagating.
+        """
         restored, issues = {}, {}
         for entity in entities:
             log = self.feedback_logs.setdefault(
@@ -259,7 +266,18 @@ class SolarRuntime:
         return requests
 
     def receive_feedback(self, body, now):
-        """Persist a current sensor-bound response before invalidating fitted and admission evidence."""
+        """Persist sensor-bound feedback with the caller's application lock held.
+
+        The API delegates this call to its cancellation-safe storage worker.
+        save_feedback commits before self.feedback changes. A revision change
+        invalidates learning, source selection and the forecast. Storage failures
+        propagate without installing the rejected response.
+
+        Raises:
+            FeedbackRequestError: The response is invalid or its request is stale.
+            RuntimeError: The sensor's retained feedback archive is unreadable.
+            ValueError: The persisted pointer no longer matches the request.
+        """
         try:
             if not isinstance(body, dict) or set(body) != {
                 "configuration_version",
