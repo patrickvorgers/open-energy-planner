@@ -19,6 +19,124 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
 
 
+@pytest.mark.parametrize("missing", ["contract", "location"])
+def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_recovery(
+    settlement, monkeypatch, caplog, missing
+):
+    """The worker exposes a missing prerequisite through HTTP/attention, preserves sealed .60 costs, and resumes only after configuration returns."""
+    import asyncio
+    import logging
+    from types import SimpleNamespace
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from open_energy_planner.savings import api as savings_api
+
+    runtime, store, docs, _engine, plans = settlement
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", contract(), None, END + timedelta(days=5), START, None
+    )
+    report["finalized_at"] = (END + timedelta(days=5)).isoformat()
+    store.put_day(report, docs, datetime.now(UTC).date().isoformat())
+    sealed, progress = store.day(finalized=True), docs.read("daily-progress.json")
+    selected = SimpleNamespace(current=None if missing == "contract" else contract())
+    location = SimpleNamespace(value=None if missing == "location" else SiteLocation(52, 6, "UTC"))
+    maintenance = []
+    monkeypatch.setattr(savings_api, "SAVINGS_WORKER_SECONDS", 0.01)
+    monkeypatch.setattr(savings_api, "thin", lambda *_arguments: maintenance.append("thin"))
+    monkeypatch.setattr(
+        savings_api, "recompress", lambda *_arguments: maintenance.append("compress")
+    )
+    expected = (
+        "Contract configuration is required for settlement"
+        if missing == "contract"
+        else "Installation location is required for settlement. Configure the location under Installation"
+    )
+
+    async def observe():
+        """Run the actual worker and existing financial HTTP projection."""
+        app = web.Application()
+        _, worker, _ = savings_api.register(
+            app,
+            plans,
+            selected,
+            SimpleNamespace(current=None),
+            SimpleNamespace(current=None),
+            SimpleNamespace(configuration=None),
+            SimpleNamespace(configuration=None),
+            asyncio.Lock(),
+            SimpleNamespace(value=None),
+            lambda: location.value,
+            mutation_lock=asyncio.Lock(),
+        )
+        async with TestClient(TestServer(app)) as client:
+            async with asyncio.timeout(5):
+                while worker.issue is None and not maintenance:
+                    await asyncio.sleep(0.01)
+            assert worker.issue == expected
+            assert worker.attention is True
+            assert maintenance == []
+            assert docs.read("daily-progress.json") == progress
+            data = await (
+                await client.get(
+                    "/v1/savings",
+                    params={
+                        "start": "2026-10-22T00:00:00+00:00",
+                        "end": "2026-10-23T00:00:00+00:00",
+                    },
+                )
+            ).json()
+            assert data["issue"] == expected
+            assert data["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+            assert not any(
+                "processing is running" in record.getMessage() for record in caplog.records
+            )
+            selected.current, location.value = contract(), SiteLocation(52, 6, "UTC")
+            async with asyncio.timeout(5):
+                while worker.issue is not None or not maintenance:
+                    await asyncio.sleep(0.01)
+            assert worker.attention is False
+            assert store.day(finalized=True) == sealed
+            data = await (
+                await client.get(
+                    "/v1/savings",
+                    params={
+                        "start": "2026-10-22T00:00:00+00:00",
+                        "end": "2026-10-23T00:00:00+00:00",
+                    },
+                )
+            ).json()
+            assert data["issue"] is None
+            assert data["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+
+    with caplog.at_level(logging.INFO, logger="open_energy_planner.savings"):
+        asyncio.run(observe())
+    assert not any(record.exc_info for record in caplog.records)
+
+
+def test_prerequisite_recovery_does_not_clear_an_unrelated_issue_before_a_day_can_run(settlement):
+    """Only the worker's own prerequisite issue can be cleared by prerequisite restoration."""
+    from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATION_CONTEXTS
+
+    runtime, _store, _docs, engine, _plans = settlement
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(ACTIVATION_CONTEXTS.delete())
+        connection.execute(ACTIVATIONS.delete())
+        connection.execute(
+            ACTIVATIONS.insert().values(activated_at=stamp(now), plan_id="original-plan")
+        )
+    runtime.issue, runtime.attention = "An unrelated retained warning", True
+    assert DailySavings(runtime).process(contract(), None, now, SiteLocation(52, 6, "UTC")) is None
+    assert runtime.issue == "An unrelated retained warning"
+    assert runtime.attention is True
+    with engine.begin() as connection:
+        connection.execute(ACTIVATIONS.delete())
+    assert DailySavings(runtime).process(None, None, now, None) is None
+    assert runtime.issue == "An unrelated retained warning"
+
+
 @pytest.mark.parametrize("damage", ["expired", "hash"])
 def test_daily_context_cache_cannot_hide_later_missing_or_corrupt_evidence(settlement, damage):
     """A new replay must reject newly corrupt evidence or mark expired context unavailable, never reuse last replay's .60 cost."""

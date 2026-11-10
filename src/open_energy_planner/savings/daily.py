@@ -41,6 +41,22 @@ MISSING_CONTEXT = "The historical installation context is unavailable."
 MISSING_ACCOUNT = "Required prices, counters or physical evidence are unavailable."
 UNKNOWN_REFERENCE = "Earlier missing evidence prevents a continuous battery or bonus comparison. No state was reset."
 TIMEZONE_PAUSE_MESSAGE = "Historical savings are paused because the Home Assistant timezone changed. Restore the original Home Assistant timezone to resume. Existing daily results are retained."
+CONTRACT_PREREQUISITE_MESSAGE = "Contract configuration is required for settlement"
+LOCATION_PREREQUISITE_MESSAGE = (
+    "Installation location is required for settlement. Configure the location under Installation"
+)
+PREREQUISITE_MESSAGES = (CONTRACT_PREREQUISITE_MESSAGE, LOCATION_PREREQUISITE_MESSAGE)
+
+
+class SavingsPrerequisiteMissing(ValueError):
+    """Pause daily work with owned configuration guidance instead of reporting successful idle processing."""
+
+    def __init__(self, *, contract_missing):
+        """Select only a fixed owned message. Arbitrary exception values never become public guidance."""
+        self.issue = (
+            CONTRACT_PREREQUISITE_MESSAGE if contract_missing else LOCATION_PREREQUISITE_MESSAGE
+        )
+        super().__init__(self.issue)
 
 
 class SavingsTimezoneChanged(ValueError):
@@ -161,8 +177,10 @@ class DailySavings:
     def process(self, contract, book, now, location):
         """Revisit provisional days chronologically, then seal due days before any retention is allowed."""
         first = self.store.first_activation()
-        if first is None or contract is None or location is None:
+        if first is None:
             return None
+        if contract is None or location is None:
+            raise SavingsPrerequisiteMissing(contract_missing=contract is None)
         timezone = location.timezone
         zone = ZoneInfo(timezone)
         today = now.astimezone(zone).date()
@@ -174,7 +192,10 @@ class DailySavings:
         if progress and progress["timezone"] != timezone:
             # Historical calendar identities cannot be silently reassigned to another day.
             raise SavingsTimezoneChanged
-        if self.runtime.issue == TIMEZONE_PAUSE_MESSAGE:
+        if (
+            self.runtime.issue == TIMEZONE_PAUSE_MESSAGE
+            or self.runtime.issue in PREREQUISITE_MESSAGES
+        ):
             self.runtime.issue, self.runtime.attention = None, False
         if not self.documents.exists("daily-upgrade.json"):
             self.documents.write(
@@ -437,9 +458,14 @@ class DailySavings:
                         if context["seeds"]
                         else ()
                     )
-                    seeds = self.runtime.bonus.prepare(
-                        contract, frame, bindings, seeds, book, now, version(bindings), state
-                    )
+                    try:
+                        seeds = self.runtime.bonus.prepare(
+                            contract, frame, bindings, seeds, book, now, version(bindings), state
+                        )
+                    except PendingSettlement as error:
+                        self._problem(error)
+                        # Known scenario usage can continue. Unvalidated openings cannot seed it.
+                        seeds = ()
                     for seed in seeds:
                         seed_record = json.loads(
                             json.dumps(asdict(seed), default=lambda value: value.isoformat())

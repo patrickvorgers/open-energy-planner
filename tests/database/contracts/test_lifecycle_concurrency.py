@@ -8,6 +8,7 @@ from threading import Event, current_thread
 import pytest
 from sqlalchemy import event, select
 
+from open_energy_planner.storage.adapters.lifecycle import transactions
 from open_energy_planner.storage.adapters.lifecycle.retention import thin
 from open_energy_planner.storage.adapters.lifecycle.schema import (
     ACTIVATION_CONTEXTS,
@@ -23,7 +24,57 @@ from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import (
 from tests.app.savings.support.scenarios import START
 
 
-def test_publication_cannot_lose_a_known_leaf_to_concurrent_collection(settlement):
+class GuardProbe:
+    """Observe real guard contention without changing the production synchronization contract."""
+
+    def __init__(self, guard, contender, *, reject=False):
+        """Wrap the existing engine guard and identify only the competing worker."""
+        self.guard, self.contender, self.reject = guard, contender, reject
+        self.attempted, self.blocked = Event(), Event()
+
+    def __enter__(self):
+        """Signal actual acquisition failure before performing the real blocking acquire."""
+        contender = current_thread().name.startswith(self.contender)
+        if contender:
+            self.attempted.set()
+        if not self.guard.acquire(blocking=False):
+            if contender:
+                self.blocked.set()
+                if self.reject:
+                    raise AssertionError(
+                        "An existing context reader attempted the held lifecycle guard"
+                    )
+            self.guard.acquire()
+        return self
+
+    def __exit__(self, *_exception):
+        """Release the same real guard after the complete transaction exits."""
+        self.guard.release()
+
+
+def observe_guard(engine, monkeypatch, contender, *, reject=False):
+    """Install a test-only proxy around the existing engine's actual RLock."""
+    with transactions._registry_lock:
+        probe = GuardProbe(transactions._engine_locks[engine], contender, reject=reject)
+        monkeypatch.setitem(transactions._engine_locks, engine, probe)
+    return probe
+
+
+def test_present_context_reads_do_not_wait_for_unrelated_lifecycle_writes(settlement, monkeypatch):
+    """A verified existing context remains readable while another full lifecycle transaction holds the engine guard."""
+    _runtime, _store, _documents, engine, plans = settlement
+    expected = plans.get_context("original-plan")
+    probe = observe_guard(engine, monkeypatch, "context-reader", reject=True)
+    with (
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="context-reader") as readers,
+        transactions.lifecycle_transaction(engine),
+    ):
+        result = readers.submit(plans.get_context, "original-plan").result(timeout=10)
+        assert result == expected
+        assert not probe.attempted.is_set()
+
+
+def test_publication_cannot_lose_a_known_leaf_to_concurrent_collection(settlement, monkeypatch):
     """A collector competing after the publisher reads a known orphan cannot delete its new reference."""
     _runtime, _store, documents, engine, plans = settlement
     original = plans.get_plan("original-plan")
@@ -44,6 +95,7 @@ def test_publication_cannot_lose_a_known_leaf_to_concurrent_collection(settlemen
     with engine.begin() as connection:
         connection.execute(VALUES.insert().values(digest=digest(leaf), payload=canonical(leaf)))
     documents.write("retention.json", {"garbage_pending": True})
+    probe = observe_guard(engine, monkeypatch, "collector")
     read_known, release_publication, collector_started, collector_finished = (
         Event(),
         Event(),
@@ -79,16 +131,17 @@ def test_publication_cannot_lose_a_known_leaf_to_concurrent_collection(settlemen
     try:
         with (
             ThreadPoolExecutor(max_workers=1, thread_name_prefix="publication") as publishers,
-            ThreadPoolExecutor(max_workers=1) as collectors,
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="collector") as collectors,
         ):
             publication = publishers.submit(publish)
             try:
                 assert read_known.wait(10)
                 collection = collectors.submit(collect)
                 assert collector_started.wait(10)
-                # A serialized collector cannot finish until publication commits.
-                # This bounded event wait also lets the unguarded regression commit its deletion.
-                collector_finished.wait(1)
+                assert probe.attempted.wait(10)
+                assert probe.blocked.wait(10)
+                assert not collector_finished.is_set()
+                assert not release_publication.is_set()
             finally:
                 release_publication.set()
             try:
@@ -110,7 +163,7 @@ def test_publication_cannot_lose_a_known_leaf_to_concurrent_collection(settlemen
         ) == canonical(leaf)
 
 
-def test_lazy_context_and_backfill_commit_one_verified_context(settlement):
+def test_lazy_context_and_backfill_commit_one_verified_context(settlement, monkeypatch):
     """A lazy overview read and background backfill cannot both insert the same old plan context."""
     _runtime, _store, _documents, engine, plans = settlement
     reader = SqlPlanRepository(".", engine=engine)
@@ -125,6 +178,7 @@ def test_lazy_context_and_backfill_commit_one_verified_context(settlement):
     with engine.begin() as connection:
         connection.execute(ACTIVATION_CONTEXTS.delete())
         connection.execute(PLAN_CONTEXTS.delete())
+    probe = observe_guard(engine, monkeypatch, "backfill")
     missing_context, release_reader, backfill_started, backfill_finished = (
         Event(),
         Event(),
@@ -153,14 +207,17 @@ def test_lazy_context_and_backfill_commit_one_verified_context(settlement):
     try:
         with (
             ThreadPoolExecutor(max_workers=1, thread_name_prefix="lazy-reader") as readers,
-            ThreadPoolExecutor(max_workers=1) as writers,
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="backfill") as writers,
         ):
             lazy = readers.submit(reader.get_context, "original-plan")
             try:
                 assert missing_context.wait(10)
                 preserved = writers.submit(backfill)
                 assert backfill_started.wait(10)
-                backfill_finished.wait(1)
+                assert probe.attempted.wait(10)
+                assert probe.blocked.wait(10)
+                assert not backfill_finished.is_set()
+                assert not release_reader.is_set()
             finally:
                 release_reader.set()
             try:

@@ -916,6 +916,8 @@ new query shape or materially larger payload is introduced.
   The guard covers the complete transaction through commit or rollback, so collection
   cannot delete a known block while publication is preparing its new references.
   Competing lazy readers and backfill writers cannot insert the same context twice.
+  Existing context rows are read and hash-verified without taking the lifecycle
+  guard. A lazy miss acquires the guard and rereads the row before any insertion.
   SQL transactions preserve publication and
   result/checkpoint boundaries. SQLAlchemy does not make arbitrary concurrent app
   writers safe. SQLite uses WAL, full synchronization, enabled foreign keys and

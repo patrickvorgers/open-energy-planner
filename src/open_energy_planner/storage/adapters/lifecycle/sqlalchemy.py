@@ -479,26 +479,25 @@ class SqlPlanRepository:
     def get_context(self, plan_id):
         """Read a hash-verified historical calculation projection without presenting it as an original plan."""
         try:
-            with lifecycle_transaction(self.engine) as connection:
-                row = (
-                    connection.execute(
-                        select(PLAN_CONTEXTS).where(PLAN_CONTEXTS.c.plan_id == plan_id)
-                    )
-                    .mappings()
-                    .first()
-                )
-                if row is None:
-                    plan = self._read_plan(connection, plan_id)
-                    if plan is None:
-                        return None
-                    self._write_context(connection, plan)
-                    return historical_context(plan)
-                if row["payload"] is None:
-                    return None
-                context = json.loads(decode_payload(row["payload"]))
-                if digest(context) != row["payload_hash"]:
-                    raise ValueError("Historical calculation context hash mismatch")
-                return context
+            query = select(PLAN_CONTEXTS).where(PLAN_CONTEXTS.c.plan_id == plan_id)
+            with self.engine.connect() as connection:
+                row = connection.execute(query).mappings().first()
+            if row is None:
+                with lifecycle_transaction(self.engine) as connection:
+                    # A competing lazy reader or backfill may have created it while we waited.
+                    row = connection.execute(query).mappings().first()
+                    if row is None:
+                        plan = self._read_plan(connection, plan_id)
+                        if plan is None:
+                            return None
+                        self._write_context(connection, plan)
+                        return historical_context(plan)
+            if row["payload"] is None:
+                return None
+            context = json.loads(decode_payload(row["payload"]))
+            if digest(context) != row["payload_hash"]:
+                raise ValueError("Historical calculation context hash mismatch")
+            return context
         except SQLAlchemyError:
             raise OSError("Historical calculation archive unavailable") from None
 

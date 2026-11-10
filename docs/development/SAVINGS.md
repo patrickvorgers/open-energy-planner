@@ -251,6 +251,11 @@ and active advice. Every distinct plan is decoded at most once during that repla
 The next replay reads fresh hash-verified context. Missing or corrupt evidence remains
 unavailable rather than falling back to a previous replay's cached values.
 
+An activated installation with no contract or location exposes an owned prerequisite
+issue requiring attention. Daily work and maintenance remain paused while stored
+results are readable. Restoring the prerequisite clears only that owned prerequisite
+issue. Before the first plan activation, no historical-work warning is generated.
+
 The current local day is excluded. For day D, recovery covers the three complete
 dates D+1, D+2 and D+3. Closure is at local midnight D+4, calculated with
 `core/calendar.day_window`, rather than 72 elapsed hours across DST. Earlier
@@ -336,6 +341,14 @@ share actual opening evidence only at the original common start. A genuine reset
 can establish a new period, but a later backdated rule cannot borrow actual usage.
 Actual hardware inventory changes are accounted independently of reference stock.
 Valuation preserves the physical movement evidence retained in the daily report.
+
+A pending historical bonus opening does not erase already established scenario
+usage. The daily evaluator handles only this expected evidence wait locally and
+passes no unvalidated opening seeds to billing. Actual and without-battery accounts
+can continue from their own known counters while another comparison remains unknown.
+Unknown openings stay unknown. A later actual confirmation cannot establish earlier
+simulated usage. Complete measurement continuity, the original shared start or a
+genuine reset is still required. No offset or new checkpoint format is introduced.
 
 Archive maintenance failures have separate sanitized, deduplicated diagnostics
 and recovery messages. They do not mark successful financial processing as failed.

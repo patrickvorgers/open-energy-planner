@@ -22,7 +22,12 @@ from open_energy_planner.runtime.diagnostics.logging import (
 from ..storage.adapters.documents import SqlDocuments
 from ..storage.adapters.lifecycle.retention import recompress, thin
 from ..storage.writes import complete_write
-from .daily import TIMEZONE_PAUSE_MESSAGE, DailySavings, SavingsTimezoneChanged
+from .daily import (
+    TIMEZONE_PAUSE_MESSAGE,
+    DailySavings,
+    SavingsPrerequisiteMissing,
+    SavingsTimezoneChanged,
+)
 from .evidence import evidence
 from .forecast import comparison
 from .repricing import PlanValuations
@@ -421,6 +426,11 @@ def register(
                     settlement_logger.success(
                         "Measured settlement processing is running independently of planning."
                     )
+            except SavingsPrerequisiteMissing as error:
+                runtime.issue, runtime.attention = error.issue, True
+                if last_state != (runtime.issue, runtime.attention):
+                    _LOGGER.warning("Settlement needs attention: %s", runtime.issue)
+                last_state = runtime.issue, runtime.attention
             except SavingsTimezoneChanged:
                 runtime.issue, runtime.attention = TIMEZONE_PAUSE_MESSAGE, True
                 if last_state != (runtime.issue, runtime.attention):
