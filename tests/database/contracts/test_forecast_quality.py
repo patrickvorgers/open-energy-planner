@@ -652,6 +652,90 @@ def frozen_plan(archive):
     return plan, solar
 
 
+@pytest.mark.parametrize("guard", ["none", "hybrid", "shared", "clipping", "late"])
+def test_solar_feedback_excludes_only_affected_plan_hours_and_alternatives(archive, guard):
+    """Only two checked unrestricted hours score. Their original/alternative MAEs are independently 1/.5 kWh."""
+    from open_energy_planner.solar.curtailment import CurtailmentHistory, save_feedback
+    from open_energy_planner.solar.storage import SolarStore
+
+    plan, solar = frozen_plan(archive)
+    definition = solar.read("configuration-solar-definition.json")
+    definition["sources"][0]["curtailment_entity_id"] = "binary_sensor.roof"
+    definition["sources"][0].update(capacity_w=5000, orientation="south")
+    if guard == "hybrid":
+        definition["inverters"][0]["hybrid"] = True
+    if guard == "shared":
+        definition["sources"].append(
+            {**definition["sources"][0], "source_id": "roof2", "entity_id": "sensor.other_pv"}
+        )
+    solar.write("configuration-solar-definition.json", definition)
+    original = solar.read("forecast-pv-original.json")["forecast"]
+    original["configuration_version"] = "solar-definition"
+    if guard == "late":
+        original["issued_at"] = (START + timedelta(minutes=30)).isoformat()
+    original["energies"] = [
+        {
+            "source_id": "roof",
+            "start": (START + timedelta(hours=index)).isoformat(),
+            "duration_h": 1,
+            "ac_kwh": 2,
+            "dc_kwh": 2.1,
+        }
+        for index in range(5)
+    ]
+    solar.write("forecast-pv-original.json", {"forecast": original})
+    alternative = {
+        **original,
+        "version": "pv-alternative",
+        "model": "solar-xgboost-production-v2",
+        "energies": [{**row, "ac_kwh": 1.5} for row in original["energies"]],
+    }
+    solar.write("forecast-pv-alternative.json", {"forecast": alternative})
+    solar.write("quality-candidates-pv-original.json", {"forecasts": ["pv-alternative"]})
+    plan["input_snapshot"]["problem"]["intervals"] = [
+        {"start": row["start"], "duration_h": 1} for row in original["energies"]
+    ]
+    pv = next(
+        source for source in plan["forecast_quality_sources"] if source["entity_id"] == "sensor.pv"
+    )
+    values = (
+        [(-1, 10), (0, 11), (1, 12), (2, 17), (3, 18), (4, 19)]
+        if guard == "clipping"
+        else [(-1, 10)] + [(index, 11 + index) for index in range(5)]
+    )
+    receipt(
+        archive,
+        values,
+        source=pv,
+        now=START + timedelta(hours=6),
+    )
+    save_feedback(
+        SolarStore(solar),
+        None,
+        CurtailmentHistory(
+            "binary_sensor.roof",
+            START + timedelta(hours=4),
+            (
+                (START, False),
+                (START + timedelta(hours=1), True),
+                (START + timedelta(hours=2), False),
+                (START + timedelta(hours=3), None),
+            ),
+        ),
+        START - timedelta(hours=1),
+    )
+    result = evidence(plan, archive, archive.documents, solar, START + timedelta(hours=6))
+    source = next(row for row in result["series"] if row["scope"] == "solar")
+    for row, expected_mae in [(source, 1), (source["alternatives"][0], 0.5)]:
+        eligible = {"none": [0, 2], "hybrid": [], "shared": [], "clipping": [0], "late": [2]}[guard]
+        assert row["coverage"] == {"hours": 5, "measured_hours": 5, "paired_hours": len(eligible)}
+        assert row["metrics"]["mae_kwh"] == (expected_mae if eligible else None)
+        assert [hour["error_kwh"] for hour in row["rows"]] == [
+            expected_mae if index in eligible else None for index in range(5)
+        ]
+        assert all(row["rows"][index]["evaluation_issue"] for index in (1, 3, 4))
+
+
 @pytest.mark.parametrize("partial_components", [False, True])
 def test_frozen_household_device_and_pv_evidence_survives_restart_without_hindsight(
     archive, partial_components
@@ -844,7 +928,23 @@ def test_pv_physical_boundaries_withhold_accuracy_but_keep_measured_values(archi
     elif boundary == "shared":
         definition["sources"].append({**definition["sources"][0], "source_id": "garage"})
     elif boundary == "curtailed":
-        definition["sources"][0]["can_curtail"] = True
+        from open_energy_planner.solar.curtailment import CurtailmentHistory, save_feedback
+        from open_energy_planner.solar.storage import SolarStore
+
+        definition["sources"][0].update(
+            can_curtail=True,
+            curtailment_entity_id="binary_sensor.confirmed",
+            capacity_w=5000,
+            orientation="south",
+        )
+        save_feedback(
+            SolarStore(solar),
+            None,
+            CurtailmentHistory(
+                "binary_sensor.confirmed", START + timedelta(hours=1), ((START, True),)
+            ),
+            START - timedelta(hours=1),
+        )
     else:
         definition["inverters"][0]["ac_limit_w"] = 1000
     solar.write("configuration-solar-definition.json", definition)

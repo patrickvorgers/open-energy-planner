@@ -7,6 +7,7 @@ PEER_ROUTES = {
     ("POST", "/v1/history"),
     ("POST", "/v1/demand/history"),
     ("POST", "/v1/solar/history"),
+    ("POST", "/v1/solar/feedback"),
     ("POST", "/v1/solar/ha-forecasts"),
     ("POST", "/v1/settlement"),
     ("POST", "/v1/settlement/bonus-history"),

@@ -81,7 +81,7 @@ def solar_day(solar):
                 "forecast_version": "original-midnight",
                 "coverage": {"hours": 24, "measured_hours": 24, "paired_hours": 24},
                 "alternatives": [
-                    forecast("XGBoost", learned),
+                    forecast("Machine learning", learned),
                     forecast("Home Assistant", provider),
                 ],
             }
@@ -201,7 +201,7 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
     source.get_by_text("Current model and learning", exact=True).click()
     expect(source).to_contain_text("Physical solar model")
     expect(source).to_contain_text("Collecting accuracy evidence")
-    expect(source).to_contain_text("XGBoost is learning in shadow mode")
+    expect(source).to_contain_text("Machine learning is learning in shadow mode")
     expect(source).to_contain_text(
         "Training: 6000 daylight hours across 730 days. Historical validation: 56 daylight hours across 7 days."
     )
@@ -245,12 +245,10 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
         "Marked for review, still included: Irradiance yield anomaly: 2 hours"
     )
     expect(controlled).to_contain_text("Excluded from learning: Meter correction: 1 hour")
-    expect(controlled.get_by_role("row", name="XGBoost 0.018", exact=True)).to_be_visible()
+    expect(controlled.get_by_role("row", name="Machine learning 0.018", exact=True)).to_be_visible()
     expect(complete).to_contain_text("Home Assistant provider uses its own weather")
     expect(complete).to_contain_text("determines Automatic selection")
-    expect(complete).to_contain_text(
-        "Scores appear after the required comparable days are complete"
-    )
+    expect(complete).to_contain_text("Captured comparison scores are unavailable")
     expect(controlled).not_to_contain_text("Simple correction")
     expect(source).to_contain_text("Historical training alone does not activate it.")
     expect(source).not_to_contain_text("Comparison unavailable")
@@ -260,7 +258,7 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
     page.screenshot(
         full_page=True, path=f"results/ci/solar-learning-shadow-{page.viewport_size['width']}.png"
     )
-    solar["source_model_labels"]["roof"] = "Independent solar production (XGBoost CPU)"
+    solar["source_model_labels"]["roof"] = "Machine learning"
     solar["calibration_status"]["roof"] = "active"
     assessment.update(
         status="eligible",
@@ -303,14 +301,14 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
     solar["history_import"]["sensor.synthetic_roof"]["issue"] = "history_continuity_unavailable"
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
     expect(source.locator(".quality-current-model")).to_have_attribute("open", "")
-    expect(source).to_contain_text("Independent solar production (XGBoost CPU)")
+    expect(source).to_contain_text("Machine learning")
     expect(source).to_contain_text("The production meter identity or accepted readings changed")
     expect(source).to_contain_text("choose Learning data from for a new production regime")
-    expect(source).to_contain_text("Forecast source: ML model: Active: ML model")
+    expect(source).to_contain_text("Forecast source: Machine learning: Active: Machine learning")
+    expect(complete).to_contain_text("Machine learning passed the historical forecast assessment")
     expect(complete).to_contain_text(
-        "0 real captured days are available; no new three-day wait is required"
+        "Home Assistant forecasts retain their separate captured comparison"
     )
-    expect(complete).to_contain_text("Home Assistant still needs a common captured comparison")
     expect(complete).to_contain_text("They are not real captured forecast scores")
     expect(complete.get_by_role("table")).to_have_count(0)
     expect(source).not_to_contain_text("Collecting accuracy evidence")
@@ -330,7 +328,7 @@ def test_solar_learning_explains_shadow_training_and_retains_status_on_refresh(a
     windows.click()
     expect(historical).to_contain_text("provider lead starts at initialization")
     windows.click()
-    expect(source).to_contain_text("XGBoost is active")
+    expect(source).to_contain_text("Machine learning is active")
     expect(source).to_contain_text("No trend selected: More comparable seasonal history is needed")
     expect(source).not_to_contain_text("learning in shadow mode")
     page.evaluate("window.scrollTo(0, 0)")
@@ -414,8 +412,8 @@ def test_solar_learning_distinguishes_validation_coverage_from_training_history(
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
     expect(source).to_contain_text("Learned trend selected automatically for the candidate")
     expect(source).to_contain_text("Selected change in yield: -2.0% per year")
-    expect(source).to_contain_text("Forecast source: ML model: Active: PVWatts")
-    expect(source).to_contain_text("XGBoost is learning in shadow mode")
+    expect(source).to_contain_text("Forecast source: Machine learning: Active: PVWatts")
+    expect(source).to_contain_text("Machine learning is learning in shadow mode")
     source.get_by_text("Seasonal time-trend comparisons: 8", exact=True).click()
     expect(controlled).to_contain_text("Without trend 0.08 kWh/hour. With trend 0.05 kWh/hour")
     training["time_trend"].update(status="not_improved", annual_change=None)

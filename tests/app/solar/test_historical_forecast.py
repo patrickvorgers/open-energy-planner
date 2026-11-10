@@ -354,7 +354,7 @@ def test_withdrawn_or_replaced_forecast_cohort_rejects_captured_worker(
     """A delayed worker cannot publish after any of its original forecast evidence is withdrawn."""
     runs, _history = original_forecasts(days=5)
     runtime = configured_runtime(tmp_path, runs=runs[-2:])
-    monkeypatch.setattr(runtime, "_learned_candidates", lambda *arguments: {})
+    monkeypatch.setattr(runtime, "_learned_candidates", lambda *arguments, **options: {})
     result = runtime.build(runtime.job(NOW))
     assert runtime.install(result, NOW)
     original = runtime.forecast
@@ -382,7 +382,7 @@ def test_additional_runs_preserve_a_worker_that_captured_a_nonempty_valid_cohort
     """Importing older immutable runs queues a later fit without starving the valid active worker."""
     runs, _history = original_forecasts(days=5)
     runtime = configured_runtime(tmp_path, runs=runs[-2:])
-    monkeypatch.setattr(runtime, "_learned_candidates", lambda *arguments: {})
+    monkeypatch.setattr(runtime, "_learned_candidates", lambda *arguments, **options: {})
     queued = runtime.job(NOW)
     result = runtime.build(queued)
     assert runtime.set_forecast_runs(SITE, runs)

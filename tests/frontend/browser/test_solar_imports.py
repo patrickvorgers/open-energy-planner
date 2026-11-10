@@ -580,7 +580,12 @@ def test_solar_accuracy_comparison_explains_current_source_and_matched_error(app
     page.get_by_label("Solar source", exact=True).select_option("roof")
     source.get_by_text("Current model and learning", exact=True).click()
     expect(source).to_contain_text("Forecast source: Automatic: Active: Home Assistant")
-    expect(source).to_contain_text("3 of 3 complete days")
+    expect(source).to_contain_text(
+        "Forecasts saved before the measured day are compared on the same actual production hours."
+    )
+    expect(source).to_contain_text(
+        "Historical forecast assessment can admit machine learning without waiting for new daily comparisons."
+    )
     comparison = source.get_by_role("region", name="Complete forecast comparison", exact=True)
     table = comparison.get_by_role("table")
     expect(table.get_by_role("columnheader")).to_have_text(["Prediction", "MAE (kWh/hour)"])
@@ -588,7 +593,7 @@ def test_solar_accuracy_comparison_explains_current_source_and_matched_error(app
     for prediction, error in (
         ("PVWatts", "0.100"),
         ("Home Assistant", "0.040"),
-        ("XGBoost", "0.070"),
+        ("Machine learning", "0.070"),
     ):
         row = table.get_by_role("row").filter(
             has=page.get_by_role("rowheader", name=prediction, exact=True)

@@ -47,6 +47,7 @@ def series(
     issue=None,
     receipt=None,
     maximum_comparable_kwh=None,
+    hourly_issues=None,
 ):
     """Score complete hours forecast before their start using comparable measurements.
 
@@ -65,6 +66,7 @@ def series(
         receipt: Optional measurement receipt time copied to last_received_at.
         maximum_comparable_kwh: Optional hourly clipping threshold in kWh.
             Observations at or above it are ineligible.
+        hourly_issues: Optional mapping of UTC hour starts to owned exclusion reasons.
 
     Returns:
         A series document with original forecast identity, hourly rows, coverage
@@ -80,7 +82,7 @@ def series(
     while cursor < end:
         prediction = integral(steps, cursor, cursor + HOUR)
         observation = actual.get(cursor) if cursor + HOUR <= completed else None
-        reason = issue
+        reason = issue or (hourly_issues or {}).get(cursor)
         if prediction is None:
             reason = "Original forecast does not cover this complete hour"
         elif issued > cursor:

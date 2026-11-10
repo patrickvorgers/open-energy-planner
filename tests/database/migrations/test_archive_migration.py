@@ -30,6 +30,63 @@ ROUTES = [
 ]
 
 
+def test_solar_feedback_transfers_without_its_original_database(route):
+    """All backend routes preserve sensor binding, first observation, unknown state and immutable feedback references."""
+    from open_energy_planner.solar.curtailment import (
+        CurtailmentHistory,
+        archive_feedback,
+        load_feedback,
+        save_feedback,
+    )
+    from open_energy_planner.solar.storage import SolarStore
+    from tests.app.solar.support import START, plant
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    store = SolarStore(SqlDocuments(source, "solar"))
+    configuration = replace(
+        plant(),
+        sources=(replace(plant().sources[0], curtailment_entity_id="binary_sensor.curtailed"),),
+    )
+    store.save(configuration)
+    feedback = CurtailmentHistory(
+        "binary_sensor.curtailed",
+        START + timedelta(hours=3),
+        ((START, False), (START + timedelta(hours=1), True), (START + timedelta(hours=2), None)),
+    )
+    accepted = save_feedback(store, None, feedback, START - timedelta(hours=1))
+    reference = archive_feedback(store, accepted)
+
+    def feedback_documents(documents):
+        """Compare complete feedback payloads without relying on database row order."""
+        return sorted(
+            json.dumps(row, sort_keys=True) for row in documents.iter_prefix("curtailment-")
+        )
+
+    original_documents = feedback_documents(store.documents)
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = SolarStore(SqlDocuments(target, "solar"))
+    assert restored.current == configuration
+    assert feedback_documents(restored.documents) == original_documents
+    accepted = load_feedback(
+        restored.documents, "binary_sensor.curtailed", START + timedelta(hours=4)
+    )
+    assert accepted == feedback
+    assert (
+        load_feedback(
+            restored.documents,
+            "binary_sensor.curtailed",
+            START + timedelta(hours=4),
+            reference=reference,
+        )
+        == feedback
+    )
+    assert accepted.unrestricted(START, START + timedelta(hours=1))
+    assert not accepted.unrestricted(START + timedelta(hours=2), START + timedelta(hours=3))
+
+
 def test_annual_demand_cohort_transfers_and_restarts_without_source(route, monkeypatch):
     """Every real backend route retains all annual source evidence and the exact accepted cohort independently."""
     from contextlib import closing

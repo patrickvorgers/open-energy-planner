@@ -54,6 +54,10 @@ def app_site(request):
     ready, shutdown = Event(), Event()
     result = {}
     with TemporaryDirectory() as directory:
+        if getattr(request, "param", None) == "solar_feedback_quality":
+            from tests.app.forecast.support.solar_feedback import seed
+
+            seed(Path(directory))
         if getattr(request, "param", None) == "consumers_unreadable":
             from open_energy_planner.storage.adapters.documents import SqlDocuments
             from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository

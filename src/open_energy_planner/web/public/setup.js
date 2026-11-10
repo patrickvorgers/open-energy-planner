@@ -56,6 +56,8 @@ const help = {
         "Allow proposed solar on/off commands. Your HA automation must implement them.",
     learning_start:
         "Optional. Choose a date after replacing panels, changing the meter or another fundamental installation change. Uses midnight in Home Assistant time. Older history is kept but does not train or validate this source.",
+    curtailment_entity_id:
+        "Optional actual feedback. On, true or 1 means curtailed. Off, false or 0 means not curtailed. Without a sensor, and before its first valid reading, production is assumed not curtailed. After that reading, unknown feedback is excluded from learning and accuracy checks. A proposed command is not actual feedback.",
     soc_entity:
         "Battery state of charge in percent. Managed read-only in Home Assistant Energy.",
     power_entity:
@@ -166,7 +168,9 @@ function sensorChoices(kind, selected) {
     const matches = (config.catalogue.data?.entities || []).filter(
         (e) =>
             e.entity_id.length <= 127 &&
-            (kind === "power"
+            (kind === "curtailment"
+                ? /^(binary_sensor|sensor)\./.test(e.entity_id)
+                : kind === "power"
                 ? e.device_class === "power" && ["W", "kW"].includes(e.unit)
                 : kind === "energy"
                   ? e.device_class === "energy" &&
@@ -175,7 +179,7 @@ function sensorChoices(kind, selected) {
                   : e.device_class === "battery" && e.unit === "%"),
     );
     const choices = [
-        ["", "Select a sensor…"],
+        ["", kind === "curtailment" ? "No feedback sensor: Assume not curtailed" : "Select a sensor…"],
         ...matches.map((e) => [e.entity_id, `${sourceName(e, "Sensor")} (${e.entity_id})`]),
     ];
     if (selected && !matches.some((e) => e.entity_id === selected))
@@ -220,10 +224,10 @@ function addSolar(old = {}) {
     }).disabled = true;
     const editor = solarRows.at(-1);
     field(node, "Forecast source", "forecast_source", old.forecast_source || "automatic", {
-        choices: [["automatic", "Automatic"], ["pvwatts", "PVWatts"], ["ha", "Home Assistant"], ["ml", "ML model"]],
+        choices: [["automatic", "Automatic"], ["pvwatts", "PVWatts"], ["ha", "Home Assistant"], ["ml", "Machine learning"]],
     });
     const forecastHelp = document.createElement("p");
-    forecastHelp.textContent = "Automatic compares the same completed days against measured production. PVWatts remains active while evidence is collected or the selected source is unavailable. HA forecasts require a supported provider and compatible production metering. ML requires sufficient history.";
+    forecastHelp.textContent = "Automatic uses historical forecast assessment and matched recorded comparisons. Machine learning activates only after its forecast accuracy improves enough. PVWatts remains available when evidence is insufficient. Home Assistant forecasts require a supported provider and compatible production metering.";
     node.append(forecastHelp);
     const geometry = document.createElement("fieldset");
     geometry.className = "solar-geometry";
@@ -365,7 +369,7 @@ function addSolar(old = {}) {
         inverter.hybrid,
         { type: "checkbox" },
     );
-    const curtailment = field(
+    field(
         node,
         "Allow proposed solar on/off commands",
         "can_curtail",
@@ -376,30 +380,7 @@ function addSolar(old = {}) {
     learningStart.closest("label").className = "solar-learning-start";
     learningStart.max = localDate();
     learningStart.addEventListener("input", () => { learningStart.max = localDate(); });
-    const history = document.createElement("fieldset"), legend = document.createElement("legend");
-    history.className = "solar-history-confirmation";
-    legend.textContent = "Historical production for learning";
-    history.append(legend);
-    const explanation = document.createElement("p");
-    explanation.textContent = "For a source that can be switched off, optionally confirm a past period with no production restriction. This is your declaration, not automatic detection. Unconfirmed periods remain excluded. Times are UTC and the end is exclusive.";
-    history.append(explanation);
-    const historyStart = field(history, "Confirmed unrestricted production from (UTC)", "unrestricted_history_start", old.unrestricted_history_start?.slice(0, 16), {type: "datetime-local"});
-    const historyEnd = field(history, "Confirmed unrestricted production until (UTC)", "unrestricted_history_end", old.unrestricted_history_end?.slice(0, 16), {type: "datetime-local"});
-    const validateHistory = () => {
-        history.hidden = !curtailment.checked;
-        history.disabled = !curtailment.checked;
-        historyStart.required = curtailment.checked && Boolean(historyEnd.value);
-        historyEnd.required = curtailment.checked && Boolean(historyStart.value);
-        const now = new Date().toISOString().slice(0, 16);
-        historyStart.max = now;
-        historyEnd.max = now;
-        historyEnd.setCustomValidity(curtailment.checked && historyStart.value && historyEnd.value && historyEnd.value <= historyStart.value ? "The end must be after the start." : "");
-    };
-    curtailment.addEventListener("change", validateHistory);
-    historyStart.addEventListener("input", validateHistory);
-    historyEnd.addEventListener("input", validateHistory);
-    validateHistory();
-    node.append(history);
+    field(node, "Curtailment feedback sensor", "curtailment_entity_id", old.curtailment_entity_id || "", {list: "curtailment"});
 }
 /** Build a battery editor with HA-owned measurements/capacity and app-owned limits. Hybrid labels retain stable converter option values. */
 function addBattery(old = {}) {
@@ -574,9 +555,10 @@ function definitions() {
             can_curtail: v.can_curtail,
             forecast_source: v.forecast_source,
             learning_start: v.learning_start ? old.learning_start && localDate(old.learning_start) === v.learning_start ? old.learning_start : localInstant(v.learning_start) : null,
-            // Inactive declarations retain accepted history, never an incomplete hidden draft.
-            unrestricted_history_start: v.can_curtail ? v.unrestricted_history_start ? `${v.unrestricted_history_start}:00+00:00` : null : old.unrestricted_history_start ?? null,
-            unrestricted_history_end: v.can_curtail ? v.unrestricted_history_end ? `${v.unrestricted_history_end}:00+00:00` : null : old.unrestricted_history_end ?? null,
+            curtailment_entity_id: v.curtailment_entity_id || null,
+            // Preserve immutable legacy declarations. Feedback now owns admission.
+            unrestricted_history_start: old.unrestricted_history_start ?? null,
+            unrestricted_history_end: old.unrestricted_history_end ?? null,
         };
     });
     const used = new Map();

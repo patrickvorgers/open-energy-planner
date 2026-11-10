@@ -48,7 +48,7 @@ When Home Assistant Energy links supported Forecast.Solar panel metadata to the 
 
 Available solar DC energy and measured inverter AC production are different quantities. Conversion losses, clipping, curtailment and hybrid battery flows can prevent a direct comparison. Do not infer forecast failure from two values that use different measurement boundaries.
 
-Each solar source can use **PVWatts**, **ML model** or **Home Assistant**. These
+Each solar source can use **PVWatts**, **Machine learning** or **Home Assistant**. These
 are independent production predictions. PVWatts uses the installation geometry
 and weather. The XGBoost ML model learns the metered production directly from
 historical weather forecasts, sun position and time. It does not scale a PVWatts prediction. The
@@ -91,8 +91,8 @@ change, optionally set **Learning data from** for that solar source under
 **Settings > Installation > Solar production**. The selected date starts at
 midnight in Home Assistant time. Earlier history remains stored but no longer
 trains or validates that source. Future dates are not accepted. Leave it empty to
-use all otherwise eligible history. This is separate from confirming that a
-curtailable source produced without restriction during a historical period.
+use all otherwise eligible history. This is separate from the curtailment
+feedback described below.
 Saving a different date starts a separate history import for that production
 regime. A replacement meter can establish its own statistics identity without
 rewriting earlier evidence. Clearing the date restores the original history
@@ -127,21 +127,52 @@ establish production. Unusual relationships between irradiance and yield are
 marked for review without discarding the measurements. A statistical anomaly or
 low production alone does not prove that panels were switched off.
 
-For a source that allows proposed solar on/off commands, **Historical production
-for learning** offers **Confirmed unrestricted production from (UTC)** and
-**Confirmed unrestricted production until (UTC)**. Set both only when you know
-the source was not limited in that period. The end is exclusive and neither
-endpoint can be in the future. This is your explicit historical declaration,
-not an automatically detected state. Unconfirmed periods remain excluded for
-that source. Extending a confirmed historical range does not confirm future
-production or authorize a hardware command.
+### Use curtailment feedback for solar learning
 
-If you turn off **Allow proposed solar on/off commands**, the historical
-confirmation fields become inactive. An unfinished draft no longer blocks
-Continue or Save. Turning the option back on before saving restores that draft.
-Saving with the option off keeps any previously saved confirmation; it does not
-save an unfinished hidden replacement. **Cancel** restores the saved settings
-and confirmation.
+Under **Settings > Installation > Solar production**, edit the relevant source
+and optionally select its **Curtailment feedback sensor**. Use an actual status
+sensor for that group, rather than a requested command or a price condition.
+The sensor must use `on`, `true` or `1` for curtailed and `off`, `false` or `0`
+for unrestricted production. A binary sensor is usually the clearest choice.
+
+Without a linked sensor, all otherwise usable production is assumed not
+curtailed. With a linked sensor, the same assumption applies before its first
+valid recorded reading. From that reading onward, observed curtailment and
+unknown values exclude the affected hours from training and accuracy checks.
+An hour containing even part of an active or unknown period is excluded.
+An explicit unrestricted value makes subsequent complete hours usable again.
+An observation never changes the interpretation of earlier hours.
+Plan comparisons keep scores for earlier checked unrestricted hours when later
+hours are curtailed, unknown or not checked yet. A whole-day accuracy score still
+requires a complete comparable day.
+
+This assumption allows existing history to train machine learning. It cannot
+identify older curtailment that was never recorded. If you know such history is
+unreliable, set **Learning data from** to a suitable later date.
+
+The Home Assistant integration imports Recorder state changes in bounded
+ranges, then refreshes new feedback every five minutes. Initial history import
+can take several updates. Dense history is split into smaller checked ranges
+without dropping boundary observations. Reads wait for queued Recorder changes
+to commit before confirming coverage. Each database query also limits its row
+count. A timed-out read cannot start overlapping retries for that sensor.
+Only successfully checked ranges are used. A failed read does not extend
+coverage. Temporary archive-read failures retry in the background without a
+configuration save or restart. Accepted observations survive restart and
+Recorder purging does not move the saved first observation. The configured
+sensor must be included in Recorder. Unknown sensor values remain unknown.
+An absent or empty feedback archive is reported as awaiting observations, not
+recovered evidence. Background capture can continue while it is empty.
+
+Feedback is independent of **Allow proposed solar on/off commands**. It can
+describe curtailment by another automation even when planner commands are not
+enabled. Linking feedback does not control equipment. Hybrid and shared-inverter
+measurement boundaries retain their separate comparability requirements.
+
+The forecast model is labelled **Machine learning**. The implementation uses
+XGBoost on the CPU. A successful historical forecast assessment can activate it
+without waiting for new daily comparisons. Current model status and the original
+forecast fixed before a selected day are separate evidence.
 
 ## Read Forecast quality
 
@@ -208,7 +239,7 @@ The model comparison reports training and validation hours and days separately.
 Missing validation coverage is different from insufficient training history.
 Excluded hours have their reasons. Hours marked for review remain included.
 A complete, successful historical forecast backtest can make ML eligible without
-waiting for three new days. It uses four predetermined weekly weather runs and
+waiting for new daily comparisons. It uses four predetermined weekly weather runs and
 tests a 48-hour plan from each run's initialization and again 24 hours later.
 Each origin group must improve accuracy. The two plans overlap: the assessment
 has 384 forecast/measurement pairs across 288 different production hours, not

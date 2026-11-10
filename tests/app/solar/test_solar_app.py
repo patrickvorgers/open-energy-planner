@@ -15,6 +15,146 @@ from tests.app.solar.support import fixture_weather, plant
 from tests.database.support.archive import read_document
 
 
+@pytest.mark.parametrize("large", [False, True])
+def test_solar_feedback_http_binds_sensor_configuration_and_checked_cursor(tmp_path, large):
+    """A normalized response advances only its current configured sensor. Stale, foreign and unauthorized writes preserve it."""
+    from dataclasses import replace
+
+    async def scenario():
+        """Exercise the real authenticated route and durable current-feedback pointer."""
+        async with running_forecasts(tmp_path, weather_factory=fixture_weather) as (session, url):
+            configuration = plant()
+            configuration = replace(
+                configuration,
+                sources=(
+                    replace(
+                        configuration.sources[0],
+                        curtailment_entity_id="binary_sensor.synthetic_curtailment",
+                    ),
+                ),
+            )
+            definition = configuration_document(configuration)
+            definition.pop("version")
+            configured = await configure_forecasts(session, url, solar_definition=definition)
+            request = configured["solar"]["feedback_requests"][0]
+            body = {
+                "configuration_version": configuration.version,
+                "start": request["start"],
+                "feedback": {
+                    "entity_id": request["entity_id"],
+                    "checked_until": request["end"],
+                    "readings": [],
+                },
+            }
+            if large:
+                import json
+
+                first = datetime.fromisoformat(request["start"])
+                last = datetime.fromisoformat(request["end"])
+                body["feedback"]["readings"] = [
+                    [(first + timedelta(hours=index)).isoformat(), bool(index % 2)]
+                    for index in range(int((last - first).total_seconds() // 3600))
+                ]
+                assert 256 * 1024 < len(json.dumps(body).encode()) < 1024 * 1024
+            async with session.post(url + "/v1/solar/feedback", json=body) as response:
+                assert response.status == 200
+                accepted = await response.json()
+            assert accepted["feedback_requests"][0]["start"] == request["end"]
+            async with session.post(url + "/v1/solar/feedback", json=body) as response:
+                assert response.status == 400
+            foreign = {**body, "configuration_version": "f" * 64}
+            async with session.post(url + "/v1/solar/feedback", json=foreign) as response:
+                assert response.status == 400
+            async with (
+                ClientSession() as untrusted,
+                untrusted.post(url + "/v1/solar/feedback", json=body) as response,
+            ):
+                assert response.status == 401
+            async with session.get(url + "/v1/solar") as response:
+                current = await response.json()
+            assert current["feedback_requests"][0]["start"] == request["end"]
+            assert current["configuration"]["version"] == configuration.version
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("phase", ["write", "projection", "projection_lookalike"])
+def test_feedback_failure_keeps_private_values_out_of_response_and_logs(
+    tmp_path, monkeypatch, caplog, phase
+):
+    """Unexpected storage and post-commit projection failures retain durable state and expose only owned recovery advice."""
+    from dataclasses import replace
+
+    from open_energy_planner.solar.runtime import SolarRuntime
+
+    async def scenario():
+        """Fail the actual HTTP operation before or after its durable write without echoing exception values."""
+        async with running_forecasts(tmp_path, weather_factory=fixture_weather) as (session, url):
+            configuration = plant()
+            configuration = replace(
+                configuration,
+                sources=(
+                    replace(
+                        configuration.sources[0],
+                        curtailment_entity_id="binary_sensor.synthetic_curtailment",
+                    ),
+                ),
+            )
+            definition = configuration_document(configuration)
+            definition.pop("version")
+            configured = await configure_forecasts(session, url, solar_definition=definition)
+            request = configured["solar"]["feedback_requests"][0]
+            body = {
+                "configuration_version": configuration.version,
+                "start": request["start"],
+                "feedback": {
+                    "entity_id": request["entity_id"],
+                    "checked_until": request["end"],
+                    "readings": [],
+                },
+            }
+            original_receive, original_document = (
+                SolarRuntime.receive_feedback,
+                SolarRuntime.document,
+            )
+            committed = False
+
+            def receive(runtime, body, now):
+                """Inject a driver failure or finish the real transaction before making projection fail."""
+                nonlocal committed
+                if phase == "write":
+                    raise OSError("private-feedback-storage-sentinel")
+                original_receive(runtime, body, now)
+                committed = True
+
+            def project(runtime, now, **options):
+                """Raise only after feedback acceptance to prove that durable writes are not called invalid input."""
+                if committed:
+                    if phase == "projection_lookalike":
+                        from open_energy_planner.solar.curtailment import FeedbackRequestError
+
+                        raise FeedbackRequestError("private-feedback-lookalike-sentinel")
+                    raise ValueError("private-feedback-projection-sentinel")
+                return original_document(runtime, now, **options)
+
+            with monkeypatch.context() as failure:
+                failure.setattr(SolarRuntime, "receive_feedback", receive)
+                failure.setattr(SolarRuntime, "document", project)
+                async with session.post(url + "/v1/solar/feedback", json=body) as response:
+                    assert response.status == 503
+                    message = await response.text()
+                    assert "private-feedback" not in message
+            async with session.get(url + "/v1/solar") as response:
+                restored = await response.json()
+            assert (
+                restored["feedback_requests"][0]["start"]
+                == request["start" if phase == "write" else "end"]
+            )
+
+    asyncio.run(scenario())
+    assert "private-feedback" not in caplog.text
+
+
 def test_solar_api_projects_two_sources_into_real_plan_and_retains_original_archive(tmp_path):
     """Configure two plants through HTTP. Preserve source DC evidence and apply each independent 96% converter exactly once."""
 

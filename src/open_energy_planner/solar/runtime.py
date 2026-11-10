@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import asdict, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as distribution_version
 
 from open_energy_planner.forecast_quality.policy import FORECAST_MODELS
@@ -17,6 +17,16 @@ from open_energy_planner.solar.forecast_weather import (
 from ..planning_policy import FINE_INTERVAL_MINUTES, PLANNING_HORIZON_HOURS
 from .boosting import TrainingResult, TrainingStatus, TrainingSummary, fit_boosted_model
 from .calculation.projection import learned_forecast
+from .curtailment import (
+    FEEDBACK_EPOCH,
+    FEEDBACK_REFRESH_MINUTES,
+    MAX_FEEDBACK_RANGE_DAYS,
+    FeedbackRequestError,
+    archive_feedback,
+    load_feedback,
+    parse_feedback,
+    save_feedback,
+)
 from .ha_forecasts import HA_REFRESH_MAX_AGE
 from .learning import learning_blocker
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
@@ -29,6 +39,7 @@ HARD_HISTORY_ISSUES = frozenset({"history_continuity_unavailable", "history_cach
 EAST_WEST_ARRAY_SHARE = 0.5
 MODEL_RETRY_MINUTES = 5
 MIN_HISTORY_MODEL_UPDATE_SECONDS = 60
+FEEDBACK_RESTORE_RETRY_SECONDS = 300
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -46,6 +57,11 @@ class SolarRuntime:
         self.weather_revision, self.history_revision = 0, 0
         self.histories, self.ranges, self.history_issues = {}, {}, {}
         self.history_retry_after = {}
+        self.feedback = {}
+        self.feedback_revision = 0
+        self.feedback_logs = {}
+        self.feedback_retry_after = {}
+        self.restore_feedback()
         self.history_import = SolarHistoryImport(store)
         self.history_import.configure(self.configuration.sources if self.configuration else ())
         self.histories = (
@@ -62,10 +78,16 @@ class SolarRuntime:
         self.learning = {}
         self.learning_log = BackgroundLog(_LOGGER, "Solar ML candidate update")
 
+    def save_configuration(self, configuration):
+        """Persist and restore settings in the caller-owned worker while its application lock is held."""
+        self.store.save(configuration)
+        self.configure(configuration)
+
     def configure(self, configuration):
         """Reset model state after persistence, retaining validated unchanged meter cohorts.
 
-        This install callback runs under the app lock on the event loop. Geometry,
+        Production writes run this method in the storage worker while their caller
+        holds the app lock. Geometry,
         control declarations and forecast preferences do not change immutable
         meter history. Only unchanged source/entity/learning-date bindings with
         an accepted importer state may reuse their already validated aggregate.
@@ -101,6 +123,7 @@ class SolarRuntime:
             if entity in unchanged
         }
         self.configuration, self.issue = configuration, None
+        self.restore_feedback()
         self.history_revision += 1
         self.ranges, self.history_issues = {}, issues
         self.history_import.configure(configuration.sources)
@@ -119,6 +142,187 @@ class SolarRuntime:
         self.failed_key, self.retry_after = None, None
         self.source_selection = {}
         self.learning = {}
+
+    def restore_feedback(self):
+        """Restore only configured sensor identities without treating unreadable evidence as absent feedback."""
+        entities = (
+            {
+                source.curtailment_entity_id
+                for source in self.configuration.sources
+                if source.curtailment_entity_id
+            }
+            if self.configuration
+            else set()
+        )
+        self.feedback_logs = {
+            entity: log for entity, log in self.feedback_logs.items() if entity in entities
+        }
+        now = datetime.now(UTC)
+        issues = getattr(self, "feedback_issues", {})
+        retained = {
+            entity: history
+            for entity, history in self.feedback.items()
+            if entity in entities
+            and entity not in issues
+            and (history is None or history.entity_id == entity and history.checked_until <= now)
+        }
+        restored, self.feedback_issues = self.read_feedback(entities - retained.keys(), now)
+        self.feedback = {**retained, **restored}
+        self.feedback_retry_after = {
+            entity: now + timedelta(seconds=FEEDBACK_RESTORE_RETRY_SECONDS)
+            for entity in self.feedback_issues
+        }
+        self.feedback_revision += 1
+
+    def read_feedback(self, entities, now):
+        """Read archives without installing feedback and return restored histories and issues.
+
+        Startup calls this before publication. Configuration calls it in the storage
+        worker with the caller's application lock held. Background retries use a
+        worker without that lock. Only per-source feedback_logs are created or
+        updated here. self.feedback is never changed. Expected read errors become
+        sanitized issues and deduplicated logs instead of propagating.
+        """
+        restored, issues = {}, {}
+        for entity in entities:
+            log = self.feedback_logs.setdefault(
+                entity, BackgroundLog(_LOGGER, "Solar curtailment feedback restore")
+            )
+            try:
+                restored[entity] = load_feedback(self.store.documents, entity, now)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                restored[entity] = None
+                issues[entity] = (
+                    "Curtailment feedback history is unreadable. Check archive storage. Production history is retained."
+                )
+                log.exception(
+                    "Linked production remains excluded until its retained feedback can be read.",
+                    retry_seconds=FEEDBACK_RESTORE_RETRY_SECONDS,
+                    expected=True,
+                    reason=type(error).__name__,
+                )
+                _LOGGER.debug(
+                    "Solar curtailment feedback restore traceback (%s).\n%s",
+                    type(error).__name__,
+                    failure_trace(error),
+                )
+            else:
+                if restored[entity] is not None and restored[entity].count:
+                    log.success("Retained feedback is readable. Background capture can continue.")
+                else:
+                    log.unavailable(
+                        "Background capture can continue.",
+                        reason="no retained observations",
+                        waiting=True,
+                    )
+        return restored, issues
+
+    def feedback_restore_job(self, now):
+        """Capture a bounded retry cohort without doing archive I/O under the live state lock."""
+        entities = tuple(
+            entity for entity in self.feedback_issues if now >= self.feedback_retry_after[entity]
+        )
+        if not entities or self.configuration is None:
+            return None
+        for entity in entities:
+            self.feedback_retry_after[entity] = now + timedelta(
+                seconds=FEEDBACK_RESTORE_RETRY_SECONDS
+            )
+        return self.configuration.version, entities
+
+    def install_feedback_restore(self, job, result):
+        """Accept recovery only for the same configured sources, preserving failures and healthy peers."""
+        if self.configuration is None or self.configuration.version != job[0]:
+            return
+        restored, issues = result
+        for entity in job[1]:
+            if entity not in issues and entity in self.feedback_issues:
+                self.feedback[entity] = restored[entity]
+                self.feedback_issues.pop(entity)
+                self.feedback_retry_after.pop(entity, None)
+                self.feedback_revision += 1
+                self.last_key = None
+
+    def feedback_requests(self, now):
+        """Request independent ranges so one missing sensor cannot starve another source."""
+        requests = []
+        for entity, history in self.feedback.items():
+            if entity in self.feedback_issues:
+                continue
+            if history is None or now - history.checked_until >= timedelta(
+                minutes=FEEDBACK_REFRESH_MINUTES
+            ):
+                start = history.checked_until if history else FEEDBACK_EPOCH
+                requests.append(
+                    {
+                        "entity_id": entity,
+                        "configuration_version": self.configuration.version,
+                        "start": start.isoformat(),
+                        "end": min(
+                            now, start + timedelta(days=MAX_FEEDBACK_RANGE_DAYS)
+                        ).isoformat(),
+                    }
+                )
+        return requests
+
+    def receive_feedback(self, body, now):
+        """Persist sensor-bound feedback with the caller's application lock held.
+
+        The API delegates this call to its cancellation-safe storage worker.
+        save_feedback commits before self.feedback changes. A revision change
+        invalidates learning, source selection and the forecast. Storage failures
+        propagate without installing the rejected response.
+
+        Raises:
+            FeedbackRequestError: The response is invalid or its request is stale.
+            RuntimeError: The sensor's retained feedback archive is unreadable.
+            ValueError: The persisted pointer no longer matches the request.
+        """
+        try:
+            if not isinstance(body, dict) or set(body) != {
+                "configuration_version",
+                "start",
+                "feedback",
+            }:
+                raise ValueError("Invalid solar feedback response")
+            if (
+                self.configuration is None
+                or body["configuration_version"] != self.configuration.version
+            ):
+                raise ValueError("Solar feedback configuration changed")
+            incoming = parse_feedback(body["feedback"], now)
+            if incoming.entity_id not in self.feedback:
+                raise ValueError("Solar feedback sensor changed")
+            previous = self.feedback[incoming.entity_id]
+            start = datetime.fromisoformat(body["start"])
+            if start != (previous.checked_until if previous else FEEDBACK_EPOCH):
+                raise ValueError("Solar feedback request changed")
+            if (
+                not start
+                < incoming.checked_until
+                <= start + timedelta(days=MAX_FEEDBACK_RANGE_DAYS)
+            ):
+                raise ValueError("Solar feedback range changed")
+            if any(at < start for at, _state in incoming.readings):
+                raise ValueError("Solar feedback observations precede the request")
+        except (ValueError, TypeError, KeyError, OverflowError):
+            raise FeedbackRequestError("Invalid or outdated solar curtailment feedback") from None
+        if incoming.entity_id in self.feedback_issues:
+            raise RuntimeError("Solar feedback archive is unreadable")
+        accepted = save_feedback(self.store, previous, incoming, start)
+        self.feedback[incoming.entity_id] = accepted
+        if (
+            previous is None
+            or incoming.readings
+            or (
+                previous.checked_until.replace(minute=0, second=0, microsecond=0)
+                != accepted.checked_until.replace(minute=0, second=0, microsecond=0)
+            )
+        ):
+            self.feedback_revision += 1
+            self.last_key = None
+            self.learning, self.source_selection = {}, {}
+            self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
 
     def save_ha(self, predictions):
         """Retain original cache observations and each real refresh without overwriting earlier receipts."""
@@ -252,6 +456,7 @@ class SolarRuntime:
                     for entity, providers in sorted(self.ha_predictions.items())
                 ),
                 self.forecast_cohort_revision,
+                self.feedback_revision,
                 self.forecast_runs_revision,
             )
             if self.configuration
@@ -315,6 +520,7 @@ class SolarRuntime:
             self.ha_predictions,
             self.forecast_runs,
             dict(self.weather_service),
+            dict(self.feedback),
         )
 
     def build(self, job):
@@ -331,6 +537,7 @@ class SolarRuntime:
             ha_predictions,
             forecast_runs,
             weather_service,
+            feedback,
         ) = job
         if not weather:
             energies, issues = ha_energies(configuration, None, ha_predictions, now)
@@ -421,7 +628,14 @@ class SolarRuntime:
                 "history", version(body), body["hours"], entity=history.entity_id
             )
         learning = self._learned_candidates(
-            configuration, location, histories, hourly, weather, now, forecast_runs
+            configuration,
+            location,
+            histories,
+            hourly,
+            weather,
+            now,
+            forecast_runs,
+            feedback=feedback,
         )
         models_by_source = {
             source_id: result.model
@@ -494,6 +708,7 @@ class SolarRuntime:
             ha,
             histories,
             now,
+            feedback=feedback,
             ha_references={
                 entity: [row.version for row in providers]
                 for entity, providers in ha_predictions.items()
@@ -629,7 +844,16 @@ class SolarRuntime:
         )
 
     def _learned_candidates(
-        self, configuration, location, histories, hourly, weather, now, forecast_runs=()
+        self,
+        configuration,
+        location,
+        histories,
+        hourly,
+        weather,
+        now,
+        forecast_runs=(),
+        *,
+        feedback=None,
     ):
         """Persist bounded tree weights once and retain separate source/cleaning provenance per fit."""
         from .backtest import assess_forecasts, validation_baselines
@@ -651,6 +875,7 @@ class SolarRuntime:
                     now,
                     forecast_runs=forecast_runs,
                     forecast_physical=forecast_physical,
+                    feedback=(feedback or {}).get(source.curtailment_entity_id),
                 )
                 if result.model:
                     assessment = assess_forecasts(
@@ -663,6 +888,7 @@ class SolarRuntime:
                         result.model.policy_version,
                         self.store,
                         histories=histories,
+                        feedback=feedback,
                     )
                     result = replace(
                         result, summary=replace(result.summary, historical_assessment=assessment)
@@ -679,6 +905,11 @@ class SolarRuntime:
                     "forecast_run_references": [run.version for run in forecast_runs],
                     "model": metadata,
                     "summary": document(result.summary),
+                    "curtailment_feedback_reference": archive_feedback(
+                        self.store, (feedback or {})[source.curtailment_entity_id]
+                    )
+                    if (feedback or {}).get(source.curtailment_entity_id) is not None
+                    else None,
                 }
                 reference = version(record)
                 self.store.archive("ml-training", reference, record)
@@ -776,6 +1007,8 @@ class SolarRuntime:
                 statuses[source.source_id] = status
         return {
             "configuration": configuration_document(self.configuration),
+            "feedback_requests": self.feedback_requests(now),
+            "feedback_issues": dict(self.feedback_issues),
             "forecast": forecast,
             "candidate": candidate,
             "calibrations": [

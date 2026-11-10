@@ -167,7 +167,11 @@ def test_local_regression_learns_per_source_factor_without_claiming_activation()
     assert model.training_version
     assert (
         fit(
-            replace(plant().sources[0], can_curtail=True),
+            replace(
+                plant().sources[0],
+                can_curtail=True,
+                curtailment_entity_id="binary_sensor.curtailed",
+            ),
             history,
             predicted,
             START,
@@ -203,7 +207,12 @@ def test_hybrid_ac_history_cannot_identify_dc_yield_but_declared_dc_history_uses
     assert result.factor == pytest.approx(0.8 * 0.96, abs=0.002)
     assert (
         fit(
-            replace(source, measurement_boundary="dc", can_curtail=True),
+            replace(
+                source,
+                measurement_boundary="dc",
+                can_curtail=True,
+                curtailment_entity_id="binary_sensor.curtailed",
+            ),
             history,
             predicted,
             START,
@@ -219,8 +228,8 @@ def test_hybrid_ac_history_cannot_identify_dc_yield_but_declared_dc_history_uses
         (False, "ac", False, "history_required"),
         (True, "ac", False, "hybrid_route_history_required"),
         (True, "dc", False, "history_required"),
-        (True, "ac", True, "curtailment_feedback_required"),
-        (True, "dc", True, "curtailment_feedback_required"),
+        (True, "ac", True, "hybrid_route_history_required"),
+        (True, "dc", True, "history_required"),
     ],
 )
 def test_calibration_status_preserves_guard_precedence_and_history_failure(
