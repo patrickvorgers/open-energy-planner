@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENTS, IDENTITY_LENGTH
+from open_energy_planner.storage.adapters.lifecycle.transactions import lifecycle_transaction
+from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
 
 DOCUMENT_NAMESPACES = (
     "contracts",
@@ -26,8 +28,9 @@ ARCHIVE_BATCH_ROWS = 128
 class SqlDocuments:
     """Borrow the single active engine, keeping versions and pointers in the same transaction.
 
-    Stores serialize writes per namespace. A thread-local connection supports the
-    existing off-loop save calls without sharing native connections across threads.
+    Complete transactions share the engine's lifecycle guard with plan publication
+    and maintenance. Domain owners still serialize their own changes. A thread-local
+    connection supports off-loop saves without sharing connections across threads.
     Bootstrap credentials, certificates and logs never enter this table.
     """
 
@@ -55,7 +58,7 @@ class SqlDocuments:
             yield
             return
         try:
-            with self.engine.begin() as connection:
+            with lifecycle_transaction(self.engine) as connection:
                 self.pending.connection = connection
                 try:
                     yield
@@ -91,7 +94,7 @@ class SqlDocuments:
             raise OSError("Document archive read failed") from None
         if payload is None:
             raise FileNotFoundError("Archived document is missing")
-        return json.loads(payload)
+        return json.loads(decode_payload(payload))
 
     def read_many(self, names):
         """Snapshot known document pointers in one SQL statement. Missing identities remain absent."""
@@ -113,17 +116,19 @@ class SqlDocuments:
                 ).all()
         except SQLAlchemyError:
             raise OSError("Document archive read failed") from None
-        return {name: json.loads(payload) for name, payload in rows}
+        return {name: json.loads(decode_payload(payload)) for name, payload in rows}
 
     def write(self, name, value):
         """Persist finite JSON without exposing connection parameters in errors."""
         key = self._key(name)
-        payload = json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-            default=lambda value: value.isoformat(),
+        payload = encode_payload(
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+                default=lambda value: value.isoformat(),
+            )
         )
         with self.transaction():
             connection = self.pending.connection
@@ -152,6 +157,6 @@ class SqlDocuments:
                     .execution_options(yield_per=ARCHIVE_BATCH_ROWS)
                 )
                 for (payload,) in rows:
-                    yield json.loads(payload)
+                    yield json.loads(decode_payload(payload))
         except SQLAlchemyError:
             raise OSError("Document archive read failed") from None

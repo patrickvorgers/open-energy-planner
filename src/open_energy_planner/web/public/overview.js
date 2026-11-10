@@ -18,13 +18,16 @@ let planReadPending = false;
 let priceRefreshPending = false;
 let periodCostPlan = null, periodCostKey = "", periodCostRequest = 0;
 const evaluationVersions = new Map();
+const DAILY_RESULTS_PAGE_SIZE = 25;
+let dailySavingsData = null, dailySavingsPage = 0;
+let overviewSessionReady = false;
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
 /** Share numeric precision across evidence cards, tooltip columns and chart axes. Units remain separate. */
 const valueText = (value, unit) => unit === "%" ? percentage(value, false) : unit === "W" ? Math.round(value).toLocaleString() : (isMoneyUnit(unit) ? money : number)(value);
 const statuses = {optimal: "Optimal", feasible: "Feasible"};
-/** Read authenticated JSON with owned recovery messages. Never expose transport or parser details. */
-async function api(path, signal) {
+/** Read JSON with owned guidance and a default deadline. An explicit signal owns its request group. */
+async function api(path, signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)) {
     let response;
     try {
         response = await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store", signal});
@@ -53,6 +56,7 @@ const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 const MILLISECONDS_PER_MINUTE = 60000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
 const MAX_TIME_AXIS_LABELS = 6;
+const DAILY_DATE_LABEL_MIN_WIDTH_PX = 120;
 const FORECAST_PRICE_DASH = [2, 4];
 const DEVICE_PATTERN_SIZE_PX = 8;
 let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0, priceInputPlanId = null;
@@ -264,7 +268,7 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
  * sharing a stack and includes zero. Rendering applies the selected planning range
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
-function chart(id, series, {utcDays = false, unit = "", minimum = null, balance = false} = {}) {
+function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false} = {}) {
     let balanceTime = null;
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
@@ -294,7 +298,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
     }, {capture: true, signal: tooltipEvents.signal});
     const canvas = $(id), legend = $(`${id}-legend`);
     legend.replaceChildren();
-    const axisTime = utcDays ? (value) => dateLabel(new Date(value).toISOString().slice(0, 10)) : value => when(value);
+    const axisTime = calendarDates ? value => dateLabel(localDate(value)) : utcDays ? (value) => dateLabel(new Date(value).toISOString().slice(0, 10)) : value => when(value);
     const datasets = series.map((s, index) => {
         const values = [];
         for (const segment of s.segments || [s.points || []]) {
@@ -306,7 +310,7 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets}, plugins: [intervalWidths, calendarDays, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
+        type: "line", data: {datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
             interaction: {mode: "nearest", axis: "x", intersect: false},
             onHover: (event, _elements, instance) => {
@@ -336,14 +340,20 @@ function chart(id, series, {utcDays = false, unit = "", minimum = null, balance 
             }}},
             scales: {x: {type: "linear", offset: false, grid: {display: false},
                 afterBuildTicks: utcDays ? undefined : (scale) => {
+                    if (calendarDates) {
+                        const boundaries = [...new Set(datasets.flatMap(dataset => dataset.data.map(point => point.x)))].sort((left, right) => left - right);
+                        const labels = Math.max(2, Math.min(MAX_TIME_AXIS_LABELS, Math.floor((scale.maxWidth || canvas.clientWidth) / DAILY_DATE_LABEL_MIN_WIDTH_PX)));
+                        scale.ticks = [...new Set(Array.from({length: labels}, (_entry, index) => boundaries[Math.round(index * (boundaries.length - 1) / (labels - 1))]))].filter(Number.isFinite).map(value => ({value}));
+                        return;
+                    }
                     const first = Math.ceil(scale.min / QUARTER_MILLISECONDS);
                     const last = Math.floor(scale.max / QUARTER_MILLISECONDS);
                     const stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_AXIS_LABELS - 1)));
                     scale.ticks = [];
                     for (let quarter = first; quarter <= last; quarter += stride) scale.ticks.push({value: quarter * QUARTER_MILLISECONDS});
                 },
-                ticks: {maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays ? axisTime(value) : calendarTime(value)},
-                title: {display: utcDays, text: "Calendar date"}},
+                ticks: {maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays || calendarDates ? axisTime(value) : calendarTime(value)},
+                title: {display: utcDays || calendarDates, text: "Calendar date"}},
                 y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
                 ...(series.some((entry) => entry.axis === "soc") ? {soc: {position: "right", min: 0, max: 100, stacked: false, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
             onClick: (_event, elements) => {
@@ -827,6 +837,7 @@ async function savings(signal) {
         if (selectedRevision) query.revision = selectedRevision;
         const data = await api(`v1/savings?${new URLSearchParams(query)}`, signal);
         if (request !== periodRequest) return false;
+        if (data.daily) { renderDailySavings(data); return true; }
         const coverage = data.coverage;
         for (const revision of data.versions || []) evaluationVersions.set(revision.revision, revision);
         renderVersions(selectedRevision);
@@ -835,6 +846,9 @@ async function savings(signal) {
         $("evaluation-version-info").textContent = data.revision ? `${data.corrected ? "Corrected evaluation" : "Original evaluation"}: ${data.revision.slice(0, 8)}: Original plans remain unchanged.` : "An evaluation version appears when settlement can begin.";
         $("coverage").textContent = `Quarters evaluated: ${number(coverage.evaluated)} of ${coverage.expected}: Reconstructed intervals: ${coverage.estimated}: Missing coverage is not zero savings.${data.details_truncated ? " Detail table shows the first day. Select a day to inspect later intervals. Period totals and chart cover the full selection." : ""}${data.issue ? ` ${data.issue}.` : ""}`;
         const currency = data.intervals[0]?.currency || "";
+        $("savings-chart").setAttribute("aria-label", "Evaluated savings over the selected period");
+        $("realization-chart").setAttribute("aria-label", "Recorded import compared with advice and simulated reference");
+        $("realization-chart").closest("figure").querySelector("figcaption h3").textContent = "Import: advice and realization";
         $("savings-total").textContent = coverage.evaluated ? `Evaluated benefit: ${money(data.savings)} ${currency}: Avoided gross import: ${number(data.avoided_import_kwh)} kWh: Negative results are retained.` : "No evaluated savings yet. Comparison starts when a published plan, completed metering and published prices are available.";
         $("cost-rows").replaceChildren();
         for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["grid_cash", "Net electricity cost"], ["wear", "Battery wear"], ["inventory_change", "Battery value change (estimated, not cash)"], ["economic_cost", "Economic cost"], ["import_kwh", "Gross import (kWh)"]]) row($("cost-rows"), [label, coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.actual[key]) : "-", coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.reference[key]) : "-"]);
@@ -879,6 +893,94 @@ async function savings(signal) {
 
         return true;
     } catch (error) { if (request === periodRequest) $("coverage").textContent = error.message; return false; }
+}
+/** Present compact daily evidence with independent coverage, including unavailable scenarios. */
+function renderDailySavings(data) {
+    const samePeriod = dailySavingsData?.start === data.start && dailySavingsData?.end === data.end;
+    if (!samePeriod) dailySavingsPage = 0;
+    dailySavingsData = data;
+    $("daily-savings-details").hidden = false;
+    for (const id of ["savings-chart", "realization-chart"]) $(id).closest("figure").classList.add("daily-savings-chart");
+    $("savings-chart").setAttribute("aria-label", "Daily smart planning benefit on matching measured coverage");
+    $("realization-chart").setAttribute("aria-label", "Daily gross import: Actual, battery self-consumption and without battery");
+    $("evaluation-version").closest("label").hidden = true;
+    $("older-evaluations").hidden = true;
+    $("evaluation-version-info").textContent = "Finalized days retain their original calculation method, contract, installation and quality. Changes apply only to provisional days.";
+    for (const id of ["evaluation-rows", "realized-battery-rows", "inventory-rows"]) $(id).closest("details").hidden = true;
+    const currency = data.currency || "";
+    $("coverage").textContent = `${data.day_count} evaluated days: Actual coverage: ${percentage(data.coverage.actual.seconds / data.coverage.actual.expected_seconds * 100)}: Self-consumption coverage: ${percentage(data.coverage.reference.seconds / data.coverage.reference.expected_seconds * 100)}: Without battery coverage: ${percentage(data.coverage.without_battery.seconds / data.coverage.without_battery.expected_seconds * 100)}.${data.details_truncated ? " Select a shorter period to inspect later daily details. Totals and charts cover the full selection." : ""}${data.issue ? ` ${data.issue}.` : ""}`;
+    $("savings-total").textContent = [
+        data.savings === null ? "No matching measured coverage for a smart planning comparison. Missing evidence is not zero savings." : `Smart planning benefit: ${money(data.savings)} ${currency}.`,
+        data.battery_savings === null ? "No matching measured coverage for a comparison versus without battery. Missing evidence is not zero savings." : `Benefit versus without battery: ${money(data.battery_savings)} ${currency}.`,
+        "Negative results are retained."
+    ].join(" ");
+    const table = $("cost-rows").closest("table");
+    table.querySelector("caption").textContent = "Costs on each scenario's own measured coverage. Compare benefits only on matching coverage.";
+    table.querySelector("thead tr").replaceChildren(...["Component", "Actual", "Battery self-consumption", "Without battery"].map(label => { const cell = document.createElement("th"); cell.textContent = label; return cell; }));
+    $("cost-rows").replaceChildren();
+    for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["grid_cash", "Net electricity cost"], ["wear", "Battery wear"], ["inventory_change", "Battery value change (estimated, not cash)"], ["economic_cost", "Economic cost"], ["import_kwh", "Gross import (kWh)"], ["export_kwh", "Gross export (kWh)"]]) {
+        row($("cost-rows"), [label, ...["actual", "reference", "without_battery"].map(kind => data.totals[kind][key] === null ? "Unavailable" : (key.endsWith("_kwh") ? number : money)(data.totals[kind][key]))]);
+    }
+    const segments = [];
+    let previousEnd = null;
+    for (const bin of data.chart) {
+        const start = Date.parse(bin.start), end = Date.parse(bin.end);
+        if (bin.savings === null) { previousEnd = null; continue; }
+        if (start !== previousEnd) segments.push([]);
+        segments.at(-1).push([start, bin.savings], [end, bin.savings]); previousEnd = end;
+    }
+    chart("savings-chart", [{name: `Smart planning benefit (${currency})`, points: segments.flat(), segments}], {unit: currency, calendarDates: true});
+    $("savings-chart").setAttribute("aria-label", "Smart planning benefit on matching measured coverage");
+    $("savings-chart").closest("figure").querySelector("figcaption p").textContent = "Benefit totals for each plotted interval on matching measured coverage. Partial coverage remains partial. Gaps indicate unavailable comparisons.";
+    const series = [["actual", "Actual"], ["reference", "Battery self-consumption"], ["without_battery", "Without battery"]].map(([kind, name]) => ({name, points: data.chart.flatMap(bin => [[Date.parse(bin.start), bin[`${kind}_import_kwh`] ?? null], [Date.parse(bin.end), bin[`${kind}_import_kwh`] ?? null]])}));
+    chart("realization-chart", series, {unit: "kWh", minimum: 0, calendarDates: true});
+    const caption = $("realization-chart").closest("figure").querySelector("figcaption");
+    $("realization-chart").setAttribute("aria-label", "Gross import: Actual, battery self-consumption and without battery");
+    caption.querySelector("h3").textContent = "Gross import";
+    caption.querySelector("p").textContent = "Measured actual import and both simulated scenarios on their own available coverage. Inspect daily details before comparing partial days.";
+    renderDailySavingsRows(!samePeriod);
+}
+/** Keep a compact, accessible 25-row list and disclose missing ranges only on request. */
+function renderDailySavingsRows(resetScroll = false) {
+    const data = dailySavingsData;
+    if (!data) return;
+    const pages = Math.max(1, Math.ceil(data.days.length / DAILY_RESULTS_PAGE_SIZE));
+    dailySavingsPage = Math.max(0, Math.min(dailySavingsPage, pages - 1));
+    const expanded = new Set([...$("daily-savings-rows").querySelectorAll("tr:has(details[open])")].map(row => row.dataset.day));
+    const focusedDay = document.activeElement?.closest("#daily-savings-rows tr")?.dataset.day;
+    const focusedTag = document.activeElement?.tagName?.toLowerCase();
+    let restoreFocus = null;
+    $("daily-savings-rows").replaceChildren();
+    for (const day of data.days.slice(dailySavingsPage * DAILY_RESULTS_PAGE_SIZE, (dailySavingsPage + 1) * DAILY_RESULTS_PAGE_SIZE)) {
+        const amount = kind => { const value = day.scenarios[kind]; return value.totals ? `${money(value.totals.economic_cost)}: ${percentage(value.coverage_seconds / day.expected_seconds * 100)}` : "Unavailable"; };
+        const quality = Object.values(day.scenarios).every(scenario => scenario.status === "complete") ? "Complete" : Object.values(day.scenarios).some(scenario => scenario.status !== "unavailable") ? "Partial" : "Unavailable";
+        row($("daily-savings-rows"), [dateLabel(day.day), `${day.finalized_at ? "Finalized" : "Provisional"}: ${quality}`, amount("actual"), amount("reference"), amount("without_battery"), day.savings === null ? "Unavailable" : money(day.savings), ""]);
+        const current = $("daily-savings-rows").lastElementChild;
+        current.dataset.day = day.day;
+        const details = document.createElement("details"), summary = document.createElement("summary");
+        summary.textContent = "Coverage and calculation"; details.append(summary);
+        const metadata = document.createElement("p"); metadata.textContent = `Evaluated: ${when(day.evaluated_at)}: ${day.finalized_at ? `Finalized: ${when(day.finalized_at)}` : `Recovery until: ${when(day.finalizes_after)}`}: Method: ${day.policy}`; details.append(metadata);
+        if (day.day_plan_id) { const original = document.createElement("button"); original.type = "button"; original.textContent = "View retained day plan"; original.addEventListener("click", () => selectOriginal(day.day_plan_id)); details.append(original); }
+        for (const [kind, label] of [["actual", "Actual"], ["reference", "Battery self-consumption"], ["without_battery", "Without battery"]]) {
+            const scenario = day.scenarios[kind], text = document.createElement("p");
+            text.textContent = `${label}: ${optionLabel(scenario.status)}: Reconstructed coverage: ${percentage(scenario.estimated_seconds / day.expected_seconds * 100)}${scenario.opening ? `: Opening battery value: ${money(scenario.opening.value)}: Closing battery value: ${money(scenario.closing.value)}` : ""}`; details.append(text);
+            for (const gap of scenario.missing) { const missing = document.createElement("p"); missing.textContent = `${when(gap.start)} to ${when(gap.end)}: ${gap.reason}`; details.append(missing); }
+        }
+        for (const movement of day.inventory_movements || []) {
+            const changed = document.createElement("p");
+            changed.textContent = `Installation change: ${when(movement.at)}: ${day.device_names?.[movement.device_id] || "Battery"}: ${movement.scenario === "actual" ? "Actual" : "Battery self-consumption"}: ${number(movement.kwh)} kWh: Value: ${money(movement.value)}: Excluded from operating benefit.`;
+            details.append(changed);
+        }
+        $("daily-savings-rows").lastElementChild.lastElementChild.append(details);
+        details.open = !resetScroll && expanded.has(day.day);
+        if (!resetScroll && focusedDay === day.day && ["summary", "button"].includes(focusedTag)) restoreFocus = current.querySelector(focusedTag);
+    }
+    $("daily-savings-page").textContent = `Page ${dailySavingsPage + 1} of ${pages}`;
+    $("daily-savings-previous").disabled = dailySavingsPage === 0;
+    $("daily-savings-next").disabled = dailySavingsPage >= pages - 1;
+    const scroll = $("daily-savings-rows").closest(".table-scroll");
+    if (resetScroll) { scroll.scrollTop = 0; scroll.scrollLeft = 0; }
+    restoreFocus?.focus({preventScroll: true});
 }
 /** Keep the selected immutable evaluation available while paging descriptors. */
 function renderVersions(selected) {
@@ -937,6 +1039,7 @@ async function currentPrices(signal) {
 }
 /** Refresh independent views. Only the plan reader reports success, preserving newer selection errors. */
 async function load() {
+    if (!overviewSessionReady && !await initializeOverview()) return;
     overviewLoads++;
     try {
         const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
@@ -975,6 +1078,8 @@ $("plan-version").addEventListener("change", () => { selectedLinkedPlan = false;
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
 $("period").addEventListener("submit", (event) => { event.preventDefault(); savings(); });
 $("evaluation-version").addEventListener("change", () => savings());
+$("daily-savings-previous").addEventListener("click", () => { dailySavingsPage--; renderDailySavingsRows(true); });
+$("daily-savings-next").addEventListener("click", () => { dailySavingsPage++; renderDailySavingsRows(true); });
 $("overview-refresh").addEventListener("click", load);
 $("older-evaluations").addEventListener("click", async () => {
     try {
@@ -984,4 +1089,25 @@ $("older-evaluations").addEventListener("click", async () => {
         evaluationCursor = data.next_evaluation; $("older-evaluations").hidden = !evaluationCursor;
     } catch (error) { $("overview-status").textContent = error.message; }
 });
-api("setup/session").then((session) => { useHomeAssistantTimezone(session.timezone); $("period-start").value = localDate(); $("period-end").value = localDate(); watchSourceNames(() => api("setup/session"), async () => (await Promise.all([showPlan(), savings()])).every(result => result === true), session.source_names_revision); if (session.ingress) { $("overview-connect").hidden = true; load(); } else $("overview-status").textContent = "Connect to view your plans and savings."; }).catch((error) => { $("overview-status").textContent = error.message; });
+/** Initialize once after a confirmed read/render. Explicit Connect/Refresh can retry a failed attempt. */
+async function initializeOverview() {
+    const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
+    try {
+        const session = await api("setup/session", signal);
+        if (overviewSessionReady) return session;
+        useHomeAssistantTimezone(session.timezone);
+        const completed = new Date(`${localDate()}T00:00:00Z`);
+        completed.setUTCDate(completed.getUTCDate() - 1);
+        if (!$("period-start").value) $("period-start").value = completed.toISOString().slice(0, 10);
+        if (!$("period-end").value) $("period-end").value = $("period-start").value;
+        watchSourceNames(() => api("setup/session", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), async () => (await Promise.all([showPlan(), savings()])).every(result => result === true), session.source_names_revision);
+        $("overview-connect").hidden = Boolean(session.ingress);
+        if (!session.ingress) $("overview-status").textContent = "Connect to view your plans and savings.";
+        overviewSessionReady = true;
+        return session;
+    } catch {
+        $("overview-status").textContent = signal.aborted ? "This view took too long to load. Please retry." : "Cannot initialize this view: Check the connection and retry.";
+        return null;
+    }
+}
+initializeOverview().then(session => { if (session?.ingress) load(); });

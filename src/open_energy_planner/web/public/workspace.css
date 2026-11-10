@@ -60,6 +60,12 @@
 .chart-legend label { display:flex; align-items:center; gap:7px; margin:4px 0; font-size:11px; cursor:pointer; }
 .chart-legend input { accent-color:#087f76; }
 .workspace details { border:1px solid #dee6ec; border-radius:10px; background:#fff; padding:16px; margin:16px 0; font-size:13px; }
+.workspace #savings-view .daily-savings-chart { grid-template-columns:minmax(0,1fr); }
+.workspace .daily-savings-chart > .chart-legend { flex-direction:row; flex-wrap:wrap; padding-top:14px; }
+.workspace #daily-savings-details .table-scroll { max-height:none; }
+.workspace #daily-savings-details details { margin:0; padding:6px 10px; }
+.workspace #daily-savings-details td { vertical-align:top; font-variant-numeric:tabular-nums; }
+.workspace #daily-savings-details td:nth-child(n+3):nth-child(-n+6) { text-align:right; white-space:nowrap; }
 .workspace summary { cursor:pointer; font-weight:650; color:#354c61; }
 .workspace .table-scroll { margin-top:12px; max-height:360px; }
 .workspace th { color:#60768c; background:#f6f8fa; font-size:11px; position:sticky; top:0; }

@@ -63,7 +63,9 @@ flowchart LR
 
 The planner remains responsible only for future plans. `savings/reference.py`
 owns deterministic physical self-consumption. `accounting.py` owns independent
-settlement. `runtime.py` owns continuation and correction generations. Native HA
+settlement. `daily.py` owns completed-day replay, recovery and immutable daily closure.
+`runtime.py` retains capture validation and the legacy interval-evaluation reader/replay.
+Native HA
 and SQLAlchemy objects stay in their adapters. No second database or executable
 contract language is introduced. Settlement mutations use a dedicated lock. The
 app lock is held only while taking immutable configuration snapshots. Slow
@@ -110,8 +112,10 @@ battery value/wear and the reference are retained. Raw HA history is not copied.
 Each frame includes original sums/deltas, battery endpoints, quality, source
 bindings, initial counter evidence and location. Capture retries are idempotent.
 Conflicting replacement evidence is rejected instead of silently rewriting it.
-Gaps stop chronological evaluation until the required evidence is available.
-They never start a fresh reference or create zero-cost intervals.
+Gaps remain missing during the recovery window. At finalization, their explicit
+missing ranges survive in the daily report. Unknown simulated stock and counters
+remain unknown for later days. Actual billing and independently recoverable
+without-battery intervals do not require inventing reference stock.
 
 ## Reference policy
 
@@ -162,16 +166,18 @@ Published wholesale prices are retained in an indexed projection when normalized
 price versions are saved/loaded. Forecast prices never settle actual costs.
 Every evaluation retains its selected published source version, effective retail
 formulas, bonus seed evidence, policy version, plan identity and evaluation time.
-Corrected published prices, contracts or confirmed bonus seeds create a new
-evaluation generation. Replay is chronological and bounded so bonus-cap effects
-propagate into later intervals. Earlier generations and original plans remain
-unchanged. A correction generation becomes the default only after it has
-replayed the previously successful coverage. Failed or partial corrections keep
-that last successful view available and report the pending/error state.
+Provisional completed days are recalculated chronologically from the preceding
+daily checkpoint. Corrected published prices, contracts and confirmed bonus seeds
+can update those provisional reports. Finalized days are immutable. The daily
+worker does not replay years of finalized quarters after a contract correction.
+Legacy interval evaluation versions remain separately readable while their
+temporary evidence remains. They are not the default daily archive.
 A missing published price delays evaluation without an actionable
 fault notification. Persistent configuration/data errors are reported separately.
-The evaluator checks the selected price again before committing. A changed price
-cannot silently commit a stale interval or lose its correction event.
+Daily publication and price acceptance use the same dedicated mutation lock.
+A newly accepted correction is visible to a later provisional-day pass. It cannot
+race an in-progress final publication. The original legacy interval evaluator
+also retains its price recheck before committing an interval.
 
 New expected comparisons start self-consumption and OEP at the same measured
 battery stock and the same initial bonus budgets frozen in the plan. They use
@@ -200,8 +206,10 @@ power and never implies that the user executed an automation.
 All data uses the active SQLAlchemy engine: SQLite by default, PostgreSQL,
 MariaDB or MySQL optionally. New tables join the shared schema and complete
 backend transfer automatically. Connection settings, tokens, certificates and
-technical logs remain outside it. Existing data is retained. The new tables are
-created additively, without a development-format converter or destructive reset.
+technical logs remain outside it. The new tables are created additively. Existing
+plan contexts and activation identities are backfilled before plan thinning is
+eligible. Existing daily backfill receives three complete recovery dates after
+upgrade before old detail can expire. No database reset is performed.
 
 * Activation chronology: primary key on normalized UTC activation time.
 * Meter frames: primary key on normalized UTC interval start.
@@ -212,21 +220,90 @@ created additively, without a development-format converter or destructive reset.
   The sequence belongs to the single app writer. Receipt timestamps are not
   correction cursors. Backend transfer retains this ordering without a server sequence reset.
 
-Period totals and chart bins are aggregated in SQL. Periods up to 366 days use
-daily bins. Longer selections use monthly bins. At most 96 detailed
-interval records enter an overview response. Missing intervals/bins break chart
-segments and aggregated calendar dates are explicitly UTC. The UI explains this bound and lets
-the user select a day for later details. Selections may span multiple years. The archive has no expiry. Three-year quarter-history tests
-exercise the year query on each backend. These query tests do not constitute a
-full installation performance guarantee.
+Daily period totals and chart bins are aggregated in SQL. Periods up to 366 days
+use local daily bins. Longer selections use local monthly bins, retaining UTC
+start/end instants. At most 366 daily detail reports enter one response. The UI
+uses 25-row Previous/Next pagination and asks for a shorter selection to inspect
+later details. Unavailable comparisons remain null. Zero is a measured/evaluated
+zero, never a substitute for missing coverage. Mixed-currency periods are rejected.
+
+`oep_savings_days` permanently retains per-scenario totals, coverage seconds,
+estimated seconds, missing ranges/reasons, opening/closing battery stock/value,
+installation snapshots, original/current contract identities, price source
+versions, method versions and independent continuation. Smart-planning, actual
+versus without-battery, and self-consumption versus without-battery benefits each
+sum only pairwise matching accepted quarters. Different scenario coverages must
+not be compared by subtracting their unmatched total costs.
+
+Reports also retain opening bonus seed evidence and external battery inventory
+movements. Display responses overlay current Home Assistant Energy names through
+retained source identities without rewriting finalized evidence. Changing the
+Home Assistant timezone after daily history exists pauses automatic processing.
+Existing calendar identities remain intact instead of being silently reassigned.
+The worker exposes this as an expected pause needing attention, with an instruction
+to restore the original Home Assistant timezone. Processing and maintenance resume
+automatically after restoration. While paused, thinning and other worker maintenance
+remain blocked and existing results stay readable. No generic failure traceback is
+generated for this owned condition.
+
+Each daily calculation shares one short-lived context lookup across frame accounting
+and active advice. Every distinct plan is decoded at most once during that replay.
+The next replay reads fresh hash-verified context. Missing or corrupt evidence remains
+unavailable rather than falling back to a previous replay's cached values.
+
+Each replay also reads its bounded local-day activation chronology and published
+price rows from one repeatable database snapshot. Frame starts resolve the most
+recent non-null physical context, including across disabled advice. Active advice
+still integrates only its actual enabled overlap. Price rows retain their receipt
+identities and are filtered by overlap before billing. The filter uses the original
+SQL predicate on canonical UTC timestamp strings before billing parses selected
+dates. Malformed evidence rejects its selected frame without poisoning unrelated
+frames. A following replay reads new corrections. There is no process cache or
+change to finalized results.
+
+The overview's shared JSON read function supplies a fresh five-second cancellation
+deadline when no caller signal is provided. Explicit caller signals remain
+authoritative for coordinated request groups. Automatic source-name refresh,
+manual plan selection and Savings period changes therefore cannot leave reads
+unbounded. A failed refresh retains its revision for the next independent retry.
+
+Measured energy metrics require a nonempty meter association and all its readings.
+An absent association has no measured total or coverage. An associated recorded
+zero remains a measured zero. An installation with no solar can still have an
+explicit physical/modelled zero without claiming a measured solar channel.
+Validate all consumed associations before adding any metric from a frame.
+Record valid measured energy before checking the original plan, installation
+physics, market identity or financial prices. Missing accounting context leaves
+the financial scenarios unavailable without discarding valid meter totals.
+
+An activated installation with no contract or location exposes an owned prerequisite
+issue requiring attention. Daily work and maintenance remain paused while stored
+results are readable. Restoring the prerequisite clears only that owned prerequisite
+issue. Before the first plan activation, no historical-work warning is generated.
+
+The current local day is excluded. For day D, recovery covers the three complete
+dates D+1, D+2 and D+3. Closure is at local midnight D+4, calculated with
+`core/calendar.day_window`, rather than 72 elapsed hours across DST. Earlier
+unfinalized days must close first. Partial and unavailable scenarios close with
+their missing coverage. Publication, checkpoint and capture-cursor advancement
+share one transaction. This allows ingestion to move past an expired gap without
+filling that gap or resetting simulated state.
+
+Maintenance expires bounded raw frames, legacy interval evaluations and detailed
+historical plan payloads only behind a hash-verified finalized checkpoint.
+The boundary installation/advice context and active plan remain protected.
+Permanent daily totals and control ownership do not depend on full original
+plans. Complete plan retention and lossless compression follow the
+[archive policy](PLAN-ARCHIVE.md#retention-and-payload-representation).
 
 ## User interface and API
 
 Open **Plan and savings** from installation setup. HA OS uses the existing
 authenticated ingress session. Standalone users use the administration token.
-The same responsive page offers original plan versions, expected EMS/reference
-power, energy/battery trajectories, date-filtered costs, coverage, realized
-benefit, original advice and evaluation versions. Original plans are read-only.
+The same responsive workspace offers original plan versions and expectations,
+then completed-day Savings with three scenario costs, coverage, provisional/final
+state and disclosed recovery details. Retained day-plan links open original
+expectations without replaying financial history. Original plans are read-only.
 The current plan's charts advance at each quarter boundary while retaining the
 original archived data. The page checks for a newly published plan every 15
 seconds and refreshes its charts when one becomes available. A deliberately
@@ -275,19 +352,42 @@ completion never reapplies an older response over newer local user intent.
 ## Physical progress during financial outages
 
 `physical.py` owns measured-frame reconstruction and stock transitions shared by
-settlement and the independent reference. `physical-reference.json` in the existing
-`savings` SQLAlchemy document namespace checkpoints `end`, `reference_stored`,
-`actual_stored` and `capacities`. It contains no prices, bonus counters or monetary
-values. The caller's settlement lock serializes advancement with measurement intake.
-Each accepted contiguous frame commits its checkpoint before financial evaluation.
-A bounded replay resumes at that checkpoint after restart.
+settlement and the independent reference. A daily checkpoint retains physical
+continuation separately from financial reference/counter readiness. Valid physical
+frames still advance when prices or bonus evidence prevent billing. Financial
+replay reuses the same resolved physical frame rather than running a second
+dispatch. Physical and monetary readiness remain distinct after restart and
+cross-backend transfer. The older `physical-reference.json` and interval replay
+remain readable for legacy evidence. They are not the new daily worker's cursor.
 
-On upgrade, a successful financial continuation supplies the existing independent
-stock once. If none exists, the first complete measured frame supplies the common
-initial stock. Contract changes, counter corrections and financial replay never
-rewind or synchronize this checkpoint to the real battery. Original plans, raw
-measurements and previously successful financial revisions remain unchanged.
-Database-backend transfer copies the checkpoint with all other app documents.
+Known exports advance each scenario's bonus usage even when its settlement price
+is missing. Missing prices cannot create fresh allowance. Simulated counters may
+share actual opening evidence only at the original common start. A genuine reset
+can establish a new period, but a later backdated rule cannot borrow actual usage.
+Actual hardware inventory changes are accounted independently of reference stock.
+Valuation preserves the physical movement evidence retained in the daily report.
+
+After a measurement gap, a reference with neither batteries nor bonus rules can
+resume on later fully measured frames because it has no stock or allowance to
+carry forward. The gap remains explicit and contributes no coverage or benefit.
+Battery stock and simulated bonus usage remain fail-closed when unknown.
+
+A pending historical bonus opening does not erase already established scenario
+usage. The daily evaluator handles only this expected evidence wait locally and
+passes no unvalidated opening seeds to billing. Actual and without-battery accounts
+can continue from their own known counters while another comparison remains unknown.
+Unknown openings stay unknown. A later actual confirmation cannot establish earlier
+simulated usage. Complete measurement continuity, the original shared start or a
+genuine reset is still required. No offset or new checkpoint format is introduced.
+
+Archive maintenance failures have separate sanitized, deduplicated diagnostics
+and recovery messages. They do not mark successful financial processing as failed.
+Unexpected financial processing failures defer maintenance for that worker round.
+
+The first complete measured quarter after initial publication supplies the common
+initial stock. An exactly aligned publication preserves that same quarter.
+Thereafter no date selection, contract change, financial outage or finalized gap
+synchronizes the reference to actual SoC. Missing physical coverage remains unknown.
 
 A missing, late or aggregate bonus seed can prevent financial settlement without
 preventing physical advancement. Historical settlement still requires measured

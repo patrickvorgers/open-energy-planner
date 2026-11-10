@@ -37,8 +37,22 @@ Every plan ID is immutable. Repeating the same save is idempotent. Changing cont
 under the same ID fails. Numeric JSON values, timestamp strings, nulls, commands,
 strategy, original inputs, independently checked economics and expected flows are
 preserved without rounding. Reconstruction verifies hashes and bounds record depth.
-No archive pruning or automatic deletion is introduced. Schema version 1 is explicit.
+Retention follows the age policy below. Schema version 1 identifies the content-addressed graph.
 An unsupported version fails startup instead of clearing or guessing at history.
+
+## Retention and payload representation
+
+`lifecycle/retention.py` preserves all original plans for 24 hours, one first publication per UTC quarter until age three days, one per UTC hour until age fourteen days, and one per HA local calendar day thereafter. Active state is always protected. The worker processes at most 32 plan candidates per round with a durable timestamp/ID cursor.
+
+Publication also stores an independently hash-checked calculation context in `oep_plan_contexts` and a logical activation link in `oep_activation_contexts`. Existing plans are verified and backfilled in bounded batches before deletion is eligible. Thinning clears the old activation foreign key only after its logical identity is durable. Permanent compact control lists preserve Forecast Quality attribution. Original-plan API reads never return a calculation projection as though it were a complete original.
+
+Unreachable shared record/leaf blocks are collected in bounded parent-before-child batches. A block referenced by any retained plan survives. Old detail payloads and captured quarters expire only behind a verified finalized daily Savings checkpoint. The context already active at that boundary, subsequent activations and active plan remain protected. See [daily settlement](SAVINGS.md).
+
+`adapters/payloads.py` encodes profitable JSON of at least 4096 UTF-8 bytes using gzip level 1 and base64 in the existing text column, prefixed `oep:gzip:1:`. Content hashes always cover decoded canonical JSON. The bounded decoder checks the version, base64, gzip checksum/end marker, trailing data and expanded size of at most 64 MiB. Larger existing plain records remain readable and are not compressed. All new readers accept existing plain JSON. Existing records are recompressed with a durable primary-key cursor, at most 16 rows in one table per round. Incompressible records cannot starve later rows.
+
+No background `VACUUM` or backend-wide compaction is performed. Deleted SQLite pages become reusable space. Other archive owners are not subjected to plan retention. Before rollback, restore a consistent matching backup. Old binaries do not understand the compression envelope. Restore is also the only way to recover intentionally expired originals. Cross-backend migration transfers and verifies the compressed records, compact contexts and finalized days through the complete shared schema.
+
+Finished-table identities prevent repeated payload scans because new writes already use the codec. A compare-and-swap update preserves concurrent document writes, including case-only differences on MySQL and MariaDB.
 
 ## Deployment
 
