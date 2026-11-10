@@ -360,15 +360,18 @@ catalogue contract and does not add tables, columns or a second source registry.
 
 Solar source objects also contain `forecast_source`, one of `automatic`, `pvwatts`,
 `ha` or `ml`. Its default `automatic` is omitted from the canonical configuration
-hash. Optional `unrestricted_history_start` and `unrestricted_history_end` retain
-an explicit user declaration of unrestricted production for a curtailable source.
-Both aware UTC ISO endpoints are required together and ordered. The end is
-exclusive and endpoints cannot be in the future. They participate in the
-configuration version, use the existing settings concurrency check, and are
-stored through the active engine. Their absence does not establish curtailment
-or unrestricted history. Unknown periods cannot establish training or forward
-accuracy for a curtailable source. No hardware command or automatic detection
-is implied. Forecast documents may contain `valid_until`, an exclusive aware UTC provider
+hash. Optional `curtailment_entity_id` links a sensor or binary sensor whose
+actual state describes curtailment. An absent value is omitted from both the
+configuration document and canonical hash. A present value participates in
+configuration and source-family identity. The original optional
+`unrestricted_history_start` and `unrestricted_history_end` fields remain readable
+and versioned for immutable archive replay. Their former manual interval does
+not override the observed-feedback policy and is no longer edited in setup.
+Without a feedback link, and before the first valid linked feedback observation,
+otherwise eligible production is assumed unrestricted. After the first valid
+observation, active or unknown control excludes the affected measurement interval.
+No command, price or statistical anomaly establishes actual control state.
+Forecast documents may contain `valid_until`, an exclusive aware UTC provider
 freshness deadline. Null leaves the existing OEP forecast age policy authoritative.
 Selected HA forecasts must pass both deadlines. `weather_version` is `none` when
 an explicit all-HA forecast was built without independent weather.
@@ -376,7 +379,7 @@ an explicit all-HA forecast was built without independent weather.
 The optional source `learning_start` is an aware UTC ISO instant. The UI edits a
 calendar date beginning at midnight in the Home Assistant installation timezone.
 Future cutoffs are rejected. An absent value is omitted from canonical hashing.
-Unset `learning_start`, `unrestricted_history_start` and
+Unset `learning_start`, `curtailment_entity_id`, `unrestricted_history_start` and
 `unrestricted_history_end` are omitted from the saved configuration document.
 Saving the same current configuration reuses its exact immutable document.
 Setting or clearing a learning date retains the other versions. No conversion of
@@ -384,9 +387,24 @@ earlier development document layouts is provided.
 A present value participates in the configuration and comparison-family identity
 and limits admitted training, validation and accuracy cohorts. Earlier raw
 history, original plans, models and evidence remain stored. This setting is
-independent of the source's confirmed unrestricted production interval.
+independent of the source's curtailment feedback.
 
 The `solar` namespace additionally owns these JSON contracts:
+
+| Document | Meaning |
+| --- | --- |
+| `curtailment-current-<sensor hash>.json` | Mutable pointer to an immutable feedback receipt for one exact configured sensor. It advances only after a successful bounded response is persisted. |
+| `curtailment-history-<hash>.json` | Immutable `entity_id`, exclusive aware UTC `checked_until` and `readings_reference`. The SHA-256 digest binds the complete receipt. An unsuccessful refresh never extends the checked boundary. |
+| `curtailment-values-<hash>.json` | Daily-block manifest using the existing immutable solar series format and active engine. Rows retain original `start` and `curtailed` as true, false or null. Unchanged daily blocks are reused. Loading validates block hashes, sensor identity, strict ordering and the reconstructed values digest. The accepted first valid observation is not discarded when Recorder removes old rows. |
+
+The peer route `/v1/solar/feedback` binds each response to the active configuration,
+exact linked sensor and preceding checked cursor. Each range is at most 367 days
+and each transfer has at most 10,000 observations. Native Recorder queries have a
+20-second deadline and run outside command synchronization. Newer observations
+cannot be applied backward. Training and historical assessment record feedback
+versions alongside the existing weather and production identities. Source
+selection uses a distinct feedback-policy family. These documents use existing
+tables and participate in the existing all-namespace database transfer.
 
 Solar daily-series writers compare the expected manifest and every referenced
 block in one active-database transaction. Reads use batches of at most 128 block

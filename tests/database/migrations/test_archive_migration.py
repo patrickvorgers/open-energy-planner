@@ -30,6 +30,45 @@ ROUTES = [
 ]
 
 
+def test_solar_feedback_transfers_without_its_original_database(route):
+    """All backend routes preserve sensor binding, first observation, unknown state and immutable feedback references."""
+    from open_energy_planner.solar.curtailment import (
+        CurtailmentHistory,
+        load_feedback,
+        save_feedback,
+    )
+    from open_energy_planner.solar.storage import SolarStore
+    from tests.app.solar.support import START, plant
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    store = SolarStore(SqlDocuments(source, "solar"))
+    configuration = replace(
+        plant(),
+        sources=(replace(plant().sources[0], curtailment_entity_id="binary_sensor.curtailed"),),
+    )
+    store.save(configuration)
+    feedback = CurtailmentHistory(
+        "binary_sensor.curtailed",
+        START + timedelta(hours=3),
+        ((START, False), (START + timedelta(hours=1), True), (START + timedelta(hours=2), None)),
+    )
+    save_feedback(store, None, feedback, START - timedelta(hours=1))
+    original_documents = list(store.documents.iter_prefix("curtailment-"))
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = SolarStore(SqlDocuments(target, "solar"))
+    assert restored.current == configuration
+    assert list(restored.documents.iter_prefix("curtailment-")) == original_documents
+    accepted = load_feedback(
+        restored.documents, "binary_sensor.curtailed", START + timedelta(hours=4)
+    )
+    assert accepted == feedback
+    assert accepted.unrestricted(START, START + timedelta(hours=1))
+    assert not accepted.unrestricted(START + timedelta(hours=2), START + timedelta(hours=3))
+
+
 def test_transfer_progress_reports_real_copy_and_verification_counts(route):
     """Every backend route reports monotonic bounded counts for both phases and preserves exact plans."""
     (source, target), root = route

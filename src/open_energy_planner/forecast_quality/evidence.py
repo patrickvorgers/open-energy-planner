@@ -8,7 +8,9 @@ from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.forecast_quality.calculation.metrics import series
 from open_energy_planner.forecast_quality.radiation import original_radiation, radiation_view
 
-from ..solar.learning import INVERTER_CLIPPING_THRESHOLD
+from ..solar.curtailment import load_feedback
+from ..solar.learning import INVERTER_CLIPPING_THRESHOLD, unrestricted_interval
+from ..solar.wire import parse_source
 
 ENERGY_TOLERANCE_KWH = 1e-7
 MAX_VIEW_HOURS = 168
@@ -295,9 +297,19 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                     )
                     > 1
                 )
+                feedback = None
+                if source.get("curtailment_entity_id"):
+                    try:
+                        feedback = load_feedback(
+                            solar_documents, source["curtailment_entity_id"], now
+                        )
+                    except (OSError, KeyError, ValueError, TypeError):
+                        pass
+                source_definition = parse_source(source)
+                unrestricted = unrestricted_interval(source_definition, start, end, feedback)
                 issue = (
                     "Available production is not independently comparable with curtailed, hybrid or shared-inverter metering"
-                    if source["can_curtail"] or inverter["hybrid"] or shared
+                    if not unrestricted or inverter["hybrid"] or shared
                     else None
                 )
                 maximum = (

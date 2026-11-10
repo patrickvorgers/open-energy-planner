@@ -823,6 +823,8 @@ The yield model estimates weather/physically available production without EMS cu
 
 Use known curtailment when selecting training data. Low controlled production is not proof of weak sun/model failure. A planned command does not prove physical execution. Use available feedback/measurements and retain uncertainty. Training selection is technical work, not another wizard.
 
+Solar learning treats production as unrestricted when no actual-curtailment sensor is linked, and before the first valid observation of a linked sensor. This is an explicit assumption, not verified operating evidence. Once feedback begins, its true/false/unknown state applies forward from each original observation time. Exclude complete training or accuracy intervals containing any curtailed or unknown portion. Never infer control execution from prices or commands, or apply a later observation backward. Feedback history and its successfully checked coverage belong to the existing solar database namespace and remain separate from cumulative production imports. Learning-start dates and hybrid/shared-inverter measurement safeguards remain independent.
+
 | Source | Role | Status/access |
 |---|---|---|
 | Open-Meteo | Weather/irradiance/historical inputs | Selected default, HA location. Validate fields/history/limits/terms |

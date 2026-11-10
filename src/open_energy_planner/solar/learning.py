@@ -70,19 +70,17 @@ class Calibration:
 
 def calibration_blocker(source, inverter):
     """Explain missing route/control evidence identically for fitting and published status."""
-    if source.can_curtail:
-        return "curtailment_feedback_required"
     if inverter.hybrid and source.measurement_boundary == "ac":
         return "hybrid_route_history_required"
     return None
 
 
-def fit(source, history, physical_hours, before, inverter):
+def fit(source, history, physical_hours, before, inverter, *, feedback=None):
     """Learn one bounded factor per measured source from complete, uncurtailed daylight hours.
 
     Cumulative Recorder sums handle meter resets. Gaps/decreasing corrections,
-    clipping and potentially curtailed sources are not training targets for
-    available production. Unknown historical curtailment disables calibration.
+    clipping and observed curtailment are not training targets for available
+    production. Linked feedback must cover each hour after its first observation.
     No command is assumed physically executed. AC targets compare to physical AC.
     """
     if calibration_blocker(source, inverter) or history is None:
@@ -92,6 +90,10 @@ def fit(source, history, physical_hours, before, inverter):
     }
     rows = []
     for previous_hour, next_hour in pairwise(history.hours):
+        if not unrestricted_interval(
+            source, next_hour.start, next_hour.start + timedelta(hours=1), feedback
+        ):
+            continue
         expected = predictions.get(next_hour.start)
         if training_sample_issue(source, inverter, previous_hour, next_hour, expected, before):
             continue
@@ -124,22 +126,18 @@ def calibration_factor(rows):
 
 def learning_blocker(source, inverter):
     """Require explicit historical control evidence without inferring available hybrid DC."""
-    if source.can_curtail and source.unrestricted_history_start is None:
-        return "curtailment_feedback_required"
     if inverter.hybrid and source.measurement_boundary == "ac":
         return "hybrid_route_history_required"
     return None
 
 
-def unrestricted_interval(source, start, end):
-    """Admit a controllable source only inside its explicitly confirmed unlimited period."""
-    if not source.can_curtail:
+def unrestricted_interval(source, start, end, feedback=None):
+    """Assume no curtailment without a sensor, then follow actual source-bound feedback."""
+    if source.curtailment_entity_id is None:
         return True
-    if source.unrestricted_history_start is None:
+    if feedback is None or feedback.entity_id != source.curtailment_entity_id:
         return False
-    return datetime.fromisoformat(
-        source.unrestricted_history_start
-    ) <= start and end <= datetime.fromisoformat(source.unrestricted_history_end)
+    return feedback.unrestricted(start, end)
 
 
 def learning_interval(source, start, end):

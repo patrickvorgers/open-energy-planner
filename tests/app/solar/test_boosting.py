@@ -11,6 +11,7 @@ import pytest
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
 from open_energy_planner.solar.boosting import SolarBoostedModel, fit_boosted_model
 from open_energy_planner.solar.calculation.model import SolarEnergy, SolarWeatherHour
+from open_energy_planner.solar.curtailment import CurtailmentHistory
 from open_energy_planner.solar.trend import YieldTrend
 from open_energy_planner.solar.wire import document
 from tests.app.solar.support import SITE, plant
@@ -97,6 +98,36 @@ def fit_case(**changes):
         before,
     )
     return result, history, physical, weather, before
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_switchable_source_can_train_before_its_first_feedback_observation(linked):
+    """Actual nonlinear fitting uses older production both without a link and before a later first feedback reading."""
+    configuration = plant()
+    history, physical, weather, before = training_data()
+    entity = "binary_sensor.curtailed" if linked else None
+    source = replace(configuration.sources[0], can_curtail=True, curtailment_entity_id=entity)
+    feedback = (
+        CurtailmentHistory(
+            entity, before + timedelta(hours=2), ((before + timedelta(hours=1), True),)
+        )
+        if linked
+        else None
+    )
+    result = fit_boosted_model(
+        source,
+        configuration.inverters[0],
+        SITE,
+        history,
+        physical,
+        weather,
+        before,
+        feedback=feedback,
+    )
+    assert result.model is not None
+    assert result.summary.training_days >= 28
+    assert result.summary.validation_days == 7
+    assert result.summary.excluded_counts.get("control_history_unconfirmed", 0) == 0
 
 
 def test_valid_daylight_production_is_not_rejected_by_a_zero_physical_prediction():
@@ -235,19 +266,29 @@ def test_learning_preserves_unknown_control_and_hybrid_measurement_guards(
     configuration = plant()
     history, physical, weather, before = training_data()
     result = fit_boosted_model(
-        replace(configuration.sources[0], can_curtail=curtail, measurement_boundary=boundary),
+        replace(
+            configuration.sources[0],
+            can_curtail=curtail,
+            measurement_boundary=boundary,
+            curtailment_entity_id="binary_sensor.curtailed" if curtail else None,
+        ),
         replace(configuration.inverters[0], hybrid=hybrid),
         SITE,
         history,
         physical,
         weather,
         before,
+        feedback=CurtailmentHistory("binary_sensor.curtailed", before, ((START, True),))
+        if curtail
+        else None,
     )
     assert result.model is None
-    assert result.summary.status == "blocked"
-    assert result.summary.issue == (
-        "curtailment_feedback_required" if curtail else "hybrid_route_history_required"
-    )
+    if curtail:
+        assert result.summary.status == "insufficient_clean_history"
+        assert result.summary.excluded_counts["control_history_unconfirmed"] > 0
+    else:
+        assert result.summary.status == "blocked"
+        assert result.summary.issue == "hybrid_route_history_required"
 
 
 def runtime_case(tmp_path, *, store=None):
@@ -624,8 +665,8 @@ def test_training_weather_received_after_fit_time_does_not_enter_the_model():
     assert result.model is not None
 
 
-def test_confirmed_unrestricted_history_admits_only_its_bounded_period():
-    """A controllable source can learn confirmed past production without authorizing later intervals."""
+def test_observed_unrestricted_history_admits_only_its_bounded_period():
+    """Actual on/off feedback excludes affected hours without granting any hardware command."""
     from open_energy_planner.solar.boosting import unrestricted_interval
 
     configuration = plant()
@@ -634,6 +675,7 @@ def test_confirmed_unrestricted_history_admits_only_its_bounded_period():
     source = replace(
         configuration.sources[0],
         can_curtail=True,
+        curtailment_entity_id="binary_sensor.curtailed",
         unrestricted_history_start=start.isoformat(),
         unrestricted_history_end=before.isoformat(),
     )
@@ -645,22 +687,33 @@ def test_confirmed_unrestricted_history_admits_only_its_bounded_period():
         physical,
         weather,
         before,
+        feedback=CurtailmentHistory(
+            "binary_sensor.curtailed",
+            before + timedelta(hours=1),
+            ((START, True), (start, False), (before, True)),
+        ),
     )
     assert result.model is not None
     assert result.summary.excluded_counts["control_history_unconfirmed"] > 0
     assert result.summary.diagnostic_counts["possible_production_limitation"] > 0
-    assert unrestricted_interval(source, before - timedelta(hours=1), before)
-    assert not unrestricted_interval(source, before, before + timedelta(hours=1))
-    assert not unrestricted_interval(source, start - timedelta(hours=1), start)
+    feedback = CurtailmentHistory(
+        "binary_sensor.curtailed",
+        before + timedelta(hours=1),
+        ((START, True), (start, False), (before, True)),
+    )
+    assert unrestricted_interval(source, before - timedelta(hours=1), before, feedback)
+    assert not unrestricted_interval(source, before, before + timedelta(hours=1), feedback)
+    assert not unrestricted_interval(source, start - timedelta(hours=1), start, feedback)
 
 
-def test_expired_unrestricted_confirmation_cannot_score_unconfirmed_validation_day():
-    """A declaration ending before the last held-out day leaves that day unknown rather than zero."""
+def test_observed_curtailment_cannot_score_a_restricted_validation_day():
+    """Feedback changing to curtailed before the last held-out day excludes that day rather than scoring zero."""
     configuration = plant()
     history, physical, weather, before = training_data()
     source = replace(
         configuration.sources[0],
         can_curtail=True,
+        curtailment_entity_id="binary_sensor.curtailed",
         unrestricted_history_start=START.isoformat(),
         unrestricted_history_end=(before - timedelta(days=1)).isoformat(),
     )
@@ -672,6 +725,9 @@ def test_expired_unrestricted_confirmation_cannot_score_unconfirmed_validation_d
         physical,
         weather,
         before,
+        feedback=CurtailmentHistory(
+            "binary_sensor.curtailed", before, ((START, False), (before - timedelta(days=1), True))
+        ),
     )
     assert result.model is None
     assert result.summary.training_days >= 28
@@ -747,7 +803,7 @@ def test_confirmation_extension_preserves_forward_family_but_geometry_and_algori
 def test_confirming_past_control_evidence_scores_original_forward_captures_without_replacing_them(
     tmp_path,
 ):
-    """Three saved forecasts wait for control evidence and become comparable after their days are confirmed."""
+    """Saved forecasts wait for the linked feedback and become comparable without rewriting captured predictions."""
     from types import SimpleNamespace
 
     from open_energy_planner.solar.calculation.model import SolarForecast
@@ -757,7 +813,14 @@ def test_confirming_past_control_evidence_scores_original_forward_captures_witho
 
     configuration = plant()
     configuration = replace(
-        configuration, sources=(replace(configuration.sources[0], can_curtail=True),)
+        configuration,
+        sources=(
+            replace(
+                configuration.sources[0],
+                can_curtail=True,
+                curtailment_entity_id="binary_sensor.curtailed",
+            ),
+        ),
     )
     store = make_store(tmp_path, SolarStore)
 
@@ -831,6 +894,11 @@ def test_confirming_past_control_evidence_scores_original_forward_captures_witho
         {"sensor.pv0": history},
         now,
         ml_policies={"pv0": "a" * 64},
+        feedback={
+            "binary_sensor.curtailed": CurtailmentHistory(
+                "binary_sensor.curtailed", now, ((START, False),)
+            )
+        },
     )
     assert selected["pv0"][0] == "ml"
     assert status["pv0"]["complete_days"] == 3

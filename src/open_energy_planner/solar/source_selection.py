@@ -37,14 +37,12 @@ from open_energy_planner.solar.wire import document
 
 HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)
-SOURCE_POLICY = "matched-local-day-mae-v1"
+SOURCE_POLICY = "matched-local-day-mae-feedback-v2"
 
 
 def eligibility(configuration, source):
     """Exclude unknown available-production boundaries without inventing DC from hybrid AC metering."""
     inverter = next(row for row in configuration.inverters if row.inverter_id == source.inverter_id)
-    if source.can_curtail and source.unrestricted_history_start is None:
-        return "Production affected by curtailment cannot establish forecast accuracy"
     if inverter.hybrid:
         return (
             "Hybrid solar needs independent route evidence before using an HA production forecast"
@@ -195,6 +193,7 @@ def choose_sources(
     ha_configuration_versions=None,
     ml_policies=None,
     historical_assessments=None,
+    feedback=None,
 ):
     """Freeze next-day forecasts before outcomes, then rank identical completed days by hourly MAE.
 
@@ -323,7 +322,12 @@ def choose_sources(
                 continue
             if not all(
                 learning_interval(source, instant, instant + HOUR)
-                and unrestricted_interval(source, instant, instant + HOUR)
+                and unrestricted_interval(
+                    source,
+                    instant,
+                    instant + HOUR,
+                    (feedback or {}).get(source.curtailment_entity_id),
+                )
                 for instant in hours
             ):
                 continue
@@ -411,6 +415,16 @@ def choose_sources(
                 if chosen == ForecastSource.PVWATTS
                 else None
             )
+        control = (feedback or {}).get(source.curtailment_entity_id)
+        if (
+            chosen == ForecastSource.PVWATTS
+            and source.curtailment_entity_id
+            and (
+                control is None
+                or control.checked_until < now.replace(minute=0, second=0, microsecond=0)
+            )
+        ):
+            learning_issue = "Curtailment feedback is still being collected. Check the linked sensor and its Recorder history. Background checks continue while PVWatts remains available."
         selected[source_id] = (chosen, models[chosen])
         statuses[source_id] = {
             "requested": preference,

@@ -63,6 +63,8 @@ class PlanCoordinator:
         self.appliances = {}
         self.appliance_history_attempts = {}
         self.appliance_history_task = None
+        self.solar_feedback_task = None
+        self.solar_feedback_attempts = {}
         self.ev = {}
         self.ev_sessions = {}
         self.ev_watch = ()
@@ -812,6 +814,9 @@ class PlanCoordinator:
 
                 self.refresh()
                 await synchronize_appliance_history(self)
+                from .solar_feedback import synchronize as synchronize_solar_feedback
+
+                await synchronize_solar_feedback(self, data)
                 if self.closed or self.schedule.resume_after != intent_at_request:
                     return
                 for request_key, bridge, endpoint, label in (
@@ -919,6 +924,12 @@ class PlanCoordinator:
         self.closed = True
         self.catalogue_discovery.close()
         await self.market_prices.close()
+        if self.solar_feedback_task:
+            self.solar_feedback_task.cancel()
+            try:
+                await self.solar_feedback_task
+            except (asyncio.CancelledError, AuthenticationError, ReleaseMismatchError):
+                pass
         if self.appliance_history_task:
             self.appliance_history_task.cancel()
             try:

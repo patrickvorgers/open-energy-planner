@@ -701,6 +701,7 @@ def fit_boosted_model(
     forecast_runs=None,
     forecast_physical=None,
     known_at=None,
+    feedback=None,
 ):
     """Train direct measured production on clean older daylight and score a later week.
 
@@ -745,7 +746,7 @@ def fit_boosted_model(
                 else "before_learning_start"
                 if not learning_interval(source, instant, end)
                 else "control_history_unconfirmed"
-                if not unrestricted_interval(source, instant, end)
+                if not unrestricted_interval(source, instant, end, feedback)
                 else "outside_daylight"
                 if geometry[instant][3] == 0
                 else TrainingExclusion.WEATHER_MISSING

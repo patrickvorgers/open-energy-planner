@@ -34,6 +34,56 @@ from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
+def test_solar_feedback_receipts_reuse_daily_blocks_and_survive_restart(archive, monkeypatch):
+    """Every backend retains exact boolean/unknown feedback and atomically rejects an interrupted pointer update."""
+    from open_energy_planner.solar.curtailment import (
+        CurtailmentHistory,
+        load_feedback,
+        save_feedback,
+    )
+    from tests.app.solar.support import START
+
+    engine, _root = archive
+    store = SolarStore(SqlDocuments(engine, "solar"))
+    source = replace(plant().sources[0], curtailment_entity_id="binary_sensor.curtailed")
+    configuration = replace(plant(), sources=(source,))
+    store.save(configuration)
+    first = CurtailmentHistory(
+        source.curtailment_entity_id, START + timedelta(hours=1), ((START, False),)
+    )
+    accepted = save_feedback(store, None, first, START - timedelta(hours=1))
+    blocks = list(store.documents.iter_prefix("block-"))
+    following = CurtailmentHistory(source.curtailment_entity_id, START + timedelta(hours=2), ())
+    accepted = save_feedback(store, accepted, following, first.checked_until)
+    assert list(store.documents.iter_prefix("block-")) == blocks
+    restored = SolarStore(SqlDocuments(engine, "solar"))
+    assert restored.current == configuration
+    assert (
+        load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=3))
+        == accepted
+    )
+    original_write = store.documents.write
+
+    def interrupted(name, value):
+        """Fail at publication after the new immutable receipt has been prepared."""
+        if name.startswith("curtailment-current-"):
+            raise OSError("synthetic interrupted feedback write")
+        original_write(name, value)
+
+    monkeypatch.setattr(store.documents, "write", interrupted)
+    next_read = CurtailmentHistory(
+        source.curtailment_entity_id,
+        START + timedelta(hours=3),
+        ((START + timedelta(hours=2), None),),
+    )
+    with pytest.raises(OSError):
+        save_feedback(store, accepted, next_read, following.checked_until)
+    assert (
+        load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=4))
+        == accepted
+    )
+
+
 def test_solar_raw_sum_evidence_and_local_conflicts_survive_restart(archive):
     """Every backend preserves raw endpoints, reset-safe sums and original conflict anchors across refreshes."""
     from datetime import UTC, datetime

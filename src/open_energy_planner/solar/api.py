@@ -1,6 +1,7 @@
 """Solar HTTP and background lifecycle composition, separate from forecast calculations."""
 
 import asyncio
+import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from open_energy_planner.solar.storage.history import parse_report
 from open_energy_planner.storage.writes import complete_write
 
 from .basis import forecast_usable
+from .curtailment import FeedbackRequestError
 from .ha_forecasts import parse_ha_predictions
 from .notifications import explain_solar_problem, solar_forecast_notifications
 from .weather import OpenMeteoSolarSource
@@ -29,6 +31,7 @@ SOLAR_WORKER_POLL_SECONDS = 5
 WEATHER_RETRY_MINUTES = 30
 WEATHER_REFRESH_HOURS = 1
 MAX_HA_FORECAST_BODY_BYTES = 32 * BYTES_PER_KIB * BYTES_PER_KIB
+MAX_FEEDBACK_BODY_BYTES = BYTES_PER_KIB * BYTES_PER_KIB
 PUBLIC_VALIDATION_MESSAGES = (
     "Complete the Home Assistant Energy dashboard first",
     "Device membership is managed in the Home Assistant Energy dashboard",
@@ -188,6 +191,37 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
             except ValueError:
                 raise web.HTTPBadRequest(text="Invalid solar history source/range") from None
         return await snapshot(request)
+
+    async def feedback(request):
+        """Accept only configured feedback through the authenticated Home Assistant peer route."""
+        try:
+            try:
+                body = await request.clone(client_max_size=MAX_FEEDBACK_BODY_BYTES).json()
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise web.HTTPBadRequest(text="Invalid solar curtailment feedback JSON") from None
+            async with lock:
+                try:
+                    cancellation = await complete_write(
+                        runtime.receive_feedback, body, datetime.now(UTC)
+                    )
+                except FeedbackRequestError:
+                    raise web.HTTPBadRequest(
+                        text="Invalid or outdated solar curtailment feedback"
+                    ) from None
+                if cancellation:
+                    raise cancellation
+            return await settings(request)
+        except web.HTTPException:
+            raise
+        except Exception as error:  # noqa: BLE001 - Sanitize unknown failures even after commit.
+            raise web.HTTPServiceUnavailable(
+                text=request_error_message(
+                    error,
+                    logger=_LOGGER,
+                    operation="Solar curtailment feedback update",
+                    fallback="Curtailment feedback could not be updated or displayed. Retained evidence is preserved. Check storage and retry the background refresh.",
+                )
+            ) from None
 
     async def ha_forecasts(request):
         """Accept only current selected Energy providers, independently of changing physical meter values."""
@@ -532,4 +566,5 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
     app.router.add_get("/v1/solar", settings)
     app.router.add_put("/v1/solar", configure)
     app.router.add_post("/v1/solar/history", history)
+    app.router.add_post("/v1/solar/feedback", feedback)
     app.router.add_post("/v1/solar/ha-forecasts", ha_forecasts)
