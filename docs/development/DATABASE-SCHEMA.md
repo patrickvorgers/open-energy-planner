@@ -462,7 +462,9 @@ Forecast-quality plan and day views copy source-bound immutable feedback snapsho
 under the application lock. A snapshot must match the source, production meter and
 feedback sensor, and its checked boundary cannot be in the future. Active missing
 or unreadable feedback stays excluded without an archive fallback. Historical
-sensors that are no longer active use the retained archive reader. Configuration
+source, meter and sensor bindings absent from the current configuration use the
+retained archive reader, even if the same healthy feedback sensor remains linked
+elsewhere. A known unavailable sensor cannot be bypassed this way. Configuration
 changes retain healthy feedback for unchanged sensors. New, failed or time-invalid
 sensors are restored in the existing cancellation-safe configuration writer,
 before the caller releases its application lock.

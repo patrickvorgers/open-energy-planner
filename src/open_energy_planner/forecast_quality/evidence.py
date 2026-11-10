@@ -136,6 +136,12 @@ def evidence(
         Series, issues and evidence version. Daily contexts need no problem intervals
         and return None for their absent plan_id and generated_at.
     """
+    feedback_by_source = solar_feedback or {}
+    unavailable_sensors = {
+        binding[2]
+        for binding, history in feedback_by_source.items()
+        if history is None or history.entity_id != binding[2] or history.checked_until > now
+    }
     result = {
         "plan_id": plan.get("plan_id"),
         "generated_at": plan.get("generated_at"),
@@ -315,19 +321,14 @@ def evidence(
                 if source.get("curtailment_entity_id"):
                     sensor = source["curtailment_entity_id"]
                     key = identity, source["entity_id"], sensor
-                    if solar_feedback is not None and any(
-                        binding[2] == sensor for binding in solar_feedback
-                    ):
-                        feedback = solar_feedback.get(key)
-                        if feedback is not None and (
-                            feedback.entity_id != sensor or feedback.checked_until > now
-                        ):
-                            feedback = None
-                    else:
-                        try:
-                            feedback = load_feedback(solar_documents, sensor, now)
-                        except (OSError, KeyError, ValueError, TypeError):
-                            pass
+                    if sensor not in unavailable_sensors:
+                        if key in feedback_by_source:
+                            feedback = feedback_by_source[key]
+                        else:
+                            try:
+                                feedback = load_feedback(solar_documents, sensor, now)
+                            except (OSError, KeyError, ValueError, TypeError):
+                                pass
                 source_definition = (
                     parse_source(source) if source.get("curtailment_entity_id") else None
                 )

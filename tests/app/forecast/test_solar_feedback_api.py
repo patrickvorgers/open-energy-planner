@@ -11,6 +11,114 @@ from tests.app.forecast.support.solar_feedback import seed
 from tests.ha_contract.support.metadata import setup_metadata
 
 
+@pytest.mark.parametrize("retarget", ["source", "meter"])
+def test_retained_plan_replays_after_actual_current_source_binding_changes(tmp_path, retarget):
+    """Changing only current bindings cannot remove the frozen old plan's independently known accuracy."""
+    historical_retarget_case(tmp_path, retarget, paired=17)
+
+
+@pytest.mark.parametrize("failure", ["absent", "unreadable"])
+def test_historical_binding_cannot_bypass_current_feedback_unavailability(
+    tmp_path, monkeypatch, failure
+):
+    """An old binding must not read around the current sensor's known absence or restore failure."""
+    from open_energy_planner.solar import runtime
+
+    def unavailable_read(_documents, _entity, _now):
+        """Keep a valid stored archive behind an independently unavailable current restore result."""
+        if failure == "unreadable":
+            raise OSError("Synthetic feedback storage unavailable")
+
+    monkeypatch.setattr(runtime, "load_feedback", unavailable_read)
+    historical_retarget_case(tmp_path, "source", paired=0)
+
+
+def historical_retarget_case(tmp_path, retarget, *, paired):
+    """Persist a changed current binding and query the unchanged historical plan and midnight capture."""
+    from dataclasses import replace
+
+    from open_energy_planner.solar.storage import SolarStore
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+    from tests.app.solar.support import fixture_weather
+
+    seed(tmp_path, active=True)
+    entity = "sensor.replacement_pv" if retarget == "meter" else "sensor.synthetic_pv"
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        original = repository.get_plan("synthetic-feedback-plan")
+        solar = SolarStore(SqlDocuments(repository.engine, "solar"))
+        changed = replace(
+            solar.current,
+            sources=(
+                replace(
+                    solar.current.sources[0],
+                    entity_id=entity,
+                    source_id="replacement_roof" if retarget == "source" else "roof",
+                ),
+            ),
+        )
+        solar.save(changed)
+        assert repository.get_plan("synthetic-feedback-plan") == original
+
+    async def scenario():
+        token = "solar-historical-binding-test-0123456789"
+        async with TestClient(
+            TestServer(
+                create_app(
+                    tmp_path, token, source="home_assistant", solar_weather_factory=fixture_weather
+                )
+            )
+        ) as client:
+            headers = {"Authorization": "Bearer " + token}
+            metadata = setup_metadata()
+            metadata["timezone"] = "UTC"
+            metadata["entities"].append(
+                {
+                    "entity_id": entity,
+                    "name": "Current PV",
+                    "unit": "kWh",
+                    "device_id": "synthetic-meter",
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                }
+            )
+            metadata["suggestions"].update(
+                solar=True,
+                solar_sources=[entity],
+                terms=[{"entity_id": "sensor.import", "sign": 1}, {"entity_id": entity, "sign": 1}],
+                solar_configurations=[
+                    {
+                        "entity_id": entity,
+                        "providers": [],
+                        "issue": "solar_configuration_not_available",
+                    }
+                ],
+            )
+            submitted = await client.post("/v1/ha/catalogue", headers=headers, json=metadata)
+            assert submitted.status == 200, await submitted.text()
+            response = await client.get(
+                "/v1/forecast-quality/synthetic-feedback-plan", headers=headers
+            )
+            assert response.status == 200
+            source = (await response.json())["series"][0]
+            assert source["coverage"]["paired_hours"] == paired
+            if paired:
+                assert source["metrics"]["mae_kwh"] == pytest.approx(0.07)
+                assert source["alternatives"][0]["metrics"]["mae_kwh"] == pytest.approx(0.035)
+            else:
+                assert source["metrics"]["mae_kwh"] is None
+                assert source["alternatives"][0]["metrics"]["mae_kwh"] is None
+            response = await client.get("/v1/forecast-quality/days/2026-06-15", headers=headers)
+            assert response.status == 200
+            daily = (await response.json())["series"][0]
+            assert daily["coverage"]["paired_hours"] == paired
+            assert daily["daily"]["error_kwh"] is None
+
+    asyncio.run(scenario())
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        assert repository.get_plan("synthetic-feedback-plan") == original
+
+
 @pytest.mark.parametrize(
     "condition,paired,archive_reads",
     [
@@ -18,10 +126,13 @@ from tests.ha_contract.support.metadata import setup_metadata
         ("none", 0, 0),
         ("wrong_sensor", 0, 0),
         ("future", 0, 0),
-        ("retarget_meter", 0, 0),
-        ("retarget_source", 0, 0),
+        ("retarget_meter", 17, 1),
+        ("retarget_source", 17, 1),
         ("retarget_feedback", 17, 1),
         ("historical", 17, 1),
+        ("historical_unavailable", 0, 0),
+        ("historical_wrong_sensor", 0, 0),
+        ("historical_future", 0, 0),
     ],
 )
 def test_quality_feedback_snapshot_binding_and_fail_closed_admission(
@@ -57,6 +168,14 @@ def test_quality_feedback_snapshot_binding_and_fail_closed_admission(
             key = ("changed", "sensor.synthetic_pv", sensor)
         elif condition == "retarget_feedback":
             key = ("roof", "sensor.synthetic_pv", "binary_sensor.changed")
+        elif condition.startswith("historical_"):
+            key = ("replacement", "sensor.changed", sensor)
+            if condition == "historical_unavailable":
+                history = None
+            elif condition == "historical_wrong_sensor":
+                history = replace(history, entity_id="binary_sensor.foreign")
+            elif condition == "historical_future":
+                history = replace(history, checked_until=now + timedelta(hours=1))
         snapshots = {} if condition == "historical" else {key: history}
         reads = []
         original = solar.read_many
