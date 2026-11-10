@@ -95,6 +95,28 @@ def test_solar_feedback_receipts_reuse_segments_and_survive_restart(archive, mon
         load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=4))
         == accepted
     )
+    readings, times = accepted.readings, accepted.times
+    monkeypatch.setattr(store.documents, "write", original_write)
+    appended = save_feedback(store, accepted, next_read, following.checked_until)
+    assert accepted.readings is readings
+    assert accepted.times is times
+    assert appended.parent.observations is accepted.observations
+    assert "readings" not in appended.parent.__dict__
+    assert "times" not in appended.parent.__dict__
+    assert not appended.unrestricted(START + timedelta(hours=2), START + timedelta(hours=3))
+    assert (
+        load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=4))
+        == appended
+    )
+    assert (
+        load_feedback(
+            restored.documents,
+            source.curtailment_entity_id,
+            START + timedelta(hours=4),
+            reference=first_reference,
+        )
+        == first_accepted
+    )
 
 
 def test_solar_raw_sum_evidence_and_local_conflicts_survive_restart(archive):

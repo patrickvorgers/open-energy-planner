@@ -243,8 +243,14 @@ def save_feedback(store, previous, incoming, start):
     if previous and previous.entity_id != incoming.entity_id:
         raise ValueError("Solar curtailment sensor changed")
     if incoming.readings or previous is None:
+        parent = replace(previous) if previous else None
+        if parent is not None:
+            # Keep immutable chunks, not old flattened caches. In-flight snapshots remain untouched.
+            parent.__dict__.update(
+                count=previous.count, tail=previous.tail, first_valid=previous.first_valid
+            )
         result = CurtailmentHistory(
-            incoming.entity_id, incoming.checked_until, incoming.readings, previous, True
+            incoming.entity_id, incoming.checked_until, incoming.readings, parent, True
         )
     else:
         result = replace(previous, checked_until=incoming.checked_until)

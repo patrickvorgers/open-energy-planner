@@ -161,6 +161,8 @@ coverage. Temporary archive-read failures retry in the background without a
 configuration save or restart. Accepted observations survive restart and
 Recorder purging does not move the saved first observation. The configured
 sensor must be included in Recorder. Unknown sensor values remain unknown.
+An absent or empty feedback archive is reported as awaiting observations, not
+recovered evidence. Background capture can continue while it is empty.
 
 Feedback is independent of **Allow proposed solar on/off commands**. It can
 describe curtailment by another automation even when planner commands are not

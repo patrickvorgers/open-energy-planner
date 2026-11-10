@@ -185,7 +185,14 @@ class SolarRuntime:
                     failure_trace(error),
                 )
             else:
-                log.success("Retained feedback is readable. Background capture can continue.")
+                if restored[entity] is not None and restored[entity].count:
+                    log.success("Retained feedback is readable. Background capture can continue.")
+                else:
+                    log.unavailable(
+                        "Background capture can continue.",
+                        reason="no retained observations",
+                        waiting=True,
+                    )
         return restored, issues
 
     def feedback_restore_job(self, now):
