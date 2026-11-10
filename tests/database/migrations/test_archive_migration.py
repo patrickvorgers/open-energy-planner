@@ -34,6 +34,7 @@ def test_solar_feedback_transfers_without_its_original_database(route):
     """All backend routes preserve sensor binding, first observation, unknown state and immutable feedback references."""
     from open_energy_planner.solar.curtailment import (
         CurtailmentHistory,
+        archive_feedback,
         load_feedback,
         save_feedback,
     )
@@ -53,7 +54,8 @@ def test_solar_feedback_transfers_without_its_original_database(route):
         START + timedelta(hours=3),
         ((START, False), (START + timedelta(hours=1), True), (START + timedelta(hours=2), None)),
     )
-    save_feedback(store, None, feedback, START - timedelta(hours=1))
+    accepted = save_feedback(store, None, feedback, START - timedelta(hours=1))
+    reference = archive_feedback(store, accepted)
     original_documents = list(store.documents.iter_prefix("curtailment-"))
     migrate_archive(source, target, overwrite_target=True)
     original.close()
@@ -65,6 +67,15 @@ def test_solar_feedback_transfers_without_its_original_database(route):
         restored.documents, "binary_sensor.curtailed", START + timedelta(hours=4)
     )
     assert accepted == feedback
+    assert (
+        load_feedback(
+            restored.documents,
+            "binary_sensor.curtailed",
+            START + timedelta(hours=4),
+            reference=reference,
+        )
+        == feedback
+    )
     assert accepted.unrestricted(START, START + timedelta(hours=1))
     assert not accepted.unrestricted(START + timedelta(hours=2), START + timedelta(hours=3))
 

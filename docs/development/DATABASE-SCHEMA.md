@@ -431,17 +431,29 @@ The `solar` namespace additionally owns these JSON contracts:
 
 | Document | Meaning |
 | --- | --- |
-| `curtailment-current-<sensor hash>.json` | Mutable pointer to an immutable feedback receipt for one exact configured sensor. It advances only after a successful bounded response is persisted. |
-| `curtailment-history-<hash>.json` | Immutable `entity_id`, exclusive aware UTC `checked_until` and `readings_reference`. The SHA-256 digest binds the complete receipt. An unsuccessful refresh never extends the checked boundary. |
-| `curtailment-values-<hash>.json` | Daily-block manifest using the existing immutable solar series format and active engine. Rows retain original `start` and `curtailed` as true, false or null. Unchanged daily blocks are reused. Loading validates block hashes, sensor identity, strict ordering and the reconstructed values digest. The accepted first valid observation is not discarded when Recorder removes old rows. |
+| `curtailment-current-<sensor hash>.json` | Mutable checked receipt and its SHA-256 reference for one exact sensor. The receipt contains `entity_id`, exclusive aware UTC `checked_until`, segment `count` and final content hash `tail`. Empty refreshes advance only this cursor. |
+| `curtailment-segment-<sensor hash>-<index>.json` | Immutable append of original timestamp/boolean-or-null observations, source identity, sequence `index` and preceding content hash `previous`. Appends do not rewrite or hash preceding observations. Restart reads known segment names in batches of at most 128, validating source, ordering, every hash-chain link and the receipt's final tail. The retained first valid observation survives Recorder purging. |
+| `curtailment-history-<hash>.json` | Immutable copy of a checked receipt, archived when model or historical-fit evidence references it. Earlier referenced receipts remain replayable against their original observation prefix. Ordinary empty polling does not retain another unreferenced receipt or full-history manifest. |
 
 The peer route `/v1/solar/feedback` binds each response to the active configuration,
 exact linked sensor and preceding checked cursor. Each range is at most 367 days
 and each transfer has at most 10,000 observations. Dense transfers end exclusively
-at the first omitted observation, which is retained by the next query. The
+at the first omitted observation, which is retained by the next query. Native
+Recorder state-change queries enforce a 10,001-row SQL limit before materializing
+the result. A separate indexed native Recorder query reads at most one earliest
+retained observation in the requested range, including an attribute-only update
+whose original state change was purged. Its original timestamp is preserved.
+Float timestamp bounds match the serialized microsecond cursor so resuming
+cannot omit that observation. Later attribute-only updates do not change the
+control state. Both reads share the same executor ownership and transfer budget. The
 Recorder commit barrier and query share one 20-second deadline and run outside
-command synchronization. Newer observations
-cannot be applied backward. Training and historical assessment record feedback
+command synchronization. A timed-out native read retains ownership until its
+executor finishes, preventing overlapping retries for that sensor while other
+sensors can continue. Restore failures remain fail-closed and retry through the
+background lifecycle at a five-minute minimum interval. Status rendering does
+not perform those reads. Diagnostics retain bounded failure types and stack
+locations without private exception values. Newer observations cannot be applied
+backward. Training and historical assessment record feedback
 versions alongside the existing weather and production identities. Source
 selection uses a distinct feedback-policy family. These documents use existing
 tables and participate in the existing all-namespace database transfer.

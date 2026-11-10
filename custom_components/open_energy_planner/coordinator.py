@@ -65,6 +65,7 @@ class PlanCoordinator:
         self.appliance_history_task = None
         self.solar_feedback_task = None
         self.solar_feedback_attempts = {}
+        self.solar_feedback_reads = {}
         self.ev = {}
         self.ev_sessions = {}
         self.ev_watch = ()
@@ -930,6 +931,10 @@ class PlanCoordinator:
                 await self.solar_feedback_task
             except (asyncio.CancelledError, AuthenticationError, ReleaseMismatchError):
                 pass
+        pending_feedback_reads = tuple(self.solar_feedback_reads.values())
+        for task in pending_feedback_reads:
+            task.cancel()
+        await asyncio.gather(*pending_feedback_reads, return_exceptions=True)
         if self.appliance_history_task:
             self.appliance_history_task.cancel()
             try:

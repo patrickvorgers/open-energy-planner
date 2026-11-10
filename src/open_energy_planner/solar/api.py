@@ -267,6 +267,14 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                 activity = None
                 try:
                     async with lock:
+                        recovery = runtime.feedback_restore_job(datetime.now(UTC))
+                    if recovery:
+                        recovered = await asyncio.to_thread(
+                            runtime.read_feedback, recovery[1], datetime.now(UTC)
+                        )
+                        async with lock:
+                            runtime.install_feedback_restore(recovery, recovered)
+                    async with lock:
                         job = runtime.job(datetime.now(UTC))
                         context = activity_context(job[1]) if job else None
                     if job:

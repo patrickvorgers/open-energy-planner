@@ -22,6 +22,7 @@ from .curtailment import (
     FEEDBACK_REFRESH_MINUTES,
     MAX_FEEDBACK_RANGE_DAYS,
     FeedbackRequestError,
+    archive_feedback,
     load_feedback,
     parse_feedback,
     save_feedback,
@@ -38,6 +39,7 @@ HARD_HISTORY_ISSUES = frozenset({"history_continuity_unavailable", "history_cach
 EAST_WEST_ARRAY_SHARE = 0.5
 MODEL_RETRY_MINUTES = 5
 MIN_HISTORY_MODEL_UPDATE_SECONDS = 60
+FEEDBACK_RESTORE_RETRY_SECONDS = 300
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -57,6 +59,8 @@ class SolarRuntime:
         self.history_retry_after = {}
         self.feedback = {}
         self.feedback_revision = 0
+        self.feedback_logs = {}
+        self.feedback_retry_after = {}
         self.restore_feedback()
         self.history_import = SolarHistoryImport(store)
         self.history_import.configure(self.configuration.sources if self.configuration else ())
@@ -135,21 +139,80 @@ class SolarRuntime:
 
     def restore_feedback(self):
         """Restore only configured sensor identities without treating unreadable evidence as absent feedback."""
-        restored = {}
-        self.feedback_issues = {}
-        for source in self.configuration.sources if self.configuration else ():
-            entity = source.curtailment_entity_id
-            if entity is None:
-                continue
+        entities = (
+            {
+                source.curtailment_entity_id
+                for source in self.configuration.sources
+                if source.curtailment_entity_id
+            }
+            if self.configuration
+            else set()
+        )
+        self.feedback_logs = {
+            entity: log for entity, log in self.feedback_logs.items() if entity in entities
+        }
+        now = datetime.now(UTC)
+        self.feedback, self.feedback_issues = self.read_feedback(entities, now)
+        self.feedback_retry_after = {
+            entity: now + timedelta(seconds=FEEDBACK_RESTORE_RETRY_SECONDS)
+            for entity in self.feedback_issues
+        }
+        self.feedback_revision += 1
+
+    def read_feedback(self, entities, now):
+        """Read selected archives outside status rendering and sanitize/deduplicate failures per source."""
+        restored, issues = {}, {}
+        for entity in entities:
+            log = self.feedback_logs.setdefault(
+                entity, BackgroundLog(_LOGGER, "Solar curtailment feedback restore")
+            )
             try:
-                restored[entity] = load_feedback(self.store.documents, entity, datetime.now(UTC))
-            except (OSError, ValueError, TypeError, KeyError):
+                restored[entity] = load_feedback(self.store.documents, entity, now)
+            except (OSError, ValueError, TypeError, KeyError) as error:
                 restored[entity] = None
-                self.feedback_issues[entity] = (
+                issues[entity] = (
                     "Curtailment feedback history is unreadable. Check archive storage. Production history is retained."
                 )
-        self.feedback = restored
-        self.feedback_revision += 1
+                log.exception(
+                    "Linked production remains excluded until its retained feedback can be read.",
+                    retry_seconds=FEEDBACK_RESTORE_RETRY_SECONDS,
+                    expected=True,
+                    reason=type(error).__name__,
+                )
+                _LOGGER.debug(
+                    "Solar curtailment feedback restore traceback (%s).\n%s",
+                    type(error).__name__,
+                    failure_trace(error),
+                )
+            else:
+                log.success("Retained feedback is readable. Background capture can continue.")
+        return restored, issues
+
+    def feedback_restore_job(self, now):
+        """Capture a bounded retry cohort without doing archive I/O under the live state lock."""
+        entities = tuple(
+            entity for entity in self.feedback_issues if now >= self.feedback_retry_after[entity]
+        )
+        if not entities or self.configuration is None:
+            return None
+        for entity in entities:
+            self.feedback_retry_after[entity] = now + timedelta(
+                seconds=FEEDBACK_RESTORE_RETRY_SECONDS
+            )
+        return self.configuration.version, entities
+
+    def install_feedback_restore(self, job, result):
+        """Accept recovery only for the same configured sources, preserving failures and healthy peers."""
+        if self.configuration is None or self.configuration.version != job[0]:
+            return
+        restored, issues = result
+        for entity in job[1]:
+            if entity not in issues and entity in self.feedback_issues:
+                self.feedback[entity] = restored[entity]
+                self.feedback_issues.pop(entity)
+                self.feedback_retry_after.pop(entity, None)
+                self.feedback_revision += 1
+                self.last_key = None
 
     def feedback_requests(self, now):
         """Request independent ranges so one missing sensor cannot starve another source."""
@@ -210,7 +273,7 @@ class SolarRuntime:
         self.feedback[incoming.entity_id] = accepted
         if (
             previous is None
-            or previous.readings != accepted.readings
+            or incoming.readings
             or (
                 previous.checked_until.replace(minute=0, second=0, microsecond=0)
                 != accepted.checked_until.replace(minute=0, second=0, microsecond=0)
@@ -802,9 +865,9 @@ class SolarRuntime:
                     "forecast_run_references": [run.version for run in forecast_runs],
                     "model": metadata,
                     "summary": document(result.summary),
-                    "curtailment_feedback_reference": (feedback or {})
-                    .get(source.curtailment_entity_id)
-                    .reference
+                    "curtailment_feedback_reference": archive_feedback(
+                        self.store, (feedback or {})[source.curtailment_entity_id]
+                    )
                     if (feedback or {}).get(source.curtailment_entity_id) is not None
                     else None,
                 }

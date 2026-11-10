@@ -15,6 +15,7 @@ from math import fsum, isfinite
 from open_energy_planner.planning_policy import PLANNING_HORIZON_HOURS
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.calculation.model import version
+from open_energy_planner.solar.curtailment import archive_feedback
 from open_energy_planner.solar.forecast_weather import (
     FORECAST_WEATHER_MODEL,
     FORECAST_WEATHER_POLICY,
@@ -485,7 +486,7 @@ def assess_forecasts(
                 "cutoff": origin.isoformat(),
                 "run_references": [row.version for row in relevant_runs],
                 "curtailment_feedback_references": {
-                    entity: value.reference
+                    entity: archive_feedback(store, value)
                     for entity, value in (feedback or {}).items()
                     if value is not None
                     and any(

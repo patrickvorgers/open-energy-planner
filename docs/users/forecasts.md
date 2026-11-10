@@ -142,6 +142,9 @@ unknown values exclude the affected hours from training and accuracy checks.
 An hour containing even part of an active or unknown period is excluded.
 An explicit unrestricted value makes subsequent complete hours usable again.
 An observation never changes the interpretation of earlier hours.
+Plan comparisons keep scores for earlier checked unrestricted hours when later
+hours are curtailed, unknown or not checked yet. A whole-day accuracy score still
+requires a complete comparable day.
 
 This assumption allows existing history to train machine learning. It cannot
 identify older curtailment that was never recorded. If you know such history is
@@ -151,8 +154,11 @@ The Home Assistant integration imports Recorder state changes in bounded
 ranges, then refreshes new feedback every five minutes. Initial history import
 can take several updates. Dense history is split into smaller checked ranges
 without dropping boundary observations. Reads wait for queued Recorder changes
-to commit before confirming coverage. Only successfully checked ranges are used. A failed
-read does not extend coverage. Accepted observations survive restart and
+to commit before confirming coverage. Each database query also limits its row
+count. A timed-out read cannot start overlapping retries for that sensor.
+Only successfully checked ranges are used. A failed read does not extend
+coverage. Temporary archive-read failures retry in the background without a
+configuration save or restart. Accepted observations survive restart and
 Recorder purging does not move the saved first observation. The configured
 sensor must be included in Recorder. Unknown sensor values remain unknown.
 

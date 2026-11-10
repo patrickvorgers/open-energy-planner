@@ -34,10 +34,11 @@ from tests.app.solar.support import plant
 from tests.database.support.backends import BACKENDS
 
 
-def test_solar_feedback_receipts_reuse_daily_blocks_and_survive_restart(archive, monkeypatch):
+def test_solar_feedback_receipts_reuse_segments_and_survive_restart(archive, monkeypatch):
     """Every backend retains exact boolean/unknown feedback and atomically rejects an interrupted pointer update."""
     from open_energy_planner.solar.curtailment import (
         CurtailmentHistory,
+        archive_feedback,
         load_feedback,
         save_feedback,
     )
@@ -52,12 +53,24 @@ def test_solar_feedback_receipts_reuse_daily_blocks_and_survive_restart(archive,
         source.curtailment_entity_id, START + timedelta(hours=1), ((START, False),)
     )
     accepted = save_feedback(store, None, first, START - timedelta(hours=1))
-    blocks = list(store.documents.iter_prefix("block-"))
+    first_accepted = accepted
+    first_reference = archive_feedback(store, accepted)
+    blocks = list(store.documents.iter_prefix("curtailment-segment-"))
+    assert len(blocks) == 1
     following = CurtailmentHistory(source.curtailment_entity_id, START + timedelta(hours=2), ())
     accepted = save_feedback(store, accepted, following, first.checked_until)
-    assert list(store.documents.iter_prefix("block-")) == blocks
+    assert list(store.documents.iter_prefix("curtailment-segment-")) == blocks
     restored = SolarStore(SqlDocuments(engine, "solar"))
     assert restored.current == configuration
+    assert (
+        load_feedback(
+            restored.documents,
+            source.curtailment_entity_id,
+            START + timedelta(hours=3),
+            reference=first_reference,
+        )
+        == first_accepted
+    )
     assert (
         load_feedback(restored.documents, source.curtailment_entity_id, START + timedelta(hours=3))
         == accepted

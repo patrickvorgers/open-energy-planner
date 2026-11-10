@@ -4,11 +4,16 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from functools import partial
+from math import inf, nextafter
 
 from aiohttp import ClientError
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.history import get_significant_states
+from homeassistant.components.recorder.db_schema import States
+from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.util import session_scope
+from homeassistant.core import State
 from homeassistant.util import dt as dt_util
+from sqlalchemy import select
 
 from .client import AuthenticationError, ReleaseMismatchError
 
@@ -28,7 +33,56 @@ def feedback_value(value):
     return None
 
 
-async def capture(hass, request):
+def first_retained_state(hass, start, end, entity):
+    """Read one indexed original observation even when its preceding state change was purged."""
+    # Recorder floats can round up to the microsecond cursor. Match that same datetime boundary.
+    lower = start.timestamp() - 0.5e-6
+    while dt_util.utc_from_timestamp(lower) < start:
+        lower = nextafter(lower, inf)
+    while dt_util.utc_from_timestamp(previous := nextafter(lower, -inf)) >= start:
+        lower = previous
+    with session_scope(hass=hass, read_only=True) as session:
+        metadata_id = get_instance(hass).states_meta_manager.get(entity, session, False)
+        if metadata_id is None:
+            return None
+        row = session.execute(
+            select(States.state, States.last_updated_ts)
+            .where(
+                States.metadata_id == metadata_id,
+                States.last_updated_ts >= lower,
+                States.last_updated_ts < end.timestamp(),
+            )
+            .order_by(States.last_updated_ts)
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        return State(
+            entity,
+            row.state or "unknown",
+            last_updated=dt_util.utc_from_timestamp(row.last_updated_ts),
+        )
+
+
+def recorder_observations(hass, start, end, entity):
+    """Keep the bounded first raw observation and native transitions under one executor owner."""
+    first = first_retained_state(hass, start, end, entity)
+    states = state_changes_during_period(
+        hass,
+        # Recorder uses a strict lower SQL bound. Retain an exact cursor observation.
+        start - timedelta(microseconds=1),
+        end,
+        entity,
+        no_attributes=True,
+        limit=MAX_FEEDBACK_READINGS + 1,
+        include_start_time_state=False,
+    )
+    if first is not None:
+        states.setdefault(entity, []).append(first)
+    return states
+
+
+async def capture(hass, request, *, pending_reads=None):
     """Read one indexed sensor history increment, preserving actual observation timestamps."""
     start, end = (datetime.fromisoformat(request[key]) for key in ("start", "end"))
     entity = request["entity_id"]
@@ -38,24 +92,34 @@ async def capture(hass, request):
     ):
         raise ValueError("Invalid curtailment feedback request")
 
-    async def persisted_history():
-        """Commit queued transitions before querying, sharing one deadline with the actual read."""
-        recorder = get_instance(hass)
+    pending_reads = pending_reads if pending_reads is not None else {}
+    if entity in pending_reads and not pending_reads[entity].done():
+        raise RuntimeError("Solar feedback Recorder read is still running")
+
+    def completed(query):
+        """Release native-work ownership only when the executor really finishes, even after timeout."""
+        if not query.cancelled():
+            query.exception()
+        if pending_reads.get(entity) is query:
+            pending_reads.pop(entity)
+
+    recorder = get_instance(hass)
+    async with asyncio.timeout(FEEDBACK_TIMEOUT_SECONDS):
         await recorder.async_block_till_done()
-        return await recorder.async_add_executor_job(
-            partial(
-                get_significant_states,
-                hass,
-                # Recorder uses a strict lower SQL bound. Retain an exact cursor observation.
-                start - timedelta(microseconds=1),
-                end,
-                [entity],
-                include_start_time_state=False,
-                significant_changes_only=False,
+        query = asyncio.ensure_future(
+            recorder.async_add_executor_job(
+                partial(
+                    recorder_observations,
+                    hass,
+                    start,
+                    end,
+                    entity,
+                )
             )
         )
-
-    states = await asyncio.wait_for(persisted_history(), FEEDBACK_TIMEOUT_SECONDS)
+        pending_reads[entity] = query
+        query.add_done_callback(completed)
+        states = await asyncio.shield(query)
     observations = list(states.get(entity, ()))
     current = hass.states.get(entity)
     if current is not None:
@@ -86,8 +150,9 @@ async def capture(hass, request):
 async def synchronize(coordinator, snapshot):
     """Keep Recorder reads off the command synchronization path and retry failures at a bounded rate."""
     previous = coordinator.solar_feedback_task
-    if previous and not previous.done():
+    if coordinator.closed or previous and not previous.done():
         return
+    coordinator.solar_feedback_task = None
     if previous and not previous.cancelled():
         previous.result()
     now = dt_util.utcnow()
@@ -95,10 +160,13 @@ async def synchronize(coordinator, snapshot):
         (
             row
             for row in snapshot.get("solar", {}).get("feedback_requests", ())
-            if row["entity_id"] not in coordinator.solar_feedback_attempts
-            or coordinator.solar_feedback_attempts[row["entity_id"]][0] != row["start"]
-            or (now - coordinator.solar_feedback_attempts[row["entity_id"]][1]).total_seconds()
-            >= FEEDBACK_RETRY_SECONDS
+            if row["entity_id"] not in coordinator.solar_feedback_reads
+            and (
+                row["entity_id"] not in coordinator.solar_feedback_attempts
+                or coordinator.solar_feedback_attempts[row["entity_id"]][0] != row["start"]
+                or (now - coordinator.solar_feedback_attempts[row["entity_id"]][1]).total_seconds()
+                >= FEEDBACK_RETRY_SECONDS
+            )
         ),
         None,
     )
@@ -109,7 +177,9 @@ async def synchronize(coordinator, snapshot):
     async def read():
         """Send only normalized evidence. A failed read never extends checked coverage."""
         try:
-            body = await capture(coordinator.hass, request)
+            body = await capture(
+                coordinator.hass, request, pending_reads=coordinator.solar_feedback_reads
+            )
             await coordinator.client.request("POST", "/v1/solar/feedback", body)
         except (AuthenticationError, ReleaseMismatchError):
             raise

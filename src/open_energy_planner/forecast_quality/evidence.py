@@ -30,6 +30,7 @@ def alternatives(
     issue=None,
     field=None,
     maximum=None,
+    hourly_issues=None,
 ):
     """Resolve same-issue archived candidates on the original measurement boundary."""
     path = "quality-candidates-" + original["version"] + ".json"
@@ -75,6 +76,7 @@ def alternatives(
                 receipt=receipt,
                 issue=issue,
                 maximum_comparable_kwh=maximum,
+                hourly_issues=hourly_issues,
             )
         )
     return result
@@ -305,11 +307,22 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                         )
                     except (OSError, KeyError, ValueError, TypeError):
                         pass
-                source_definition = parse_source(source)
-                unrestricted = unrestricted_interval(source_definition, start, end, feedback)
+                source_definition = (
+                    parse_source(source) if source.get("curtailment_entity_id") else None
+                )
+                hourly_issues = {}
+                hour = start
+                while source_definition and hour < end:
+                    if not unrestricted_interval(
+                        source_definition, hour, hour + timedelta(hours=1), feedback
+                    ):
+                        hourly_issues[hour] = (
+                            "Curtailment feedback does not establish unrestricted production for this hour"
+                        )
+                    hour += timedelta(hours=1)
                 issue = (
                     "Available production is not independently comparable with curtailed, hybrid or shared-inverter metering"
-                    if not unrestricted or inverter["hybrid"] or shared
+                    if inverter["hybrid"] or shared
                     else None
                 )
                 maximum = (
@@ -335,6 +348,7 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                     issue=issue,
                     receipt=receipt,
                     maximum_comparable_kwh=maximum,
+                    hourly_issues=hourly_issues,
                 )
                 row["measurement_boundary"] = boundary.upper()
 
@@ -352,6 +366,7 @@ def evidence(plan, archive, demand_documents, solar_documents, now, *, window=No
                         issue=issue,
                         field=field,
                         maximum=maximum,
+                        hourly_issues=hourly_issues,
                     )
                 except (FileNotFoundError, OSError, KeyError, TypeError, ValueError):
                     row["alternatives"] = []
