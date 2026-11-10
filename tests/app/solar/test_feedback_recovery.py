@@ -87,6 +87,9 @@ def test_solar_configuration_reads_off_loop_and_finishes_before_unlock_on_cancel
                 assert threads[0] != main_thread().name
                 await asyncio.sleep(0)
                 assert handler is not None and not handler.done()
+                async with session.get(url + "/v1/notifications") as response:
+                    assert response.status == 200
+                    assert "solar" in (await response.json())["unavailable_sources"]
                 waiting_read = asyncio.create_task(session.get(url + "/v1/solar"))
                 await asyncio.sleep(0.02)
                 assert not waiting_read.done()
@@ -109,6 +112,9 @@ def test_solar_configuration_reads_off_loop_and_finishes_before_unlock_on_cancel
             assert response.status == 200
             assert (await response.json())["configuration"]["version"] == target_version
             assert json.loads(read_document(tmp_path, "solar", "current.json")) == target_version
+            async with session.get(url + "/v1/notifications") as response:
+                assert response.status == 200
+                assert "solar" not in (await response.json())["unavailable_sources"]
 
     try:
         asyncio.run(scenario())

@@ -4,6 +4,7 @@ import logging
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as distribution_version
+from threading import Lock
 
 from open_energy_planner.forecast_quality.policy import FORECAST_MODELS
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, failure_trace
@@ -49,6 +50,7 @@ class SolarRuntime:
     def __init__(self, store):
         """Restore settings while requiring new weather/location before publishing live forecasts."""
         self.store = store
+        self.configuration_lock = Lock()
         self.configuration, self.issue = store.current, store.issue
         self.location, self.weather = None, ()
         self.forecast_runs, self.weather_service = (), {}
@@ -79,9 +81,14 @@ class SolarRuntime:
         self.learning_log = BackgroundLog(_LOGGER, "Solar ML candidate update")
 
     def save_configuration(self, configuration):
-        """Persist and restore settings in the caller-owned worker while its application lock is held."""
-        self.store.save(configuration)
-        self.configure(configuration)
+        """Persist and restore settings in the caller-owned worker while its application lock is held.
+
+        The Solar configuration lock excludes notification reads of partial state
+        without treating unrelated application work as a failed notification source.
+        """
+        with self.configuration_lock:
+            self.store.save(configuration)
+            self.configure(configuration)
 
     def configure(self, configuration):
         """Reset model state after persistence, retaining validated unchanged meter cohorts.

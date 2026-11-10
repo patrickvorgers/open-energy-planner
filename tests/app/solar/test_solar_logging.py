@@ -176,7 +176,7 @@ def test_configuration_worker_does_not_publish_mixed_solar_status(tmp_path, monk
 
 
 def test_notification_guard_retains_active_warning_until_coherent_recovery(tmp_path, monkeypatch):
-    """A busy writer preserves the existing notice as stale and only an unlocked usable state clears it."""
+    """Solar configuration work retains stale notices, but unrelated app work cannot delay recovery."""
     runtime = SolarRuntime(make_store(tmp_path, SolarStore))
     runtime.configure(plant())
     runtime.set_weather(SITE, weather())
@@ -195,11 +195,13 @@ def test_notification_guard_retains_active_warning_until_coherent_recovery(tmp_p
         assert notice["owner"] == "solar" and not notice["stale"]
         result = await asyncio.to_thread(runtime.build, runtime.job(START))
         async with lock:
-            assert runtime.install(result, START)
-            during = center.document()
-            assert len(during["notifications"]) == 1
-            assert during["notifications"][0] == {**notice, "stale": True}
-            assert during["unavailable_sources"] == ["solar"]
+            with runtime.configuration_lock:
+                assert runtime.install(result, START)
+                during = center.document()
+                assert len(during["notifications"]) == 1
+                assert during["notifications"][0] == {**notice, "stale": True}
+                assert during["unavailable_sources"] == ["solar"]
+            assert center.document() == {"notifications": [], "unavailable_sources": []}
         assert center.document() == {"notifications": [], "unavailable_sources": []}
 
     asyncio.run(scenario())
