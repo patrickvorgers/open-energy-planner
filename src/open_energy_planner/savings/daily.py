@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from open_energy_planner.contracts.wire import parse_counters
 from open_energy_planner.core.calendar import day_window
+from open_energy_planner.demand.calculation.model import EnergyTerm
 from open_energy_planner.installation.location import SiteLocation
 
 from .accounting import (
@@ -368,6 +369,9 @@ class DailySavings:
                 pv_estimated = False
                 physical, physical_advanced = None, False
                 try:
+                    bindings = row["context"]["bindings"]
+                    add_energy(energy, frame, bindings)
+                    bindings = dict(bindings)
                     if plan is None:
                         raise KeyError("context")
                     problem = physical_context(plan)
@@ -392,7 +396,6 @@ class DailySavings:
                     original_contract = plan["input_snapshot"].get("contract_version")
                     if original_contract and original_contract != contract.version:
                         problem, _tariffs = corrected_problem(plan, contract)
-                    bindings = dict(row["context"]["bindings"])
                     if isinstance(plan.get("display_sources"), dict):
                         display_sources.update(
                             {
@@ -417,7 +420,6 @@ class DailySavings:
                             and isinstance(source.get("entity_id"), str)
                         }
                     )
-                    add_energy(energy, frame, bindings)
                     advice = active_advice(
                         frame,
                         activations[
@@ -784,17 +786,26 @@ class DailySavings:
 
 def add_energy(totals, frame, bindings):
     """Retain measured energy independently of monetary coverage. Each metric keeps its own missing-data coverage."""
+    if not isinstance(bindings, dict) or any(
+        not isinstance(bindings[name], list) for name in ("imports", "exports", "terms", "solar")
+    ):
+        raise ValueError("Invalid measured energy bindings")
     members = {
-        "grid_import": [(identity, 1) for identity in bindings["imports"]],
-        "grid_export": [(identity, 1) for identity in bindings["exports"]],
-        "household": [(term["entity_id"], term["sign"]) for term in bindings["terms"]],
-        "solar_ac": [(source["entity_id"], 1) for source in bindings["solar"]],
+        "grid_import": [EnergyTerm(identity, 1) for identity in bindings["imports"]],
+        "grid_export": [EnergyTerm(identity, 1) for identity in bindings["exports"]],
+        "household": [EnergyTerm(**term) for term in bindings["terms"]],
+        "solar_ac": [EnergyTerm(source["entity_id"], 1) for source in bindings["solar"]],
     }
+    amounts = {}
     for key, terms in members.items():
-        if terms and all(identity in frame.channels for identity, _sign in terms):
-            amount = fsum(frame.channels[identity] * sign for identity, sign in terms)
+        if len({term.entity_id for term in terms}) != len(terms):
+            raise ValueError("Duplicate measured energy bindings")
+        if terms and all(term.entity_id in frame.channels for term in terms):
+            amount = fsum(frame.channels[term.entity_id] * term.sign for term in terms)
             if amount < 0:
                 continue
-            metric = totals[key]
-            metric["kwh"] = fsum((metric["kwh"] or 0.0, amount))
-            metric["coverage_seconds"] += (frame.end - frame.start).total_seconds()
+            amounts[key] = amount
+    for key, amount in amounts.items():
+        metric = totals[key]
+        metric["kwh"] = fsum((metric["kwh"] or 0.0, amount))
+        metric["coverage_seconds"] += (frame.end - frame.start).total_seconds()

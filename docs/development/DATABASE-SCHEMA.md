@@ -860,7 +860,9 @@ The report contains each scenario's `complete`, `partial` or `unavailable` statu
 cost breakdown, accepted and estimated seconds, coalesced missing UTC ranges with
 owned reasons, and opening/closing battery stock and value. `energy` retains
 measured gross import/export, household and AC solar kWh with independent coverage
-even when financial prices are missing. Captured installation definitions,
+even when the original accounting context or financial prices are missing.
+Associations are validated before any metric in a frame is added. Invalid
+associations cannot partially contribute energy or coverage. Captured installation definitions,
 contract/counter versions, published price versions, policy versions, evaluation
 time, recovery deadline and optional retained daily-plan ID remain permanent.
 

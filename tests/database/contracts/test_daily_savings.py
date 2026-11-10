@@ -15,8 +15,65 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
     ACTIVATIONS,
     PUBLISHED_PRICES,
     SAVINGS_DAYS,
+    SETTLEMENT_FRAMES,
 )
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
+
+
+@pytest.mark.parametrize("damage", ["missing", "physics", "market"])
+def test_measured_energy_survives_unavailable_plan_accounting(settlement, monkeypatch, damage):
+    """A measured quarter retains 1 kWh and 900 seconds even when no financial scenario is usable."""
+    from copy import deepcopy
+
+    runtime, _store, _docs, _engine, plans = settlement
+    original = deepcopy(plans.get_context("original-plan"))
+    if damage == "missing":
+        original = None
+    elif damage == "physics":
+        original["input_snapshot"]["problem"] = {}
+    else:
+        original["market_area"] = "PRIVATE-MARKET-SENTINEL"
+    monkeypatch.setattr(plans, "get_context", lambda _identity: original)
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), END, None
+    )
+    assert report["energy"] == {
+        "grid_import": {"kwh": 1, "coverage_seconds": 900},
+        "grid_export": {"kwh": 0, "coverage_seconds": 900},
+        "household": {"kwh": 1, "coverage_seconds": 900},
+        "solar_ac": {"kwh": 0, "coverage_seconds": 900},
+    }
+    assert all(
+        scenario["totals"] is None and scenario["coverage_seconds"] == 0
+        for scenario in report["scenarios"].values()
+    )
+    assert report["savings"] is None
+    assert "PRIVATE-MARKET-SENTINEL" not in str(report)
+    assert "PRIVATE-MARKET-SENTINEL" not in runtime.issue
+
+
+def test_invalid_energy_bindings_do_not_abort_later_measured_quarters(settlement):
+    """Reject a malformed first frame atomically, then retain the next valid quarter without raw diagnostics."""
+    runtime, store, _docs, engine, _plans = settlement
+    malformed = bindings()
+    malformed["solar"] = [{"source_id": "roof", "entity_id": "PRIVATE-BINDING-SENTINEL"}]
+    with engine.begin() as connection:
+        connection.execute(
+            SETTLEMENT_FRAMES.delete().where(SETTLEMENT_FRAMES.c.start == stamp(START))
+        )
+    store.put_frames((frame(),), {"bindings": malformed, "seeds": [], "location": None})
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+    )
+    assert report["energy"] == {
+        "grid_import": {"kwh": 1, "coverage_seconds": 900},
+        "grid_export": {"kwh": 0, "coverage_seconds": 900},
+        "household": {"kwh": 1, "coverage_seconds": 900},
+        "solar_ac": {"kwh": 0, "coverage_seconds": 900},
+    }
+    assert report["scenarios"]["actual"]["coverage_seconds"] == 900
+    assert "PRIVATE-BINDING-SENTINEL" not in str(report)
+    assert "PRIVATE-BINDING-SENTINEL" not in runtime.issue
 
 
 @pytest.mark.parametrize("missing", ["contract", "location"])

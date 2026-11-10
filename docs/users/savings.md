@@ -73,6 +73,8 @@ Smart planning benefit and benefit versus without battery have independent
 coverage. One can remain available when the other is unavailable. Charts use
 day or month totals according to the selected period. Missing measured meter
 associations remain unavailable rather than appearing as zero consumption.
+Valid measured energy remains available when the original plan or accounting
+context is missing. Costs and benefits still require their own complete evidence.
 
 A reference without batteries or bonus rules can resume after a gap on later
 fully measured intervals. The missing interval remains uncovered. Unknown battery

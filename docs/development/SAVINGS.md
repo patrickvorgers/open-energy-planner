@@ -262,6 +262,10 @@ Measured energy metrics require a nonempty meter association and all its reading
 An absent association has no measured total or coverage. An associated recorded
 zero remains a measured zero. An installation with no solar can still have an
 explicit physical/modelled zero without claiming a measured solar channel.
+Validate all consumed associations before adding any metric from a frame.
+Record valid measured energy before checking the original plan, installation
+physics, market identity or financial prices. Missing accounting context leaves
+the financial scenarios unavailable without discarding valid meter totals.
 
 An activated installation with no contract or location exposes an owned prerequisite
 issue requiring attention. Daily work and maintenance remain paused while stored
