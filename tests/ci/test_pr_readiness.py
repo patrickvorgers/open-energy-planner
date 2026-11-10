@@ -1,10 +1,12 @@
 """Prove Draft transitions and resolved-discussion admission with independent API evidence."""
 
+import json
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
+from script.ci import pr_readiness
 from script.ci.check_commit_signatures import GitHub, VerificationError
 from script.ci.pr_readiness import (
     require_resolved_threads,
@@ -109,6 +111,67 @@ def test_unconfirmed_draft_update_is_not_reported_as_success():
     client.invalid_mutation = True
     with pytest.raises(VerificationError):
         reset_changed_pr(client.event, "owner/planner", client)
+
+
+@pytest.mark.parametrize("action", ["opened", "synchronize", "reopened", "edited"])
+@pytest.mark.parametrize("draft", [True, False])
+def test_dependabot_retains_readiness_without_graphql_writes(action, draft, capsys):
+    """The existing bot exception avoids Draft writes and still requires a deliberate candidate request."""
+    client = ReadinessEvidence()
+    client.event["action"] = action
+    client.event["changes"] = {"base": {"ref": {"from": "previous-base"}}}
+    client.current.update(draft=draft, user={"login": "dependabot[bot]"})
+    client.invalid_mutation = True
+    assert reset_changed_pr(client.event, "owner/planner", client) is False
+    assert client.current["draft"] is draft
+    assert client.writes == []
+    assert "ci: run" in capsys.readouterr().out
+
+
+def test_event_claiming_dependabot_does_not_exempt_an_ordinary_author():
+    """Only the current authenticated PR author can select the established bot exception."""
+    client = ReadinessEvidence()
+    client.event["pull_request"]["user"] = {"login": "dependabot[bot]"}
+    client.current["user"] = {"login": "developer"}
+    assert reset_changed_pr(client.event, "owner/planner", client) is True
+    assert len(client.writes) == 1
+
+
+def test_readiness_entrypoint_reports_controlled_draft_failure(monkeypatch, tmp_path, capsys):
+    """A failed Draft mutation reports the safe operation error without claiming candidate admission."""
+    client = ReadinessEvidence()
+    client.invalid_mutation = True
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(client.event), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request_target")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/planner")
+    monkeypatch.setenv("GITHUB_TOKEN", "private-fixture-token")
+    monkeypatch.setattr(pr_readiness, "GitHub", lambda token: client)
+    assert pr_readiness.main() == 1
+    output = capsys.readouterr().out
+    assert "Draft transition unavailable" in output
+    assert "No candidate was admitted" in output
+    assert "private-fixture-token" not in output
+
+
+@pytest.mark.parametrize("fault", ["head", "base", "closed", "missing-draft"])
+def test_dependabot_exception_never_bypasses_current_metadata_checks(fault):
+    """Stale bot events do nothing and incomplete current metadata still fails closed."""
+    client = ReadinessEvidence()
+    client.current["user"] = {"login": "dependabot[bot]"}
+    if fault in {"head", "base"}:
+        client.current[fault]["sha"] = "3" * 40
+    elif fault == "closed":
+        client.current["state"] = "closed"
+    else:
+        del client.current["draft"]
+    if fault == "missing-draft":
+        with pytest.raises(VerificationError):
+            reset_changed_pr(client.event, "owner/planner", client)
+    else:
+        assert reset_changed_pr(client.event, "owner/planner", client) is False
+    assert client.writes == []
 
 
 @pytest.mark.parametrize(

@@ -105,6 +105,13 @@ def reset_changed_pr(event, repository, client):
     node_id = current.get("node_id")
     if type(current.get("draft")) is not bool or not isinstance(node_id, str) or not node_id:
         raise VerificationError("Invalid PR readiness metadata")
+    # The existing dependency-review exception has no automated Draft review phase.
+    if current.get("user", {}).get("login") == "dependabot[bot]":
+        print(
+            f"PR {number} retains its Dependabot readiness state. Assess compatibility and "
+            "regression coverage, then explicitly request candidate CI with ci: run."
+        )
+        return False
     changed = not current["draft"]
     if changed:
         response = client.post("graphql", {"query": DRAFT_MUTATION, "variables": {"id": node_id}})
@@ -132,7 +139,10 @@ def main():
             raise VerificationError("Readiness updates require trusted pull_request_target code")
         event = json.loads(Path(environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
         reset_changed_pr(event, environ["GITHUB_REPOSITORY"], GitHub(environ["GITHUB_TOKEN"]))
-    except (VerificationError, KeyError, TypeError, ValueError, OSError):
+    except VerificationError as error:
+        print(f"PR readiness failed: {error}. No candidate was admitted by this workflow.")
+        return 1
+    except (KeyError, TypeError, ValueError, OSError):
         print("PR readiness metadata unavailable. No candidate was admitted by this workflow.")
         return 1
     return 0
