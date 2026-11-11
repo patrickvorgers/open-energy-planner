@@ -761,6 +761,8 @@ def test_pause_resume_goes_through_http_and_persists_intent():
     async def scenario():
         """Toggle the actual virtual switch and verify persisted app intent and a newly accepted plan."""
         async with running_chain() as (hass, entry, _url, _root):
+            entry.runtime_data.poll_cancel()
+            entry.runtime_data.poll_cancel = None
             old = entry.runtime_data.schedule.plan.plan_id
             await hass.services.async_call(
                 "switch",
@@ -946,6 +948,8 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
     async def scenario():
         """Use a capture-only HA automation to observe pause and resume events without operating equipment."""
         async with running_chain() as (hass, entry, _url, _root):
+            entry.runtime_data.poll_cancel()
+            entry.runtime_data.poll_cancel = None
             captured = []
             hass.bus.async_listen(
                 "oep_test_capture", lambda event_item: captured.append(event_item.data)

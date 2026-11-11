@@ -16,6 +16,8 @@ def test_pause_confirmation_does_not_fetch_history_and_periodic_sync_still_does(
         """Gate the real archive owner rather than returning a fabricated status snapshot."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
             entered, release = threading.Event(), threading.Event()
             readers, readers_lock = [], threading.Lock()
             original = SavingsRuntime.request
@@ -60,6 +62,62 @@ def test_pause_confirmation_does_not_fetch_history_and_periodic_sync_still_does(
             assert ("GET", "/v1/snapshot") in requests
             assert coordinator.issue is None
             assert coordinator.pending_enabled is None
+
+    asyncio.run(scenario())
+
+
+def test_local_pause_withdraws_commands_while_existing_sync_holds_its_lock(monkeypatch):
+    """A blocked sync delays the control receipt, while local pause immediately withdraws commands."""
+    from open_energy_planner.savings.runtime import SavingsRuntime
+
+    async def scenario():
+        """Block a real coordinator snapshot read and observe the independent local pause before release."""
+        async with running_chain() as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            entered, release = threading.Event(), threading.Event()
+            original = SavingsRuntime.request
+            requests = []
+            request = coordinator.client.request
+
+            async def record(method, path, body=None):
+                """Record real client requests so a local pause cannot masquerade as an HTTP receipt."""
+                requests.append((method, path))
+                return await request(method, path, body)
+
+            def read_history(runtime, *arguments):
+                """Hold the archive read inside a real sync until the local command assertion completes."""
+                entered.set()
+                assert release.wait(4)
+                return original(runtime, *arguments)
+
+            monkeypatch.setattr(coordinator.client, "request", record)
+            with monkeypatch.context() as patch:
+                patch.setattr(SavingsRuntime, "request", read_history)
+                syncing = asyncio.create_task(coordinator.sync())
+                pausing = None
+                try:
+                    assert await asyncio.to_thread(entered.wait, 2)
+                    assert coordinator.lock.locked()
+                    pausing = asyncio.create_task(coordinator.set_enabled(False))
+                    async with asyncio.timeout(1):
+                        while coordinator.pending_enabled is not False:
+                            await asyncio.sleep(0)
+                    assert find(hass, "battery_power_target").state == "unavailable"
+                    assert not coordinator.schedule.enabled
+                    assert not syncing.done() and not pausing.done()
+                    assert ("PUT", "/v1/enabled") not in requests
+                finally:
+                    release.set()
+                    await asyncio.gather(syncing, *([pausing] if pausing else []))
+            assert requests.count(("PUT", "/v1/enabled")) == 1
+            assert coordinator.pending_enabled is None
+            assert find(hass, "battery_power_target").state == "unavailable"
+            await coordinator.sync()
+            assert requests.count(("GET", "/v1/snapshot")) == 2
+            assert coordinator.issue is None
+            assert not coordinator.schedule.enabled
 
     asyncio.run(scenario())
 

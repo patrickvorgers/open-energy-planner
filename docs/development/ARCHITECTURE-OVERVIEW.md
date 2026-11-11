@@ -35,7 +35,10 @@ not fetch a snapshot or wait for historical readers. The app composition owns
 this mutation boundary. The HA client validates the receipt against the exact
 boolean, request identity and paired build. The coordinator clears only the
 confirmed current intent, never an intent superseded during the exchange or
-after shutdown. Its next periodic synchronization retains the complete snapshot,
+after shutdown. Local pause withdraws commands before waiting for the HA
+synchronization lock. Its confirmation can wait for an in-flight synchronization
+to finish, but the control receipt does not start another historical read.
+Its next periodic synchronization retains the complete snapshot,
 catalogue, observation and history flow. Resume still requires a plan generated
 after the local resume boundary, so a receipt cannot revive older commands.
 

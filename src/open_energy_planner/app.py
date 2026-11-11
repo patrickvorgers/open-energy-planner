@@ -781,7 +781,11 @@ def create_app(
     register_prices(app, lambda: prices, contracts, live, lock)
 
     async def snapshot(request):
-        """Refresh live validity under the state lock and return the current installation snapshot."""
+        """Capture settlement inputs under the state lock and await their archive read outside it.
+
+        Reacquire the lock to refresh live validity and assemble current state, so
+        intervening controls are reflected rather than overwritten by captured state.
+        """
         async with lock:
             pending_settlement = settlement_request()
         settlement = await pending_settlement

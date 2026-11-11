@@ -13,6 +13,13 @@ from sqlalchemy.engine import make_url
 def paused_responses(url):
     """Forward a local test connection and retain server bytes while the returned gate is set."""
     target = make_url(url)
+    postgres = target.drivername.startswith("postgresql")
+    if postgres:
+        _arguments, parameters = target.get_dialect()().create_connect_args(target)
+        upstream_host = parameters.get("hostaddr") or parameters.get("host")
+        upstream_port = parameters.get("port", 5432)
+    else:
+        upstream_host, upstream_port = target.host, target.port or 3306
     paused, received, stopped = Event(), Event(), Event()
 
     class Forwarder(BaseRequestHandler):
@@ -23,11 +30,7 @@ def paused_responses(url):
             with (
                 suppress(OSError),
                 socket.create_connection(
-                    (
-                        target.query.get("hostaddr", target.host),
-                        target.port
-                        or (5432 if target.drivername.startswith("postgresql") else 3306),
-                    ),
+                    (upstream_host, upstream_port),
                     timeout=5,
                 ) as upstream,
             ):
@@ -55,8 +58,10 @@ def paused_responses(url):
         thread.start()
         try:
             proxied = target.set(port=server.server_address[1])
-            if target.drivername.startswith("postgresql"):
-                proxied = proxied.update_query_dict({"hostaddr": "127.0.0.1"})
+            if postgres:
+                proxied = proxied.difference_update_query(("port",)).update_query_dict(
+                    {"hostaddr": "127.0.0.1"}
+                )
             else:
                 proxied = proxied.set(host="127.0.0.1")
             yield proxied, paused, received
