@@ -17,6 +17,28 @@ from tests.ci.browser_evidence import write_browser_evidence
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_preparation_normalizes_legacy_documentation_scope_once_for_all_consumers():
+    """Native Actions bindings preserve legacy docs fallback and share one profile across machines."""
+    workflow = (ROOT / ".github/workflows/checks.yaml").read_text(encoding="utf-8")
+    preparation = workflow.split("  prepare:\n", 1)[1].split("\n  tests:\n", 1)[0]
+    expression = "${{ steps.scope.outputs.profile || (steps.scope.outputs.documentation_only == 'true' && 'documentation' || 'full') }}"
+    # Actions expression and cross-job output wiring require structural coverage.
+    assert "profile: ${{ steps.selection.outputs.profile }}" in preparation
+    normalization = preparation.split("      - name: Normalize selected CI profile\n", 1)[1]
+    normalization = normalization.split("      - name:", 1)[0]
+    assert "id: selection" in normalization
+    assert f"OEP_CI_PROFILE: {expression}" in normalization
+    assert 'run: echo "profile=$OEP_CI_PROFILE" >> "$GITHUB_OUTPUT"' in normalization
+    assert preparation.count(expression) == 1
+    for name in (
+        "Packaged test images, collection and provisioning imports",
+        "Export each prepared test image once",
+    ):
+        consumer = preparation.split(f"      - name: {name}\n", 1)[1]
+        consumer = consumer.split("      - name:", 1)[0]
+        assert "OEP_CI_PROFILE: ${{ steps.selection.outputs.profile }}" in consumer
+
+
 def test_hosted_images_share_one_storage_setup_and_failed_machines_cancel_peers():
     """Exporter and consumers use one backend before image operations and cancellation cannot package."""
     workflow = (ROOT / ".github/workflows/checks.yaml").read_text(encoding="utf-8")
@@ -132,6 +154,82 @@ def prepare_plan(profile):
     (parallel.PREPARED / "parallel-plan.json").write_text(json.dumps(document))
     (parallel.PREPARED / "preflight").mkdir()
     return document
+
+
+@pytest.mark.parametrize(
+    "profile,images,expected_lanes,collected_suites",
+    [
+        ("documentation", {"native"}, {"native"}, set()),
+        (
+            "full",
+            {"native", "app", "ha-tests", "ui-tests"},
+            {"native", "browser", "databases", "supervisor"},
+            {"native", "ha", "browser", "databases", "supervisor"},
+        ),
+        (
+            "selected:browser,ci",
+            {"native", "ui-tests"},
+            {"native", "browser"},
+            {"browser", "ci"},
+        ),
+    ],
+)
+def test_preflight_and_export_share_profile_without_requesting_unbuilt_images(
+    hosted_identity, monkeypatch, profile, images, expected_lanes, collected_suites
+):
+    """Docs-only, full and focused preparation export only images available from their own build."""
+    from script.ci import check_images
+
+    collected = []
+    inspected = []
+    available = {f"oep-check-123-2-{image}" for image in images}
+    available.update({"oep-check-123-2-db-tests", "oep-check-123-2-provision-tests"})
+
+    def run(command, **options):
+        """Reject unbuilt image use at real inspect boundaries and write requested image archives."""
+        if command[:3] == ["docker", "image", "inspect"]:
+            assert set(command[3:]) <= available
+            inspected.extend(command[3:])
+        elif command[:3] == ["docker", "image", "save"]:
+            Path(command[command.index("-o") + 1]).write_bytes(b"prepared image")
+        elif command[:2] == ["docker", "compose"] and (
+            command[-3:] == ["down", "--volumes", "--remove-orphans"]
+            or command[-2:] == ["logs", "--no-color"]
+        ):
+            pass
+        else:
+            pytest.fail(f"Unexpected preparation command: {command}")
+
+    def inspect(command):
+        """The image exporter cannot inspect an image absent from the selected build."""
+        run(command)
+        return json.dumps([{"Id": "sha256:prepared"} for _ in command[3:]]).encode()
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "check_output", inspect)
+    monkeypatch.setattr(
+        check_images,
+        "check_images",
+        lambda compose, project, selected, suites: collected.append((selected, suites)),
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["ci.py", "--prebuilt", "--stage", "preflight", "--profile", profile]
+    )
+    runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
+    monkeypatch.chdir(hosted_identity)
+    Path("results/ci").mkdir(parents=True)
+    parallel.export_images(profile)
+    plan = json.loads((parallel.PREPARED / "parallel-plan.json").read_text())
+    assert collected == [(profile, collected_suites)]
+    assert plan["profile"] == profile
+    assert set(plan["images"]) == images
+    assert set(plan["lanes"]) == expected_lanes
+    if profile == "documentation":
+        assert set(inspected) == {
+            "oep-check-123-2-native",
+            "oep-check-123-2-db-tests",
+            "oep-check-123-2-provision-tests",
+        }
 
 
 def test_preparation_exports_shared_native_image_once_and_retains_all_aliases(

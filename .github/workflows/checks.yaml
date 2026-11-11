@@ -42,7 +42,7 @@ jobs:
       run:
         shell: bash
     outputs:
-      profile: ${{ steps.scope.outputs.profile || 'full' }}
+      profile: ${{ steps.selection.outputs.profile }}
       documentation_only: ${{ steps.scope.outputs.documentation_only }}
       test_only: ${{ steps.scope.outputs.test_only }}
       matrix_profile: ${{ steps.scope.outputs.matrix_profile }}
@@ -90,6 +90,11 @@ jobs:
           echo "test_only=false" >> "$GITHUB_OUTPUT"
           echo "targets=app,native,ha-tests,ui-tests" >> "$GITHUB_OUTPUT"
           echo "CI scope: full checks (non-PR event or unavailable base policy)"
+      - name: Normalize selected CI profile
+        id: selection
+        env:
+          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || (steps.scope.outputs.documentation_only == 'true' && 'documentation' || 'full') }}
+        run: echo "profile=$OEP_CI_PROFILE" >> "$GITHUB_OUTPUT"
       - name: Report authoritative CI selection
         run: python -m script.ci.scope_report
       - name: Release unused hosted-runner SDK storage
@@ -129,12 +134,12 @@ jobs:
             ui-tests.cache-to=type=gha,scope=oep-ui,mode=max,ignore-error=true,timeout=60s
       - name: Packaged test images, collection and provisioning imports
         env:
-          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || (steps.scope.outputs.documentation_only == 'true' && 'documentation' || 'full') }}
+          OEP_CI_PROFILE: ${{ steps.selection.outputs.profile }}
         run: python script/ci/ci.py --prebuilt --stage preflight --profile "$OEP_CI_PROFILE"
       - name: Export each prepared test image once
         id: parallel
         env:
-          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || 'full' }}
+          OEP_CI_PROFILE: ${{ steps.selection.outputs.profile }}
         run: python -m script.ci.parallel_checks export --profile "$OEP_CI_PROFILE"
       - name: Preserve prepared selection and inventories
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
