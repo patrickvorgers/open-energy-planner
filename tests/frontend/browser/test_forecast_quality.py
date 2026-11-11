@@ -677,6 +677,7 @@ def test_energy_consumer_forecast_choices_use_visual_inputs_without_helpers(app_
         route.fulfill(json=state)
 
     page.route("**/v1/consumers", consumers)
+    page.route("**/v1/consumers?view=settings", consumers)
     page.route(
         "**/v1/ev",
         lambda route: route.fulfill(status=409, body="Home Assistant timezone unavailable"),
