@@ -1355,6 +1355,7 @@ def test_appliance_controls_reconcile_after_pending_removal(monkeypatch, platfor
 
 def test_mixed_consumer_history_keeps_the_ready_devices_forecast(tmp_path, monkeypatch):
     """The real mixed-history producer retains a ready forecast through the strict HA projection."""
+    import json
     from dataclasses import replace
     from types import SimpleNamespace
 
@@ -1400,5 +1401,12 @@ def test_mixed_consumer_history_keeps_the_ready_devices_forecast(tmp_path, monke
     )
     ready = ConsumerSensor(coordinator, "sensor.ready", "Ready appliance", "power")
     missing = ConsumerSensor(coordinator, "sensor.short", "Short-history appliance", "power")
+    status = ConsumerSensor(coordinator, "sensor.ready", "Ready appliance", "status")
+    for name in ("strings.json", "translations/en.json"):
+        labels = json.loads((COMPONENT / name).read_text(encoding="utf-8"))["entity"]["sensor"]
+        assert (
+            labels[status.translation_key]["state"]["partial_history"] == "Some history unavailable"
+        )
+        assert "partial_history" not in labels["status"]["state"]
     assert ready.available and ready.native_value == pytest.approx(200)
     assert not missing.available

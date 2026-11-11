@@ -24,7 +24,6 @@
       "status": {
         "state": {
           "active": "Active",
-          "partial_history": "Some history unavailable",
           "paused": "Paused",
           "waiting_for_new_plan": "Waiting for new plan",
           "not_ready": "Not ready",
@@ -87,7 +86,8 @@
           "existing_exclusions_unsupported": "Existing exclusions unsupported",
           "consumer_overlaps_household_boundary": "Meter overlaps household boundary",
           "energy_consumer_hierarchy_inconsistent": "Energy meter hierarchy inconsistent",
-          "household_boundary_missing": "Household boundary missing"
+          "household_boundary_missing": "Household boundary missing",
+          "partial_history": "Some history unavailable"
         }
       },
       "appliance_task_status": {
