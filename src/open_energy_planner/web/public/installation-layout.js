@@ -251,6 +251,7 @@ export class InstallationLayout {
             panelSections.push(section);
         }
         for (const input of root?.querySelectorAll("input,select") || []) {
+            if (input.closest(".calibration-fields")?.hidden) continue;
             if (input.type === "hidden" || input.id === "grid-invert" || input.dataset.key === "panel_name" || input.hasAttribute("data-view-control")) continue;
             const title = input.getAttribute("aria-label") || [...(input.labels?.[0]?.childNodes || [])].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join("").trim();
             if (["grid", "export-energy"].includes(input.id) || input.dataset.key === "inverter_id") continue;
@@ -260,6 +261,7 @@ export class InstallationLayout {
         if (this.area === 0) for (const [title, value] of this.gridSources || []) summaryFact(list, title, value);
         if (this.area === 2 && root) summaryFact(list, "Usable capacity source", "Home Assistant Energy: Read-only");
         summary.append(tag, heading, list, ...panelSections);
+        for (const status of root?.querySelectorAll(".calibration-status") || []) summary.append(status.cloneNode(true));
         if (!root) { const empty = document.createElement("p"); empty.textContent = `No ${this.area === 1 ? "solar sources" : "batteries"} configured in Home Assistant Energy.`; summary.append(empty); }
         if (this.area === 0) for (const id of ["grid-summary", "household-summary"]) {
             const note = document.createElement("p"); note.className = "installation-note"; note.textContent = find(id).textContent; summary.append(note);

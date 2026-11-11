@@ -53,7 +53,20 @@ Review any suggested efficiency or rating against the manufacturer's information
 
 Enable **Can follow zero grid target** only if your own controller or automation can implement that mode. It is a capability permission, not a promise of physically exact zero grid exchange.
 
+### Periodic battery calibration
+
+Select a battery and **Edit installation**, then enable **Periodic battery calibration**. It is off by default. **Calibration interval (days)** defaults to 14 whole elapsed days. **Calibration hold (hours)** defaults to 3 hours and accepts fractions. Save the installation explicitly.
+
+The first deadline is 14 days after enabling with the default interval. Each completed calibration establishes the next deadline. The planner starts charging ahead of the deadline, allowing for configured charging power, converter and grid connection, the full hold and a quarter-hour margin. Calibration charging takes priority over price optimization. Electrical limits and local battery protections remain authoritative. Insufficient capacity or energy can leave calibration overdue. A deadline never permits exceeding those limits.
+
+Completion requires a measured **100.0%**, followed by the configured continuous hold without measured active discharge. Natural absorption drift down to **98.0%** is allowed. A lower SoC, positive discharge power, missing SoC/power inputs or more than five minutes between captures restarts the hold after a new measured 100.0%. A natural full-charge hold can also satisfy the requirement. The planner does not force an early natural hold before calibration charging becomes due.
+
+During required charging and the hold, proposed battery commands cannot actively discharge or use zero-grid following. After measured completion, a fresh plan resumes normal operation. Until that confirmation, the displayed future plan conservatively retains the hold. Your existing Home Assistant automation must execute the battery commands. This setting does not configure inverter charging voltage, BMS balancing or manufacturer calibration procedures.
+
+Progress and the last completed time live in the active database and survive restart and database transfer. An unobserved offline period never counts toward completion. A predicted full battery in a plan does not count either. Reload Installation to see retained progress and the next deadline. Disabling calibration clears its schedule. Re-enabling, changing its interval/hold, or replacing its measurement identity or capacity starts a new schedule. Unrelated settings preserve measured progress. Only enable periodic full charging when appropriate for the battery manufacturer's instructions.
+
 ## Choose the planning strategy
+
 
 Select **Planning strategy** in the installation area selector. The saved **Optimization goal** row shows **Minimize cost** or **Minimize consumption**. Open **Compare optimization goals** for the full explanation, then use **Edit installation** to change the choice.
 

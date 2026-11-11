@@ -107,7 +107,15 @@ def physical_context(plan, *, immediate_appliances=False):
         intervals=intervals,
         inverters=tuple(SolarInverter(**row) for row in data["inverters"]),
         batteries=tuple(
-            BatteryState(**{**row, "battery": Battery(**row["battery"])})
+            BatteryState(
+                **{
+                    **row,
+                    "battery": Battery(**row["battery"]),
+                    "calibration_hold_until": datetime.fromisoformat(row["calibration_hold_until"])
+                    if row.get("calibration_hold_until")
+                    else None,
+                }
+            )
             for row in data["batteries"]
         ),
         pv_sources=tuple(PVUnit(**row) for row in data["pv_sources"]),

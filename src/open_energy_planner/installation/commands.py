@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import timedelta
+from math import ceil
 from uuid import uuid4
 
 from open_energy_planner.core.units import FULL_SOC_PERCENT, WATTS_PER_KW
@@ -55,7 +56,8 @@ def plan_document(snapshot, result, costs, now):
         controlled_entities=tuple(ev_sources.values()) + tuple(thermal_sources.values()),
     )
     steps = []
-    stored = {unit.device_id: unit.battery.initial_kwh for unit in problem.batteries}
+    units = {unit.device_id: unit for unit in problem.batteries}
+    stored = {identity: unit.battery.initial_kwh for identity, unit in units.items()}
     group_followers = {}
     for interval_index, (interval, flow) in enumerate(
         zip(problem.intervals, result.plan.flows, strict=True)
@@ -68,6 +70,8 @@ def plan_document(snapshot, result, costs, now):
             battery.device_id
             for battery in problem.batteries
             if battery.can_follow_grid
+            and not battery.calibration_charge
+            and battery.calibration_hold_until is None
             and stored[battery.device_id] >= battery.battery.minimum_kwh
             and abs(flow.grid_import) <= ZERO_GRID_TOLERANCE_KWH
             and abs(flow.grid_export) <= ZERO_GRID_TOLERANCE_KWH
@@ -82,9 +86,15 @@ def plan_document(snapshot, result, costs, now):
         commands = {}
         followers = group_followers[interval.control_group or interval_index]
         for battery in flow.batteries:
+            unit = units[battery.device_id]
             power = (
                 (battery.discharge_kwh - battery.charge_kwh) * WATTS_PER_KW / interval.duration_h
             )
+            if (
+                unit.calibration_charge
+                and abs(battery.end_kwh - unit.battery.capacity_kwh) <= ZERO_GRID_TOLERANCE_KWH
+            ):
+                power = -ceil(max(0, -power) - WHOLE_WATT_TOLERANCE)
             if abs(power - round(power)) > WHOLE_WATT_TOLERANCE:
                 raise ValueError("Fractional device command")
             following = battery.device_id in followers

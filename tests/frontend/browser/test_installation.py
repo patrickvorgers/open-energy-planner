@@ -80,6 +80,49 @@ def _discovered_installation_devices(page, url, kind, count):
     return body
 
 
+def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
+    """Desktop/mobile can enable defaults, save a different interval and discard an unsaved disable."""
+    page, url = app_page
+    _discovered_installation_devices(page, url, "battery", 1)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    editor = page.locator("#battery-rows > fieldset").first
+    editor.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Own inverter AC rating (kW)", exact=True).fill("3")
+    toggle = editor.get_by_label("Periodic battery calibration", exact=True)
+    expect(toggle).not_to_be_checked()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).not_to_be_visible()
+    toggle.check()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("14")
+    expect(editor.get_by_label("Calibration hold (hours)", exact=True)).to_have_value("3")
+    editor.get_by_label("Calibration interval (days)", exact=True).fill("10")
+    editor.get_by_label("Calibration hold (hours)", exact=True).fill("2.5")
+    finish(page)
+    saved = read_settings(page, url)["installation"]["batteries"][0]
+    assert saved["calibration_enabled"] is True
+    assert saved["calibration_interval_days"] == 10
+    assert saved["calibration_hold_hours"] == 2.5
+    page.reload()
+    connect(page)
+    installation_area(page, 2, edit=True)
+    expect(toggle).to_be_checked()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("10")
+    screenshots = Path("results/ci/battery-calibration")
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(screenshots / f"installation-{page.viewport_size['width']}.png"), full_page=True
+    )
+    toggle.evaluate("element => element.closest('label').scrollIntoView({block: 'start'})")
+    page.evaluate("window.scrollBy(0, -130)")
+    page.screenshot(path=str(screenshots / f"calibration-{page.viewport_size['width']}.png"))
+    toggle.uncheck()
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    installation_area(page, 2, edit=True)
+    expect(toggle).to_be_checked()
+
+
 @pytest.mark.parametrize("kind", ["solar", "battery"])
 def test_seventeen_installation_devices_can_be_saved_reloaded_and_edited(app_page, kind):
     """Every one of seventeen Energy sources survives setup and a later edit of the final device."""

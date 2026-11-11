@@ -1033,7 +1033,20 @@ def create_app(
 
                     body = await request.json()
                     report = parse_report(body, live.configuration, datetime.now(UTC))
+                    if live.report is not None and report.captured_at <= live.report.captured_at:
+                        raise ValueError("Observation reports must advance capture time")
+                    cancellation = None
+                    if installation.current is not None and any(
+                        battery.calibration_enabled for battery in installation.current.batteries
+                    ):
+                        previous_progress = installation.calibration.command_revision
+                        cancellation = await complete_write(installation.observe, report)
+                        if installation.calibration.command_revision != previous_progress:
+                            live.invalidate("battery_calibration_changed")
+                            live.last_submission = None
                     await live.receive_async(report)
+                    if cancellation is not None:
+                        raise cancellation
                 except (ValueError, TypeError, KeyError):
                     raise web.HTTPBadRequest(text="Invalid observation report") from None
             return await snapshot(request)

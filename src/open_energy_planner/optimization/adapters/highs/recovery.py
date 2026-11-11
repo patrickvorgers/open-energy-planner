@@ -28,8 +28,9 @@ def prioritize_reserve(model, problem: InstallationProblem, deadline):
     Nonempty reserve_checkpoints restrict priority to those interval ends, so EV
     refinement cannot add new reserve priorities. Empty checkpoints retain every end.
 
-    Only explicitly enabled batteries initially below reserve participate. Fix
-    each proven optimum before advancing. Stop once all reserves are restored.
+    Opted-in batteries initially below reserve target their configured reserve.
+    Active calibration charges target full capacity. Fix each proven optimum
+    before advancing and stop once all participating targets are restored.
     Shared limits can require choosing which battery recovers first. Monetary
     optimization breaks ties only inside the proven aggregate shortfall profile.
     The same wall-clock budget covers every stage. An unproven priority returns
@@ -51,10 +52,18 @@ def prioritize_reserve(model, problem: InstallationProblem, deadline):
     """
     context, native = model.context, model.context.native
     units = [
-        (battery_item.battery, "bat:" + battery_item.device_id)
+        (
+            "bat:" + battery_item.device_id,
+            battery_item.battery.capacity_kwh
+            if battery_item.calibration_charge
+            else battery_item.battery.minimum_kwh,
+        )
         for battery_item in problem.batteries
-        if battery_item.battery.recover_reserve
-        and battery_item.battery.initial_kwh < battery_item.battery.minimum_kwh
+        if battery_item.calibration_charge
+        or (
+            battery_item.battery.recover_reserve
+            and battery_item.battery.initial_kwh < battery_item.battery.minimum_kwh
+        )
     ]
     if not units:
         return None
@@ -73,12 +82,10 @@ def prioritize_reserve(model, problem: InstallationProblem, deadline):
             if checkpoints and step.start + timedelta(hours=step.duration_h) not in checkpoints:
                 continue
             shortfall = []
-            for battery, key in units:
-                deficit = native.addVariable(lb=0, ub=battery.minimum_kwh)
+            for key, target in units:
+                deficit = native.addVariable(lb=0, ub=target)
                 native.addConstr(
-                    deficit
-                    >= battery.minimum_kwh
-                    - context.binding(key).variables["energy"][interval_index]
+                    deficit >= target - context.binding(key).variables["energy"][interval_index]
                 )
                 shortfall.append(deficit)
             remaining = deadline - perf_counter()
@@ -102,11 +109,9 @@ def prioritize_reserve(model, problem: InstallationProblem, deadline):
             native.addConstr(sum(shortfall) <= max(0, optimum) + RESERVE_PRIORITY_TOLERANCE_KWH)
             if optimum <= RESERVE_PRIORITY_TOLERANCE_KWH:
                 # Recovery cannot be undone. Make that implied future floor explicit for presolve.
-                for battery, key in units:
+                for key, target in units:
                     for end in context.binding(key).variables["energy"][interval_index + 1 :]:
-                        native.addConstr(
-                            end >= battery.minimum_kwh - RESERVE_PRIORITY_TOLERANCE_KWH
-                        )
+                        native.addConstr(end >= target - RESERVE_PRIORITY_TOLERANCE_KWH)
                 break
     finally:
         native.setObjective(objective, sense)

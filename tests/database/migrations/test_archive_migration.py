@@ -30,6 +30,58 @@ ROUTES = [
 ]
 
 
+def test_battery_calibration_transfers_without_source_dependency(route):
+    """Every backend route preserves calibration after the original database is closed."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from open_energy_planner.installation.model import Installation, InstalledBattery
+    from open_energy_planner.installation.storage import InstallationStore
+    from open_energy_planner.solar.calculation.model import SolarInverter
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    store = InstallationStore(SqlDocuments(source, "installation"))
+    battery = InstalledBattery(
+        "battery",
+        "inv",
+        "sensor.soc",
+        "sensor.power",
+        2,
+        4000,
+        4000,
+        calibration_enabled=True,
+        calibration_hold_hours=0.25,
+    )
+    settings = Installation("sensor.grid", 4000, 4000, (SolarInverter("inv", 4000, 1),), (battery,))
+    store.save(settings)
+    start = datetime.now(UTC)
+    for minute in (0, 5, 10, 15):
+        store.observe(
+            SimpleNamespace(
+                captured_at=start + timedelta(minutes=minute),
+                readings=tuple(
+                    SimpleNamespace(
+                        key=f"battery.battery.{key}", entity_id=entity, value=value, unit=unit
+                    )
+                    for key, entity, value, unit in (
+                        ("soc", "sensor.soc", 100 if minute == 0 else 98, "%"),
+                        ("power", "sensor.power", 0, "W"),
+                    )
+                ),
+            )
+        )
+    before = deepcopy(store.calibration.state)
+    assert before["battery"]["completed_at"] is not None
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = InstallationStore(SqlDocuments(target, "installation"))
+    assert restored.current == settings
+    assert restored.calibration.state == before
+    assert restored.calibration.due_at(battery) == start + timedelta(minutes=15, days=14)
+
+
 def test_solar_feedback_transfers_without_its_original_database(route):
     """All backend routes preserve sensor binding, first observation, unknown state and immutable feedback references."""
     from open_energy_planner.solar.curtailment import (

@@ -38,6 +38,9 @@ for (const type of ["input", "change"]) $("wizard").addEventListener(type, event
 });
 const priceSettings = new PriceSourceSettings(() => { saveState.update(); layout.sync(); });
 const help = {
+    calibration_enabled: "Periodically reach 100.0% and hold without active discharge. Up to 2.0 percentage points of natural absorption drift is allowed. Your Home Assistant automation must execute the battery commands.",
+    calibration_interval_days: "Maximum elapsed days after a measured completed calibration. The first deadline is this many days after enabling. Charging starts ahead of the deadline and takes priority over price optimization. Physical limits and missing measurements can delay completion.",
+    calibration_hold_hours: "Continuous hours after a measured 100.0%. Active discharge, a fall below 98.0% or a measurement gap longer than five minutes restarts the hold. A predicted charge does not count.",
     energy_entity: "The cumulative battery meter configured in the Energy dashboard. It identifies which battery these measurements and ratings belong to.",
     charge_energy_entity: "Cumulative energy entering the battery. Managed read-only in Home Assistant Settings > Dashboards > Energy.",
     entity_id:
@@ -487,6 +490,29 @@ function addBattery(old = {}) {
     );
     field(node, "Restore minimum reserve immediately", "recover_reserve", old.recover_reserve ?? false,
           { type: "checkbox" });
+    field(node, "Periodic battery calibration", "calibration_enabled", old.calibration_enabled ?? false, {type: "checkbox"});
+    const calibrationFields = document.createElement("div");
+    calibrationFields.className = "calibration-fields";
+    field(calibrationFields, "Calibration interval (days)", "calibration_interval_days", old.calibration_interval_days ?? 14, {type: "number", min: "1", max: "365", required: true});
+    calibrationFields.querySelector("input").step = "1";
+    field(calibrationFields, "Calibration hold (hours)", "calibration_hold_hours", old.calibration_hold_hours ?? 3, {type: "number", min: "0.25", max: "24", required: true});
+    node.append(calibrationFields);
+    const calibrationToggle = node.querySelector('[data-key="calibration_enabled"]');
+    calibrationToggle.closest("label").classList.add("calibration-toggle");
+    const showCalibration = () => { calibrationFields.hidden = !calibrationToggle.checked; };
+    calibrationToggle.addEventListener("change", showCalibration);
+    showCalibration();
+    const progress = config.devices?.find(device => device.id === old.device_id)?.calibration;
+    if (old.calibration_enabled && progress) {
+        const status = document.createElement("p");
+        status.className = "installation-note calibration-status";
+        status.setAttribute("role", "status");
+        status.textContent = progress.status === "unavailable" ? "Calibration: Progress unavailable. Check the active database before continuing."
+            : progress.status === "overdue" ? `Calibration: Overdue since ${when(progress.due_at)}. Charging or valid measurements are still required.`
+            : progress.hold_until ? `Calibration: Holding until ${when(progress.hold_until)}.`
+            : `Calibration: Next deadline ${when(progress.due_at)}. ${progress.completed_at ? `Last completed ${when(progress.completed_at)}.` : "No completed calibration recorded yet."}`;
+        node.append(status);
+    }
     field(
         node,
         "Cost per full cycle (optional)",
@@ -604,6 +630,9 @@ function definitions() {
             discharge_limit_w: v.discharge * 1000,
             minimum_soc: v.minimum_soc,
             recover_reserve: v.recover_reserve,
+            calibration_enabled: v.calibration_enabled,
+            calibration_interval_days: v.calibration_interval_days,
+            calibration_hold_hours: v.calibration_hold_hours,
             cycle_fee: v.cycle_fee,
         };
     });

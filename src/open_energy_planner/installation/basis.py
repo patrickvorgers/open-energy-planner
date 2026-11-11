@@ -111,6 +111,25 @@ class InstallationBasisSource:
                 state = battery.state(readings[f"battery.{battery.device_id}.soc"].value)
             except ValueError:
                 raise InputsUnavailable("battery_state_outside_configured_bounds") from None
+            if battery.calibration_enabled and self.store.calibration.issue:
+                raise InputsUnavailable("battery_calibration_unreadable")
+            converter = converters[battery.inverter_id]
+            charge, hold_until = (
+                self.store.calibration.directive(
+                    battery,
+                    now,
+                    min(
+                        battery.charge_limit_w,
+                        converter.ac_limit_w * converter.efficiency * battery.dc_efficiency,
+                        settings.import_limit_w
+                        * converter.efficiency
+                        * battery.dc_efficiency
+                        / max(1, len(settings.batteries)),
+                    ),
+                )
+                if battery.calibration_enabled
+                else (False, None)
+            )
             states.append(
                 BatteryState(
                     battery.device_id,
@@ -118,6 +137,8 @@ class InstallationBasisSource:
                     state,
                     battery.dc_efficiency,
                     battery.can_follow_grid,
+                    calibration_charge=charge,
+                    calibration_hold_until=hold_until,
                 )
             )
         rows = {source.source_id: [] for source in solar.configuration.sources}
@@ -187,6 +208,16 @@ class InstallationBasisSource:
                     settings.version,
                     load.version,
                     pv.version if rows else solar.configuration.version,
+                    tuple(
+                        (
+                            unit.device_id,
+                            unit.calibration_charge,
+                            unit.calibration_hold_until.isoformat()
+                            if unit.calibration_hold_until
+                            else None,
+                        )
+                        for unit in states
+                    ),
                 )
             ),
             "contract_required",

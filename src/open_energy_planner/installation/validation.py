@@ -149,6 +149,11 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
         commands = []
         for unit in problem.batteries:
             battery, battery_flow = unit.battery, battery_flows[unit.device_id]
+            if unit.calibration_charge or unit.calibration_hold_until is not None:
+                require(
+                    battery_flow.discharge_kwh <= tolerance,
+                    "Battery calibration forbids active discharge",
+                )
             require(
                 all(
                     isfinite(value_item) and value_item >= -tolerance
@@ -189,7 +194,16 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
                 * WATTS_PER_KW
                 / duration_hours
             )
-            require(abs(power - round(power)) <= WHOLE_WATT_TOLERANCE, "Whole-watt command")
+            if unit.calibration_charge and close(battery_flow.end_kwh, battery.capacity_kwh):
+                from math import ceil
+
+                power = -ceil(max(0, -power) - WHOLE_WATT_TOLERANCE)
+                require(
+                    -power <= battery.charge_limit_w + tolerance,
+                    "Whole-watt calibration charge limit",
+                )
+            else:
+                require(abs(power - round(power)) <= WHOLE_WATT_TOLERANCE, "Whole-watt command")
             commands.append((unit.device_id, round(power)))
             wear += (
                 battery.cycle_fee
