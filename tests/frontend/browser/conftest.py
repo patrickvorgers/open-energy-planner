@@ -73,11 +73,17 @@ def app_site(request):
             from tests.frontend.browser.documentation_fixture import seed
 
             seed(Path(directory))
-        if getattr(request, "param", None) in ("device_planning", "device_planning_precision"):
+        if getattr(request, "param", None) in (
+            "device_planning",
+            "device_planning_precision",
+            "device_planning_legend",
+        ):
             from tests.frontend.browser.device_planning_fixture import seed as seed_devices
 
             seed_devices(
-                Path(directory), fractional_boundaries=request.param == "device_planning_precision"
+                Path(directory),
+                fractional_boundaries=request.param == "device_planning_precision",
+                legend_devices=request.param == "device_planning_legend",
             )
 
         async def serve():
