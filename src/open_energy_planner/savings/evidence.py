@@ -265,11 +265,14 @@ def summary_cards(plan, problem):
                     fact("Configured reserve", battery.minimum_kwh, "kWh"),
                     fact("Charge efficiency", battery.charge_efficiency * PERCENT, "%"),
                     fact("Discharge efficiency", battery.discharge_efficiency * PERCENT, "%"),
-                    fact(
-                        "Wear per internal kWh discharged",
-                        battery.wear_cost_per_kwh,
-                        currency + "/kWh",
-                    ),
+                    {
+                        **fact(
+                            "Wear per internal kWh discharged",
+                            battery.wear_cost_per_kwh,
+                            currency + "/kWh",
+                        ),
+                        "key": "wear_cost_per_kwh",
+                    },
                 ],
                 ["Reserve recovery is required."]
                 if battery.recover_reserve and battery.initial_kwh < battery.minimum_kwh

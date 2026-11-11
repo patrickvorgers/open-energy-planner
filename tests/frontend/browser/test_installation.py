@@ -584,8 +584,9 @@ def test_grid_only_app_wizard_keeps_optional_devices_absent(app_page):
     expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Planning")
 
 
-def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
-    """Converter identities and exact SoC edits survive wizard steps. Clearing minimum SoC stays invalid and cannot replace saved 10.04 with zero."""
+@pytest.mark.parametrize("wear_rate", ["0.025", "0.004"])
+def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, wear_rate):
+    """Converter identities, exact wear rates and SoC edits survive wizard steps. Clearing minimum SoC stays invalid and cannot replace saved 10.04 with zero."""
     page, url = app_page
     discover(page, url, devices=True)
     connect(page)
@@ -619,7 +620,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
         item.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
         item.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
         if index == 0:
-            item.get_by_label("Cost per kWh (optional)", exact=True).fill("0.025")
+            item.get_by_label("Cost per kWh (optional)", exact=True).fill(wear_rate)
             item.get_by_label("Minimum state of charge (%)", exact=True).fill("10.03")
             item.get_by_label("Converter connection", exact=True).select_option("roof")
             item.get_by_label("Can follow zero grid target", exact=True).check()
@@ -637,7 +638,17 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
     assert before["installation"]["batteries"][1].get("can_follow_grid", False) is False
     assert before["installation"]["batteries"][1]["inverter_id"] != "roof"
     assert before["installation"]["batteries"][0]["minimum_soc"] == 10.03
-    assert before["installation"]["batteries"][0]["wear_cost_per_kwh"] == 0.025
+    assert before["installation"]["batteries"][0]["wear_cost_per_kwh"] == float(wear_rate)
+    installation_area(page, 2)
+    page.locator("#installation-battery").select_option("0")
+    expect(
+        page.locator("#installation-summary dt", has_text="Cost per kWh")
+        .locator("..")
+        .locator("dd")
+    ).to_have_text(wear_rate)
+    page.locator("#installation-summary").screenshot(
+        path=f"results/ci/battery-wear-precision/saved-{wear_rate}-{page.viewport_size['width']}.png"
+    )
     installation_area(page, 2)
     page.locator("#installation-battery").select_option("1")
     expect(page.locator("#installation-summary")).to_contain_text("sensor.discharge1")
@@ -650,7 +661,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page):
     page.locator("#installation-battery").select_option("0")
     minimum = page.get_by_label("Minimum state of charge (%)", exact=True).first
     expect(minimum).to_have_value("10.0")
-    expect(page.get_by_label("Cost per kWh (optional)", exact=True).first).to_have_value("0.025")
+    expect(page.get_by_label("Cost per kWh (optional)", exact=True).first).to_have_value(wear_rate)
     minimum.fill("10.04")
     minimum.press("Tab")
     expect(minimum).to_have_value("10.0")

@@ -59,6 +59,8 @@ For example, a rate of **0.02 EUR/kWh** and **5 kWh** removed from internal batt
 
 Internal energy includes cell discharge losses. With 80.0% discharge efficiency, supplying 4 kWh at the battery terminal removes 5 kWh internally. When calculating actual costs from an AC discharge meter, inverter and DC losses are also accounted for before applying the same rate.
 
+The saved summary and the original plan's **Starting conditions** retain the configured rate, including values such as **0.025** or **0.004**. Cost totals still show two decimals.
+
 The optimizer, self-consumption reference, expected period costs and measured comparison use this same basis. The estimated value of remaining energy deducts its future discharge wear. Neither the without-battery baseline nor charging alone incurs battery wear.
 
 Enable **Can follow zero grid target** only if your own controller or automation can implement that mode. It is a capability permission, not a promise of physically exact zero grid exchange.

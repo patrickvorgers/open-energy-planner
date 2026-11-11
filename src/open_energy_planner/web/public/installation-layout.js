@@ -1,4 +1,4 @@
-import {money, percentage, optionLabel, sourceName} from "./display.js";
+import {configuredRate, percentage, optionLabel, sourceName} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {azimuthLabel} from "./solar-geometry.js";
 
@@ -254,7 +254,7 @@ export class InstallationLayout {
             if (input.type === "hidden" || input.id === "grid-invert" || input.dataset.key === "panel_name" || input.hasAttribute("data-view-control")) continue;
             const title = input.getAttribute("aria-label") || [...(input.labels?.[0]?.childNodes || [])].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join("").trim();
             if (["grid", "export-energy"].includes(input.id) || input.dataset.key === "inverter_id") continue;
-            const value = input.type === "checkbox" ? (input.checked ? "Enabled" : "Off") : input.dataset.key === "minimum_soc" ? (input.value === "" ? "Not configured" : percentage(Number(input.value))) : !input.value ? "Not configured" : input.dataset.key === "wear_cost_per_kwh" ? money(Number(input.value)) : input.selectedOptions?.[0]?.textContent || input.value;
+            const value = input.type === "checkbox" ? (input.checked ? "Enabled" : "Off") : input.dataset.key === "minimum_soc" ? (input.value === "" ? "Not configured" : percentage(Number(input.value))) : !input.value ? "Not configured" : input.dataset.key === "wear_cost_per_kwh" ? configuredRate(Number(input.value)) : input.selectedOptions?.[0]?.textContent || input.value;
             summaryFact(panelLists.get(input.closest(".solar-panel")) || list, title, input.dataset.key === "panel_azimuth" ? azimuthLabel(input.value === "" ? null : Number(input.value)) : value);
         }
         if (this.area === 0) for (const [title, value] of this.gridSources || []) summaryFact(list, title, value);
