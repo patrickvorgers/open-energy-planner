@@ -58,6 +58,51 @@ def integral(steps, start, end):
     return fsum(amounts)
 
 
+def integrals(steps, windows):
+    """Integrate windows in one sweep through exact source coverage.
+
+    Args:
+        steps: Ordered nonoverlapping LoadSteps containing nonnegative AC kWh.
+        windows: Ordered nonoverlapping (start, end) half-open datetime pairs.
+            Each end must be later than its start.
+
+    Returns:
+        A tuple of AC kWh sums in the supplied window order.
+
+    Raises:
+        ValueError: Source steps are reordered or overlap, windows are invalid
+            or overlap, or a window has missing source coverage.
+    """
+    spans = tuple(
+        (step.start, step.start + timedelta(hours=step.duration_h), step.kwh) for step in steps
+    )
+    for previous, current in pairwise(spans):
+        if previous[0] > current[0]:
+            raise ValueError("Household component coverage out of order")
+        if previous[1] > current[0]:
+            raise ValueError("Household component coverage overlaps")
+    source_index, previous_end, result = 0, None, []
+    for start, end in windows:
+        if end <= start or (previous_end is not None and start < previous_end):
+            raise ValueError("Household integration windows overlap or are invalid")
+        previous_end = end
+        while source_index < len(spans) and spans[source_index][1] <= start:
+            source_index += 1
+        cursor, amounts, index = start, [], source_index
+        while index < len(spans) and spans[index][0] < end:
+            source_start, source_end, energy = spans[index]
+            left, right = max(start, source_start), min(end, source_end)
+            if left != cursor:
+                raise ValueError("Household component coverage missing")
+            amounts.append(energy * ((right - left) / (source_end - source_start)))
+            cursor = right
+            index += 1
+        if cursor != end:
+            raise ValueError("Household component coverage missing")
+        result.append(fsum(amounts))
+    return tuple(result)
+
+
 def replace_cycle(steps, work, horizon_start, horizon_end):
     """Replace at most one cycle's expected energy inside its acknowledged service window.
 
@@ -122,14 +167,19 @@ def validate_components(problem, components, *, controlled_entities=()):
         raise ValueError("Household component identities overlap")
     if len(set(controlled)) != len(controlled) or not set(controlled) <= set(entities):
         raise ValueError("Controlled household components overlap")
-    for interval in problem.intervals:
-        end = interval.start + timedelta(hours=interval.duration_h)
-        amounts = [integral(component.steps, interval.start, end) for component in components]
+    windows = tuple(
+        (interval.start, interval.start + timedelta(hours=interval.duration_h))
+        for interval in problem.intervals
+    )
+    remaining = [integrals(component.steps, windows) for component in components]
+    forecasts = [integrals(component.forecast_steps, windows) for component in components]
+    for interval_index, interval in enumerate(problem.intervals):
+        amounts = [series[interval_index] for series in remaining]
         if not isclose(
             fsum(amounts), interval.load_kwh, rel_tol=0, abs_tol=LOAD_BALANCE_TOLERANCE_KWH
         ):
             raise ValueError("Household component balance differs")
-        for component, amount in zip(components, amounts, strict=True):
-            original = integral(component.forecast_steps, interval.start, end)
+        for series, amount in zip(forecasts, amounts, strict=True):
+            original = series[interval_index]
             if amount < 0 or amount > original + LOAD_BALANCE_TOLERANCE_KWH:
                 raise ValueError("Household component replacement differs")

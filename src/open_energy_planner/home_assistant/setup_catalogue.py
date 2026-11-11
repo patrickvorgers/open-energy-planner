@@ -313,7 +313,7 @@ class SetupDiscovery:
                 if issue:
                     self.live.invalidate(issue)
                 await self.reconcile()
-                self.live.refresh()
+                await self.live.refresh_async()
                 if cancellation:
                     raise cancellation
                 result = {

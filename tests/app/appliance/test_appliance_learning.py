@@ -189,11 +189,16 @@ def test_http_profile_and_history_writes_preserve_contract_and_skip_unchanged_re
     async def scenario():
         """Exercise route parsing and serialized SQL writes against the actual appliance service."""
         app, refreshes = web.Application(), []
+
+        async def refresh_async(**kwargs):
+            """Observe the actual awaited refresh contract without starting the planner."""
+            refreshes.append(kwargs)
+
         register(
             app,
             service,
             SimpleNamespace(state={"enabled": False, "plan": None}),
-            SimpleNamespace(refresh=lambda **kwargs: refreshes.append(kwargs)),
+            SimpleNamespace(refresh_async=refresh_async),
             asyncio.Lock(),
             SimpleNamespace(state={"points": []}),
             SimpleNamespace(state={"stores": []}),

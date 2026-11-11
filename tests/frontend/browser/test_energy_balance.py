@@ -317,13 +317,9 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     expect(page.locator("#plan-chart-legend .series-swatch")).to_have_count(8)
     canvas = page.locator("#plan-chart")
     canvas.scroll_into_view_if_needed()
-    bounds = canvas.bounding_box()
     point = page.evaluate(
         "Chart.getChart(document.getElementById('plan-chart')).getDatasetMeta(0).data[0].getCenterPoint()"
     )
-    if page.viewport_size["width"] < 500:
-        page.touchscreen.tap(bounds["x"] + point["x"], bounds["y"] + point["y"])
-    # Locator hover scrolls the canvas back into view after a touch opens the inspector.
     canvas.hover(position={"x": point["x"], "y": point["y"]})
     popup = page.locator("#plan-chart-tooltip")
     expect(popup).to_be_visible()
@@ -376,6 +372,16 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     expect(popup.get_by_role("heading")).to_have_text(["Battery state"])
     expect(popup).to_contain_text("SoC")
     expect(popup).to_contain_text("50")
+    if page.viewport_size["width"] < 500:
+        # Touch opens and scrolls to the inspector, which intentionally dismisses chart tooltips.
+        bounds = canvas.bounding_box()
+        point = page.evaluate(
+            "Chart.getChart(document.getElementById('plan-chart')).getDatasetMeta(0).data[0].getCenterPoint()"
+        )
+        page.touchscreen.tap(bounds["x"] + point["x"], bounds["y"] + point["y"])
+        expect(page.locator("#plan-evidence-panel")).to_have_attribute("open", "")
+        expect(page.locator("#interval-evidence-panel")).to_have_attribute("open", "")
+        expect(page.get_by_label("Inspect planning time", exact=True)).to_have_value("0")
     if not page.get_by_label("Inspect planning time", exact=True).is_visible():
         if not page.get_by_text("Selected interval details", exact=True).is_visible():
             page.get_by_text("Understand this plan", exact=True).click()

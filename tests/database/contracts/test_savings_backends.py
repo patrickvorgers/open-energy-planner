@@ -123,6 +123,65 @@ def test_background_plan_repricing_publishes_only_successful_versions(settlement
     assert plans.get_plan(original["plan_id"]) == original
 
 
+def test_background_repricing_skips_current_contract_without_loading_plans(settlement, monkeypatch):
+    """A current-contract queue entry advances without reconstructing its original plan."""
+    from open_energy_planner.savings.repricing import PlanValuations
+    from tests.app.savings.test_plan_repricing import original_plan
+
+    _runtime, _store, docs, _engine, plans = settlement
+    original = original_plan()
+    original["input_snapshot"]["contract_version"] = contract().version
+    plans.state["plan"] = original
+    plans.save()
+
+    read_original = plans.get_plan
+
+    def forbidden_read(identity):
+        """Fail if a queue skip reconstructs the entire immutable plan."""
+        assert identity != original["plan_id"], "Current-contract plan must not be reconstructed"
+        return read_original(identity)
+
+    monkeypatch.setattr(plans, "get_plan", forbidden_read)
+    PlanValuations(docs, plans).process(contract(), None, END)
+    assert docs.read("repricing.json")["complete"] is True
+
+
+def test_corrupt_contract_leaf_does_not_block_other_plan_values(settlement):
+    """A corrupt newest plan keeps its prior value while the healthy plan receives the new rate."""
+    from copy import deepcopy
+
+    from open_energy_planner.savings.repricing import PlanValuations
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import VALUES, digest
+    from tests.app.savings.test_plan_repricing import original_plan
+
+    _runtime, _store, docs, engine, plans = settlement
+    healthy = original_plan()
+    healthy["plan_id"] = "healthy-plan"
+    healthy["input_snapshot"]["contract_version"] = "healthy-original-contract"
+    plans.state["plan"] = healthy
+    plans.save()
+    broken = deepcopy(healthy)
+    broken["plan_id"] = "broken-plan"
+    broken["generated_at"] = (START + timedelta(minutes=1)).isoformat()
+    broken["input_snapshot"]["contract_version"] = "broken-original-contract"
+    plans.state["plan"] = broken
+    plans.save()
+    values = PlanValuations(docs, plans)
+    values.process(contract(buy="0.4"), None, END)
+    accepted = values.latest("broken-plan")["valuation"]
+    with engine.begin() as connection:
+        connection.execute(
+            VALUES.update()
+            .where(VALUES.c.digest == digest("broken-original-contract"))
+            .values(payload='"corrupt"')
+        )
+    values.process(contract(buy="0.5"), None, END + timedelta(hours=1))
+    assert values.latest("broken-plan")["valuation"] == accepted
+    assert values.latest("broken-plan")["valuation_status"]["issue"]
+    assert values.latest("healthy-plan")["valuation"]["ems_costs"]["purchase"] == pytest.approx(0.5)
+    assert docs.read("repricing.json")["complete"] is True
+
+
 def test_sparse_multi_year_query_preserves_year_bounds_and_bounded_details(settlement):
     """Ninety-seven quarters inside 2023 exclude both neighbors and retain the detail and calendar limits."""
     from datetime import UTC, datetime
