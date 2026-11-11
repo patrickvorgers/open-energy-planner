@@ -45,11 +45,11 @@ def test_failed_paired_read_holds_busy_until_peer_settles_and_retains_draft(
             const held='v1/'+(failed==='editor'?'consumers':editor);
             window.heldStarted=false;window.failureSettled=false;window.peerSettled=false;
             window.fetch=(path,options)=>{
-                if(String(path).endsWith(bad)){
+                if(String(path).split('?')[0].endsWith(bad)){
                     window.failureSettled=true;
                     return Promise.resolve(new Response('PRIVATE-FAILED-READ',{status:500}));
                 }
-                if(String(path).endsWith(held)){
+                if(String(path).split('?')[0].endsWith(held)){
                     window.heldStarted=true;
                     return new Promise(resolve=>{window.releasePeer=async()=>{
                         const response=await original(path,options);
@@ -165,7 +165,7 @@ def test_new_consumer_reads_keep_safe_errors_and_existing_deadline(app_page, edi
             window.consumerBudgets=[];window.consumerBodyReads=0;
             AbortSignal.timeout=milliseconds=>{const signal=nativeTimeout(milliseconds===30000?30:milliseconds);budgets.set(signal,milliseconds);return signal;};
             window.fetch=(path,options)=>{
-                if(!String(path).endsWith('v1/consumers'))return original(path,options);
+                if(!String(path).split('?')[0].endsWith('v1/consumers'))return original(path,options);
                 window.consumerBudgets.push(budgets.get(options.signal));
                 if(outcome==='network')return Promise.reject(new TypeError('PRIVATE-CONSUMER-NETWORK'));
                 if(outcome==='stall')return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('PRIVATE-CONSUMER-TIMEOUT','AbortError')),{once:true}));

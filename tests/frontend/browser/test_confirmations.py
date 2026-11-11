@@ -108,7 +108,7 @@ def scheduled_appliances(app_page):
         lambda route: route.fulfill(json={"ingress": False, "timezone": "Europe/Amsterdam"}),
     )
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "thermal_meters": [],

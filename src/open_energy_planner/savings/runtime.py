@@ -189,7 +189,7 @@ class SavingsRuntime:
         self.attention = False
         self.events = None
         self.physical_issue = None
-        self._bindings_plan, self._bindings = None, None
+        self._request_bindings = None, None
 
     def request(self, now, settings, solar, demand, seeds, location):
         """Request at most one day after first publication. Wait for completed Recorder statistics."""
@@ -214,11 +214,12 @@ class SavingsRuntime:
         }
         plan_id = self.store.context_plan(start)
         if plan_id:
-            if self._bindings_plan != plan_id:
+            cached_plan, historical_bindings = self._request_bindings
+            if cached_plan != plan_id:
                 original = self.plans.get_context(plan_id)
-                self._bindings = original.get("comparison_bindings") if original else None
-                self._bindings_plan = plan_id
-            bindings = self._bindings or bindings
+                historical_bindings = original.get("comparison_bindings") if original else None
+                self._request_bindings = plan_id, historical_bindings
+            bindings = historical_bindings or bindings
         changed = self.store.next_configuration(start, end, bindings)
         if changed:
             end = datetime.fromisoformat(changed)

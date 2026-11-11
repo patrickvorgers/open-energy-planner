@@ -617,7 +617,7 @@ def test_appliance_workspace_filters_permission_and_handles_empty_refresh(app_pa
             {"entity_id": device["entity_id"], "name": device["name"]} for device in devices
         ],
     }
-    page.route("**/v1/consumers", lambda route: route.fulfill(json=consumers))
+    page.route("**/v1/consumers?view=settings", lambda route: route.fulfill(json=consumers))
     page.route(
         "**/v1/appliances", lambda route: route.fulfill(json={"devices": devices, "issue": None})
     )

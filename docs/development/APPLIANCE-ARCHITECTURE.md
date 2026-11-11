@@ -1,5 +1,11 @@
 # Shared appliance structure
 
+Individual forecast sensors accept the daily model-selection states, including
+`collecting_forward_accuracy`, `accuracy_validated` and baseline-retention states.
+Collecting comparison evidence does not make an otherwise usable baseline
+forecast invalid. The HA adapter still rejects unknown states and malformed,
+expired or non-finite forecast quantities.
+
 Settings > Appliances retains its existing categories, routes and device editors.
 Consumption and cycles, Electric boilers and EV charging use the same interaction:
 select an appliance, inspect saved configuration, then explicitly choose Edit.

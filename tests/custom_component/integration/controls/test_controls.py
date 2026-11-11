@@ -1040,6 +1040,53 @@ def test_multi_device_zero_grid_modes_keep_power_enabled_but_inapplicable():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        "training_history_required",
+        "forward_archive_required",
+        "collecting_forward_accuracy",
+        "no_consistent_accuracy_benefit",
+        "accuracy_validated",
+        "comparison_evidence_unreadable",
+    ],
+)
+def test_consumer_daily_model_selection_states_are_valid_ha_estimates(status):
+    """Daily model evidence states remain visible without discarding usable baseline forecasts."""
+    from types import SimpleNamespace
+
+    from custom_components.open_energy_planner.consumer_sensors import ConsumerSensor, validate
+
+    now = dt_util.utcnow()
+    document = {
+        "selected": [{"entity_id": "sensor.synthetic_energy", "weather_sensitive": False}],
+        "result": {
+            "status": "active",
+            "devices": [
+                {
+                    "entity_id": "sensor.synthetic_energy",
+                    "status": status,
+                    "forecast": {
+                        "issued_at": now.isoformat(),
+                        "model": "weekday-profile-v1",
+                        "unit": "kWh",
+                        "steps": [{"start": now.isoformat(), "duration_h": 1, "kwh": 0.5}],
+                    },
+                }
+            ],
+        },
+    }
+    coordinator = SimpleNamespace(
+        entry=SimpleNamespace(entry_id="consumer-status", data={"url": "http://app"}),
+        consumer_forecasts=validate(document),
+    )
+    sensor = ConsumerSensor(coordinator, "sensor.synthetic_energy", "Synthetic appliance", "status")
+    assert sensor.native_value == status
+    assert status in sensor.options
+    power = ConsumerSensor(coordinator, "sensor.synthetic_energy", "Synthetic appliance", "power")
+    assert power.available and power.native_value == 500
+
+
 @pytest.mark.parametrize("duration_hours", [0.25, 0.5, 0.75, 1])
 def test_consumer_forecast_projection_is_estimated_and_expires(duration_hours):
     """HA exposes interval mean W and horizon kWh as estimates. Old forecasts are unavailable, not zero."""

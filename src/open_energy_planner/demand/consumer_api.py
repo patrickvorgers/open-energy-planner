@@ -10,10 +10,13 @@ from ..storage.writes import complete_write
 def register(app, demand, lock, ev, thermal):
     """Expose existing runtime status and serialize settings writes with forecast admission."""
 
-    async def state(_request):
+    async def state(request):
         """Return source choices and estimated component forecasts without issuing commands."""
         async with lock:
-            document = demand.consumers.document()
+            view = request.query.get("view")
+            if view not in (None, "settings"):
+                raise web.HTTPBadRequest(text="Unknown consumer view")
+            document = demand.consumers.document(forecasts=view != "settings")
             document["charging_meters"] = sorted(
                 point["energy_entity"] for point in ev.state["points"]
             )

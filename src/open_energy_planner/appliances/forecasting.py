@@ -198,20 +198,22 @@ class ConsumerForecasts:
         """Compare borrowed immutable histories without serializing a year of readings on every poll."""
         return self.version, tuple(sorted(self.histories.items()))
 
-    def document(self):
+    def document(self, *, forecasts=True):
         """Expose configured choices, actual membership and explicitly shadow component predictions."""
-        return {
+        document = {
             "version": self.version,
             "selected": list(self.selected),
             "options": list(self.options),
             "issue": self.issue,
             "history_issues": dict(self.failures),
-            "result": {
-                key: value for key, value in self.result.items() if key != "model_parameters"
-            }
-            if self.result is not None
-            else None,
         }
+        if forecasts:
+            document["result"] = (
+                {key: value for key, value in self.result.items() if key != "model_parameters"}
+                if self.result is not None
+                else None
+            )
+        return document
 
 
 def build_components(

@@ -783,6 +783,9 @@ def create_app(
     async def snapshot(request):
         """Refresh live validity under the state lock and return the current installation snapshot."""
         async with lock:
+            pending_settlement = settlement_request()
+        settlement = await pending_settlement
+        async with lock:
             cancellation = await complete_write(
                 appliances.tick,
                 datetime.now(UTC),
@@ -820,7 +823,7 @@ def create_app(
             return web.json_response(
                 {
                     "release": RELEASE,
-                    "settlement_request": await settlement_request(),
+                    "settlement_request": settlement,
                     "settlement_bonus_request": settlement_bonus_request(),
                     "savings_status": {
                         "issue": savings_runtime.issue,

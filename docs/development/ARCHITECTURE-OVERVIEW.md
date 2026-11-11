@@ -19,6 +19,22 @@ There is no physical-device driver hidden in the HTTP UI. The app's static pages
 
 ## Keep calculation work outside the interface loop
 
+Snapshot reads capture immutable settlement source definitions under the state
+lock, then await historical database I/O outside that lock. The handler reacquires
+the lock afterward to refresh validity and read current state. A pause or source
+change therefore remains responsive and cannot be hidden by an older captured
+screen state. Historical transfers also read outside the state lock and reject
+source changes made during validation before admitting a write. Financial
+mutations retain their separate serialization lock. Concurrent readers publish
+the cached historical plan identity and its bindings as one pair and use their
+own local bindings. Cancellation drains the historical reader before its handler
+finishes.
+
+Appliance editors request `/v1/consumers?view=settings`. This projection retains
+selection versions, Energy choices and specialized-meter ownership without
+transferring model forecasts that these editors do not use. The default consumer
+response retains complete forecast evidence for existing clients.
+
 Live HTTP and background refresh owners await `LiveInputs.refresh_async` or
 `receive_async` while retaining the application state lock. The event loop first
 captures the coherent nonblocking installation and price basis. Price caches

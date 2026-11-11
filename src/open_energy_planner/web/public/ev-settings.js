@@ -259,7 +259,7 @@ function renderSummary() {
 /** Reload confirmed configuration only through an explicit SaveBar transition. */
 async function load(selection = selectedId) {
     try {
-        const results = await Promise.allSettled([api("v1/ev"), api("v1/consumers")]);
+        const results = await Promise.allSettled([api("v1/ev"), api("v1/consumers?view=settings")]);
         const failed = results.find(result => result.status === "rejected");
         if (failed) throw failed.reason;
         [current, energySources] = results.map(result => result.value); useHomeAssistantTimezone(current.timezone);
@@ -277,7 +277,7 @@ async function load(selection = selectedId) {
 const refreshSources = sourceRefresh(api, "ev", find("refresh-ev-sources"), find("status"), async (catalogue, signal) => {
     const opening = current;
     if (saveState.busy || !opening) return;
-    const refreshed = await api("v1/consumers", undefined, signal);
+    const refreshed = await api("v1/consumers?view=settings", undefined, signal);
     if (saveState.busy || current !== opening) return;
     current.catalogue = catalogue;
     energySources = refreshed;
@@ -301,7 +301,7 @@ find("continue-add-ev").onclick = async () => {
     if (!vehicle) {
         const opening = current;
         saveState.begin("Loading Home Assistant Energy devices…"); syncEditor();
-        try { energySources = await api("v1/consumers"); current.energy_consumers = energySources.options; }
+        try { energySources = await api("v1/consumers?view=settings"); current.energy_consumers = energySources.options; }
         catch (error) { find("status").textContent = error.message; return; }
         finally { saveState.end(); syncEditor(); }
         if (current !== opening || editing) return;

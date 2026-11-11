@@ -743,7 +743,7 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
         ],
     }
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "thermal_meters": [],
@@ -894,7 +894,7 @@ def test_appliance_permissions_save_explicitly_and_retain_only_failed_changes(ap
         "issue": None,
     }
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "thermal_meters": [],
@@ -956,7 +956,7 @@ def test_appliance_without_complete_cycle_cannot_submit_runnable_work(app_page):
     """A selected meter alone grants no scheduling authority. Missing profile keeps readiness disabled on desktop/mobile."""
     page, url = app_page
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "thermal_meters": [],
@@ -1009,7 +1009,7 @@ def test_appliance_settings_lock_writes_reload_and_open_cycle_removal(app_page):
         "issue": None,
     }
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "version": "fixture",
@@ -1113,7 +1113,7 @@ def test_removing_appliance_revokes_shifting_before_source_removal(app_page):
         route.fulfill(json={"appliances": appliances})
 
     page.route("**/v1/appliances", lambda route: route.fulfill(json=appliances))
-    page.route("**/v1/consumers", select)
+    page.route("**/v1/consumers{,?view=settings}", select)
     page.route("**/v1/appliances/device", configure)
     page.route("**/v1/ev", lambda route: route.fulfill(json={"points": []}))
     page.goto(url + "/appliance-settings")
@@ -1166,7 +1166,7 @@ def test_appliance_source_picker_searches_large_catalogue_and_preserves_ha_membe
             state["version"] = "next"
         route.fulfill(json=state)
 
-    page.route("**/v1/consumers", consumers)
+    page.route("**/v1/consumers{,?view=settings}", consumers)
     page.route("**/v1/appliances", lambda route: route.fulfill(json={"devices": [], "issue": None}))
     page.goto(url + "/appliance-settings")
     if "hassio_ingress" not in url:
@@ -1222,7 +1222,7 @@ def test_appliance_prototype_cycle_facts_keep_zero_power_phases(app_page):
     """A synthetic 1-kW quarter and zero-power quarter give 0.25 kWh over 30 minutes, not a 15-minute active-only cycle."""
     page, url = app_page
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "version": "fixture",
@@ -1350,7 +1350,7 @@ def test_appliance_learning_manual_save_failure_and_retained_evidence(app_page):
     state = {"revision": "initial", "issue": None, "devices": [device]}
     page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "version": "selection",
@@ -1504,7 +1504,7 @@ def test_appliance_session_failures_show_only_owned_messages(app_page, failure, 
     page.route("**/setup/session", session)
     page.route("**/v1/appliances", lambda route: route.fulfill(json={"devices": [], "issue": None}))
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={"charging_meters": [], "thermal_meters": [], "selected": [], "options": []}
         ),
@@ -1566,7 +1566,7 @@ def test_appliance_evidence_waits_for_all_reads_before_next_poll(app_page):
             route.fulfill(json=sources)
 
     page.route("**/v1/appliances", appliances)
-    page.route("**/v1/consumers", consumers)
+    page.route("**/v1/consumers{,?view=settings}", consumers)
     page.goto(url + "/appliances")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1651,7 +1651,7 @@ def test_appliance_read_deadline_cancels_stalled_network_and_recovers(app_page, 
 
     page.route("**/v1/appliances", appliances)
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={"charging_meters": [], "thermal_meters": [], "selected": [], "options": []}
         ),

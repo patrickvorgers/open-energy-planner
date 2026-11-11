@@ -72,7 +72,7 @@ async function load() {
     const ownsLock = !saveState.busy;
     if (ownsLock) saveState.begin("Loading appliance settings…");
     try {
-        const [data, consumers] = await Promise.all([api("v1/appliances"), api("v1/consumers")]);
+        const [data, consumers] = await Promise.all([api("v1/appliances"), api("v1/consumers?view=settings")]);
         if (!Array.isArray(consumers.charging_meters) || !Array.isArray(consumers.thermal_meters)) throw new Error("Specialized-meter membership unavailable. Reload before editing appliance settings.");
         settings(consumers, new Set([...consumers.charging_meters, ...consumers.thermal_meters]), data.devices);
         applianceVersion = data.revision;
