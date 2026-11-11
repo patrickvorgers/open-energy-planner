@@ -134,3 +134,31 @@ def test_stalled_database_response_is_bounded_and_connection_can_recover(
                 assert connection.scalar(text("SELECT 1")) == 1
         finally:
             engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "backend,url",
+    [(name, url) for name, url in BACKENDS if name == "postgresql"],
+    ids=[name for name, _ in BACKENDS if name == "postgresql"],
+)
+def test_postgres_proxy_preserves_native_tls_verification_parameters(tmp_path, backend, url):
+    """Native libpq keeps the configured verification name and TLS policy while connecting through loopback."""
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from sqlalchemy.engine import make_url
+
+    target = make_url(url).update_query_dict(
+        {"sslmode": "verify-full", "sslrootcert": "/synthetic/trust-root.crt"}
+    )
+    with paused_responses(target) as (proxied, _paused, _received):
+        engine = archive_adapter.archive_engine(tmp_path, proxied)
+        try:
+            arguments, keywords = engine.dialect.create_connect_args(proxied)
+            keywords.pop("context", None)
+            native = conninfo_to_dict(make_conninfo(*arguments, **keywords))
+            assert native["host"] == target.host
+            assert native["hostaddr"] == "127.0.0.1"
+            assert native["port"] == str(proxied.port)
+            assert native["sslmode"] == "verify-full"
+            assert native["sslrootcert"] == "/synthetic/trust-root.crt"
+        finally:
+            engine.dispose()

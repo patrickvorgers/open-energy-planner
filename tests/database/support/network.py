@@ -24,7 +24,7 @@ def paused_responses(url):
                 suppress(OSError),
                 socket.create_connection(
                     (
-                        target.host,
+                        target.query.get("hostaddr", target.host),
                         target.port
                         or (5432 if target.drivername.startswith("postgresql") else 3306),
                     ),
@@ -54,7 +54,12 @@ def paused_responses(url):
         thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01))
         thread.start()
         try:
-            yield target.set(host="127.0.0.1", port=server.server_address[1]), paused, received
+            proxied = target.set(port=server.server_address[1])
+            if target.drivername.startswith("postgresql"):
+                proxied = proxied.update_query_dict({"hostaddr": "127.0.0.1"})
+            else:
+                proxied = proxied.set(host="127.0.0.1")
+            yield proxied, paused, received
         finally:
             stopped.set()
             server.shutdown()

@@ -932,7 +932,13 @@ def create_app(
             repository.state["enabled"] = body["enabled"]
             repository.state["last_control_id"] = request_id
             await save_state()
-        return await snapshot(request)
+            return web.json_response(
+                {
+                    "accepted": True,
+                    "enabled": repository.state["enabled"],
+                    "request_id": repository.state["last_control_id"],
+                }
+            )
 
     async def acknowledge(request):
         """Record acceptance only for the current plan ID. Reject stale acknowledgements."""

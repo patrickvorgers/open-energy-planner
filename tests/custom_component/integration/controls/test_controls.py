@@ -399,8 +399,8 @@ def test_real_ha_unchanged_state_report_updates_freshness():
     asyncio.run(scenario())
 
 
-def test_large_schema2_resume_and_ordinary_response_size_limits():
-    """A resume response carrying a >256 KiB schema-2 plan succeeds. An equally large ordinary settings response remains rejected."""
+def test_large_schema2_snapshot_and_ordinary_response_size_limits():
+    """A full snapshot accepts a >256 KiB schema-2 plan. Control receipts and ordinary settings retain the smaller bound."""
     import json
 
     from custom_components.open_energy_planner.client import LocalClient
@@ -428,6 +428,7 @@ def test_large_schema2_resume_and_ordinary_response_size_limits():
             )
 
         app = web.Application()
+        app.router.add_get("/v1/snapshot", respond)
         app.router.add_put("/v1/enabled", respond)
         app.router.add_get("/v1/solar", respond)
         runner = web.AppRunner(app)
@@ -438,8 +439,10 @@ def test_large_schema2_resume_and_ordinary_response_size_limits():
         try:
             async with ClientSession() as session:
                 client = LocalClient(session, url, TOKEN)
-                result = await client.enabled(True, "resume-large")
+                result = await client.snapshot()
                 assert Plan.parse(result["plan"], plan["config_revision"]).steps
+                with pytest.raises(ValueError, match="size limit"):
+                    await client.enabled(True, "resume-large")
                 with pytest.raises(ValueError, match="size limit"):
                     await client.request("GET", "/v1/solar")
         finally:
@@ -778,6 +781,9 @@ def test_pause_resume_goes_through_http_and_persists_intent():
                 },
                 blocking=True,
             )
+            assert entry.runtime_data.pending_enabled is None
+            assert find(hass, "battery_power_target").state == "unavailable"
+            await entry.runtime_data.sync()
             assert entry.runtime_data.schedule.plan.plan_id != old
             assert find(hass, "battery_power_target").state == "-1000"
             assert dt_util.parse_datetime(
@@ -973,6 +979,9 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
             assert captured[-1]["status"] == "paused"
             assert captured[-1]["available"] is False
             await entry.runtime_data.set_enabled(True)
+            await hass.async_block_till_done()
+            assert captured[-1]["status"] != "active"
+            await entry.runtime_data.sync()
             await hass.async_block_till_done()
             assert captured[-1]["status"] == "active"
             assert captured[-1]["mode"] == "fixed_power"

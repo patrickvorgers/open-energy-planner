@@ -328,12 +328,13 @@ class PlanCoordinator:
                         self.refresh()
                 intent_at_request = self.schedule.resume_after
                 if self.pending_enabled is not None:
-                    data = await self.client.enabled(
+                    await self.client.enabled(
                         self.pending_enabled, self.schedule.resume_after.isoformat()
                     )
-                    if self.schedule.resume_after != intent_at_request:
+                    if self.closed or self.schedule.resume_after != intent_at_request:
                         return
                     self.pending_enabled = None
+                    return
                 else:
                     try:
                         data = await self.client.snapshot()

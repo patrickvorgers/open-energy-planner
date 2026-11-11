@@ -22,21 +22,25 @@ def test_settlement_history_read_does_not_hold_appliance_state_lock(
     async def scenario():
         """Block only the historical reader and release it even if the independent request fails."""
         entered, release = threading.Event(), threading.Event()
+        readers, readers_lock = [], threading.Lock()
         async with running_app(tmp_path) as (session, url):
 
             def request(_runtime, *_arguments):
                 """Simulate a slow archive without any production data or timing assumptions."""
-                if entered.is_set():
-                    return
-                entered.set()
+                with readers_lock:
+                    readers.append(True)
+                    if len(readers) == 2:
+                        entered.set()
                 assert release.wait(3)
 
             monkeypatch.setattr(SavingsRuntime, "request", request)
-            pending = asyncio.create_task(
+            first = asyncio.create_task(
                 session.get(url + "/v1/snapshot")
                 if operation == "snapshot"
                 else session.post(url + "/v1/settlement", json={})
             )
+            second = asyncio.create_task(session.get(url + "/v1/snapshot"))
+            pending = (first, second)
             try:
                 assert await asyncio.to_thread(entered.wait, 2)
                 async with asyncio.timeout(1):
@@ -45,19 +49,61 @@ def test_settlement_history_read_does_not_hold_appliance_state_lock(
                         json={"enabled": False, "request_id": "pause-during-read"},
                     ) as response:
                         assert response.status == 200
-                assert not release.is_set() and not pending.done()
+                        assert await response.json() == {
+                            "accepted": True,
+                            "enabled": False,
+                            "request_id": "pause-during-read",
+                        }
+                assert not release.is_set() and all(not reader.done() for reader in pending)
+                assert len(readers) == 2
                 response = await asyncio.wait_for(session.get(url + "/v1/appliances"), 0.5)
                 assert response.status == 200
                 assert (await response.json())["devices"] == []
             finally:
                 release.set()
-                response = await pending
+                response, snapshot = await asyncio.gather(*pending)
+            assert snapshot.status == 200
+            full = await snapshot.json()
+            assert full["enabled"] is False
+            assert "settlement_request" in full and "consumers" in full and "installation" in full
             if operation == "snapshot":
                 assert response.status == 200
                 assert (await response.json())["enabled"] is False
             else:
                 assert response.status == 409
                 assert await response.text() == "No settlement capture is pending"
+
+    asyncio.run(scenario())
+
+
+def test_failed_control_persistence_never_returns_an_acceptance(tmp_path, monkeypatch):
+    """A failed intent write returns an error rather than acknowledging uncommitted state."""
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+
+    async def scenario():
+        """Fail only the explicit control write and inspect the independent durable state afterward."""
+        async with running_app(tmp_path) as (session, url):
+            original = SqlPlanRepository.save
+
+            def fail_control(repository):
+                """Leave setup and shutdown writes intact while refusing this control transaction."""
+                if repository.state["last_control_id"] == "failed-pause":
+                    raise OSError("Synthetic control persistence failure")
+                return original(repository)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(SqlPlanRepository, "save", fail_control)
+                async with session.put(
+                    url + "/v1/enabled",
+                    json={"enabled": False, "request_id": "failed-pause"},
+                ) as response:
+                    assert response.status == 500
+                stored = SqlPlanRepository(tmp_path)
+                try:
+                    assert stored.state["enabled"] is True
+                    assert stored.state["last_control_id"] != "failed-pause"
+                finally:
+                    stored.close()
 
     asyncio.run(scenario())
 

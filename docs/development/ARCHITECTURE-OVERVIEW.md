@@ -30,12 +30,22 @@ the cached historical plan identity and its bindings as one pair and use their
 own local bindings. Cancellation drains the historical reader before its handler
 finishes.
 
+Enable and pause responses acknowledge persisted control intent only. They do
+not fetch a snapshot or wait for historical readers. The app composition owns
+this mutation boundary. The HA client validates the receipt against the exact
+boolean, request identity and paired build. The coordinator clears only the
+confirmed current intent, never an intent superseded during the exchange or
+after shutdown. Its next periodic synchronization retains the complete snapshot,
+catalogue, observation and history flow. Resume still requires a plan generated
+after the local resume boundary, so a receipt cannot revive older commands.
+
 The shared PostgreSQL engine also bounds each native driver I/O wait to thirty
 seconds. Server statement timeouts alone cannot bound an answer stalled in
 transit. An operational wait failure closes the connection before propagating
-the error, so cleanup cannot wait again on that connection. Existing bounded
-connection establishment, pool admission and MariaDB/MySQL read/write waits
-remain separate limits. A sequence of database operations can take longer than
+the error, so cleanup cannot wait again on that connection. PostgreSQL connection
+timeout applies per address attempt, not to DNS or the full multi-address process.
+Pool admission and MariaDB/MySQL read/write waits remain separate limits.
+A sequence of database operations can take longer than
 one wait. Cancellation still drains the worker before releasing mutation
 ownership or disposing its engine.
 

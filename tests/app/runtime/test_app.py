@@ -73,7 +73,11 @@ def test_control_retries_create_only_one_new_plan_and_ack_is_not_execution(tmp_p
                         },
                     ) as response:
                         assert response.status == 200
-                        await response.json()
+                        assert await response.json() == {
+                            "accepted": True,
+                            "enabled": True,
+                            "request_id": "same-control-request",
+                        }
                     plans.append(await ready(original_id) if request_index == 0 else await ready())
                 assert plans[0] == plans[1]
                 async with session.post(url + "/v1/ack", json={"plan_id": plans[0]}) as response:
