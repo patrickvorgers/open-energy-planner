@@ -11,8 +11,12 @@ from open_energy_planner.storage.adapters.lifecycle import sqlalchemy as archive
 from tests.database.support.backends import BACKENDS
 from tests.database.support.network import paused_responses
 
+NETWORK_BACKENDS = [(name, url) for name, url in BACKENDS if name != "sqlite"]
 
-@pytest.mark.parametrize("backend,url", BACKENDS, ids=[name for name, _ in BACKENDS])
+
+@pytest.mark.parametrize(
+    "backend,url", NETWORK_BACKENDS, ids=[name for name, _ in NETWORK_BACKENDS]
+)
 def test_cancelled_settlement_reader_drains_and_releases_mutation_lock(
     tmp_path, monkeypatch, backend, url
 ):
@@ -28,8 +32,6 @@ def test_cancelled_settlement_reader_drains_and_releases_mutation_lock(
     from open_energy_planner.savings.api import register
     from open_energy_planner.savings.runtime import SavingsRuntime
 
-    if backend == "sqlite":
-        pytest.skip("An established network response is only relevant to external backends")
     monkeypatch.setattr(archive_adapter, "DATABASE_IO_TIMEOUT_SECONDS", 0.3)
 
     async def scenario(proxied, paused, received):
