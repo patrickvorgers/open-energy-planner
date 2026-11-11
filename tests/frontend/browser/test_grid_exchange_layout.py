@@ -9,7 +9,7 @@ from tests.frontend.browser.helpers import TOKEN
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
 def test_grid_exchange_uses_full_planning_width(app_page):
-    """Render a real 48-hour plan at desktop/mobile sizes without horizontal overflow."""
+    """A 48-hour desktop/mobile comparison matches scenario order with solid, individually toggled lines."""
     page, url = app_page
     page.clock.install(time=START)
     page.goto(url + "/overview")
@@ -29,6 +29,31 @@ def test_grid_exchange_uses_full_planning_width(app_page):
     )
     page.evaluate("document.fonts.ready")
     comparison.screenshot(path=f"results/ci/grid-exchange-{page.viewport_size['width']}.png")
+    headings = page.locator(".scenario-card h3").all_text_contents()
+    assert headings == ["Optimizer", "Battery self-consumption", "Without battery: Baseline"]
+    legend = page.locator("#energy-chart-legend")
+    expect(legend.locator("label")).to_have_text(headings)
+    rendering = page.locator("#energy-chart").evaluate("""canvas => {
+        const chart = Chart.getChart(canvas);
+        return chart.data.datasets.map((series, index) => ({
+            label: series.label,
+            dash: Array.from(chart.getDatasetMeta(index).dataset.options.borderDash || []),
+            color: series.borderColor,
+        }));
+    }""")
+    assert [series["label"] for series in rendering] == headings
+    assert [series["dash"] for series in rendering] == [[], [], []]
+    assert [series["color"] for series in rendering] == ["#078b80", "#5d70bc", "#e49b38"]
+    for index, heading in enumerate(headings):
+        toggle = legend.get_by_role("checkbox", name=heading, exact=True)
+        toggle.uncheck()
+        assert page.locator("#energy-chart").evaluate(
+            "(canvas, index) => !Chart.getChart(canvas).isDatasetVisible(index)", index
+        )
+        toggle.check()
+        assert page.locator("#energy-chart").evaluate(
+            "(canvas, index) => Chart.getChart(canvas).isDatasetVisible(index)", index
+        )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)

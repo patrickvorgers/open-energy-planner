@@ -715,9 +715,9 @@ async function showPlan(signal, background = false) {
                 reference.push([time, power], [end, power]);
             }
         });
-        const series = [{name: "EMS power (W)", points: ems}];
-        if (bareReference.length) series.push({name: "Without battery (W)", points: bareReference, reference: true});
-        if (reference.length) series.push({name: "Battery self-consumption (W)", points: reference, reference: true});
+        const series = [{name: "Optimizer", points: ems}];
+        if (reference.length) series.push({name: "Battery self-consumption", points: reference, color: palette[2]});
+        if (bareReference.length) series.push({name: "Without battery: Baseline", points: bareReference, color: palette[1]});
         const balances = energyBalances(plan, new Map([...Object.entries(plan.comparison_names || {}), ...batteryLabels]));
         inspectSteps.forEach((step, index) => {
             const rows = balances.map((group) => `${group.name}${group.missing ? ` (${group.missing} interval(s) with unavailable physical evidence)` : ""}: ${group.series.map((series) => series.type === "bar" ? `${series.name} ${number(series.intervals[index]?.value)} kW` : `${series.name} ${percentage(series.points[index * 2 + 1]?.[1])}`).join(": ")}`);

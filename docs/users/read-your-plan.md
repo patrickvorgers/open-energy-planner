@@ -20,6 +20,10 @@ For duration and solver-progress questions, use [Planning performance](planning-
 
 The scenarios share a time range, units and kW scale. The value-axis bounds combine visible data across all three charts, so the same bar height represents the same power. Zooming, toggling a series or resizing updates their shared scale. The baseline retains planned EV and thermal loads. Self-consumption aims for zero on the meter within physical limits, rather than guaranteeing it.
 
+**Grid exchange comparison** shows the net grid power for these scenarios in W.
+Its legend uses the same names and order as the three scenario charts above.
+All three lines are solid. Positive power is import and negative power is export.
+
 [![A populated synthetic Planning view showing energy supply and use, battery state and the boundary between days.](../assets/planning-example.png)](../assets/planning-example.png)
 
 *Read the colored flows together with battery SoC. The example contains actual calculated flows from synthetic inputs. It is a teaching scenario, not a prediction for your household.*
