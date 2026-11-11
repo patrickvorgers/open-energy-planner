@@ -399,6 +399,7 @@ def test_live_replan_waits_for_publication_save_before_invalidating(
     """Block successful/failing publication saves. Require concurrent invalidation to wait and finally clear memory/disk pointers."""
 
     async def scenario():
+        """Release the held publication independently of either HTTP response's scheduling."""
         future = FutureSource()
         async with running_app(tmp_path, future) as (session, url):
             state = await configure(session, url)
@@ -424,16 +425,18 @@ def test_live_replan_waits_for_publication_save_before_invalidating(
                 save(repository)
 
             monkeypatch.setattr(SqlPlanRepository, "save", slow_save)
-            async with session.post(url + "/v1/replan") as response:
-                assert response.status == 200
-            assert await asyncio.to_thread(started.wait, 5)
-            future.available = False
-            pending = asyncio.create_task(session.post(url + "/v1/replan"))
+            # The initial snapshot may wait behind the publication writer too.
+            publication = asyncio.create_task(session.post(url + "/v1/replan"))
             try:
+                assert await asyncio.to_thread(started.wait, 5)
+                future.available = False
+                pending = asyncio.create_task(session.post(url + "/v1/replan"))
                 await asyncio.sleep(0.05)
                 assert not pending.done(), "Invalidation bypassed the publication lock"
             finally:
                 release.set()
+            async with await publication as response:
+                assert response.status == 200
             async with await pending as response:
                 assert response.status == 200
                 state = await response.json()
