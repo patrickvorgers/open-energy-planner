@@ -1753,61 +1753,87 @@ def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page
             expect(page.locator("#thermal-save-state")).to_contain_text("Unsaved changes")
 
 
-def test_consumer_put_conflict_keeps_draft_and_write_acknowledgement_unbounded(app_page):
-    """A 409 selection conflict retains the staged device and an independent retry keeps real PUT semantics."""
+def test_consumer_put_conflict_requires_current_version_and_explicit_reconciliation(app_page):
+    """A concurrent durable selection survives stale retries. Explicit reload and review permit a fresh versioned save."""
     page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
     discover_boiler_sources(page, url)
     page.goto(url + "/appliance-settings")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    initial = page.request.get(
-        url + "/v1/consumers", headers={"Authorization": "Bearer " + TOKEN}
-    ).json()
+    initial = page.request.get(url + "/v1/consumers", headers=headers).json()
     page.get_by_role("button", name="Add appliance", exact=True).click()
     page.locator("#source-dialog button.source-choice:enabled").first.click()
     weather = page.get_by_label("Consumption depends on outdoor temperature", exact=True)
     weather.check()
-    writes = []
-
-    def conflict(route):
-        """Reject a versioned selection write without accepting any of its changes."""
-        assert route.request.method == "PUT"
-        writes.append(route.request.post_data_json)
-        route.fulfill(status=409, body="PRIVATE-CONFLICT-DETAILS")
-
-    page.route("**/v1/consumers", conflict)
+    competing_selection = [
+        {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": False}
+    ]
+    concurrent = page.request.put(
+        url + "/v1/consumers",
+        headers=headers,
+        data={"expected_version": initial["version"], "selected": competing_selection},
+    )
+    assert concurrent.status == 200
+    persisted = concurrent.json()
+    assert persisted["version"] != initial["version"]
+    assert persisted["selected"] == competing_selection
     page.evaluate("""() => {
         const original=window.fetch;
-        window.writeDeadlines=[];
+        window.writeDeadlines=[];window.consumerWrites=[];
         window.fetch=(path,options)=>{
-            if(options?.method==='PUT')window.writeDeadlines.push(options.signal==null);
+            if(options?.method==='PUT'){
+                window.writeDeadlines.push(options.signal==null);
+                window.consumerWrites.push(JSON.parse(options.body));
+            }
             return original(path,options);
         };
     }""")
+    for _attempt in range(2):
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "PUT" and response.url.endswith("/v1/consumers")
+            )
+        ) as rejected:
+            page.get_by_role("button", name="Save appliance settings", exact=True).click()
+        assert rejected.value.status == 409
+        expect(page.locator("#save-state")).to_contain_text("Settings were rejected")
+        expect(page.locator("#save-state")).to_contain_text("Refresh before saving")
+        expect(weather).to_be_checked()
+        expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "dirty")
+        unchanged = page.request.get(url + "/v1/consumers", headers=headers).json()
+        assert unchanged["version"] == persisted["version"]
+        assert unchanged["selected"] == competing_selection
+    stale_write = {
+        "expected_version": initial["version"],
+        "selected": [{"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}],
+    }
+    assert page.evaluate("window.consumerWrites") == [stale_write, stale_write]
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "saved")
+    expect(page.get_by_role("heading", name="Synthetic boiler", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Edit appliance settings", exact=True).click()
+    expect(weather).not_to_be_checked()
+    weather.check()
     with page.expect_response(
         lambda response: response.request.method == "PUT" and response.url.endswith("/v1/consumers")
-    ) as rejected:
+    ) as accepted:
         page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    assert rejected.value.status == 409
-    expect(page.locator("#save-state")).to_contain_text("Settings were rejected")
-    expect(page.locator("#save-state")).not_to_contain_text("PRIVATE-")
-    expect(weather).to_be_checked()
-    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "dirty")
-    assert writes == [
+    assert accepted.value.status == 200
+    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "saved")
+    assert page.evaluate("window.writeDeadlines") == [True, True, True]
+    assert page.evaluate("window.consumerWrites") == [
+        stale_write,
+        stale_write,
         {
-            "expected_version": initial["version"],
+            "expected_version": persisted["version"],
             "selected": [
                 {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}
             ],
-        }
+        },
     ]
-    page.unroute("**/v1/consumers", conflict)
-    page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "saved")
-    assert page.evaluate("window.writeDeadlines") == [True, True]
-    confirmed = page.request.get(
-        url + "/v1/consumers", headers={"Authorization": "Bearer " + TOKEN}
-    ).json()
+    confirmed = page.request.get(url + "/v1/consumers", headers=headers).json()
+    assert confirmed["version"] != persisted["version"]
     assert confirmed["selected"] == [
         {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}
     ]

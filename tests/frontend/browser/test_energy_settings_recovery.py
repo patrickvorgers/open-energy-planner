@@ -17,6 +17,48 @@ from tests.frontend.browser.test_charge_point_energy_selection import prepare_ch
 from tests.frontend.browser.thermal_fixture import document as thermal_document
 
 
+@pytest.mark.parametrize("failure", ["network", "json", "decoder", "http", "unauthorized", "abort"])
+def test_appliance_session_failures_never_display_private_diagnostics(app_page, failure):
+    """Session fetch, body, parser and authorization failures expose only the shared fixed public advice."""
+    page, url = app_page
+    page.add_init_script(
+        """(() => {
+            const original=window.fetch;
+            window.sessionBodyReads=[];
+            window.fetch=(path,options)=>{
+                if(!String(path).endsWith('setup/session'))return original(path,options);
+                const failure=FAILURE;
+                if(failure==='network')return Promise.reject(new TypeError('PRIVATE-SESSION-NETWORK'));
+                if(failure==='abort')return Promise.reject(new DOMException('PRIVATE-SESSION-ABORT','AbortError'));
+                const response=new Response('PRIVATE-SESSION-BODY',{
+                    status:failure==='unauthorized'?401:failure==='http'?503:200
+                });
+                const responseIndex=window.sessionBodyReads.push(0)-1;
+                const parse=response.json.bind(response);
+                response.json=()=>{
+                    ++window.sessionBodyReads[responseIndex];
+                    if(failure==='decoder')return Promise.reject(new Error('PRIVATE-SESSION-DECODER'));
+                    return parse();
+                };
+                return Promise.resolve(response);
+            };
+        })();""".replace("FAILURE", repr(failure))
+    )
+    page.goto(url + "/appliance-settings")
+    expect(page.locator("#status")).to_have_text(
+        "The installation token was rejected."
+        if failure == "unauthorized"
+        else "Home Assistant data could not be read. Check the connection and retry."
+    )
+    expect(page.locator("body")).not_to_contain_text("PRIVATE-SESSION-")
+    body_reads = page.evaluate("window.sessionBodyReads")
+    if failure in ("json", "decoder"):
+        assert body_reads and all(reads == 1 for reads in body_reads)
+    else:
+        assert not any(body_reads)
+    expect(page.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
+
+
 @pytest.mark.parametrize("editor", ["ev", "thermal", "consumption"])
 @pytest.mark.parametrize("failed", ["editor", "consumers"])
 def test_failed_paired_read_holds_busy_until_peer_settles_and_retains_draft(
