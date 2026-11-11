@@ -56,10 +56,9 @@ and timing can differ. The candidate workflow additionally establishes admission
 package identity and artifact evidence on either execution route. An informal
 local success does not replace those merge or reuse gates.
 
-The hosted **Quality and integration (AMD64)** job has a 90-minute execution
-limit. This includes container setup, all selected suites, the isolated
-Supervisor lifecycle when selected, packaging and evidence preservation. It is
-an outer CI deadline. Solver, process, HTTP and individual readiness deadlines
+Hosted preparation and each selected test machine have a 90-minute execution
+limit. The final **Quality and integration (AMD64)** job has a 15-minute limit
+for joining evidence, packaging and evidence preservation. These are outer CI deadlines. Solver, process, HTTP and individual readiness deadlines
 retain their independent limits. Increasing this allowance does not make tests
 faster or turn an interrupted run into successful candidate evidence.
 
@@ -1040,9 +1039,36 @@ still retain all transitive consumers. Scope labels remain informational.
 
 ### Execution, completion and reuse proof
 
-Packaged collection fails early before services or long tests start. Native and
-browser work finishes before early HA contracts and real database/HA groups.
-Actual Supervisor acceptance runs last after fast services have been cleaned up.
+Packaged collection fails early before services or long tests start. One preparation
+job executes the immutable base policy, records collection inventories and builds
+only the selected test images. Scope labels continue to describe that decision.
+Labels do not override the policy or directly choose workloads.
+
+The resulting required suites are partitioned across at most four GitHub-hosted
+Ubuntu machines. A machine is omitted when none of its suites is selected.
+
+| Machine | Assigned work |
+| --- | --- |
+| Native and HA | Documentation or CI checks, selected native/unit groups, HA contracts, integration and provisioning |
+| Browser | Selected browser cases through the existing two isolated workers |
+| Databases | Selected database contracts/migrations followed by query-performance tests when required |
+| Supervisor | Actual isolated installation, retention, restart, update and chronological replay |
+
+Preparation saves each built image once. Native and database machines share the
+same exported native image. Each machine downloads only its required images and
+verifies archive checksums, loaded image identities, source tree and workflow
+attempt before executing work. The Supervisor machine prepares its separate
+actual lifecycle environment and does not download unrelated test images.
+
+Each machine preserves its original reports even if another machine fails.
+The final quality job runs only after every selected machine succeeds. It rejects
+missing or extra machines, foreign source/attempt identities, incorrect suite
+ownership, missing or unexpected reports and inconsistent executed counts.
+It then writes and verifies the existing whole-profile completion record. Package
+creation happens once after this join. The existing quality check name, ordered
+source-tree markers and matched bundle/report identities remain the merge and
+main-reuse contract. A skipped or failed machine cannot authorize a package.
+
 Every group has its own JUnit report. Empty
 selection, collection failure, cancellation or process failure cannot count as a
 completed suite.
@@ -1066,10 +1092,11 @@ reports. The canonical `ui.xml` is written only after the full union passes, so
 existing candidate and package readers retain one browser report. Every worker is
 joined before service cleanup, including after failure.
 
-Focused routes run cheap policy checks before overlapping their native unit groups
-and browser work within their separate container budgets. Full routes retain their
-existing native/browser overlap. Database and HA services start after those early
-groups finish. Browser teaching examples reuse a real solved and
+Hosted native work runs cheap policy checks before its selected unit and HA groups.
+Browser, database and Supervisor machines run independently after preparation.
+Local runs without `--lane` retain the bounded single-machine orchestration.
+The hosted controller requires `--prebuilt --stage tests --lane <name>` and keeps
+the original selection profile unchanged. Browser teaching examples reuse a real solved and
 independently validated plan once per process. Each case still initializes a fresh
 database and receives its own mutable copy. No database snapshot or persistent
 fixture cache is used.
@@ -1095,11 +1122,16 @@ Actions shows selected and omitted groups with complete-PR path and consumer
 reasons. Groups executing inside legacy parents are labeled as included, not
 separately executed. Planned `ci-scope: *` labels are advisory. They never replace those logs.
 `results/ci/selection.json` retains the trusted selection and its raw reasons.
-`results/ci/phase-times.json` records actual phase starts, durations and outcomes,
-including overlapping work and the final Supervisor phase. Preflight has a separate
-`phase-times-preflight.json` record. Hosted image-build timing remains in workflow
-step metadata. These records are uploaded with
-completion and JUnit evidence.
+Hosted `results/ci/phase-times-<lane>.json` records each machine's phase starts,
+durations and outcomes. Local runs retain `phase-times.json`. Preflight has a
+separate `phase-times-preflight.json` record. `parallel-plan.json` captures machine
+assignments and prepared image identities. Each `lane-completion-<lane>.json`
+binds its completed groups and executed counts to the original profile, source
+tree, tested commit and workflow run/attempt. These records are retained in the
+canonical `test-reports-amd64` artifact with completion and JUnit evidence.
+Image-transfer artifacts expire after one day. Original reports and the final
+matched installation bundle retain their fourteen-day lifetime. Hosted setup,
+image-build and transfer timing remains in workflow step metadata.
 
 ### How an omission is substantiated
 

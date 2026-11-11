@@ -17,9 +17,9 @@ def isolated_ci_reports(tmp_path, monkeypatch):
     def write(path, *arguments, **options):
         """Only mocked pipeline diagnostics belong in this test's temporary report directory."""
         if (
-            path.name in {"phase-times.json", "phase-times-preflight.json", "selection.json"}
-            and path.resolve().parent == shared
-        ):
+            path.name in {"phase-times.json", "selection.json"}
+            or path.name.startswith("phase-times-")
+        ) and path.resolve().parent == shared:
             path = tmp_path / path.name
         return original_write(path, *arguments, **options)
 

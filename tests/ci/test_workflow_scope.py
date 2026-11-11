@@ -108,14 +108,14 @@ def test_scalar_and_non_step_references_keep_full(workflow_trees, workflow):
     assert select_profile(base, tested, root) == "full"
 
 
-def test_real_workflow_setup_python_update_keeps_ci_route(workflow_trees):
-    """The maintained workflow's block scalars, conditions and earlier checkout step remain supported."""
+def test_real_parallel_workflow_setup_updates_keep_conservative_route(workflow_trees):
+    """Changing multiple machine setup steps exceeds the existing one-reference-only exemption."""
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/checks.yaml").read_text()
     updated = re.sub(r"(uses: actions/setup-python@)[0-9a-f]{40}", r"\g<1>" + "b" * 40, workflow)
     root, tree = workflow_trees
     base = tree(workflow)
     tested = tree(updated)
-    assert select_profile(base, tested, root) == "ci"
+    assert select_profile(base, tested, root) == "full"
 
 
 @pytest.mark.parametrize(

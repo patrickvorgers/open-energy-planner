@@ -32,17 +32,22 @@ jobs:
       actions: read
       checks: read
       pull-requests: read
-  quality:
+  prepare:
     needs: candidate
     if: needs.candidate.outputs.reuse != 'true'
-    name: Quality and integration (AMD64)
+    name: Prepare selected test images and inventories
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:
       run:
         shell: bash
     outputs:
-      build_attempt: ${{ steps.bundle.outputs.attempt }}
+      profile: ${{ steps.scope.outputs.profile || 'full' }}
+      documentation_only: ${{ steps.scope.outputs.documentation_only }}
+      test_only: ${{ steps.scope.outputs.test_only }}
+      matrix_profile: ${{ steps.scope.outputs.matrix_profile }}
+      tree: ${{ steps.source.outputs.tree }}
+      matrix: ${{ steps.parallel.outputs.matrix }}
     env:
       COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
       DOCKER_BUILD_RECORD_UPLOAD: false
@@ -136,19 +141,219 @@ jobs:
         env:
           OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || (steps.scope.outputs.documentation_only == 'true' && 'documentation' || 'full') }}
         run: python script/ci/ci.py --prebuilt --stage preflight --profile "$OEP_CI_PROFILE"
+      - name: Export each prepared test image once
+        id: parallel
+        env:
+          OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || 'full' }}
+        run: python -m script.ci.parallel_checks export --profile "$OEP_CI_PROFILE"
+      - name: Preserve prepared selection and inventories
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-prepared
+          include-hidden-files: true
+          path: |
+            .local/ci-prepared/parallel-plan.json
+            .local/ci-prepared/preflight/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Share the prepared native image
+        if: hashFiles('.local/ci-prepared/native.tar') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-image-native
+          include-hidden-files: true
+          path: .local/ci-prepared/native.tar
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 1
+      - name: Share the prepared app image
+        if: hashFiles('.local/ci-prepared/app.tar') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-image-app
+          include-hidden-files: true
+          path: .local/ci-prepared/app.tar
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 1
+      - name: Share the prepared ha-tests image
+        if: hashFiles('.local/ci-prepared/ha-tests.tar') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-image-ha-tests
+          include-hidden-files: true
+          path: .local/ci-prepared/ha-tests.tar
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 1
+      - name: Share the prepared ui-tests image
+        if: hashFiles('.local/ci-prepared/ui-tests.tar') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-image-ui-tests
+          include-hidden-files: true
+          path: .local/ci-prepared/ui-tests.tar
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 1
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-preflight-diagnostics
+          path: |
+            results/ci/*.xml
+            results/ci/browser-*/*.xml
+            results/ci/browser-*/*.json
+            results/ci/suite-completion.json
+            results/ci/phase-times*.json
+            results/ci/selection.json
+            results/ci/preflight-*.log
+            results/ci/price-history-*.json
+            results/ci/**/*.png
+            results/ci/supervisor-*.json
+            results/ci/supervisor-failure.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  tests:
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    name: Selected tests (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
+      OEP_CI_PROFILE: ${{ needs.prepare.outputs.profile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Load the prepared selection and inventories
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ci-prepared
+          path: .local/ci-prepared
+      - name: Download the selected native image
+        if: contains(matrix.images, 'native')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ci-image-native
+          path: .local/ci-prepared
+      - name: Download the selected app image
+        if: contains(matrix.images, 'app')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ci-image-app
+          path: .local/ci-prepared
+      - name: Download the selected ha-tests image
+        if: contains(matrix.images, 'ha-tests')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ci-image-ha-tests
+          path: .local/ci-prepared
+      - name: Download the selected ui-tests image
+        if: contains(matrix.images, 'ui-tests')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ci-image-ui-tests
+          path: .local/ci-prepared
+      - name: Release storage for actual Supervisor acceptance
+        if: matrix.lane == 'supervisor'
+        run: sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+      - name: Verify the prepared image bytes and load selected images
+        run: python -m script.ci.parallel_checks load --profile "$OEP_CI_PROFILE" --lane "${{ matrix.lane }}"
+      - name: Execute this machine's assigned suites
+        run: python script/ci/ci.py --prebuilt --stage tests --profile "$OEP_CI_PROFILE" --lane "${{ matrix.lane }}"
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-reports-${{ matrix.lane }}
+          path: |
+            results/ci/*.xml
+            results/ci/browser-*/*.xml
+            results/ci/browser-*/*.json
+            results/ci/lane-completion-*.json
+            results/ci/phase-times*.json
+            results/ci/selection.json
+            results/ci/preflight-*.log
+            results/ci/price-history-*.json
+            results/ci/**/*.png
+            results/ci/supervisor-*.json
+            results/ci/supervisor-failure.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  quality:
+    needs: [candidate, prepare, tests]
+    if: >-
+      !cancelled() && needs.candidate.outputs.reuse != 'true' &&
+      needs.prepare.result == 'success' && needs.tests.result == 'success'
+    name: Quality and integration (AMD64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      build_attempt: ${{ steps.bundle.outputs.attempt }}
+    env:
+      OEP_CI_PROFILE: ${{ needs.prepare.outputs.profile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Retain the prepared source identity
+        id: source
+        env:
+          OEP_TESTED_TREE: ${{ needs.prepare.outputs.tree }}
+        run: |
+          test "$(git rev-parse HEAD^{tree})" = "$OEP_TESTED_TREE"
+          echo "tree=$OEP_TESTED_TREE" >> "$GITHUB_OUTPUT"
+      - name: Retain the immutable base selection
+        id: scope
+        env:
+          DOCUMENTATION_ONLY: ${{ needs.prepare.outputs.documentation_only }}
+          TEST_ONLY: ${{ needs.prepare.outputs.test_only }}
+          MATRIX_PROFILE: ${{ needs.prepare.outputs.matrix_profile }}
+        run: |
+          echo "profile=$OEP_CI_PROFILE" >> "$GITHUB_OUTPUT"
+          echo "documentation_only=$DOCUMENTATION_ONLY" >> "$GITHUB_OUTPUT"
+          echo "test_only=$TEST_ONLY" >> "$GITHUB_OUTPUT"
+          echo "matrix_profile=$MATRIX_PROFILE" >> "$GITHUB_OUTPUT"
+      - name: Download the original preparation evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ci-prepared
+          path: .local/ci-prepared
+      - name: Download each machine's original reports separately
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: ci-reports-*
+          path: .local/ci-lanes
       - name: Documentation, Ruff and CI routing checks
         if: steps.scope.outputs.documentation_only == 'true'
-        run: python script/ci/ci.py --documentation-only --prebuilt --stage tests
+        run: python -m script.ci.parallel_checks join --profile "$OEP_CI_PROFILE"
       - name: Native checks, planner scenarios, app smoke and real HA handoff
         if: steps.scope.outputs.documentation_only != 'true' && (steps.scope.outputs.matrix_profile == 'full' || steps.scope.outputs.profile == 'full' || steps.scope.outputs.profile == '')
         env:
           OEP_CI_PROFILE: ${{ steps.scope.outputs.profile || 'full' }}
-        run: python script/ci/ci.py --prebuilt --stage tests --profile "$OEP_CI_PROFILE"
+        run: python -m script.ci.parallel_checks join --profile "$OEP_CI_PROFILE"
       - name: Selected native and integration suites
         if: steps.scope.outputs.documentation_only != 'true' && steps.scope.outputs.matrix_profile != 'full' && steps.scope.outputs.profile != 'full' && steps.scope.outputs.profile != ''
         env:
           OEP_CI_PROFILE: ${{ steps.scope.outputs.profile }}
-        run: python script/ci/ci.py --prebuilt --stage tests --profile "$OEP_CI_PROFILE"
+        run: python -m script.ci.parallel_checks join --profile "$OEP_CI_PROFILE"
       - name: ${{ (steps.scope.outputs.matrix_profile == 'full' || steps.scope.outputs.profile == 'full' || steps.scope.outputs.profile == '') && 'Full CI suite completion' || 'Selected CI suite completion' }}
         if: steps.scope.outputs.documentation_only != 'true'
         env:
@@ -218,6 +423,8 @@ jobs:
             results/ci/browser-*/*.xml
             results/ci/browser-*/*.json
             results/ci/suite-completion.json
+            results/ci/lane-completion-*.json
+            results/ci/parallel-plan.json
             results/ci/phase-times*.json
             results/ci/selection.json
             results/ci/preflight-*.log

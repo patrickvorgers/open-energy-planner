@@ -18,6 +18,7 @@ scope = importlib.import_module("script.ci.ci_scope")
 check_images = importlib.import_module("script.ci.check_images").check_images
 completion = importlib.import_module("script.ci.check_suite_completion")
 browser_execution = importlib.import_module("script.ci.check_browser")
+parallel = importlib.import_module("script.ci.parallel_checks")
 
 EARLY_CHECK_WORKERS = 2
 DATABASE_CHECK_WORKERS = 1
@@ -44,12 +45,22 @@ parser.add_argument(
     default="full",
     help="Run suites selected by the trusted base policy. Defaults to full.",
 )
+parser.add_argument(
+    "--lane", choices=parallel.LANES, help="Execute only this hosted machine assignment."
+)
 arguments = parser.parse_args()
+if arguments.lane and (arguments.stage != "tests" or not arguments.prebuilt):
+    parser.error("--lane requires --prebuilt --stage tests")
 if arguments.documentation_only and arguments.profile != "full":
     parser.error("Choose --documentation-only or --profile")
 profile = "documentation" if arguments.documentation_only else arguments.profile
 documentation_only = profile == "documentation"
 suites = scope.selected_suites(profile)
+if arguments.lane:
+    assignments = parallel.lane_suites(profile)
+    if arguments.lane not in assignments:
+        parser.error("Unselected CI lane")
+    suites = assignments[arguments.lane]
 focused = profile.startswith("selected:") or scope.matrix_profile(profile) == "ci"
 database_suites = suites & set(scope.FUNCTIONAL_DATABASE_SUITES)
 ha_selected = "ha" in suites or any(suite.startswith("ha-") for suite in suites)
@@ -60,6 +71,8 @@ pipeline_started = monotonic()
 timing_report = Path(
     "results/ci/phase-times-preflight.json"
     if arguments.stage == "preflight"
+    else f"results/ci/phase-times-{arguments.lane}.json"
+    if arguments.lane
     else "results/ci/phase-times.json"
 )
 project = f"oep-check-{uuid4().hex[:12]}"
@@ -149,6 +162,52 @@ def run_database_suites():
         )
 
 
+def run_ha_contracts():
+    """Run early peer contracts before starting disposable app and database services."""
+    if "ha-contracts" in suites or "ha" in suites:
+        run(
+            "run",
+            "--no-deps",
+            "--rm",
+            "ha-tests",
+            "-m",
+            "script.ci.pytest_suites",
+            "ha-contracts",
+            suite="ha-contracts",
+        )
+
+
+def run_ha_suites():
+    """Execute assigned HA groups once against this machine's disposable app and peer."""
+    if app_selected:
+        run("up", "--no-build", "--detach", "--wait", "app")
+    if "ha" in suites:
+        run(
+            "run",
+            "--rm",
+            "ha-tests",
+            "-m",
+            "script.ci.check_ha",
+            "--ignore=tests/custom_component/integration/contracts",
+            suite="ha",
+        )
+        run("run", "--rm", "provision-tests", suite="provisioning")
+    for suite in sorted(suites):
+        if suite.startswith("ha-") and suite != "ha-contracts" and "ha" not in suites:
+            run(
+                "run",
+                "--no-deps",
+                "--rm",
+                "ha-tests",
+                "-m",
+                "script.ci.pytest_suites",
+                suite,
+                suite=suite,
+            )
+    if "provisioning" in suites and "ha" not in suites:
+        run("run", "--rm", "provision-tests", suite="provisioning")
+
+
 try:
     targets = ["native"]
     if app_selected:
@@ -161,18 +220,45 @@ try:
         targets.append("ui-tests")
     if database_selected:
         targets.append("db-tests")
-    if arguments.prebuilt:
+    if arguments.lane:
+        targets = [
+            target
+            for target in targets
+            if target != "native" or arguments.lane in {"native", "databases"}
+        ]
+        if arguments.lane == "supervisor":
+            targets = []
+    if arguments.prebuilt and targets:
         subprocess.run(
             ["docker", "image", "inspect", *[f"{project}-{target}" for target in targets]],
             check=True,
             stdout=subprocess.DEVNULL,
         )
-    else:
+    elif not arguments.prebuilt:
         run("--profile", "test", "build", *targets)
     if arguments.stage != "tests":
         check_images(compose, project, profile, suites)
     if arguments.stage == "preflight":
         pass
+    elif arguments.lane and not documentation_only:
+        if arguments.lane == "browser":
+            run_browser()
+        elif arguments.lane == "databases":
+            run("up", "--detach", "--wait", "postgres-test", "mariadb-test", "mysql-test")
+            run_database_suites()
+        elif arguments.lane == "native":
+            if focused:
+                run("run", "--rm", "native", "script/ci/check_native.py", "--ci-only", suite="ci")
+                run_unit_suites()
+            else:
+                native_arguments = (
+                    ("script/ci/check_native.py", "--without-database-contracts")
+                    if scope.selected_suites(profile) & set(scope.FUNCTIONAL_DATABASE_SUITES)
+                    else ()
+                )
+                run("run", "--rm", "native", *native_arguments, suite="native")
+            run_ha_contracts()
+            run_ha_suites()
     elif documentation_only:
         run(
             "run",
@@ -192,48 +278,12 @@ try:
                 browser_checks.result()
         else:
             run_unit_suites()
-        if "ha-contracts" in suites or "ha" in suites:
-            run(
-                "run",
-                "--no-deps",
-                "--rm",
-                "ha-tests",
-                "-m",
-                "script.ci.pytest_suites",
-                "ha-contracts",
-                suite="ha-contracts",
-            )
+        run_ha_contracts()
         if database_selected:
             run("up", "--detach", "--wait", "postgres-test", "mariadb-test", "mysql-test")
         with ThreadPoolExecutor(max_workers=DATABASE_CHECK_WORKERS) as background:
             database_checks = background.submit(run_database_suites) if database_selected else None
-            if app_selected:
-                run("up", "--no-build", "--detach", "--wait", "app")
-            if "ha" in suites:
-                run(
-                    "run",
-                    "--rm",
-                    "ha-tests",
-                    "-m",
-                    "script.ci.check_ha",
-                    "--ignore=tests/custom_component/integration/contracts",
-                    suite="ha",
-                )
-                run("run", "--rm", "provision-tests", suite="provisioning")
-            for suite in sorted(suites):
-                if suite.startswith("ha-") and suite != "ha-contracts":
-                    run(
-                        "run",
-                        "--no-deps",
-                        "--rm",
-                        "ha-tests",
-                        "-m",
-                        "script.ci.pytest_suites",
-                        suite,
-                        suite=suite,
-                    )
-            if "provisioning" in suites:
-                run("run", "--rm", "provision-tests", suite="provisioning")
+            run_ha_suites()
             if database_checks is not None:
                 database_checks.result()
     else:
@@ -320,7 +370,7 @@ if "supervisor" in suites and arguments.stage != "preflight":
                 "success": "supervisor" in completed_suites,
             }
         )
-        Path("results/ci/phase-times.json").write_text(
+        timing_report.write_text(
             json.dumps(
                 {
                     "profile": profile,
@@ -333,4 +383,7 @@ if "supervisor" in suites and arguments.stage != "preflight":
         )
 
 if arguments.stage != "preflight":
-    completion.write_completion(profile, completed_suites)
+    if arguments.lane:
+        parallel.write_lane_completion(profile, arguments.lane, completed_suites)
+    else:
+        completion.write_completion(profile, completed_suites)
