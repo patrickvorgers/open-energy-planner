@@ -5,21 +5,17 @@ import {SaveBar} from "./save-bar.js";
 import {money, optionLabel} from "./display.js";
 import {profileMetrics} from "./appliance-profile.js";
 import {pollApplianceEvidence} from "./appliance-evidence.js";
+import {applianceSettingsApi} from "./appliance-settings-api.js";
 /** Configuration uses the existing consumers and appliance APIs. Source meters remain owned by Home Assistant Energy. */
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
 let token = "", consumerVersion, applianceVersion, retainedSpecialized = [], savedConsumers = "";
+const api = applianceSettingsApi(base, () => token);
 const consumerChoices = new Map(), pending = new Map();
 let energySources;
 let selectedId = null, editing = false, evidenceEpoch = 0, evidenceRefreshing = false;
 bindSettingsActions();
 const saveState = new SaveBar({form: "appliance-settings", bar: "appliance-save-bar", save: "save-settings", discard: "discard-settings", status: "save-state", read: () => [...consumerChoices].map(([id, inputs]) => [id, inputs.enabled.checked, inputs.weather.checked, inputs.permission.checked, inputs.duration.value, inputs.energy.value])});
-/** Send versioned configuration requests through the authenticated app boundary. */
-async function api(path, body, method = body ? "POST" : "GET") {
-    const response = await fetch(base + path, {method, headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store"});
-    if (!response.ok) { const error = new Error(await response.text()); error.status = response.status; throw error; }
-    return response.json();
-}
 /** Build labels as text so source names cannot inject markup. */
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
 /** Keep all OEP-owned source choices in Settings while preserving EV/thermal-owned selections and unresolved cycles. */
@@ -72,7 +68,10 @@ async function load() {
     const ownsLock = !saveState.busy;
     if (ownsLock) saveState.begin("Loading appliance settings…");
     try {
-        const [data, consumers] = await Promise.all([api("v1/appliances"), api("v1/consumers?view=settings")]);
+        const results = await Promise.allSettled([api("v1/appliances"), api("v1/consumers?view=settings")]);
+        const failed = results.find(result => result.status === "rejected");
+        if (failed) throw failed.reason;
+        const [data, consumers] = results.map(result => result.value);
         if (!Array.isArray(consumers.charging_meters) || !Array.isArray(consumers.thermal_meters)) throw new Error("Specialized-meter membership unavailable. Reload before editing appliance settings.");
         settings(consumers, new Set([...consumers.charging_meters, ...consumers.thermal_meters]), data.devices);
         applianceVersion = data.revision;
@@ -96,7 +95,7 @@ find("appliance-settings").onsubmit = async (event) => {
     try {
         for (const [entity_id, shiftable] of pending) if (!shiftable) { const response = await api("v1/appliances/device", {entity_id, shiftable, expected_version: applianceVersion}); applianceVersion = response.appliances.revision; pending.delete(entity_id); }
         if (JSON.stringify(selected) !== savedConsumers) {
-            const result = await api("v1/consumers", {expected_version: consumerVersion, selected}, "PUT");
+            const result = await api("v1/consumers", {expected_version: consumerVersion, selected}, undefined, "PUT");
             consumerVersion = result.version; savedConsumers = JSON.stringify(selected);
         }
         for (const [entity_id, shiftable] of pending) { const response = await api("v1/appliances/device", {entity_id, shiftable, expected_version: applianceVersion}); applianceVersion = response.appliances.revision; pending.delete(entity_id); }
@@ -113,7 +112,7 @@ find("appliance-settings").onsubmit = async (event) => {
 find("discard-settings").onclick = async () => { await saveState.refresh(load, {discard: true}); syncEditor(); };
 find("refresh").onclick = () => { find("appliance-more").open = false; return saveState.refresh(load); };
 find("connect").onsubmit = event => { event.preventDefault(); token = find("token").value; load(); };
-fetch(base + "setup/session", {redirect: "error"}).then(response => response.json()).then(session => { if (session.ingress) load(); }).catch(error => { find("status").textContent = error.message; });
+api("setup/session").then(session => { if (session.ingress) load(); }).catch(error => { find("status").textContent = error.message; });
 
 /** Select only OEP members while retaining all source controls for versioned API writes. */
 function showAppliance() {

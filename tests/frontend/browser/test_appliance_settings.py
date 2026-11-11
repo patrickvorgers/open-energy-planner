@@ -13,7 +13,12 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.control_layout import assert_field_actions_aligned
-from tests.frontend.browser.helpers import TOKEN, assert_floating_save_bar, discover
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    assert_floating_save_bar,
+    discover,
+    discover_boiler_sources,
+)
 
 
 @pytest.mark.parametrize("action", ["click", "enter"])
@@ -173,8 +178,16 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     expect(duration).to_have_value("90")
     expect(energy).to_have_value("0.6")
     expect(duration).to_be_focused()
-    page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    expect(page.locator("#save-state")).to_contain_text("Appliance settings changed")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST"
+            and response.url.endswith("/v1/appliances/manual_profile")
+        )
+    ) as saving:
+        page.get_by_role("button", name="Save appliance settings", exact=True).click()
+    assert saving.value.status == 400
+    assert saving.value.text() == "Appliance settings changed. Reload before saving"
+    expect(page.locator("#save-state")).to_contain_text("Settings were rejected")
     expect(duration).to_have_value("90")
     expect(energy).to_have_value("0.6")
     page.route(
@@ -937,7 +950,8 @@ def test_appliance_permissions_save_explicitly_and_retain_only_failed_changes(ap
     page.get_by_role("button", name="Reload appliance settings", exact=True).click()
     expect(permissions.nth(1)).to_be_checked()
     page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    expect(page.locator("#save-state")).to_contain_text("Dryer storage unavailable")
+    expect(page.locator("#save-state")).to_contain_text("Save could not be confirmed")
+    expect(page.locator("#save-state")).not_to_contain_text("Dryer storage unavailable")
     expect(page.locator("#save-state")).to_contain_text("Unsaved changes")
     assert writes == [
         {"entity_id": "sensor.dishwasher", "shiftable": True},
@@ -1421,7 +1435,8 @@ def test_appliance_learning_manual_save_failure_and_retained_evidence(app_page):
     duration.fill("90")
     energy.fill("0.6")
     page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    expect(page.locator("#save-state")).to_contain_text("Storage temporarily unavailable")
+    expect(page.locator("#save-state")).to_contain_text("Save could not be confirmed")
+    expect(page.locator("#save-state")).not_to_contain_text("Storage temporarily unavailable")
     expect(duration).to_have_value("90")
     expect(energy).to_have_value("0.6")
     page.get_by_role("button", name="Save appliance settings", exact=True).click()
@@ -1736,3 +1751,63 @@ def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page
             expect(page.get_by_role("heading", name="Utility boiler", exact=True)).to_be_visible()
         else:
             expect(page.locator("#thermal-save-state")).to_contain_text("Unsaved changes")
+
+
+def test_consumer_put_conflict_keeps_draft_and_write_acknowledgement_unbounded(app_page):
+    """A 409 selection conflict retains the staged device and an independent retry keeps real PUT semantics."""
+    page, url = app_page
+    discover_boiler_sources(page, url)
+    page.goto(url + "/appliance-settings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    initial = page.request.get(
+        url + "/v1/consumers", headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
+    page.get_by_role("button", name="Add appliance", exact=True).click()
+    page.locator("#source-dialog button.source-choice:enabled").first.click()
+    weather = page.get_by_label("Consumption depends on outdoor temperature", exact=True)
+    weather.check()
+    writes = []
+
+    def conflict(route):
+        """Reject a versioned selection write without accepting any of its changes."""
+        assert route.request.method == "PUT"
+        writes.append(route.request.post_data_json)
+        route.fulfill(status=409, body="PRIVATE-CONFLICT-DETAILS")
+
+    page.route("**/v1/consumers", conflict)
+    page.evaluate("""() => {
+        const original=window.fetch;
+        window.writeDeadlines=[];
+        window.fetch=(path,options)=>{
+            if(options?.method==='PUT')window.writeDeadlines.push(options.signal==null);
+            return original(path,options);
+        };
+    }""")
+    with page.expect_response(
+        lambda response: response.request.method == "PUT" and response.url.endswith("/v1/consumers")
+    ) as rejected:
+        page.get_by_role("button", name="Save appliance settings", exact=True).click()
+    assert rejected.value.status == 409
+    expect(page.locator("#save-state")).to_contain_text("Settings were rejected")
+    expect(page.locator("#save-state")).not_to_contain_text("PRIVATE-")
+    expect(weather).to_be_checked()
+    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "dirty")
+    assert writes == [
+        {
+            "expected_version": initial["version"],
+            "selected": [
+                {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}
+            ],
+        }
+    ]
+    page.unroute("**/v1/consumers", conflict)
+    page.get_by_role("button", name="Save appliance settings", exact=True).click()
+    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "saved")
+    assert page.evaluate("window.writeDeadlines") == [True, True]
+    confirmed = page.request.get(
+        url + "/v1/consumers", headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
+    assert confirmed["selected"] == [
+        {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}
+    ]
