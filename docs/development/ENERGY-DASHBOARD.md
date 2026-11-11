@@ -117,6 +117,14 @@ after fifteen minutes without confirmation. A pending partial transfer cannot be
 confirmed. App restart or revision mismatch requires complete publication again.
 This is connection/watch confirmation, not a sensor-value heartbeat or proof that
 an upstream provider generated new measurements.
+If a command snapshot or observation upload fails with a transport error, the
+integration can still send that same bounded revision confirmation. The command
+failure remains visible and its normal command-validity rules still apply.
+This recovery never captures or publishes metadata or forecasts. The app checks
+all currently configured source bindings under its configuration lock before
+advancing freshness. Missing or malformed bindings, a changed revision and a
+pending transfer reject confirmation without changing the accepted timestamp.
+Validation, authentication and release failures do not use transport recovery.
 Rejected configured source identities suspend metadata publication, confirmation
 and forecast capture without stopping otherwise valid plan acceptance or
 acknowledgement. The previous active set is retained for recovery. It is not

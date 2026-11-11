@@ -1067,6 +1067,9 @@ def create_app(
         catalogue=setup_catalogue,
         contracts=contracts,
         appliances=appliances,
+        source_entities=lambda: configured_sources(
+            live.configuration if live else None, ev.state, thermal.state
+        ),
     )
     register_session(app, setup_catalogue)
     register_assets(app, installation, demand, solar)

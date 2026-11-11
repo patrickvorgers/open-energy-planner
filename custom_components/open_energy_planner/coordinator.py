@@ -223,6 +223,38 @@ class PlanCoordinator:
         await self.save()
         await self.sync()
 
+    async def _confirm_catalogue(self, now):
+        """Confirm healthy watched metadata even when independent command transport fails.
+
+        The app also checks current source bindings before advancing freshness.
+        Changed watches and rejected bindings never authorize this fallback.
+        """
+        if (
+            self.closed
+            or self.catalogue_bindings_rejected
+            or self.catalogue_context is None
+            or not self.catalogue_discovery.healthy
+            or self.catalogue_confirmed_at is not None
+            and now - self.catalogue_confirmed_at < timedelta(seconds=CATALOGUE_CONFIRM_SECONDS)
+        ):
+            return
+        try:
+            await self.client.request(
+                "POST",
+                "/v1/ha/catalogue",
+                {"confirmed_revision": self.catalogue_context.revision},
+            )
+        except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
+            raise
+        except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+            if not self.closed:
+                self.catalogue_discovery.repair()
+                self.catalogue_failed_at = None
+            _LOGGER.debug("Setup catalogue confirmation failed", exc_info=True)
+        else:
+            if not self.closed:
+                self.catalogue_confirmed_at = now
+
     async def sync(self, _now=None):
         """Serialize authenticated snapshots/reports and accept only compatible validated plans.
 
@@ -256,7 +288,13 @@ class PlanCoordinator:
                         return
                     self.pending_enabled = None
                 else:
-                    data = await self.client.snapshot()
+                    try:
+                        data = await self.client.snapshot()
+                    except ServerFingerprintMismatch:
+                        raise
+                    except (ClientError, TimeoutError):
+                        await self._confirm_catalogue(dt_util.utcnow())
+                        raise
                 if self.closed or self.schedule.resume_after != intent_at_request:
                     return
                 if data.get("release") != RELEASE:
@@ -285,7 +323,13 @@ class PlanCoordinator:
                     if not ready:
                         self.schedule.invalidate()
                         self.refresh()
-                    data = await self.client.observations(report)
+                    try:
+                        data = await self.client.observations(report)
+                    except ServerFingerprintMismatch:
+                        raise
+                    except (ClientError, TimeoutError):
+                        await self._confirm_catalogue(dt_util.utcnow())
+                        raise
                     if self.closed or self.schedule.resume_after != intent_at_request:
                         return
                     if data.get("release") != RELEASE:
@@ -393,7 +437,6 @@ class PlanCoordinator:
                 ):
                     from .catalogue_transfer import prepare_catalogue
 
-                    confirmation_repair = False
                     try:
                         catalogue = await self.catalogue_discovery.capture(
                             force=bool(forced_catalogue), now=now
@@ -432,33 +475,14 @@ class PlanCoordinator:
                                         "status": "not_ready",
                                         "reason": membership["configuration_issue"],
                                     }
-                        elif (
-                            self.catalogue_context is not None
-                            and self.catalogue_discovery.healthy
-                            and (
-                                self.catalogue_confirmed_at is None
-                                or now - self.catalogue_confirmed_at
-                                >= timedelta(seconds=CATALOGUE_CONFIRM_SECONDS)
-                            )
-                        ):
-                            try:
-                                await self.client.request(
-                                    "POST",
-                                    "/v1/ha/catalogue",
-                                    {"confirmed_revision": self.catalogue_context.revision},
-                                )
-                            except (AuthenticationError, ReleaseMismatchError):
-                                raise
-                            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                                confirmation_repair = True
-                                raise
-                            self.catalogue_confirmed_at = now
+                        else:
+                            await self._confirm_catalogue(now)
                         self.catalogue_failed_at = None
-                    except (AuthenticationError, ReleaseMismatchError):
+                    except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                         self.catalogue_discovery.repair()
-                        self.catalogue_failed_at = None if confirmation_repair else now
+                        self.catalogue_failed_at = now
                         _LOGGER.debug("Setup catalogue refresh failed", exc_info=True)
                         if catalogue_request:
                             try:
