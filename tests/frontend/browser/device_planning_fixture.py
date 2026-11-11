@@ -25,7 +25,7 @@ DEVICE_NAMES = {
 }
 
 
-def seed(directory, *, fractional_boundaries=False):
+def seed(directory, *, fractional_boundaries=False, legend_devices=False):
     """Keep full-day solar and prices, and solve explicit washer/dryer tasks with remaining expectations.
 
     Args:
@@ -34,6 +34,8 @@ def seed(directory, *, fractional_boundaries=False):
             by 123456 microseconds, and fix acknowledged starts at ready_at.
             This isolates boundary precision from free-scheduling search. The
             default retains ordinary free scheduling over the full 48 hours.
+        legend_devices: Include an unused meter and an expected-only device
+            whose consumption starts exactly at the second day's boundary.
     """
     seed_household(directory)
     repository = SqlPlanRepository(directory)
@@ -41,20 +43,21 @@ def seed(directory, *, fractional_boundaries=False):
         original = repository.state["plan"]
         problem = physical_context(original)
         consumers = ConsumerForecasts(SqlDocuments(repository.engine, "demand"))
+        names = dict(DEVICE_NAMES)
+        if legend_devices:
+            names.update(
+                {"sensor.idle_energy": "Unused appliance", "sensor.later_energy": "Later appliance"}
+            )
         consumers.sync(
             {
-                "entities": [
-                    {"entity_id": entity, "name": name} for entity, name in DEVICE_NAMES.items()
-                ],
+                "entities": [{"entity_id": entity, "name": name} for entity, name in names.items()],
                 "suggestions": {
-                    "consumers": [
-                        {"entity_id": entity, "upstream": None} for entity in DEVICE_NAMES
-                    ]
+                    "consumers": [{"entity_id": entity, "upstream": None} for entity in names]
                 },
             }
         )
         consumers.save(
-            [{"entity_id": entity, "weather_sensitive": False} for entity in DEVICE_NAMES],
+            [{"entity_id": entity, "weather_sensitive": False} for entity in names],
             consumers.version,
         )
 
@@ -73,13 +76,26 @@ def seed(directory, *, fractional_boundaries=False):
                 ],
             }
 
-        residual = forecast()
+        def later_rate(step):
+            """Shift 30 W from household base to a named device only on the second day."""
+            return 0.03 if legend_devices and step.start >= START + timedelta(hours=24) else 0
+
+        residual = forecast(lambda step: step.load_kwh / step.duration_h - 0.24 - later_rate(step))
         consumers.result = {"devices": [], "residual": residual, "residual_baseline": residual}
         for entity, power_kw in zip(DEVICE_NAMES, (0.04, 0.06, 0.04, 0.10), strict=True):
             expected = forecast(lambda _step, rate=power_kw: rate)
             consumers.result["devices"].append(
                 {"entity_id": entity, "forecast": expected, "baseline_forecast": expected}
             )
+        if legend_devices:
+            for entity, rates in (
+                ("sensor.idle_energy", lambda _step: 0),
+                ("sensor.later_energy", later_rate),
+            ):
+                expected = forecast(rates)
+                consumers.result["devices"].append(
+                    {"entity_id": entity, "forecast": expected, "baseline_forecast": expected}
+                )
         appliances = ApplianceService(SqlDocuments(repository.engine, "planning"), consumers)
         for entity, duration, energy in (
             ("sensor.washer_energy", 90, 0.9),
@@ -110,7 +126,8 @@ def seed(directory, *, fractional_boundaries=False):
             SimpleNamespace(forecast=SimpleNamespace(model="consumer-composite-v1")),
             START,
         )
-        assert len(snapshot.problem.appliances) == 2 and len(snapshot.load_components) == 5
+        assert len(snapshot.problem.appliances) == 2
+        assert len(snapshot.load_components) == (7 if legend_devices else 5)
         if fractional_boundaries:
             # Freeze acknowledged starts to test boundary precision independently of timing search.
             snapshot = replace(
@@ -130,7 +147,7 @@ def seed(directory, *, fractional_boundaries=False):
         document.update(
             currency="EUR",
             market_area="NL",
-            comparison_names={**original["comparison_names"], **DEVICE_NAMES},
+            comparison_names={**original["comparison_names"], **names},
         )
         repository.state["plan"] = document
         repository.save()
