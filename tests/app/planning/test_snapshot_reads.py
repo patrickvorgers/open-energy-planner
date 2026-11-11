@@ -39,22 +39,25 @@ def test_settlement_history_read_does_not_hold_appliance_state_lock(
             )
             try:
                 assert await asyncio.to_thread(entered.wait, 2)
+                async with asyncio.timeout(1):
+                    async with session.put(
+                        url + "/v1/enabled",
+                        json={"enabled": False, "request_id": "pause-during-read"},
+                    ) as response:
+                        assert response.status == 200
+                assert not release.is_set() and not pending.done()
                 response = await asyncio.wait_for(session.get(url + "/v1/appliances"), 0.5)
                 assert response.status == 200
                 assert (await response.json())["devices"] == []
-                async with session.put(
-                    url + "/v1/enabled", json={"enabled": False, "request_id": "pause-during-read"}
-                ) as response:
-                    assert response.status == 200
             finally:
                 release.set()
                 response = await pending
-                if operation == "snapshot":
-                    assert response.status == 200
-                    assert (await response.json())["enabled"] is False
-                else:
-                    assert response.status == 409
-                    assert await response.text() == "No settlement capture is pending"
+            if operation == "snapshot":
+                assert response.status == 200
+                assert (await response.json())["enabled"] is False
+            else:
+                assert response.status == 409
+                assert await response.text() == "No settlement capture is pending"
 
     asyncio.run(scenario())
 

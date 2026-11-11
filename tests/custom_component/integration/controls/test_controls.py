@@ -1351,3 +1351,54 @@ def test_appliance_controls_reconcile_after_pending_removal(monkeypatch, platfor
                 assert hass.states.get(entity_id) is not None
 
     asyncio.run(scenario())
+
+
+def test_mixed_consumer_history_keeps_the_ready_devices_forecast(tmp_path, monkeypatch):
+    """The real mixed-history producer retains a ready forecast through the strict HA projection."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from custom_components.open_energy_planner.consumer_sensors import ConsumerSensor, validate
+    from open_energy_planner.appliances.forecasting import (
+        ConsumerForecasts,
+        build_components,
+        parse_selection,
+    )
+    from open_energy_planner.demand.storage import DemandStore
+    from tests.app.demand.test_demand import START, channel, config
+    from tests.database.support.archive import make_store
+
+    consumers = ConsumerForecasts(make_store(tmp_path, DemandStore).documents)
+    members = ("sensor.ready", "sensor.short")
+    consumers.sync(
+        {
+            "entities": [{"entity_id": entity} for entity in members],
+            "suggestions": {
+                "consumers": [{"entity_id": entity, "upstream": None} for entity in members]
+            },
+        }
+    )
+    consumers.save(
+        parse_selection([{"entity_id": entity, "weather_sensitive": False} for entity in members]),
+        consumers.version,
+    )
+    hours = 35 * 24
+    consumers.histories["sensor.ready"] = channel("sensor.ready", [0.2] * hours)
+    short = channel("sensor.short", [0.1] * hours)
+    consumers.histories["sensor.short"] = replace(short, hours=short.hours[-60:])
+    now = START + timedelta(hours=hours)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: now)
+    _, consumers.result = build_components(
+        config(), (channel("sensor.house", [0.5] * hours),), (), now, consumers.inputs()
+    )
+    document = consumers.document()
+    assert document["result"]["status"] == "partial_history"
+    assert [item["entity_id"] for item in document["result"]["devices"]] == ["sensor.ready"]
+    coordinator = SimpleNamespace(
+        entry=SimpleNamespace(entry_id="mixed-history", data={"url": "http://app"}),
+        consumer_forecasts=validate(document),
+    )
+    ready = ConsumerSensor(coordinator, "sensor.ready", "Ready appliance", "power")
+    missing = ConsumerSensor(coordinator, "sensor.short", "Short-history appliance", "power")
+    assert ready.available and ready.native_value == pytest.approx(200)
+    assert not missing.available

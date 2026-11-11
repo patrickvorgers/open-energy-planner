@@ -24,6 +24,7 @@
       "status": {
         "state": {
           "active": "Active",
+          "partial_history": "Some history unavailable",
           "paused": "Paused",
           "waiting_for_new_plan": "Waiting for new plan",
           "not_ready": "Not ready",

@@ -5,6 +5,14 @@ The authoritative SQLAlchemy Core registry is
 [`storage/adapters/lifecycle/schema.py`](../../src/open_energy_planner/storage/adapters/lifecycle/schema.py).
 All registered tables use the same app-owned engine: SQLite by default, or PostgreSQL,
 MariaDB or MySQL. The HA integration exchanges API messages and never reads SQL.
+The PostgreSQL driver bounds client I/O waits to thirty seconds in addition to
+server statement and lock timeouts. Operational wait failures close the failed
+connection before cleanup or pool reuse. Connection establishment and pool
+admission have their own five-second bounds. MariaDB/MySQL retain thirty-second
+read/write bounds and SQLite retains its five-second busy timeout. These limits
+apply to operations across the existing shared schema without changing stored
+documents, table ownership or transaction contracts. A client timeout never
+establishes that an attempted write committed or permits a success response.
 See [the plan archive guide](PLAN-ARCHIVE.md) for deployment, backup and cross-backend transfer.
 
 ## Storage conventions

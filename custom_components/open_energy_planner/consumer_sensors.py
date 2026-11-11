@@ -28,6 +28,7 @@ FORECAST_STATUSES = (
     "comparison_evidence_unreadable",
     "waiting_for_history",
     "active",
+    "partial_history",
     "shadow_waiting_for_decision_evidence",
     "history_or_weather_not_ready",
     "energy_consumer_removed",

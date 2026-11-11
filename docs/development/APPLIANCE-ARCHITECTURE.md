@@ -5,6 +5,9 @@ Individual forecast sensors accept the daily model-selection states, including
 Collecting comparison evidence does not make an otherwise usable baseline
 forecast invalid. The HA adapter still rejects unknown states and malformed,
 expired or non-finite forecast quantities.
+Mixed readiness uses `partial_history`. A device with insufficient history stays
+in residual household demand while forecasts from independently ready devices
+remain available in Home Assistant.
 
 Settings > Appliances retains its existing categories, routes and device editors.
 Consumption and cycles, Electric boilers and EV charging use the same interaction:

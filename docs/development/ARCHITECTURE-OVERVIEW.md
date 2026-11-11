@@ -30,6 +30,15 @@ the cached historical plan identity and its bindings as one pair and use their
 own local bindings. Cancellation drains the historical reader before its handler
 finishes.
 
+The shared PostgreSQL engine also bounds each native driver I/O wait to thirty
+seconds. Server statement timeouts alone cannot bound an answer stalled in
+transit. An operational wait failure closes the connection before propagating
+the error, so cleanup cannot wait again on that connection. Existing bounded
+connection establishment, pool admission and MariaDB/MySQL read/write waits
+remain separate limits. A sequence of database operations can take longer than
+one wait. Cancellation still drains the worker before releasing mutation
+ownership or disposing its engine.
+
 Appliance editors request `/v1/consumers?view=settings`. This projection retains
 selection versions, Energy choices and specialized-meter ownership without
 transferring model forecasts that these editors do not use. The default consumer

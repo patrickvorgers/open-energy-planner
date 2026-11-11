@@ -10,13 +10,17 @@ from ..storage.writes import complete_write
 def register(app, demand, lock, ev, thermal):
     """Expose existing runtime status and serialize settings writes with forecast admission."""
 
+    def view(request):
+        """Reject unsupported response projections before either reading or changing consumer state."""
+        selected = request.query.get("view")
+        if selected not in (None, "settings"):
+            raise web.HTTPBadRequest(text="Unknown consumer view")
+        return selected
+
     async def state(request):
         """Return source choices and estimated component forecasts without issuing commands."""
         async with lock:
-            view = request.query.get("view")
-            if view not in (None, "settings"):
-                raise web.HTTPBadRequest(text="Unknown consumer view")
-            document = demand.consumers.document(forecasts=view != "settings")
+            document = demand.consumers.document(forecasts=view(request) != "settings")
             document["charging_meters"] = sorted(
                 point["energy_entity"] for point in ev.state["points"]
             )
@@ -30,6 +34,7 @@ def register(app, demand, lock, ev, thermal):
 
     async def save(request):
         """Validate selected sources against current Energy metadata, retaining historical versions."""
+        view(request)
         try:
             body = await request.json()
             if not isinstance(body, dict) or set(body) != {"selected", "expected_version"}:
