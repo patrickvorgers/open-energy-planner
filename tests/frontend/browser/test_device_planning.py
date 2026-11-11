@@ -28,8 +28,9 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
     assert sorted({round(value, 4) for value in original_rates}) == [0.45, 2.2, 2.7]
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
         legend = page.locator("#" + identity + "-legend")
-        for name in ("Washing machine", "Dryer", "Dishwasher", "Charge point"):
+        for name in ("Washing machine", "Dryer", "Charge point"):
             expect(legend.get_by_role("checkbox", name=name, exact=True)).to_have_count(1)
+        expect(legend.locator("label").filter(has_text="Dishwasher")).not_to_be_visible()
         expect(legend).to_contain_text(
             "Striped bars show expected use. Solid bars show scheduled use."
         )
