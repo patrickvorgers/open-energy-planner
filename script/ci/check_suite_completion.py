@@ -40,10 +40,12 @@ def junit_reports(profile, directory=None):
     }
 
 
-def execution_counts(profile, directory=None):
+def execution_counts(profile, directory=None, *, suites=None):
     """Reject missing, failed, skipped or insufficient execution instead of trusting exit zero alone."""
     counts = {}
     for suite, reports in junit_reports(profile, directory).items():
+        if suites is not None and suite not in suites:
+            continue
         if suite == "browser":
             execution_reports(reports[0].parent, combined=True)
         cases = []
