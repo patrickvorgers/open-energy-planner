@@ -368,6 +368,11 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
         from open_energy_planner.storage.adapters.activities import ActivityStore
 
         app, refreshes = web.Application(), []
+
+        async def refresh_async(**values):
+            """Observe awaited replanning while preserving the real history service and storage."""
+            refreshes.append(values)
+
         events = Events(ActivityStore(service.documents.engine))
         app[EVENTS] = events
         service.configure(ENTITY, False)
@@ -375,7 +380,7 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
             app,
             service,
             SimpleNamespace(state={"enabled": False, "plan": None}),
-            SimpleNamespace(refresh=lambda **values: refreshes.append(values)),
+            SimpleNamespace(refresh_async=refresh_async),
             asyncio.Lock(),
             SimpleNamespace(state={"points": []}),
             SimpleNamespace(state={"stores": []}),
