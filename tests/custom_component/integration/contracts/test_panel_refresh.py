@@ -19,9 +19,14 @@ from tests.custom_component.support.chain import TOKEN, running_chain
 
 
 @asynccontextmanager
-async def _accepted_metadata(*, measurement=False):
+async def _accepted_metadata(*, measurement=False, fixture_devices=True):
     """Own real HA watches and an authenticated app with a previously acknowledged catalogue."""
-    async with running_chain(live=True) as (hass, entry, url, _root):
+    async with running_chain(live=True, fixture_devices=fixture_devices) as (
+        hass,
+        entry,
+        url,
+        _root,
+    ):
         coordinator = entry.runtime_data
         coordinator.poll_cancel()
         coordinator.poll_cancel = None
@@ -124,6 +129,140 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
             monkeypatch.setattr(coordinator.client, "request", original_request)
             await coordinator.sync()
             assert coordinator.issue != "synchronization_failed"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("caller", ["normal", "recovery"])
+def test_changed_publication_preserves_real_configuration_rejection(monkeypatch, caller):
+    """An accepted app configuration rejection must revoke old plans despite a concurrent watch change."""
+    import json
+    from copy import deepcopy
+
+    from homeassistant.components.energy.data import async_get_manager
+
+    from custom_components.open_energy_planner.protocol import RevokedPlan
+    from open_energy_planner.home_assistant.setup_catalogue import SetupDiscovery
+    from tests.ha_contract.support.commands import command_plan
+
+    async def scenario():
+        """Retain a deliberately stale command reply while the real app rejects incomplete Energy setup."""
+        entered, release = asyncio.Event(), asyncio.Event()
+        original_discovery = SetupDiscovery.discovery
+        active = False
+        responses = []
+
+        async def discovery(owner, request):
+            """Retain the actual accepted response and deliver a real HA event before returning it."""
+            response = await original_discovery(owner, request)
+            if active:
+                data = json.loads(response.body)
+                if "configuration_issue" in data:
+                    responses.append(data)
+                if not entered.is_set():
+                    entered.set()
+                    await release.wait()
+                else:
+                    hass.states.async_set(
+                        "sensor.diagnostic_grid", "0", {"unit_of_measurement": "MW"}
+                    )
+                    await hass.async_block_till_done()
+            return response
+
+        monkeypatch.setattr(SetupDiscovery, "discovery", discovery)
+        async with _accepted_metadata(measurement=True, fixture_devices=False) as (
+            hass,
+            coordinator,
+            status,
+        ):
+            for identity in ("sensor.import_energy", "sensor.export_energy", "sensor.roof_energy"):
+                hass.states.async_set(
+                    identity,
+                    "0",
+                    {
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "state_class": "total_increasing",
+                        "friendly_name": "Original roof"
+                        if identity == "sensor.roof_energy"
+                        else identity,
+                    },
+                )
+            manager = await async_get_manager(hass)
+            await manager.async_update(
+                {
+                    "energy_sources": [
+                        {
+                            "type": "grid",
+                            "stat_energy_from": "sensor.import_energy",
+                            "stat_energy_to": "sensor.export_energy",
+                        },
+                        {"type": "solar", "stat_energy_from": "sensor.roof_energy"},
+                    ],
+                    "device_consumption": [],
+                }
+            )
+            await hass.async_block_till_done()
+            await coordinator.sync()
+            assert coordinator.catalogue_discovery.healthy
+            original_request = coordinator.client.request
+            cached = await original_request("GET", "/v1/snapshot")
+            now = dt_util.utcnow()
+            plan = command_plan(now, powers=(0,))
+            plan["config_revision"] = coordinator.schedule.config_revision
+            plan["steps"][0]["devices"] = {}
+            assert coordinator.schedule.accept(plan, now)
+            coordinator.refresh(now)
+            assert coordinator.projection.status == "active"
+            cached.update(plan=plan, plan_invalidated=False, planning={"status": "ready"})
+            old_devices = deepcopy(cached["installation"]["devices"])
+            assert old_devices and old_devices[0]["energy_entity"] == "sensor.roof_energy"
+
+            async def request(method, path, body=None):
+                """Model an old valid command reply or outage, preserving actual app catalogue traffic."""
+                if path in ("/v1/snapshot", "/v1/observations"):
+                    if caller == "recovery":
+                        raise TimeoutError("Synthetic command transport failure")
+                    return deepcopy(cached)
+                return await original_request(method, path, body)
+
+            monkeypatch.setattr(coordinator.client, "request", request)
+            coordinator.catalogue_confirmed_at = now - timedelta(minutes=2)
+            if caller == "normal":
+                coordinator.catalogue_discovery.repair()
+            active = True
+            task = asyncio.create_task(coordinator.sync())
+            await entered.wait()
+            try:
+                unit = "kW" if caller == "recovery" else "MW"
+                hass.states.async_set("sensor.diagnostic_grid", "0", {"unit_of_measurement": unit})
+                await hass.async_block_till_done()
+                release.set()
+                await task
+                assert len(responses) == 1
+                membership = responses[0]
+                assert membership["accepted"] is True
+                assert membership["configuration_issue"] == "energy_configuration_changed"
+                assert (
+                    membership["devices"]
+                    and membership["devices"][0]["energy_entity"] == "sensor.roof_energy"
+                )
+                assert not coordinator.catalogue_discovery.healthy
+                assert coordinator.catalogue_confirmed_at is None
+                assert coordinator.schedule.plan is None
+                assert coordinator.schedule.invalidated_generation == now
+                with pytest.raises(RevokedPlan):
+                    coordinator.schedule.accept(plan, dt_util.utcnow())
+                if caller == "normal":
+                    assert coordinator.devices == membership["devices"]
+                    assert coordinator.planning_status["reason"] == "energy_configuration_changed"
+                else:
+                    assert coordinator.issue == "synchronization_failed"
+                accepted = await status(metadata=True)
+                assert accepted["data"]["suggestions"]["solar_sources"] == ["sensor.roof_energy"]
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
 

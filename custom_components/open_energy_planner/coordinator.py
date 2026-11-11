@@ -253,7 +253,7 @@ class PlanCoordinator:
             return
         if generation != self.catalogue_discovery.generation:
             self.catalogue_confirmed_at = None
-            return
+            return membership
         self.catalogue_discovery.acknowledge(catalogue)
         self.catalogue_context = prepared
         self.catalogue_confirmed_at = now
