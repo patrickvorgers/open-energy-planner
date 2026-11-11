@@ -27,7 +27,10 @@ MAX_EXPORT_BONUSES = 8
 
 @dataclass(frozen=True)
 class InstalledBattery:
-    """One battery's terminal ratings, sensors and explicit converter connection. Energies are kWh."""
+    """Define terminal ratings, sensors and converter connection for one battery.
+
+    Energies are kWh. Wear is contract currency per internal kWh discharged.
+    """
 
     device_id: str
     inverter_id: str

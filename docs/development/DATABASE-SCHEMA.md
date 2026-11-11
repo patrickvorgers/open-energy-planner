@@ -870,7 +870,7 @@ support SQL period aggregation without loading years of JSON.
 | `duration_h` | Double | Interval duration in hours, used for coverage rather than assuming one row equals one quarter. |
 
 `actual` derives import/export from measured channels and wear from measured
-battery discharge with configured losses and cycle costs. Contract and inventory
+battery discharge with configured losses and per-internal-kWh wear costs. Contract and inventory
 valuation assumptions determine the financial amounts. Recorded advice is
 retained for provenance and curtailment/reference reconstruction. It does not
 replace measured quantities or prove that physical devices followed the plan.

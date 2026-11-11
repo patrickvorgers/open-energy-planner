@@ -104,8 +104,8 @@ solver/provider/HA objects.
 
 Each converter has a local DC bus behind the shared household AC bus. PV retains
 canonical available DC per source. Each battery retains its own internal energy,
-reserve, terminal ratings, cell efficiencies and optional cycle fee. The latter
-defaults to zero and is proportional to equivalent full internal discharges.
+reserve, terminal ratings, cell efficiencies and optional wear rate per internal
+kWh discharged. The rate defaults to zero and does not scale with capacity.
 An optional battery `dc_efficiency` describes DC-bus-to-terminal conversion in
 both directions, default one. It is separate from cell and AC-inverter losses.
 
