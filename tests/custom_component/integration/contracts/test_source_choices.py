@@ -92,6 +92,12 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
                     row["entity_id"] == "sensor.zzz_zeekr"
                     for row in result["catalogue"]["entities"]
                 )
+                assert {row["entity_id"] for row in result["catalogue"]["entities"]} == {
+                    "sensor.grid",
+                    "sensor.import",
+                    "sensor.zzz_zeekr",
+                    *(f"sensor.candidate_{index:04}" for index in range(1500)),
+                }
                 async with session.get(url + "/v1/ha/source-choices/thermal") as response:
                     thermal = await response.json()
                 assert any(
@@ -111,7 +117,9 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
                 assert len(pages) == completed
                 async with session.get(url + "/v1/ev") as response:
                     current = await response.json()
-                assert current["catalogue"] == before
+                assert current["catalogue"] == result["catalogue"]
+                async with session.get(url + "/v1/setup") as response:
+                    assert (await response.json())["catalogue"]["data"] == before
                 async with session.get(url + "/v1/thermal") as response:
                     assert (await response.json())["catalogue"] == before
                 vehicle = {
@@ -134,7 +142,9 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
                 async with session.get(url + "/v1/ev") as response:
                     just_saved = await response.json()
                 assert just_saved["vehicles"][0]["name"] == "Synthetic Zeekr battery"
-                assert just_saved["catalogue"] == before
+                assert just_saved["catalogue"] == result["catalogue"]
+                async with session.get(url + "/v1/setup") as response:
+                    assert (await response.json())["catalogue"]["data"] == before
                 await coordinator.sync()
                 async with session.get(url + "/v1/setup") as response:
                     active = (await response.json())["catalogue"]["data"]
