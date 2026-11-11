@@ -263,7 +263,13 @@ def discover_charging_sources(page, url):
                 "device_id": "",
             }
         )
-    body["suggestions"]["consumers"] = [{"entity_id": "sensor.charger_energy", "upstream": None}]
+    body["suggestions"]["consumers"] = [
+        {
+            "entity_id": "sensor.charger_energy",
+            "power_entity": "sensor.charger_power",
+            "upstream": None,
+        }
+    ]
     assert page.request.post(
         url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
     ).ok
@@ -494,8 +500,6 @@ def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(ap
     add_ev_appliance(page, "point")
     point = page.locator("#points > section")
     for field, value in (
-        ("energy_entity", "sensor.charger_energy"),
-        ("power_entity", "sensor.charger_power"),
         ("connected_entity", "binary_sensor.charger_connected"),
         ("control", "variable"),
     ):

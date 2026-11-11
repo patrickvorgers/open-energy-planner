@@ -94,6 +94,19 @@ def configuration(body, catalogue, consumers, appliances):
             raise ValueError("Invalid charge-point fields")
         identity(row["id"])
         entity(row["energy_entity"], "sensor")
+        energy_source = next(
+            (source for source in consumers.options if source["entity_id"] == row["energy_entity"]),
+            None,
+        )
+        if energy_source is not None:
+            if not energy_source.get("power_entity"):
+                raise ValueError(
+                    "Configure device power consumption in Home Assistant Energy before saving this charge point"
+                )
+            if row["power_entity"] != energy_source["power_entity"]:
+                raise ValueError(
+                    "Use the power sensor configured for this device in Home Assistant Energy"
+                )
         power = metadata.get(entity(row["power_entity"], "sensor"), {})
         if power.get("device_class") != "power" or power.get("unit") not in ("W", "kW"):
             raise ValueError("Select an AC charging power sensor")
@@ -102,7 +115,11 @@ def configuration(body, catalogue, consumers, appliances):
         if row["control"] not in ("read_only", "on_off", "variable"):
             raise ValueError("Invalid charge-point control mode")
         number(row["maximum_w"], 1, MAX_EV_POWER_W)
-        number(row["minimum_w"], 0, row["maximum_w"])
+        number(
+            row["minimum_w"],
+            0,
+            row["maximum_w"] if row["control"] == "variable" else MAX_EV_POWER_W,
+        )
         if any(round(row[key]) != row[key] for key in ("minimum_w", "maximum_w")):
             raise ValueError("Charge-point limits require whole watts")
         allowed = row["vehicle_ids"]

@@ -569,7 +569,9 @@ def test_later_control_ownership_conflict_withdraws_thermal_work_without_losing_
     assert prepare(service).problem.thermal_work
     saved = deepcopy(service.state)
     if owner == "ev":
-        service.ev.state["points"].append({"id": "point", "energy_entity": ENERGY})
+        service.ev.state["points"].append(
+            {"id": "point", "energy_entity": ENERGY, "power_entity": "sensor.boiler_power"}
+        )
     else:
         service.appliances.state["devices"][ENERGY] = {"shiftable": True}
     withdrawn = prepare(service)

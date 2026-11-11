@@ -12,7 +12,9 @@ source dialog. It searches display names and meter IDs and offers Available,
 Already added and All sources filters. Assigned meters are disabled across all
 categories. Specialized additions create their typed draft only after a source
 is chosen. The Energy-defined meter and optional power link travel together.
-Missing power remains an explicit choice. No registered device or vendor
+Charge points lock that measurement pair and require a missing power link to be
+corrected in Energy before Save. Other appliance types retain their existing
+source validation. No registered device or vendor
 integration is required, and no connection, car identity or temperature is
 inferred. Cancel closes the chooser without changing the saved configuration.
 

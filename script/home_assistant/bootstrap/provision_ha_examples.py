@@ -138,7 +138,11 @@ async def provision(session, url, request, journal_path, *, app_request):
             and any(
                 key not in completed for key in ("automation:wallbox-a", "automation:wallbox-b")
             )
-            and not unchanged_ev_configuration(await app_request("GET", "/v1/ev"))
+            and not unchanged_ev_configuration(
+                await app_request("GET", "/v1/ev"),
+                journal.state.get("ev_configuration"),
+                (await app_request("GET", "/v1/consumers"))["options"],
+            )
         ):
             journal.discard("owns:ev")
         if "owns:thermal" in completed and "automation:boiler" not in completed:

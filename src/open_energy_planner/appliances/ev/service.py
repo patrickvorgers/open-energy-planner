@@ -248,15 +248,22 @@ class EVService:
             return {}
         return {row["id"]: row for row in self.report["vehicles"] if row["soc"] is not None}
 
+    def energy_source_available(self, point):
+        """Require the saved measurement pair to match current authoritative Energy configuration."""
+        return any(
+            source["entity_id"] == point["energy_entity"]
+            and source.get("power_entity") == point["power_entity"]
+            for source in self.consumers.options
+        )
+
     def work(self, now, timezone):
         """Build solver work only for identified, fresh, controllable, uniquely connected vehicles."""
         telemetry = {row["id"]: row for row in self.live(now)}
         readings = self.vehicle_readings(now)
         vehicles = {row["id"]: row for row in self.state["vehicles"]}
-        available = {row["entity_id"] for row in self.consumers.options}
         selected = []
         for point in self.state["points"]:
-            if point["energy_entity"] not in available:
+            if not self.energy_source_available(point):
                 continue
             actual = telemetry.get(point["id"])
             assigned = self.state["assignments"].get(point["id"], {})
@@ -271,7 +278,8 @@ class EVService:
             if not car or measured.get("soc") is None or point["control"] == "read_only":
                 continue
             maximum = min(point["maximum_w"], car["maximum_w"])
-            if maximum < point["minimum_w"]:
+            minimum = maximum if point["control"] == "on_off" else point["minimum_w"]
+            if maximum < minimum:
                 continue
             deadline = departure(car, now, timezone)
             ready = min(
@@ -288,7 +296,7 @@ class EVService:
                     car["capacity_kwh"],
                     measured["soc"],
                     car["target_soc"],
-                    point["minimum_w"],
+                    minimum,
                     maximum,
                     point["control"],
                 )
@@ -382,7 +390,6 @@ class EVService:
         )
         schedules = {row["point_id"]: row for row in plan.get("ev_schedule", [])} if usable else {}
         points = []
-        available = {row["entity_id"] for row in self.consumers.options}
         for point in self.state["points"]:
             actual = live.get(point["id"], {})
             assigned = self.state["assignments"].get(point["id"], {})
@@ -394,7 +401,7 @@ class EVService:
             )
             status = (
                 "energy_source_unavailable"
-                if point["energy_entity"] not in available
+                if not self.energy_source_available(point)
                 else "telemetry_unavailable"
                 if not actual
                 else "disconnected"

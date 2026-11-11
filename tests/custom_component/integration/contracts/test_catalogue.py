@@ -60,6 +60,8 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
                 },
             )
             coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
             hass.auth = await auth_manager_from_config(hass, [], [])
             assert await setup_energy(hass)
             manager = await async_get_manager(hass)
@@ -83,12 +85,16 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
                     entity["entity_id"] == "sensor.zzz_family_vehicle_soc"
                     for entity in choices["catalogue"]["entities"]
                 )
+                expected_meters = {f"sensor.synthetic_meter_{index:04}" for index in range(2000)}
+                assert {entity["entity_id"] for entity in choices["catalogue"]["entities"]} == (
+                    expected_meters | {"sensor.zzz_family_vehicle_soc"}
+                )
+                async with session.get(url + "/v1/setup") as response:
+                    before = (await response.json())["catalogue"]["data"]
+                assert {entity["entity_id"] for entity in before["entities"]} == expected_meters
                 async with session.get(url + "/v1/ev") as response:
                     current = await response.json()
-                assert all(
-                    entity["entity_id"] != "sensor.zzz_family_vehicle_soc"
-                    for entity in current["catalogue"]["entities"]
-                )
+                assert current["catalogue"] == choices["catalogue"]
                 async with session.post(
                     url + "/v1/ev/configuration",
                     json={
@@ -110,6 +116,8 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
                     },
                 ) as response:
                     assert response.status == 200
+                async with session.get(url + "/v1/setup") as response:
+                    assert (await response.json())["catalogue"]["data"] == before
             request = coordinator.client.request
             exchanges = []
 
@@ -150,6 +158,14 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
             assert all(size <= 196608 for size, _accepted in exchanges)
             assert all(not accepted for _size, accepted in exchanges[:-1])
             assert exchanges[-1][1] is True
+            async with (
+                ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session,
+                session.get(url + "/v1/setup") as response,
+            ):
+                active = (await response.json())["catalogue"]["data"]
+            assert {entity["entity_id"] for entity in active["entities"]} == (
+                expected_meters | {"sensor.zzz_family_vehicle_soc"}
+            )
 
     asyncio.run(scenario())
 
