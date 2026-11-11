@@ -5,7 +5,7 @@ import json
 import logging
 from copy import deepcopy
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -238,6 +238,7 @@ def test_failed_restore_without_observations_stays_pending_until_capture(
     from open_energy_planner.solar import runtime
 
     caplog.set_level(logging.DEBUG, logger="open_energy_planner.solar.runtime")
+
     entity = "binary_sensor.pending"
     configuration = plant()
     configuration = replace(
@@ -413,6 +414,19 @@ def test_transient_feedback_restore_recovers_in_background_without_save(
 
     caplog.set_level(logging.DEBUG, logger="open_energy_planner.solar.runtime")
 
+    clock = [datetime.now(UTC)]
+
+    class RetryClock(datetime):
+        """Advance retry eligibility independently of HTTP and hosted-runner scheduling delays."""
+
+        @classmethod
+        def now(cls, timezone=None):
+            """Return the fixture's explicit retry instant in the requested timezone."""
+            return clock[0].astimezone(timezone) if timezone else clock[0].replace(tzinfo=None)
+
+    monkeypatch.setattr(runtime, "datetime", RetryClock)
+    monkeypatch.setattr(api, "datetime", RetryClock)
+
     available = False
     attempts = []
     original = runtime.load_feedback
@@ -478,17 +492,20 @@ def test_transient_feedback_restore_recovers_in_background_without_save(
             ) as response:
                 assert response.status == 200
             initial_attempts = len(attempts)
-            await asyncio.sleep(0.03)
+            # HTTP scheduling may exceed the retry interval without advancing its explicit clock.
+            await asyncio.sleep(0.25)
             for _ in range(3):
                 async with session.get(url + "/v1/solar") as response:
                     assert response.status == 200
             assert len(attempts) == initial_attempts
+            clock[0] += timedelta(seconds=0.21)
             for _ in range(30):
                 if len(attempts) > initial_attempts:
                     break
                 await asyncio.sleep(0.02)
             assert len(attempts) > initial_attempts
             available = True
+            clock[0] += timedelta(seconds=0.21)
             recovered = None
             for _ in range(30):
                 await asyncio.sleep(0.02)

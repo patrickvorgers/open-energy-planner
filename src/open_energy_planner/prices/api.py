@@ -62,7 +62,7 @@ def register(app, current_prices, contracts, live, lock):
             )
             async with lock:
                 if live:
-                    live.refresh(force=True)
+                    await live.refresh_async(force=True)
             return web.json_response(cached_document())
         except (ValueError, TypeError, KeyError) as error:
             raise web.HTTPBadRequest(

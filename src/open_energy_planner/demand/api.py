@@ -90,7 +90,7 @@ def register(
                 job = demand.job(datetime.now(UTC))
                 result = await build_demand(job)
                 demand.install(result, datetime.now(UTC))
-                live.refresh(force=True)
+                await live.refresh_async(force=True)
         return await demand_settings(request)
 
     async def demand_history(request):

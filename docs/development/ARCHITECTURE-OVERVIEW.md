@@ -17,6 +17,41 @@ OEP consists of a local calculation app and a thin Home Assistant integration. S
 
 There is no physical-device driver hidden in the HTTP UI. The app's static pages call authenticated APIs. Supervisor ingress and standalone administration retain different authentication entry points.
 
+## Keep calculation work outside the interface loop
+
+Live HTTP and background refresh owners await `LiveInputs.refresh_async` or
+`receive_async` while retaining the application state lock. The event loop first
+captures the coherent nonblocking installation and price basis. Price caches
+publish on that loop outside the application lock, so their values, versions and
+expiry cannot be read across a worker handoff. A thread prepares the appliance,
+EV and thermal snapshots from the captured immutable input. Coordinator
+invalidation, snapshot installation and submission remain on the event loop.
+Cancellation drains the preparation worker before releasing the state lock,
+including repeated cancellation. Installation rechecks measurement and future
+input expiry after the worker finishes. A closed coordinator discards completed
+preparation without submitting more work. The synchronous domain entry points
+remain available for isolated callers and startup without observations.
+
+Component coverage and balance checks integrate ordered target windows with a
+single sweep through each source series. Gaps, overlaps, duplicate ownership and
+replacement limits still reject invalid inputs. Task candidate windows are
+computed once per preparation, and boundary lookup does not rescan every device
+series for every planning interval.
+
+The native solver runs in its separate process. Independent validation,
+consumption evaluation and command-document construction run outside the event
+loop. Historical repricing, retention and compression remain background workers.
+Repricing reads only hash-checked contract-version leaves before deciding whether
+a full original plan needs recalculation. Archive reconstruction reads all value
+leaves for each record together and verifies the complete reconstructed hash.
+
+Off-loop execution prevents synchronous interface stalls. It does not reserve
+CPU or eliminate contention on small machines. Diagnose input preparation,
+native solver phases, publication and archive maintenance separately. A battery
+below its reserve invokes the reserve-recovery phase. Comparing those rounds
+with rounds above reserve does not establish a solver regression. Preserve
+reserve safety, numerical precision and historical evidence when optimizing.
+
 ## Keep the important dimensions separate
 
 - **Identity versus configuration:** Energy owns source membership. The app owns equipment ratings, topology and planning settings.
