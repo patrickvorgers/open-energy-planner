@@ -466,7 +466,7 @@ def test_price_chart_shows_total_export_with_bonus_before_exhausted_cap(app_page
         ]
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", frozen_bonus)
+    page.route("**/v1/plans/*/comparison?view=plan", frozen_bonus)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1189,7 +1189,7 @@ def test_bonus_chart_preserves_microsecond_daylight_edges_without_false_gaps(app
         ]
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", daylight_edge)
+    page.route("**/v1/plans/*/comparison?view=plan", daylight_edge)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

@@ -246,7 +246,7 @@ def test_equal_device_names_keep_independent_legend_switches(app_page):
             document["plan"]["comparison_names"][entity] = "Laundry"
         route.fulfill(response=response, json=document)
 
-    page.route("**/v1/plans/*/comparison", same_friendly_names)
+    page.route("**/v1/plans/*/comparison?view=plan", same_friendly_names)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

@@ -1,0 +1,116 @@
+"""Read-only Planning projections avoid work that belongs to another disclosure."""
+
+import asyncio
+import json
+from contextlib import closing
+from copy import deepcopy
+from dataclasses import asdict
+
+from aiohttp import ClientSession
+
+from open_energy_planner.savings import api
+from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+from tests.app.contract.test_contract_app import running
+from tests.app.savings.support.scenarios import START, problem
+
+
+def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path, monkeypatch):
+    """Each projection retains identical original values while skipping evidence until explicitly requested."""
+    plan = {
+        "input_snapshot": {
+            "problem": json.loads(
+                json.dumps(asdict(problem()), default=lambda value: value.isoformat())
+            )
+        },
+        "expected_flows": [
+            {
+                "grid_import": 1,
+                "grid_export": 0,
+                "batteries": [{"device_id": "battery", "end_kwh": 2, "discharge_kwh": 0}],
+            }
+        ],
+        "plan_id": "projection-original",
+        "generated_at": START.isoformat(),
+        "currency": "EUR",
+    }
+    before = deepcopy(plan)
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        repository.state["plan"] = plan
+        repository.save()
+
+    calls = []
+    original_evidence, original_scenarios, original_latest = (
+        api.evidence,
+        api.scenarios,
+        api.PlanValuations.latest,
+    )
+
+    def evidence(original):
+        """Observe actual evidence construction without replacing its output."""
+        calls.append("evidence")
+        return original_evidence(original)
+
+    def scenarios(*arguments):
+        """Observe actual scenario replay without changing the financial oracle."""
+        calls.append("scenarios")
+        return original_scenarios(*arguments)
+
+    def latest(*arguments):
+        """Observe repricing reads that neither plan nor evidence projection needs."""
+        calls.append("valuation")
+        return original_latest(*arguments)
+
+    monkeypatch.setattr(api, "evidence", evidence)
+    monkeypatch.setattr(api, "scenarios", scenarios)
+    monkeypatch.setattr(api.PlanValuations, "latest", latest)
+
+    async def check():
+        """Use the real authenticated routes and compare projections with the original complete response."""
+        async with running(tmp_path) as (session, url):
+            path = url + "/v1/plans/projection-original/comparison"
+            async with session.get(path) as response:
+                assert response.status == 200
+                complete = await response.json()
+            for view, expected_calls in (
+                ("plan", []),
+                ("simulations", ["valuation", "scenarios"]),
+                ("evidence", ["evidence"]),
+            ):
+                calls.clear()
+                async with (
+                    ClientSession() as anonymous,
+                    anonymous.get(path, params={"view": view}) as response,
+                ):
+                    assert response.status == 401
+                async with session.get(path, params={"view": view}) as response:
+                    assert response.status == 200
+                    assert response.headers["Cache-Control"] == "no-store"
+                    projected = await response.json()
+                assert calls == expected_calls
+                if view == "plan":
+                    assert projected == {"plan": complete["plan"]}
+                elif view == "simulations":
+                    assert projected == {
+                        "plan_id": "projection-original",
+                        **{
+                            key: value
+                            for key, value in complete.items()
+                            if key not in ("plan", "evidence")
+                        },
+                    }
+                else:
+                    assert projected == {
+                        "plan_id": "projection-original",
+                        "evidence": complete["evidence"],
+                    }
+            for query in ({"view": "unknown"}, {"view": "plan", "start": START.isoformat()}):
+                async with session.get(path, params=query) as response:
+                    assert response.status == 400
+            async with session.get(url + "/v1/plans/projection-original") as response:
+                assert await response.json() == before
+            async with session.get(
+                url + "/v1/plans/missing/comparison", params={"view": "evidence"}
+            ) as response:
+                assert response.status == 404
+
+    asyncio.run(check())

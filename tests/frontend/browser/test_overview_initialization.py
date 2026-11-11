@@ -89,6 +89,7 @@ def overview_read_probe(page, stalled):
         const start=address.searchParams.get('start'),end=address.searchParams.get('end');
         const periodSlice=comparison&&address.searchParams.size===2&&Number.isFinite(Date.parse(start))&&Date.parse(end)>Date.parse(start);
         if(periodSlice){window.overviewPeriodReads.push({start,end,budget:budgets.get(options.signal)});return fetchOriginal(path,options);}
+        if(['simulations','evidence'].includes(address.searchParams.get('view')))return fetchOriginal(path,options);
         const kind=comparison?'plan':address.pathname.endsWith('/v1/savings')?'savings':null;
         if(!kind)return fetchOriginal(path,options);
         const record={kind,signal:options.signal,budget:budgets.get(options.signal),armed:window.armOverviewReads,aborted:false,completed:false};
@@ -139,7 +140,7 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(app_page
     assert page.evaluate(
         "window.overviewReads.filter(record=>!record.armed).every(record=>record.budget===5000)"
     )
-    assert page.evaluate("window.overviewReads[0].signal===window.overviewReads[1].signal")
+    assert page.evaluate("window.overviewReads[0].signal!==window.overviewReads[1].signal")
     page.locator("#period-start").fill("2026-10-01")
     page.locator("#period-end").fill("2026-10-30")
     page.evaluate("window.armOverviewReads=true")

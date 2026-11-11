@@ -8,6 +8,17 @@ configuration, revised forecasts or corrected contract prices.
 
 Implemented by `savings/evidence.py`, exposed on the authenticated original-plan
 comparison response, and rendered in **Planning > Understand this plan**.
+Planning first requests `comparison?view=plan`, then `comparison?view=simulations`.
+The first projection skips evidence, scenario replay and repricing. The second
+omits the repeated plan and evidence while retaining the original financial basis.
+Only opening the evidence disclosure requests `comparison?view=evidence`, which
+returns the plan identity and evidence without scenario replay or repricing.
+The unfiltered comparison response and financial period queries retain their
+existing contracts. JSON encoding runs outside the application event loop.
+Each read has its own deadline. Selection generations reject late simulation
+and evidence responses. A simulation or evidence failure leaves the displayed
+plan usable. Evidence reads are deduplicated for the displayed plan and can be
+retried by reopening the disclosure after failure.
 The primary view covers the **whole original planning period**, with explicit
 start/end/duration, total forecast demand/PV, per-source forecast model/quality,
 total planned grid exchange and per-battery charge/discharge and start/final SoC.

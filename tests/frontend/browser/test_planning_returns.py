@@ -97,7 +97,7 @@ def test_scenario_headers_lead_with_cost_then_baseline_benefit(
     """Both battery scenarios compare with baseline, preserving losses, zero and unknown."""
     page, url = financial_page
     page.route(
-        "**/v1/plans/*/comparison",
+        "**/v1/plans/*/comparison?view=simulations",
         lambda route: comparison_response(route, baseline_benefit_eur),
     )
     connect(page, url)
@@ -148,7 +148,8 @@ def test_missing_baseline_does_not_substitute_the_self_consumption_comparison(fi
     """A valid optimizer cost survives missing baseline, but neither benefit is invented."""
     page, url = financial_page
     page.route(
-        "**/v1/plans/*/comparison", lambda route: comparison_response(route, without_battery=False)
+        "**/v1/plans/*/comparison?view=simulations",
+        lambda route: comparison_response(route, without_battery=False),
     )
     connect(page, url)
     expect(page.locator("#ems-costs > dl dd")).to_have_text(["9,25 EUR", "- EUR"])
@@ -170,11 +171,13 @@ def test_missing_self_consumption_keeps_optimizer_baseline_benefit(financial_pag
         body["scenarios"].pop("self_consumption")
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", lambda route: comparison_response(route))
+    page.route(
+        "**/v1/plans/*/comparison?view=simulations", lambda route: comparison_response(route)
+    )
     connect(page, url)
-    page.unroute("**/v1/plans/*/comparison")
-    page.route("**/v1/plans/*/comparison", without_self_consumption)
-    with page.expect_response("**/v1/plans/*/comparison"):
+    page.unroute("**/v1/plans/*/comparison?view=simulations")
+    page.route("**/v1/plans/*/comparison?view=simulations", without_self_consumption)
+    with page.expect_response("**/v1/plans/*/comparison?view=simulations"):
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#self-consumption-costs > dl dd")).to_have_text(["- EUR", "- EUR"])
     expect(page.locator("#ems-costs > dl dt")).to_have_text(
@@ -187,7 +190,9 @@ def test_missing_self_consumption_keeps_optimizer_baseline_benefit(financial_pag
 def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_page):
     """Keep original cash, wear and non-cash inventory available without the dense text strip."""
     page, url = financial_page
-    page.route("**/v1/plans/*/comparison", lambda route: comparison_response(route))
+    page.route(
+        "**/v1/plans/*/comparison?view=simulations", lambda route: comparison_response(route)
+    )
     connect(page, url)
     chart_help = page.get_by_text("Read this chart", exact=True)
     chart_help.focus()
@@ -225,7 +230,7 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
             ),
         ]
     )
-    with page.expect_response("**/v1/plans/*/comparison"):
+    with page.expect_response("**/v1/plans/*/comparison?view=simulations"):
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#ems-costs > dl dd")).to_have_text(["9,25 EUR", "4,96 EUR"])
     expect(page.locator("#overview-status")).to_contain_text("Connected")
@@ -283,7 +288,7 @@ def test_cost_breakdown_shows_each_scenario_income_with_original_sign(financial_
         body["scenarios"]["self_consumption"]["comparison"]["reference_costs"] = costs[1]
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", respond)
+    page.route("**/v1/plans/*/comparison?view=simulations", respond)
     connect(page, url)
     english = page.evaluate("navigator.language") == "en-US"
     for cost_id, amounts in zip(
@@ -357,7 +362,7 @@ def test_cost_breakdown_preserves_unknown_values_and_full_precision(
         body["scenarios"]["self_consumption"]["comparison"]["reference_costs"] = costs
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", respond)
+    page.route("**/v1/plans/*/comparison?view=simulations", respond)
     connect(page, url)
     for cost_id in ("ems-costs", "self-consumption-costs", "reference-costs"):
         host = page.locator("#" + cost_id)
