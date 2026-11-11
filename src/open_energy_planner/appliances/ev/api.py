@@ -146,7 +146,7 @@ def register(app, service, catalogue, repository, live, lock, thermal):
                     raise ValueError("Unsupported EV operation or fields")
                 cancellation = await complete_write(function, *arguments)
                 if live:
-                    live.refresh()
+                    await live.refresh_async()
                 if cancellation:
                     raise cancellation
                 return web.json_response(

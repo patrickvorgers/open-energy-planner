@@ -183,7 +183,7 @@ def create_app(
         """
         async with lock:
             if live:
-                live.refresh()
+                await live.refresh_async()
                 reason = planner.publication_rejection(
                     document, datetime.now(UTC), live.current_snapshot
                 )
@@ -236,8 +236,10 @@ def create_app(
             capture_sources(document, demand, solar, setup_catalogue.value, ev, thermal)
             repository.state["plan"] = document
             try:
-                await asyncio.to_thread(appliances.accept_plan, document)
+                cancellation = await complete_write(appliances.accept_plan, document)
                 await save_state()
+                if cancellation is not None:
+                    raise cancellation
             except Exception:
                 repository.state["plan"] = previous
                 raise
@@ -459,7 +461,7 @@ def create_app(
         if live:
             if contract_input:
                 live.basis_source = contract_basis
-            live.refresh(force=True)
+            await live.refresh_async(force=True)
         _LOGGER.info(
             "Configuration saved (%s). Updated settings are now active%s.",
             type(candidate).__name__,
@@ -781,14 +783,16 @@ def create_app(
     async def snapshot(request):
         """Refresh live validity under the state lock and return the current installation snapshot."""
         async with lock:
-            await asyncio.to_thread(
+            cancellation = await complete_write(
                 appliances.tick,
                 datetime.now(UTC),
                 repository.state["enabled"],
                 repository.state["plan"],
             )
+            if cancellation is not None:
+                raise cancellation
             if live:
-                live.refresh()
+                await live.refresh_async()
             pending_history = contract_api.history_request()
             devices = installation_catalogue(
                 installation, solar, live.current_snapshot if live else None
@@ -919,7 +923,7 @@ def create_app(
         async with lock:
             if body["enabled"] and request_id != repository.state["last_control_id"]:
                 if live:
-                    live.refresh(force=True)
+                    await live.refresh_async(force=True)
                 else:
                     planner.submit(capture())
             repository.state["enabled"] = body["enabled"]
@@ -956,7 +960,7 @@ def create_app(
         """Request a fresh live round or validate explicitly synthetic state overrides."""
         if live:
             async with lock:
-                live.refresh(force=True)
+                await live.refresh_async(force=True)
             return await snapshot(request)
         try:
             body = await request.json()
@@ -1016,7 +1020,7 @@ def create_app(
 
                     body = await request.json()
                     report = parse_report(body, live.configuration, datetime.now(UTC))
-                    live.receive(report)
+                    await live.receive_async(report)
                 except (ValueError, TypeError, KeyError):
                     raise web.HTTPBadRequest(text="Invalid observation report") from None
             return await snapshot(request)
@@ -1047,7 +1051,7 @@ def create_app(
             raise web.HTTPServiceUnavailable(text="Plan archive unavailable or invalid") from None
         if plan is None:
             raise web.HTTPNotFound(text="Archived plan not found")
-        return web.json_response(public_reference_plan(plan))
+        return await asyncio.to_thread(lambda: web.json_response(public_reference_plan(plan)))
 
     app.router.add_get("/v1/plans", plan_history)
     app.router.add_get("/v1/plans/{plan_id}", archived_plan)

@@ -120,7 +120,7 @@ def register(app, service, catalogue, repository, live, lock):
                     raise ValueError("Unsupported thermal operation or fields")
                 cancelled = await complete_write(function, *arguments)
                 if live:
-                    live.refresh()
+                    await live.refresh_async()
                 if cancelled:
                     raise cancelled
                 return web.json_response(document())

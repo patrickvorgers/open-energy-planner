@@ -299,7 +299,7 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                 if runtime.forecast is not None:
                                     forecast_logger.success("A new solar forecast is available.")
                                 if live:
-                                    live.refresh()
+                                    await live.refresh_async()
                             if activity:
                                 usable = installed and forecast_usable(
                                     runtime.configuration,

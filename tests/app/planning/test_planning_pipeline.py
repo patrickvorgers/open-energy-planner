@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 
@@ -12,7 +13,12 @@ from open_energy_planner.installation.validation import validate
 from open_energy_planner.optimization.adapters.highs import HighsSolver
 from open_energy_planner.optimization.adapters.process.worker import ProcessSolver
 from open_energy_planner.optimization.domain import Costs, SolveResult, Status
-from open_energy_planner.planning import PlanningCoordinator, PlanningService, PublicationSuperseded
+from open_energy_planner.planning import (
+    CommandMapper,
+    PlanningCoordinator,
+    PlanningService,
+    PublicationSuperseded,
+)
 from open_energy_planner.synthetic import capture
 
 NOW = datetime(2026, 10, 19, tzinfo=UTC)
@@ -72,6 +78,27 @@ def test_solver_generation_after_first_interval_start_is_a_valid_document():
         assert Plan.parse(outcome.document, "demo-1").generated_at > NOW
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("expire", [False, True])
+def test_command_mapping_runs_off_loop_and_expiry_is_rechecked(monkeypatch, expire):
+    """Mapping borrows frozen inputs on a worker and cannot publish a document that expires during mapping."""
+    original = CommandMapper.build
+    clock = [NOW]
+    loop_thread = threading.get_ident()
+
+    def build(mapper, *args):
+        """Advance the independent clock only after successfully constructing the original document."""
+        assert threading.get_ident() != loop_thread
+        document = original(mapper, *args)
+        if expire:
+            clock[0] += timedelta(minutes=5)
+        return document
+
+    monkeypatch.setattr(CommandMapper, "build", build)
+    outcome = asyncio.run(service(clock=lambda: clock[0]).calculate(capture(NOW)))
+    assert outcome.reason == ("input_expired_during_solve" if expire else "validated")
+    assert (outcome.document is None) is expire
 
 
 def test_terminal_side_power_applies_converter_and_cell_losses_once():

@@ -80,6 +80,70 @@ def test_backend_exact_reconstruction_reuse_and_restart(archive):
         assert connection.scalar(select(func.count()).select_from(PLANS)) == 2
 
 
+def test_contract_projection_reads_one_query_and_verifies_only_selected_leaves(archive):
+    """One bounded query reads contract identity without loading unrelated forecasts on every backend."""
+    repository, engine, _root = archive
+    original = plan()
+    original["input_snapshot"]["contract_version"] = "contract-a"
+    repository.state["plan"] = original
+    repository.save()
+    repository.state["plan"] = plan("legacy", minute="15")
+    repository.save()
+    statements = []
+
+    def executed(_connection, _cursor, statement, _parameters, _context, _many):
+        """Record actual query count without coupling to a backend's SQL syntax."""
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", executed)
+    try:
+        assert repository.contract_versions(("plan-a", "legacy")) == {
+            "plan-a": "contract-a",
+            "legacy": None,
+        }
+    finally:
+        event.remove(engine, "before_cursor_execute", executed)
+    assert len(statements) == 1
+    with engine.begin() as connection:
+        from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import digest
+
+        connection.execute(
+            VALUES.update()
+            .where(VALUES.c.digest == digest("contract-a"))
+            .values(payload='"altered"')
+        )
+    with pytest.raises(ValueError, match="hash mismatch"):
+        repository.contract_versions(("plan-a",))
+    with pytest.raises(ValueError, match="plan missing"):
+        repository.contract_versions(("missing",))
+
+
+def test_full_plan_read_batches_leaves_and_returns_detached_documents(archive):
+    """Three nested records need four reads regardless of leaf count and never share mutable results."""
+    repository, engine, _root = archive
+    original = plan()
+    original["input_snapshot"]["problem"].update(
+        {f"source_{index}": {"values": [index, index + 0.25]} for index in range(100)}
+    )
+    repository.state["plan"] = original
+    repository.save()
+    statements = []
+
+    def executed(_connection, _cursor, statement, _parameters, _context, _many):
+        """Count round trips rather than timing a particular database machine."""
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", executed)
+    try:
+        restored = repository.get_plan("plan-a")
+    finally:
+        event.remove(engine, "before_cursor_execute", executed)
+    assert restored == original
+    assert len(statements) == 4
+    restored["input_snapshot"]["problem"]["source_0"]["values"].append(999)
+    assert repository.get_plan("plan-a") == original
+
+
 def test_backend_compression_preserves_original_hash_and_shared_blocks(archive):
     """Large unchanged arrays share their original identity despite compressed physical storage on every backend."""
     from hashlib import sha256
