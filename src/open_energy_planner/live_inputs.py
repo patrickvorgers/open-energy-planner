@@ -1,5 +1,6 @@
 """Coordinate selected observations and independent future inputs before planning."""
 
+import asyncio
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -96,14 +97,23 @@ class LiveInputs:
 
     def receive(self, report):
         """Accept a strictly newer capture and refresh readiness. Reject reordered reports."""
+        self._accept_report(report)
+        self.refresh()
+
+    async def receive_async(self, report):
+        """Accept a capture under the caller-held state lock and prepare it off-loop."""
+        self._accept_report(report)
+        await self.refresh_async()
+
+    def _accept_report(self, report):
+        """Reject reordered reports before replacing the current capture."""
         if self.report is not None and report.captured_at <= self.report.captured_at:
             raise ValueError("Observation reports must advance capture time")
         first_capture = self.report is None
         self.report = report
-        self.refresh()
         if first_capture:
             _LOGGER.info(
-                "Home Assistant observation stream received (%d readings). Planning prerequisites have been checked.",
+                "Home Assistant observation stream received (%d readings). Checking planning prerequisites.",
                 len(report.readings),
             )
 
@@ -113,6 +123,37 @@ class LiveInputs:
         Explicit configuration/resume requests and readiness recovery may start
         immediately. Ordinary source versions and deviations never bypass the
         five-minute limit. Measurement freshness is validated, not a solve timer.
+        """
+        self._install(self._prepare(self._capture()), force=force)
+
+    async def refresh_async(self, *, force=False):
+        """Prepare off-loop, draining cancellation before releasing the caller-held state lock.
+
+        Coordinator mutation and submission remain on the event loop. The state
+        lock protects the domain services borrowed by the preparation worker.
+        """
+        captured = self._capture()
+        worker = asyncio.create_task(asyncio.to_thread(self._prepare, captured))
+        cancellation = None
+        while True:
+            try:
+                prepared = await asyncio.shield(worker)
+                break
+            except asyncio.CancelledError as error:
+                if worker.cancelled():
+                    raise
+                cancellation = error
+        if not self.planner.closed:
+            self._install(prepared, force=force)
+        if cancellation is not None:
+            raise cancellation
+
+    def _capture(self):
+        """Capture coherent nonblocking source views before yielding the event loop.
+
+        Price caches publish outside the application state lock. Their versions,
+        values and expiry must therefore be read on their owning loop, before
+        appliance preparation borrows the resulting immutable snapshot.
         """
         now = self.clock()
         try:
@@ -131,7 +172,36 @@ class LiveInputs:
             )
             snapshot = self.assembler.build(self.configuration, self.report, basis, now)
             snapshot = replace(snapshot, strategy=self.requested_strategy())
-            snapshot = self.prepare_snapshot(snapshot, now)
+        except InputsUnavailable as error:
+            return error
+        return now, basis, snapshot
+
+    def _prepare(self, captured):
+        """Prepare appliances on the worker without reading event-loop-owned source caches.
+
+        The async caller retains the application state lock because appliance
+        services can update their readiness issues. Return an InputsUnavailable
+        value on missing prerequisites, otherwise a (now, basis, snapshot) tuple.
+        """
+        if isinstance(captured, InputsUnavailable):
+            return captured
+        now, basis, snapshot = captured
+        try:
+            return now, basis, self.prepare_snapshot(snapshot, now)
+        except InputsUnavailable as error:
+            return error
+
+    def _install(self, prepared, *, force):
+        """Recheck freshness and install completed preparation on the coordinator's thread."""
+        if isinstance(prepared, InputsUnavailable):
+            self.invalidate(str(prepared))
+            self.last_submission = None
+            return
+        now, basis, snapshot = prepared
+        try:
+            self.assembler.expiry(self.configuration, self.report, self.clock())
+            if self.clock() >= basis.valid_until:
+                raise InputsUnavailable("forecast_or_prices_invalid")
         except InputsUnavailable as error:
             self.invalidate(str(error))
             self.last_submission = None

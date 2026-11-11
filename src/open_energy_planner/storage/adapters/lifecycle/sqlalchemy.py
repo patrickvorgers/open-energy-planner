@@ -441,7 +441,15 @@ class SqlPlanRepository:
             raise ValueError("Archive record nesting invalid")
         if ref in cache:
             return deepcopy(cache[ref])
-        rows = connection.execute(select(PARTS).where(PARTS.c.owner == ref)).mappings().all()
+        rows = (
+            connection.execute(
+                select(PARTS, VALUES.c.payload)
+                .outerjoin(VALUES, VALUES.c.digest == PARTS.c.value_ref)
+                .where(PARTS.c.owner == ref)
+            )
+            .mappings()
+            .all()
+        )
         value = {}
         for row in rows:
             if row["record_ref"]:
@@ -449,9 +457,7 @@ class SqlPlanRepository:
                     connection, row["record_ref"], cache, depth + 1
                 )
             else:
-                payload = connection.scalar(
-                    select(VALUES.c.payload).where(VALUES.c.digest == row["value_ref"])
-                )
+                payload = row["payload"]
                 if payload is None:
                     raise ValueError("Archive input block missing")
                 child = json.loads(decode_payload(payload))
@@ -461,7 +467,7 @@ class SqlPlanRepository:
         if digest(value) != ref:
             raise ValueError("Archive record hash mismatch")
         cache[ref] = value
-        return deepcopy(value)
+        return value
 
     def _read_plan(self, connection, plan_id):
         """Read by immutable ID, returning a detached document or None for an unknown ID."""
@@ -475,6 +481,54 @@ class SqlPlanRepository:
                 return self._read_plan(connection, plan_id)
         except SQLAlchemyError:
             raise OSError("Archive read failed") from None
+
+    def contract_versions(self, plan_ids):
+        """Read hash-checked contract leaves without reconstructing physical or forecast inputs.
+
+        This projection verifies the selected leaf, not the complete plan record.
+        Absent optional versions return None and still require full repricing.
+        Missing plans and corrupt leaves fail closed.
+        """
+        identities = set(plan_ids)
+        if not identities:
+            return {}
+        snapshots, contracts = PARTS.alias("snapshots"), PARTS.alias("contracts")
+        query = (
+            select(PLANS.c.plan_id, contracts.c.field, contracts.c.value_ref, VALUES.c.payload)
+            .select_from(
+                PLANS.outerjoin(
+                    snapshots,
+                    (snapshots.c.owner == PLANS.c.record_ref)
+                    & (snapshots.c.field == "input_snapshot"),
+                )
+                .outerjoin(
+                    contracts,
+                    (contracts.c.owner == snapshots.c.record_ref)
+                    & (contracts.c.field == "contract_version"),
+                )
+                .outerjoin(VALUES, VALUES.c.digest == contracts.c.value_ref)
+            )
+            .where(PLANS.c.plan_id.in_(identities))
+        )
+        versions = {}
+        try:
+            with self.engine.connect() as connection:
+                for row in connection.execute(query):
+                    version = None
+                    if row.field is not None:
+                        if row.payload is None:
+                            raise ValueError("Archive contract block missing")
+                        version = json.loads(decode_payload(row.payload))
+                        if digest(version) != row.value_ref:
+                            raise ValueError("Archive contract hash mismatch")
+                        if version is not None and not isinstance(version, str):
+                            raise ValueError("Archive contract version invalid")
+                    versions[row.plan_id] = version
+        except SQLAlchemyError:
+            raise OSError("Archive contract read failed") from None
+        if versions.keys() != identities:
+            raise ValueError("Archive plan missing")
+        return versions
 
     def get_context(self, plan_id):
         """Read a hash-verified historical calculation projection without presenting it as an original plan."""

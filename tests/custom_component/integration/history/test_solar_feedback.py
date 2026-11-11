@@ -304,10 +304,11 @@ def test_real_recorder_first_retained_attribute_observation_keeps_actual_time(
                 (retained_state, {"sample": 2}),
                 ("on" if retained_state == "off" else "off", {"sample": 3}),
             ):
-                hass.states.async_set(entity, state, attributes)
-                observations.append(hass.states.get(entity))
-                await hass.async_block_till_done()
-                await recorder.async_block_till_done()
+                observations.append(
+                    await record_feedback(
+                        hass, entity, dt_util.utcnow(), state, attributes["sample"]
+                    )
+                )
             original, retained, transition = observations
             assert retained.last_changed == original.last_changed
             assert retained.last_updated > original.last_updated
