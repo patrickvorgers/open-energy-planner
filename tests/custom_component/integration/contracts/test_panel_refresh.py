@@ -17,6 +17,8 @@ from homeassistant.util import dt as dt_util
 from custom_components.open_energy_planner.client import AuthenticationError, ReleaseMismatchError
 from tests.custom_component.support.chain import TOKEN, running_chain
 
+HTTP_GATE_TIMEOUT_SECONDS = 10
+
 
 @asynccontextmanager
 async def _accepted_metadata(*, measurement=False, fixture_devices=True):
@@ -133,7 +135,9 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("caller", ["normal", "recovery"])
+@pytest.mark.parametrize(
+    "caller", ["normal", "recovery", "confirmation_empty", "confirmation_newer"]
+)
 def test_changed_publication_preserves_real_configuration_rejection(monkeypatch, caller):
     """An accepted app configuration rejection must revoke old plans despite a concurrent watch change."""
     import json
@@ -211,12 +215,33 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
             plan = command_plan(now, powers=(0,))
             plan["config_revision"] = coordinator.schedule.config_revision
             plan["steps"][0]["devices"] = {}
-            assert coordinator.schedule.accept(plan, now)
+            installed = None
+            if caller == "confirmation_newer":
+                installed = command_plan(now - timedelta(seconds=1), powers=(0,))
+                installed["config_revision"] = coordinator.schedule.config_revision
+                installed["steps"][0]["devices"] = {}
+                assert coordinator.schedule.accept(installed, now)
+            elif caller != "confirmation_empty":
+                installed = plan
+                assert coordinator.schedule.accept(plan, now)
             coordinator.refresh(now)
-            assert coordinator.projection.status == "active"
+            assert coordinator.projection.status == (
+                "not_ready" if caller == "confirmation_empty" else "active"
+            )
             cached.update(plan=plan, plan_invalidated=False, planning={"status": "ready"})
             old_devices = deepcopy(cached["installation"]["devices"])
             assert old_devices and old_devices[0]["energy_entity"] == "sensor.roof_energy"
+            confirmation = caller.startswith("confirmation_")
+            accept = coordinator.schedule.accept
+            fetched_plan_attempts = []
+
+            def accept_reply(document, current):
+                """Record attempts to accept the fetched plan after the genuine app rejection."""
+                fetched_plan_attempts.append(document["plan_id"])
+                return accept(document, current)
+
+            if confirmation:
+                monkeypatch.setattr(coordinator.schedule, "accept", accept_reply)
 
             async def request(method, path, body=None):
                 """Model an old valid command reply or outage, preserving actual app catalogue traffic."""
@@ -232,10 +257,18 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
                 coordinator.catalogue_discovery.repair()
             active = True
             task = asyncio.create_task(coordinator.sync())
-            await entered.wait()
             try:
-                unit = "kW" if caller == "recovery" else "MW"
+                async with asyncio.timeout(HTTP_GATE_TIMEOUT_SECONDS):
+                    await entered.wait()
+                unit = "kW" if caller == "recovery" or confirmation else "MW"
                 hass.states.async_set("sensor.diagnostic_grid", "0", {"unit_of_measurement": unit})
+                if confirmation:
+                    roof = hass.states.get("sensor.roof_energy")
+                    hass.states.async_set(
+                        roof.entity_id,
+                        roof.state,
+                        {**roof.attributes, "friendly_name": "Updated roof"},
+                    )
                 await hass.async_block_till_done()
                 release.set()
                 await task
@@ -249,19 +282,29 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
                 )
                 assert not coordinator.catalogue_discovery.healthy
                 assert coordinator.catalogue_confirmed_at is None
+                if confirmation:
+                    assert fetched_plan_attempts == []
                 assert coordinator.schedule.plan is None
-                assert coordinator.schedule.invalidated_generation == now
-                with pytest.raises(RevokedPlan):
-                    coordinator.schedule.accept(plan, dt_util.utcnow())
-                if caller == "normal":
+                assert coordinator.schedule.invalidated_generation == (
+                    dt_util.parse_datetime(installed["generated_at"]) if installed else None
+                )
+                if not confirmation:
+                    with pytest.raises(RevokedPlan):
+                        coordinator.schedule.accept(plan, dt_util.utcnow())
+                if caller == "normal" or confirmation:
                     assert coordinator.devices == membership["devices"]
                     assert coordinator.planning_status["reason"] == "energy_configuration_changed"
+                    if confirmation:
+                        assert membership["devices"] != old_devices
+                        assert membership["devices"][0]["name"] == "Updated roof"
                 else:
                     assert coordinator.issue == "synchronization_failed"
                 accepted = await status(metadata=True)
                 assert accepted["data"]["suggestions"]["solar_sources"] == ["sensor.roof_energy"]
             finally:
                 release.set()
+                if not task.done():
+                    task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
@@ -315,8 +358,9 @@ def test_watch_change_during_confirmation_cannot_leave_old_app_metadata_fresh(
             monkeypatch.setattr(coordinator.client, "request", request)
             hold = True
             task = asyncio.create_task(coordinator.sync())
-            await entered.wait()
             try:
+                async with asyncio.timeout(HTTP_GATE_TIMEOUT_SECONDS):
+                    await entered.wait()
                 hass.states.async_set("sensor.diagnostic_grid", "0", {"unit_of_measurement": "kW"})
                 await hass.async_block_till_done()
                 assert not coordinator.catalogue_discovery.healthy
@@ -345,6 +389,8 @@ def test_watch_change_during_confirmation_cannot_leave_old_app_metadata_fresh(
                         assert coordinator.catalogue_discovery.healthy
             finally:
                 release.set()
+                if not task.done():
+                    task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
@@ -508,7 +554,7 @@ def test_unavailable_watch_cannot_confirm_after_command_failure(monkeypatch, una
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("finish", ["cancel", "close"])
+@pytest.mark.parametrize("finish", ["cancel", "close", "missing_gate"])
 def test_inflight_confirmation_does_not_reopen_cancelled_or_closed_owner(monkeypatch, finish):
     """Cancellation propagates and a late accepted reply cannot advance a closed coordinator."""
 
@@ -520,7 +566,8 @@ def test_inflight_confirmation_does_not_reopen_cancelled_or_closed_owner(monkeyp
 
             async def request(method, path, body=None):
                 """Wait before the actual confirmation, retaining the same authenticated receiver."""
-                entered.set()
+                if finish != "missing_gate":
+                    entered.set()
                 await release.wait()
                 return await original(method, path, body)
 
@@ -528,21 +575,32 @@ def test_inflight_confirmation_does_not_reopen_cancelled_or_closed_owner(monkeyp
             before = coordinator.catalogue_confirmed_at
             monkeypatch.setattr(coordinator.client, "request", request)
             task = asyncio.create_task(coordinator._confirm_catalogue(dt_util.utcnow()))
-            await entered.wait()
             try:
-                if finish == "cancel":
-                    task.cancel()
-                    with pytest.raises(asyncio.CancelledError):
-                        await task
+                if finish == "missing_gate":
+                    with pytest.raises(TimeoutError):
+                        async with asyncio.timeout(0):
+                            await entered.wait()
                 else:
-                    coordinator.closed = True
-                    release.set()
-                    await task
+                    async with asyncio.timeout(HTTP_GATE_TIMEOUT_SECONDS):
+                        await entered.wait()
+                    if finish == "cancel":
+                        task.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await task
+                    else:
+                        coordinator.closed = True
+                        release.set()
+                        await task
                 assert coordinator.catalogue_confirmed_at == before
             finally:
                 release.set()
                 coordinator.closed = False
+                if not task.done():
+                    task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+            assert task.done()
+            if finish == "missing_gate":
+                assert task.cancelled()
 
     asyncio.run(scenario())
 

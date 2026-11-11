@@ -291,6 +291,7 @@ class PlanCoordinator:
                 if membership and membership.get("configuration_issue"):
                     self.schedule.invalidate()
                     self.refresh()
+                return membership
             else:
                 self.catalogue_confirmed_at = now
         except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
@@ -485,6 +486,8 @@ class PlanCoordinator:
                         membership = await self._publish_catalogue(
                             now, force=bool(forced_catalogue)
                         )
+                        if membership is None:
+                            membership = await self._confirm_catalogue(now)
                         if self.closed:
                             return
                         if membership is not None:
@@ -497,8 +500,6 @@ class PlanCoordinator:
                                     "status": "not_ready",
                                     "reason": membership["configuration_issue"],
                                 }
-                        else:
-                            await self._confirm_catalogue(now)
                         self.catalogue_failed_at = None
                     except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
                         raise
