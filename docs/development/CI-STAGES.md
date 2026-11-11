@@ -1057,10 +1057,18 @@ Ubuntu machines. A machine is omitted when none of its suites is selected.
 Preparation saves each built image once. Native and database machines share the
 same exported native image. Each machine downloads only its required images and
 verifies archive checksums, loaded image identities, source tree and workflow
-attempt before executing work. The Supervisor machine prepares its separate
+attempt before executing work. Preparation and image-consuming machines use the
+same shared Docker containerd image-store setup. The strict image-ID comparison
+remains unchanged. Classic and containerd stores expose different identities for
+the same OCI archive, so their setup must agree before loading prepared images.
+The Supervisor machine prepares its separate
 actual lifecycle environment and does not download unrelated test images.
 
-Each machine preserves its original reports even if another machine fails.
+The matrix uses fail-fast execution. When a machine fails, GitHub cancels the
+other queued or running test machines instead of waiting for them to finish.
+Each machine attempts to preserve its available original reports before exiting.
+Cancelled machines can have partial or missing reports. Their workflow logs remain
+available, and cancellation never counts as successful suite completion.
 The final quality job runs only after every selected machine succeeds. It rejects
 missing or extra machines, foreign source/attempt identities, incorrect suite
 ownership, missing or unexpected reports and inconsistent executed counts.

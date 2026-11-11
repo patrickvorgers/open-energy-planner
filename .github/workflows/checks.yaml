@@ -100,17 +100,7 @@ jobs:
           sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
           df -h /
       - name: Enable shared build and container image storage
-        run: |
-          sudo python3 - <<'PY'
-          import json
-          from pathlib import Path
-          configuration = Path('/etc/docker/daemon.json')
-          settings = json.loads(configuration.read_text()) if configuration.exists() else {}
-          settings.setdefault('features', {})['containerd-snapshotter'] = True
-          configuration.write_text(json.dumps(settings))
-          PY
-          sudo systemctl restart docker
-          docker info --format '{{json .DriverStatus}}' | grep -q 'io.containerd.snapshotter.v1'
+        uses: ./.github/actions/shared-image-storage
       - name: Set up cached image builder
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:
@@ -223,7 +213,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
-      fail-fast: false
+      fail-fast: true
       max-parallel: 4
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
@@ -269,6 +259,9 @@ jobs:
       - name: Release storage for actual Supervisor acceptance
         if: matrix.lane == 'supervisor'
         run: sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+      - name: Enable shared image storage before loading
+        uses: ./.github/actions/shared-image-storage
+        if: matrix.lane != 'supervisor'
       - name: Verify the prepared image bytes and load selected images
         run: python -m script.ci.parallel_checks load --profile "$OEP_CI_PROFILE" --lane "${{ matrix.lane }}"
       - name: Execute this machine's assigned suites

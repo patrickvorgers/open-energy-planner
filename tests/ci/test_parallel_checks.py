@@ -5,6 +5,7 @@ import runpy
 import subprocess
 import sys
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -14,6 +15,62 @@ from script.ci.ci_groups import ATOMIC_SUITES, PROFILES, focused_profile
 from tests.ci.browser_evidence import write_browser_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_hosted_images_share_one_storage_setup_and_failed_machines_cancel_peers():
+    """Exporter and consumers use one backend before image operations and cancellation cannot package."""
+    workflow = (ROOT / ".github/workflows/checks.yaml").read_text(encoding="utf-8")
+    preparation = workflow.split("  prepare:\n", 1)[1].split("\n  tests:\n", 1)[0]
+    tests = workflow.split("  tests:\n", 1)[1].split("\n  quality:\n", 1)[0]
+    quality = workflow.split("  quality:\n", 1)[1].split("\n  publish-release:\n", 1)[0]
+    action = "uses: ./.github/actions/shared-image-storage"
+    assert preparation.count(action) == tests.count(action) == 1
+    assert preparation.index(action) < preparation.index("uses: docker/bake-action@")
+    setup = tests.split(action, 1)[1].split("      - name:", 1)[0]
+    assert "if: matrix.lane != 'supervisor'" in setup
+    assert tests.index(action) < tests.index("script.ci.parallel_checks load")
+    assert "fail-fast: true" in tests
+    assert "if: always()" in tests and "ci-reports-${{ matrix.lane }}" in tests
+    assert "needs.tests.result == 'success'" in quality
+    assert quality.index("script.ci.parallel_checks join") < quality.index(
+        "script.release.package_release"
+    )
+
+
+@pytest.mark.parametrize("state", ["missing", "existing", "invalid"])
+def test_shared_storage_setup_preserves_configuration_and_rejects_invalid_json(tmp_path, state):
+    """The extracted real setup changes only its feature flag and never overwrites malformed settings."""
+    action = (ROOT / ".github/actions/shared-image-storage/action.yaml").read_text(encoding="utf-8")
+    setup = dedent(action.split("sudo python3 - <<'PY'\n", 1)[1].split("\n        PY", 1)[0])
+    configuration = tmp_path / "daemon.json"
+    if state == "existing":
+        configuration.write_text(
+            json.dumps({"log-driver": "json-file", "features": {"retained": True}})
+        )
+    elif state == "invalid":
+        configuration.write_text("invalid existing configuration")
+
+    # Redirect only the fixed system path, leaving the extracted setup executable unchanged.
+    assert setup.count("Path('/etc/docker/daemon.json')") == 1
+    script = tmp_path / "storage-setup.py"
+    script.write_text(
+        setup.replace("Path('/etc/docker/daemon.json')", f"Path({str(configuration)!r})")
+    )
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, check=False)
+    if state == "invalid":
+        assert result.returncode != 0
+        assert configuration.read_text() == "invalid existing configuration"
+    elif state == "existing":
+        assert result.returncode == 0
+        assert json.loads(configuration.read_text()) == {
+            "log-driver": "json-file",
+            "features": {"retained": True, "containerd-snapshotter": True},
+        }
+    else:
+        assert result.returncode == 0
+        assert json.loads(configuration.read_text()) == {
+            "features": {"containerd-snapshotter": True}
+        }
 
 
 @pytest.mark.parametrize("profile", [*PROFILES, *map(focused_profile, sorted(ATOMIC_SUITES))])

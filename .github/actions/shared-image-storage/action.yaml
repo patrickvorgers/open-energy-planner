@@ -1,0 +1,18 @@
+name: Shared test image storage
+description: Keep prepared and loaded test image identities on the same Docker storage backend.
+runs:
+  using: composite
+  steps:
+    - name: Enable the containerd image store
+      shell: bash
+      run: |
+        sudo python3 - <<'PY'
+        import json
+        from pathlib import Path
+        configuration = Path('/etc/docker/daemon.json')
+        settings = json.loads(configuration.read_text()) if configuration.exists() else {}
+        settings.setdefault('features', {})['containerd-snapshotter'] = True
+        configuration.write_text(json.dumps(settings))
+        PY
+        sudo systemctl restart docker
+        docker info --format '{{json .DriverStatus}}' | grep -q 'io.containerd.snapshotter.v1'
