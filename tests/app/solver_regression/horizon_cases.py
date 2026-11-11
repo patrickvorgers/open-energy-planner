@@ -124,7 +124,7 @@ HORIZON_CASES = (
                 discharge_limit_w=5000,
                 charge_efficiency=0.9,
                 discharge_efficiency=0.9,
-                cycle_fee=0.5,
+                wear_cost_per_kwh=0.05,
             ),
             import_limit=6000,
             export_limit=6000,

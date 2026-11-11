@@ -128,11 +128,12 @@ def test_two_batteries_keep_independent_stock_and_valuation_curves():
     assert costs["economic_cost"] == pytest.approx(0)
 
 
-def test_discharge_losses_and_wear_keep_original_economic_meaning():
+@pytest.mark.parametrize("capacity", [4, 8])
+def test_discharge_losses_and_wear_keep_original_economic_meaning(capacity):
     """.5-kWh discharge at .8 efficiency costs .125 wear and leaves .075 added stock value: .25+.125-.075=.30."""
     plan = window_plan()
     battery = plan["input_snapshot"]["problem"]["batteries"][0]["battery"]
-    battery.update(discharge_efficiency=0.8, cycle_fee=0.8)
+    battery.update(capacity_kwh=capacity, discharge_efficiency=0.8, wear_cost_per_kwh=0.2)
     plan["expected_flows"][1]["batteries"][0]["end_kwh"] = 2.375
     costs = window_summary(plan, {}, START, START + timedelta(hours=2))["scenarios"]["optimizer"][
         "costs"

@@ -76,8 +76,8 @@ const help = {
         "Hard planning reserve in percent. Physical battery protection remains local.",
     recover_reserve:
         "When measured energy is below the minimum, restore it as early as the planning intervals and physical limits allow, before optimizing costs. When off, the strategy chooses when to charge. Further discharge below reserve is always forbidden.",
-    cycle_fee:
-        "Wear cost in your contract currency per full equivalent discharge cycle. Zero excludes it. Partial cycles count proportionally.",
+    wear_cost_per_kwh:
+        "Wear cost in your contract currency per kWh discharged from internal battery storage. Cell losses are included. Charging is not charged again. Zero excludes wear cost.",
 };
 const solarRows = [],
     batteryRows = [];
@@ -489,9 +489,9 @@ function addBattery(old = {}) {
           { type: "checkbox" });
     field(
         node,
-        "Cost per full cycle (optional)",
-        "cycle_fee",
-        old.cycle_fee ?? 0,
+        "Cost per kWh (optional)",
+        "wear_cost_per_kwh",
+        old.wear_cost_per_kwh ?? 0,
         { type: "number", required: true },
     );
 }
@@ -604,7 +604,7 @@ function definitions() {
             discharge_limit_w: v.discharge * 1000,
             minimum_soc: v.minimum_soc,
             recover_reserve: v.recover_reserve,
-            cycle_fee: v.cycle_fee,
+            wear_cost_per_kwh: v.wear_cost_per_kwh,
         };
     });
     const terms = config.catalogue.data.suggestions.terms;

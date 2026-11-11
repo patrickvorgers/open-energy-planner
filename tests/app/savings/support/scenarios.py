@@ -16,12 +16,12 @@ START = datetime(2026, 10, 22, 10, tzinfo=UTC)
 END = START + timedelta(minutes=15)
 
 
-def problem(*, pv_kwh=0, load_kwh=1, hybrid=True, efficiency=1, cycle_fee=0):
+def problem(*, pv_kwh=0, load_kwh=1, hybrid=True, efficiency=1, wear_cost_per_kwh=0):
     """One 4-kWh battery, a 4-kW converter and a quarter. All numerical expectations are independent."""
     return InstallationProblem(
         (Interval(START, 0.25, 0.3, -0.1, load_kwh, pv_kwh, pv_sources=(("roof", pv_kwh),)),),
         (SolarInverter("inv", 4000, efficiency, hybrid),),
-        (BatteryState("battery", "inv", Battery(4, 2, 0, 4000, 4000, 1, 1, cycle_fee)),),
+        (BatteryState("battery", "inv", Battery(4, 2, 0, 4000, 4000, 1, 1, wear_cost_per_kwh)),),
         (PVUnit("roof", "inv", False),),
         10000,
         10000,
