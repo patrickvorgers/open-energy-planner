@@ -15,8 +15,10 @@ Only opening the evidence disclosure requests `comparison?view=evidence`, which
 returns the plan identity and evidence without scenario replay or repricing.
 The unfiltered comparison response and financial period queries retain their
 existing contracts. JSON encoding runs outside the application event loop.
-Each read has its own deadline. Selection generations reject late plan-list, simulation
-and evidence responses. A simulation or evidence failure leaves the displayed
+Each read has its own deadline. Selection generations reject late plan-list and
+simulation responses. Evidence belongs to its active shared read and displayed
+plan, so a failed refresh retaining that plan can still complete its evidence.
+A simulation or evidence failure leaves the displayed
 plan usable. Evidence reads are deduplicated for the displayed plan and can be
 retried by reopening the disclosure after failure.
 The coordinated load waits for simulation and already pending disclosed evidence

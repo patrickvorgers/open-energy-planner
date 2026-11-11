@@ -6,6 +6,7 @@ from contextlib import closing
 from copy import deepcopy
 from dataclasses import asdict
 
+import pytest
 from aiohttp import ClientSession
 
 from open_energy_planner.savings import api
@@ -112,5 +113,48 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                 url + "/v1/plans/missing/comparison", params={"view": "evidence"}
             ) as response:
                 assert response.status == 404
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("context", ["complete", "legacy", "empty_intervals"])
+def test_real_evidence_projection_returns_cards_or_an_explicit_issue(tmp_path, context):
+    """The actual producer returns populated evidence or an owned issue for supported incomplete archives."""
+    plan = {
+        "plan_id": "evidence-contract",
+        "generated_at": START.isoformat(),
+        "input_snapshot": {
+            "problem": json.loads(
+                json.dumps(asdict(problem()), default=lambda value: value.isoformat())
+            )
+        },
+    }
+    if context == "legacy":
+        plan.pop("input_snapshot")
+    elif context == "empty_intervals":
+        plan["input_snapshot"]["problem"]["intervals"] = []
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        repository.state["plan"] = plan
+        repository.save()
+
+    async def check():
+        """Exercise the authenticated HTTP projection without mocking evidence or its response."""
+        async with running(tmp_path) as (session, url):
+            async with session.get(
+                url + "/v1/plans/evidence-contract/comparison?view=evidence"
+            ) as response:
+                assert response.status == 200
+                result = await response.json()
+            assert result["plan_id"] == result["evidence"]["plan_id"] == "evidence-contract"
+            evidence = result["evidence"]
+            if context == "complete":
+                assert evidence["summary"] and evidence["intervals"]
+                assert not evidence.get("issue")
+            else:
+                assert evidence["summary"] == evidence["intervals"] == []
+                assert (
+                    evidence["issue"]
+                    == "Original plan evidence is incomplete or unavailable for this plan."
+                )
 
     asyncio.run(check())

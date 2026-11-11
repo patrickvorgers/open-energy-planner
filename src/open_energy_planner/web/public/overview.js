@@ -617,13 +617,13 @@ function clearPlanComparisons() {
 function loadPlanEvidence() {
     if (evidenceRequest) return evidenceRequest;
     if (!$("plan-evidence-panel").open || !renderedPlanId || planEvidence) return Promise.resolve();
-    const request = selectionRequest, id = renderedPlanId;
+    const id = renderedPlanId;
     $("plan-evidence-status").textContent = "Loading original plan evidence…";
     $("evidence-issue").textContent = "Loading original plan evidence…";
     const pending = (async () => {
         try {
             const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=evidence`);
-            if (request !== selectionRequest || id !== renderedPlanId) return;
+            if (evidenceRequest !== pending || id !== renderedPlanId) return;
             if (data.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
             planEvidence = data.evidence;
             $("evidence-period").textContent = planEvidence?.period ? `From ${when(planEvidence.period.start)} to ${when(planEvidence.period.end)}: ${number(planEvidence.period.duration_h)} hours: All totals below cover this whole period.` : "";
@@ -631,7 +631,7 @@ function loadPlanEvidence() {
             evidenceCards($("plan-evidence"), planEvidence?.summary || []);
             inspect();
         } catch {
-            if (request !== selectionRequest || id !== renderedPlanId) return;
+            if (evidenceRequest !== pending || id !== renderedPlanId) return;
             planEvidence = null;
             const message = "Original plan evidence is unavailable. Close and reopen this panel to retry.";
             $("plan-evidence-status").textContent = $("evidence-issue").textContent = message;
