@@ -10,6 +10,7 @@ from open_energy_planner.demand.calculation.model import EnergyTerm
 from open_energy_planner.home_assistant.catalogue import (
     BATTERY_ENERGY_FIELDS,
     MAX_CATALOGUE_REQUEST_BYTES,
+    MAX_ENTITY_ID_LENGTH,
 )
 from open_energy_planner.home_assistant.names import source_names
 from open_energy_planner.home_assistant.solar_panels import (
@@ -50,8 +51,9 @@ class SetupDiscovery:
         required,
         contracts,
         appliances,
+        source_entities,
     ):
-        """Borrow the current stores and serialize discovery under the same app configuration lock."""
+        """Borrow stores and the current binding projection under the shared configuration lock."""
         self.catalogue = catalogue
         self.installation = installation
         self.demand = demand
@@ -62,6 +64,7 @@ class SetupDiscovery:
         self.required = required
         self.contracts = contracts
         self.appliances = appliances
+        self.source_entities = source_entities
         self.panel_changes = {}
 
     def panel_settings(self):
@@ -291,6 +294,20 @@ class SetupDiscovery:
             body = await request.clone(client_max_size=MAX_CATALOGUE_REQUEST_BYTES).json()
             async with self.lock:
                 if isinstance(body, dict) and set(body) == {"confirmed_revision"}:
+                    identities = self.source_entities()
+                    available = {
+                        entity["entity_id"]
+                        for entity in (self.catalogue.value or {}).get("entities", ())
+                    }
+                    if not isinstance(identities, list) or any(
+                        not isinstance(identity, str)
+                        or len(identity) > MAX_ENTITY_ID_LENGTH
+                        or identity.partition(".")[0]
+                        not in ("sensor", "binary_sensor", "water_heater")
+                        or identity not in available
+                        for identity in identities
+                    ):
+                        raise ValueError("Current sources require fresh discovery")
                     self.catalogue.confirm(body["confirmed_revision"], datetime.now(UTC))
                     return web.json_response({"accepted": True})
                 if isinstance(body, dict) and set(body) == {"refresh_failed"}:

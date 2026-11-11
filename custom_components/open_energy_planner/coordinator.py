@@ -5,7 +5,7 @@ import logging
 from dataclasses import replace
 from datetime import timedelta
 
-from aiohttp import ClientError, ServerFingerprintMismatch
+from aiohttp import ClientError, ClientResponseError, ServerFingerprintMismatch
 from homeassistant.components import persistent_notification
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import callback
@@ -223,6 +223,85 @@ class PlanCoordinator:
         await self.save()
         await self.sync()
 
+    async def _publish_catalogue(self, now, *, force=False):
+        """Publish one captured generation through the existing bounded transfer and acknowledge it.
+
+        The caller owns the synchronization lock and failure recovery. Changes during
+        preparation or HTTP transfer leave discovery dirty and locally unconfirmed.
+        """
+        from .catalogue_transfer import prepare_catalogue
+
+        if self.closed or self.catalogue_bindings_rejected:
+            return
+        catalogue = await self.catalogue_discovery.capture(force=force, now=now)
+        if self.closed or self.catalogue_bindings_rejected or catalogue is None:
+            return
+        generation = self.catalogue_discovery.captured_generation
+        prepared = await self.hass.async_add_executor_job(prepare_catalogue, catalogue)
+        if self.closed or self.catalogue_bindings_rejected:
+            return
+        if generation != self.catalogue_discovery.generation:
+            self.catalogue_confirmed_at = None
+            return
+        for page in prepared.pages:
+            if self.closed or self.catalogue_bindings_rejected:
+                return
+            membership = await self.client.request("POST", "/v1/ha/catalogue", page)
+        if membership.get("accepted") is not True:
+            raise ValueError("Catalogue snapshot was not accepted")
+        if self.closed:
+            return
+        if generation != self.catalogue_discovery.generation:
+            self.catalogue_confirmed_at = None
+            return membership
+        self.catalogue_discovery.acknowledge(catalogue)
+        self.catalogue_context = prepared
+        self.catalogue_confirmed_at = now
+        self.solar_forecast_sent = None
+        self.solar_forecast_attempted_at = None
+        return membership
+
+    async def _confirm_catalogue(self, now):
+        """Confirm healthy watched metadata even when independent command transport fails.
+
+        The app also checks current source bindings before advancing freshness.
+        Changed watches and rejected bindings never authorize this fallback.
+        """
+        if (
+            self.closed
+            or self.catalogue_bindings_rejected
+            or self.catalogue_context is None
+            or not self.catalogue_discovery.healthy
+            or self.catalogue_confirmed_at is not None
+            and now - self.catalogue_confirmed_at < timedelta(seconds=CATALOGUE_CONFIRM_SECONDS)
+        ):
+            return
+        generation = self.catalogue_discovery.generation
+        try:
+            await self.client.request(
+                "POST",
+                "/v1/ha/catalogue",
+                {"confirmed_revision": self.catalogue_context.revision},
+            )
+            if self.closed:
+                return
+            if generation != self.catalogue_discovery.generation:
+                self.catalogue_confirmed_at = None
+                membership = await self._publish_catalogue(now)
+                if membership and membership.get("configuration_issue"):
+                    self.schedule.invalidate()
+                    self.refresh()
+                return membership
+            else:
+                self.catalogue_confirmed_at = now
+        except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
+            raise
+        except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+            if not self.closed:
+                self.catalogue_discovery.repair()
+                self.catalogue_failed_at = None
+            _LOGGER.debug("Setup catalogue confirmation failed", exc_info=True)
+
     async def sync(self, _now=None):
         """Serialize authenticated snapshots/reports and accept only compatible validated plans.
 
@@ -256,7 +335,13 @@ class PlanCoordinator:
                         return
                     self.pending_enabled = None
                 else:
-                    data = await self.client.snapshot()
+                    try:
+                        data = await self.client.snapshot()
+                    except (ClientResponseError, ServerFingerprintMismatch):
+                        raise
+                    except (ClientError, TimeoutError):
+                        await self._confirm_catalogue(dt_util.utcnow())
+                        raise
                 if self.closed or self.schedule.resume_after != intent_at_request:
                     return
                 if data.get("release") != RELEASE:
@@ -285,7 +370,13 @@ class PlanCoordinator:
                     if not ready:
                         self.schedule.invalidate()
                         self.refresh()
-                    data = await self.client.observations(report)
+                    try:
+                        data = await self.client.observations(report)
+                    except (ClientResponseError, ServerFingerprintMismatch):
+                        raise
+                    except (ClientError, TimeoutError):
+                        await self._confirm_catalogue(dt_util.utcnow())
+                        raise
                     if self.closed or self.schedule.resume_after != intent_at_request:
                         return
                     if data.get("release") != RELEASE:
@@ -391,74 +482,30 @@ class PlanCoordinator:
                         >= timedelta(minutes=CATALOGUE_RETRY_MINUTES)
                     )
                 ):
-                    from .catalogue_transfer import prepare_catalogue
-
-                    confirmation_repair = False
                     try:
-                        catalogue = await self.catalogue_discovery.capture(
-                            force=bool(forced_catalogue), now=now
+                        membership = await self._publish_catalogue(
+                            now, force=bool(forced_catalogue)
                         )
+                        if membership is None:
+                            membership = await self._confirm_catalogue(now)
                         if self.closed:
                             return
-                        if catalogue is not None:
-                            generation = self.catalogue_discovery.captured_generation
-                            prepared = await self.hass.async_add_executor_job(
-                                prepare_catalogue, catalogue
-                            )
-                            if generation != self.catalogue_discovery.generation:
-                                prepared = None
-                            if prepared is not None:
-                                for page in prepared.pages:
-                                    if self.closed:
-                                        return
-                                    membership = await self.client.request(
-                                        "POST", "/v1/ha/catalogue", page
-                                    )
-                                if membership.get("accepted") is not True:
-                                    raise ValueError("Catalogue snapshot was not accepted")
-                                if self.closed:
-                                    return
-                                self.catalogue_discovery.acknowledge(catalogue)
-                                self.catalogue_context = prepared
-                                self.catalogue_confirmed_at = now
-                                self.solar_forecast_sent = None
-                                self.solar_forecast_attempted_at = None
-                                if membership.get("devices") is not None:
-                                    data["installation"]["devices"] = membership["devices"]
-                                if membership.get("configuration_issue"):
-                                    self.schedule.invalidate()
-                                    data["plan"] = None
-                                    data["planning"] = {
-                                        "status": "not_ready",
-                                        "reason": membership["configuration_issue"],
-                                    }
-                        elif (
-                            self.catalogue_context is not None
-                            and self.catalogue_discovery.healthy
-                            and (
-                                self.catalogue_confirmed_at is None
-                                or now - self.catalogue_confirmed_at
-                                >= timedelta(seconds=CATALOGUE_CONFIRM_SECONDS)
-                            )
-                        ):
-                            try:
-                                await self.client.request(
-                                    "POST",
-                                    "/v1/ha/catalogue",
-                                    {"confirmed_revision": self.catalogue_context.revision},
-                                )
-                            except (AuthenticationError, ReleaseMismatchError):
-                                raise
-                            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                                confirmation_repair = True
-                                raise
-                            self.catalogue_confirmed_at = now
+                        if membership is not None:
+                            if membership.get("devices") is not None:
+                                data["installation"]["devices"] = membership["devices"]
+                            if membership.get("configuration_issue"):
+                                self.schedule.invalidate()
+                                data["plan"] = None
+                                data["planning"] = {
+                                    "status": "not_ready",
+                                    "reason": membership["configuration_issue"],
+                                }
                         self.catalogue_failed_at = None
-                    except (AuthenticationError, ReleaseMismatchError):
+                    except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                         self.catalogue_discovery.repair()
-                        self.catalogue_failed_at = None if confirmation_repair else now
+                        self.catalogue_failed_at = now
                         _LOGGER.debug("Setup catalogue refresh failed", exc_info=True)
                         if catalogue_request:
                             try:

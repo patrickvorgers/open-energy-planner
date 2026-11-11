@@ -35,12 +35,15 @@ def register(
     contracts=None,
     catalogue=None,
     appliances=None,
+    source_entities,
 ):
     """Register public setup pages/metadata and authenticated configuration routes.
 
     Ready Energy discovery reconciles source membership, demand balance/timezone
     and, when contracts has a current revision, HA-owned bonus timezones. Changed
     bonus clocks persist a new revision and recorded_at. Original plans stay intact.
+    source_entities supplies current persisted bindings for serialized metadata
+    confirmation, using the same composition projection as command snapshots.
     """
     catalogue = catalogue or HACatalogue()
     if live:
@@ -51,7 +54,17 @@ def register(
         )
 
     discovery_handler = SetupDiscovery(
-        catalogue, installation, demand, solar, lock, live, persist, required, contracts, appliances
+        catalogue,
+        installation,
+        demand,
+        solar,
+        lock,
+        live,
+        persist,
+        required,
+        contracts,
+        appliances,
+        source_entities,
     )
     app[NOTIFICATIONS].register("solar-panels", discovery_handler.panel_notifications)
 
