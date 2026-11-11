@@ -20,8 +20,15 @@ CONSUMER_ID_HEX_LENGTH = 16
 WATTS_PER_KILOWATT = 1000
 SUPPORTED_DURATIONS_HOURS = (0.25, 0.5, 0.75, 1)
 FORECAST_STATUSES = (
+    "training_history_required",
+    "forward_archive_required",
+    "collecting_forward_accuracy",
+    "no_consistent_accuracy_benefit",
+    "accuracy_validated",
+    "comparison_evidence_unreadable",
     "waiting_for_history",
     "active",
+    "partial_history",
     "shadow_waiting_for_decision_evidence",
     "history_or_weather_not_ready",
     "energy_consumer_removed",

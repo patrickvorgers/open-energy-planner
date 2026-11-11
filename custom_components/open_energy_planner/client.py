@@ -75,7 +75,6 @@ class LocalClient:
             snapshot_response = path in (
                 "/v1/snapshot",
                 "/v1/observations",
-                "/v1/enabled",
                 "/v1/history",
                 "/v1/demand/history",
                 "/v1/solar/history",
@@ -121,10 +120,20 @@ class LocalClient:
         return await self.request("PUT", "/v1/demand", body)
 
     async def enabled(self, value, request_id):
-        """Send enable intent with a request identity so repeated synchronization is idempotent."""
-        return await self.request(
+        """Confirm persisted intent without fetching a plan or historical financial data."""
+        receipt = await self.request(
             "PUT", "/v1/enabled", {"enabled": value, "request_id": request_id}
         )
+        if (
+            receipt.keys() != {"accepted", "enabled", "request_id"}
+            or receipt["accepted"] is not True
+            or type(receipt["enabled"]) is not bool
+            or receipt["enabled"] is not value
+            or not isinstance(receipt["request_id"], str)
+            or receipt["request_id"] != request_id
+        ):
+            raise ValueError("Invalid enable acknowledgement")
+        return receipt
 
     async def acknowledge(self, plan_id):
         """Acknowledge local acceptance of the specified current app plan."""

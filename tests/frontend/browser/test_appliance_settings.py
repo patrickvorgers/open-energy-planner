@@ -13,7 +13,12 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.control_layout import assert_field_actions_aligned
-from tests.frontend.browser.helpers import TOKEN, assert_floating_save_bar, discover
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    assert_floating_save_bar,
+    discover,
+    discover_boiler_sources,
+)
 
 
 @pytest.mark.parametrize("action", ["click", "enter"])
@@ -173,8 +178,16 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     expect(duration).to_have_value("90")
     expect(energy).to_have_value("0.6")
     expect(duration).to_be_focused()
-    page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    expect(page.locator("#save-state")).to_contain_text("Appliance settings changed")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST"
+            and response.url.endswith("/v1/appliances/manual_profile")
+        )
+    ) as saving:
+        page.get_by_role("button", name="Save appliance settings", exact=True).click()
+    assert saving.value.status == 400
+    assert saving.value.text() == "Appliance settings changed. Reload before saving"
+    expect(page.locator("#save-state")).to_contain_text("Settings were rejected")
     expect(duration).to_have_value("90")
     expect(energy).to_have_value("0.6")
     page.route(
@@ -743,7 +756,7 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
         ],
     }
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "thermal_meters": [],
@@ -894,7 +907,7 @@ def test_appliance_permissions_save_explicitly_and_retain_only_failed_changes(ap
         "issue": None,
     }
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "thermal_meters": [],
@@ -937,7 +950,8 @@ def test_appliance_permissions_save_explicitly_and_retain_only_failed_changes(ap
     page.get_by_role("button", name="Reload appliance settings", exact=True).click()
     expect(permissions.nth(1)).to_be_checked()
     page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    expect(page.locator("#save-state")).to_contain_text("Dryer storage unavailable")
+    expect(page.locator("#save-state")).to_contain_text("Save could not be confirmed")
+    expect(page.locator("#save-state")).not_to_contain_text("Dryer storage unavailable")
     expect(page.locator("#save-state")).to_contain_text("Unsaved changes")
     assert writes == [
         {"entity_id": "sensor.dishwasher", "shiftable": True},
@@ -956,7 +970,7 @@ def test_appliance_without_complete_cycle_cannot_submit_runnable_work(app_page):
     """A selected meter alone grants no scheduling authority. Missing profile keeps readiness disabled on desktop/mobile."""
     page, url = app_page
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "thermal_meters": [],
@@ -1009,7 +1023,7 @@ def test_appliance_settings_lock_writes_reload_and_open_cycle_removal(app_page):
         "issue": None,
     }
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "version": "fixture",
@@ -1113,7 +1127,7 @@ def test_removing_appliance_revokes_shifting_before_source_removal(app_page):
         route.fulfill(json={"appliances": appliances})
 
     page.route("**/v1/appliances", lambda route: route.fulfill(json=appliances))
-    page.route("**/v1/consumers", select)
+    page.route("**/v1/consumers{,?view=settings}", select)
     page.route("**/v1/appliances/device", configure)
     page.route("**/v1/ev", lambda route: route.fulfill(json={"points": []}))
     page.goto(url + "/appliance-settings")
@@ -1166,7 +1180,7 @@ def test_appliance_source_picker_searches_large_catalogue_and_preserves_ha_membe
             state["version"] = "next"
         route.fulfill(json=state)
 
-    page.route("**/v1/consumers", consumers)
+    page.route("**/v1/consumers{,?view=settings}", consumers)
     page.route("**/v1/appliances", lambda route: route.fulfill(json={"devices": [], "issue": None}))
     page.goto(url + "/appliance-settings")
     if "hassio_ingress" not in url:
@@ -1222,7 +1236,7 @@ def test_appliance_prototype_cycle_facts_keep_zero_power_phases(app_page):
     """A synthetic 1-kW quarter and zero-power quarter give 0.25 kWh over 30 minutes, not a 15-minute active-only cycle."""
     page, url = app_page
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "version": "fixture",
@@ -1350,7 +1364,7 @@ def test_appliance_learning_manual_save_failure_and_retained_evidence(app_page):
     state = {"revision": "initial", "issue": None, "devices": [device]}
     page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "version": "selection",
@@ -1421,7 +1435,8 @@ def test_appliance_learning_manual_save_failure_and_retained_evidence(app_page):
     duration.fill("90")
     energy.fill("0.6")
     page.get_by_role("button", name="Save appliance settings", exact=True).click()
-    expect(page.locator("#save-state")).to_contain_text("Storage temporarily unavailable")
+    expect(page.locator("#save-state")).to_contain_text("Save could not be confirmed")
+    expect(page.locator("#save-state")).not_to_contain_text("Storage temporarily unavailable")
     expect(duration).to_have_value("90")
     expect(energy).to_have_value("0.6")
     page.get_by_role("button", name="Save appliance settings", exact=True).click()
@@ -1504,7 +1519,7 @@ def test_appliance_session_failures_show_only_owned_messages(app_page, failure, 
     page.route("**/setup/session", session)
     page.route("**/v1/appliances", lambda route: route.fulfill(json={"devices": [], "issue": None}))
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={"charging_meters": [], "thermal_meters": [], "selected": [], "options": []}
         ),
@@ -1566,7 +1581,7 @@ def test_appliance_evidence_waits_for_all_reads_before_next_poll(app_page):
             route.fulfill(json=sources)
 
     page.route("**/v1/appliances", appliances)
-    page.route("**/v1/consumers", consumers)
+    page.route("**/v1/consumers{,?view=settings}", consumers)
     page.goto(url + "/appliances")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1651,7 +1666,7 @@ def test_appliance_read_deadline_cancels_stalled_network_and_recovers(app_page, 
 
     page.route("**/v1/appliances", appliances)
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={"charging_meters": [], "thermal_meters": [], "selected": [], "options": []}
         ),
@@ -1736,3 +1751,89 @@ def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page
             expect(page.get_by_role("heading", name="Utility boiler", exact=True)).to_be_visible()
         else:
             expect(page.locator("#thermal-save-state")).to_contain_text("Unsaved changes")
+
+
+def test_consumer_put_conflict_requires_current_version_and_explicit_reconciliation(app_page):
+    """A concurrent durable selection survives stale retries. Explicit reload and review permit a fresh versioned save."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    discover_boiler_sources(page, url)
+    page.goto(url + "/appliance-settings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    initial = page.request.get(url + "/v1/consumers", headers=headers).json()
+    page.get_by_role("button", name="Add appliance", exact=True).click()
+    page.locator("#source-dialog button.source-choice:enabled").first.click()
+    weather = page.get_by_label("Consumption depends on outdoor temperature", exact=True)
+    weather.check()
+    competing_selection = [
+        {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": False}
+    ]
+    concurrent = page.request.put(
+        url + "/v1/consumers",
+        headers=headers,
+        data={"expected_version": initial["version"], "selected": competing_selection},
+    )
+    assert concurrent.status == 200
+    persisted = concurrent.json()
+    assert persisted["version"] != initial["version"]
+    assert persisted["selected"] == competing_selection
+    page.evaluate("""() => {
+        const original=window.fetch;
+        window.writeDeadlines=[];window.consumerWrites=[];
+        window.fetch=(path,options)=>{
+            if(options?.method==='PUT'){
+                window.writeDeadlines.push(options.signal==null);
+                window.consumerWrites.push(JSON.parse(options.body));
+            }
+            return original(path,options);
+        };
+    }""")
+    for _attempt in range(2):
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "PUT" and response.url.endswith("/v1/consumers")
+            )
+        ) as rejected:
+            page.get_by_role("button", name="Save appliance settings", exact=True).click()
+        assert rejected.value.status == 409
+        expect(page.locator("#save-state")).to_contain_text("Settings were rejected")
+        expect(page.locator("#save-state")).to_contain_text("Refresh before saving")
+        expect(weather).to_be_checked()
+        expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "dirty")
+        unchanged = page.request.get(url + "/v1/consumers", headers=headers).json()
+        assert unchanged["version"] == persisted["version"]
+        assert unchanged["selected"] == competing_selection
+    stale_write = {
+        "expected_version": initial["version"],
+        "selected": [{"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}],
+    }
+    assert page.evaluate("window.consumerWrites") == [stale_write, stale_write]
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "saved")
+    expect(page.get_by_role("heading", name="Synthetic boiler", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Edit appliance settings", exact=True).click()
+    expect(weather).not_to_be_checked()
+    weather.check()
+    with page.expect_response(
+        lambda response: response.request.method == "PUT" and response.url.endswith("/v1/consumers")
+    ) as accepted:
+        page.get_by_role("button", name="Save appliance settings", exact=True).click()
+    assert accepted.value.status == 200
+    expect(page.locator("#appliance-save-bar")).to_have_attribute("data-save-state", "saved")
+    assert page.evaluate("window.writeDeadlines") == [True, True, True]
+    assert page.evaluate("window.consumerWrites") == [
+        stale_write,
+        stale_write,
+        {
+            "expected_version": persisted["version"],
+            "selected": [
+                {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}
+            ],
+        },
+    ]
+    confirmed = page.request.get(url + "/v1/consumers", headers=headers).json()
+    assert confirmed["version"] != persisted["version"]
+    assert confirmed["selected"] == [
+        {"entity_id": "sensor.synthetic_boiler_energy", "weather_sensitive": True}
+    ]

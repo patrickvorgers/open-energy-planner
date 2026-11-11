@@ -44,6 +44,7 @@ SQLITE_BUSY_TIMEOUT_MS = SQLITE_BUSY_TIMEOUT_SECONDS * 1000
 CONNECT_TIMEOUT_SECONDS = 5
 POOL_TIMEOUT_SECONDS = 5
 DATABASE_IO_TIMEOUT_SECONDS = 30
+POSTGRES_POLL_INTERVAL_SECONDS = 0.1
 DATABASE_STATEMENT_TIMEOUT_MS = DATABASE_IO_TIMEOUT_SECONDS * 1000
 DATABASE_LOCK_TIMEOUT_MS = CONNECT_TIMEOUT_SECONDS * 1000
 DEFAULT_HISTORY_LIMIT = 20
@@ -88,13 +89,40 @@ def archive_engine(directory, url=None):
                     read_timeout=DATABASE_IO_TIMEOUT_SECONDS,
                     write_timeout=DATABASE_IO_TIMEOUT_SECONDS,
                 )
-            return create_engine(
+            engine = create_engine(
                 parsed,
                 pool_pre_ping=True,
                 pool_timeout=POOL_TIMEOUT_SECONDS,
                 connect_args=connect_args,
                 hide_parameters=True,
             )
+            if parsed.drivername == "postgresql+psycopg":
+                driver = engine.dialect.loaded_dbapi
+
+                class BoundedConnection(driver.Connection):
+                    """Bound client I/O as well as server execution without abandoning SQL worker threads."""
+
+                    def wait(
+                        self, generator, interval=POSTGRES_POLL_INTERVAL_SECONDS, timeout=None
+                    ):
+                        """Discard an interrupted connection so rollback or pool reuse cannot wait on it again."""
+                        limit = (
+                            min(timeout, DATABASE_IO_TIMEOUT_SECONDS)
+                            if timeout is not None
+                            else DATABASE_IO_TIMEOUT_SECONDS
+                        )
+                        try:
+                            return super().wait(generator, interval=interval, timeout=limit)
+                        except driver.OperationalError:
+                            self.close()
+                            raise
+
+                @event.listens_for(engine, "do_connect")
+                def connect_postgres(_dialect, _record, arguments, keywords):
+                    """Preserve SQLAlchemy's URL/options conversion while using the bounded native driver."""
+                    return BoundedConnection.connect(*arguments, **keywords)
+
+            return engine
         except (ValueError, TypeError, SQLAlchemyError):
             raise ValueError("Unsupported archive database configuration") from None
     path = root / "archive.sqlite3"

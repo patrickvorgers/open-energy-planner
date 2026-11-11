@@ -112,9 +112,9 @@ def register(
     runtime.events = app.get(EVENTS)
     valuations.events = app.get(EVENTS)
 
-    def pending():
-        """Capture currently requested immutable bindings. Historic frames retain their own context."""
-        return runtime.request(
+    def capture_bindings():
+        """Borrow frozen source definitions under the app lock before any database worker yields."""
+        return (
             datetime.now(UTC),
             installation.current,
             solar.configuration,
@@ -123,15 +123,31 @@ def register(
             location(),
         )
 
-    async def capture_request():
-        """Keep all database reads outside HTTP event-loop execution."""
+    async def read_request(arguments):
+        """Drain the captured archive reader before request cancellation or engine shutdown."""
+        worker = asyncio.create_task(asyncio.to_thread(runtime.request, *arguments))
+        cancellation = None
         try:
-            return await asyncio.to_thread(pending)
+            while True:
+                try:
+                    result = await asyncio.shield(worker)
+                    break
+                except asyncio.CancelledError as error:
+                    if worker.cancelled():
+                        raise
+                    cancellation = error
         except Exception:
             runtime.issue = "Settlement capture unavailable. Inspect application logs"
             runtime.attention = True
             _LOGGER.exception("Settlement request failed. Planning remains independent")
-            return None
+            result = None
+        if cancellation is not None:
+            raise cancellation
+        return result
+
+    def capture_request():
+        """Capture source ownership synchronously, then return an independently awaited archive read."""
+        return read_request(capture_bindings())
 
     async def receive(request):
         """Validate the current peer request before saving a bounded batch. Never control hardware."""
@@ -141,9 +157,12 @@ def register(
             raise web.HTTPBadRequest(text="Settlement body must be JSON") from None
         async with mutation_lock:
             async with lock:
-                expected = await capture_request()
-                seeds = counters.current.seeds if counters.current else ()
-                site = location()
+                arguments = capture_bindings()
+            expected = await read_request(arguments)
+            async with lock:
+                if arguments[1:] != capture_bindings()[1:]:
+                    raise web.HTTPConflict(text="Settlement request changed")
+                seeds, site = arguments[-2:]
             if expected is None:
                 raise web.HTTPConflict(text="No settlement capture is pending")
             try:

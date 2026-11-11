@@ -229,10 +229,14 @@ The boiler's hourly-demand disclosure retains its open state during rendering so
 that a focused hourly field stays visible and typing can continue.
 Reading and validating a chooser POST body happens before acquiring the shared app lock.
 Only the resulting bounded request/status operations hold that lock.
-Ordinary EV and boiler settings GETs use the existing 30-second read deadline,
+Ordinary consumption, EV and boiler settings GETs use the shared 30-second read deadline,
 including response decoding. An explicitly supplied source-refresh deadline stays
 authoritative instead of being shortened. Read errors use owned recovery advice.
-EV and boiler editors share one authenticated request helper. HTTP 401 reports
+All three appliance editors share one authenticated request helper. Paired reads
+settle before the editor releases its busy state, and one failed read prevents
+both results from replacing the draft. Explicit selection writes retain PUT and
+configuration commands retain POST. Write acknowledgements are not cancelled
+by a read deadline. HTTP 401 reports
 that the installation token was rejected, independently of connection errors,
 without consuming the rejected response body. Correcting the token permits retry.
 Write failures never render response bodies, JSON parser errors or transport

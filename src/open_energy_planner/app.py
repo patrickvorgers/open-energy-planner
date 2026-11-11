@@ -781,7 +781,14 @@ def create_app(
     register_prices(app, lambda: prices, contracts, live, lock)
 
     async def snapshot(request):
-        """Refresh live validity under the state lock and return the current installation snapshot."""
+        """Capture settlement inputs under the state lock and await their archive read outside it.
+
+        Reacquire the lock to refresh live validity and assemble current state, so
+        intervening controls are reflected rather than overwritten by captured state.
+        """
+        async with lock:
+            pending_settlement = settlement_request()
+        settlement = await pending_settlement
         async with lock:
             cancellation = await complete_write(
                 appliances.tick,
@@ -820,7 +827,7 @@ def create_app(
             return web.json_response(
                 {
                     "release": RELEASE,
-                    "settlement_request": await settlement_request(),
+                    "settlement_request": settlement,
                     "settlement_bonus_request": settlement_bonus_request(),
                     "savings_status": {
                         "issue": savings_runtime.issue,
@@ -929,7 +936,13 @@ def create_app(
             repository.state["enabled"] = body["enabled"]
             repository.state["last_control_id"] = request_id
             await save_state()
-        return await snapshot(request)
+            return web.json_response(
+                {
+                    "accepted": True,
+                    "enabled": repository.state["enabled"],
+                    "request_id": repository.state["last_control_id"],
+                }
+            )
 
     async def acknowledge(request):
         """Record acceptance only for the current plan ID. Reject stale acknowledgements."""

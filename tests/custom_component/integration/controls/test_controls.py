@@ -399,8 +399,8 @@ def test_real_ha_unchanged_state_report_updates_freshness():
     asyncio.run(scenario())
 
 
-def test_large_schema2_resume_and_ordinary_response_size_limits():
-    """A resume response carrying a >256 KiB schema-2 plan succeeds. An equally large ordinary settings response remains rejected."""
+def test_large_schema2_snapshot_and_ordinary_response_size_limits():
+    """A full snapshot accepts a >256 KiB schema-2 plan. Control receipts and ordinary settings retain the smaller bound."""
     import json
 
     from custom_components.open_energy_planner.client import LocalClient
@@ -428,6 +428,7 @@ def test_large_schema2_resume_and_ordinary_response_size_limits():
             )
 
         app = web.Application()
+        app.router.add_get("/v1/snapshot", respond)
         app.router.add_put("/v1/enabled", respond)
         app.router.add_get("/v1/solar", respond)
         runner = web.AppRunner(app)
@@ -438,8 +439,10 @@ def test_large_schema2_resume_and_ordinary_response_size_limits():
         try:
             async with ClientSession() as session:
                 client = LocalClient(session, url, TOKEN)
-                result = await client.enabled(True, "resume-large")
+                result = await client.snapshot()
                 assert Plan.parse(result["plan"], plan["config_revision"]).steps
+                with pytest.raises(ValueError, match="size limit"):
+                    await client.enabled(True, "resume-large")
                 with pytest.raises(ValueError, match="size limit"):
                     await client.request("GET", "/v1/solar")
         finally:
@@ -758,6 +761,8 @@ def test_pause_resume_goes_through_http_and_persists_intent():
     async def scenario():
         """Toggle the actual virtual switch and verify persisted app intent and a newly accepted plan."""
         async with running_chain() as (hass, entry, _url, _root):
+            entry.runtime_data.poll_cancel()
+            entry.runtime_data.poll_cancel = None
             old = entry.runtime_data.schedule.plan.plan_id
             await hass.services.async_call(
                 "switch",
@@ -778,6 +783,9 @@ def test_pause_resume_goes_through_http_and_persists_intent():
                 },
                 blocking=True,
             )
+            assert entry.runtime_data.pending_enabled is None
+            assert find(hass, "battery_power_target").state == "unavailable"
+            await entry.runtime_data.sync()
             assert entry.runtime_data.schedule.plan.plan_id != old
             assert find(hass, "battery_power_target").state == "-1000"
             assert dt_util.parse_datetime(
@@ -940,6 +948,8 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
     async def scenario():
         """Use a capture-only HA automation to observe pause and resume events without operating equipment."""
         async with running_chain() as (hass, entry, _url, _root):
+            entry.runtime_data.poll_cancel()
+            entry.runtime_data.poll_cancel = None
             captured = []
             hass.bus.async_listen(
                 "oep_test_capture", lambda event_item: captured.append(event_item.data)
@@ -973,6 +983,9 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
             assert captured[-1]["status"] == "paused"
             assert captured[-1]["available"] is False
             await entry.runtime_data.set_enabled(True)
+            await hass.async_block_till_done()
+            assert captured[-1]["status"] != "active"
+            await entry.runtime_data.sync()
             await hass.async_block_till_done()
             assert captured[-1]["status"] == "active"
             assert captured[-1]["mode"] == "fixed_power"
@@ -1038,6 +1051,53 @@ def test_multi_device_zero_grid_modes_keep_power_enabled_but_inapplicable():
             assert find(hass, "grid_control_mode").state == "unavailable"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "training_history_required",
+        "forward_archive_required",
+        "collecting_forward_accuracy",
+        "no_consistent_accuracy_benefit",
+        "accuracy_validated",
+        "comparison_evidence_unreadable",
+    ],
+)
+def test_consumer_daily_model_selection_states_are_valid_ha_estimates(status):
+    """Daily model evidence states remain visible without discarding usable baseline forecasts."""
+    from types import SimpleNamespace
+
+    from custom_components.open_energy_planner.consumer_sensors import ConsumerSensor, validate
+
+    now = dt_util.utcnow()
+    document = {
+        "selected": [{"entity_id": "sensor.synthetic_energy", "weather_sensitive": False}],
+        "result": {
+            "status": "active",
+            "devices": [
+                {
+                    "entity_id": "sensor.synthetic_energy",
+                    "status": status,
+                    "forecast": {
+                        "issued_at": now.isoformat(),
+                        "model": "weekday-profile-v1",
+                        "unit": "kWh",
+                        "steps": [{"start": now.isoformat(), "duration_h": 1, "kwh": 0.5}],
+                    },
+                }
+            ],
+        },
+    }
+    coordinator = SimpleNamespace(
+        entry=SimpleNamespace(entry_id="consumer-status", data={"url": "http://app"}),
+        consumer_forecasts=validate(document),
+    )
+    sensor = ConsumerSensor(coordinator, "sensor.synthetic_energy", "Synthetic appliance", "status")
+    assert sensor.native_value == status
+    assert status in sensor.options
+    power = ConsumerSensor(coordinator, "sensor.synthetic_energy", "Synthetic appliance", "power")
+    assert power.available and power.native_value == 500
 
 
 @pytest.mark.parametrize("duration_hours", [0.25, 0.5, 0.75, 1])
@@ -1304,3 +1364,62 @@ def test_appliance_controls_reconcile_after_pending_removal(monkeypatch, platfor
                 assert hass.states.get(entity_id) is not None
 
     asyncio.run(scenario())
+
+
+def test_mixed_consumer_history_keeps_the_ready_devices_forecast(tmp_path, monkeypatch):
+    """The real mixed-history producer retains a ready forecast through the strict HA projection."""
+    import json
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from custom_components.open_energy_planner.consumer_sensors import ConsumerSensor, validate
+    from open_energy_planner.appliances.forecasting import (
+        ConsumerForecasts,
+        build_components,
+        parse_selection,
+    )
+    from open_energy_planner.demand.storage import DemandStore
+    from tests.app.demand.test_demand import START, channel, config
+    from tests.database.support.archive import make_store
+
+    consumers = ConsumerForecasts(make_store(tmp_path, DemandStore).documents)
+    members = ("sensor.ready", "sensor.short")
+    consumers.sync(
+        {
+            "entities": [{"entity_id": entity} for entity in members],
+            "suggestions": {
+                "consumers": [{"entity_id": entity, "upstream": None} for entity in members]
+            },
+        }
+    )
+    consumers.save(
+        parse_selection([{"entity_id": entity, "weather_sensitive": False} for entity in members]),
+        consumers.version,
+    )
+    hours = 35 * 24
+    consumers.histories["sensor.ready"] = channel("sensor.ready", [0.2] * hours)
+    short = channel("sensor.short", [0.1] * hours)
+    consumers.histories["sensor.short"] = replace(short, hours=short.hours[-60:])
+    now = START + timedelta(hours=hours)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: now)
+    _, consumers.result = build_components(
+        config(), (channel("sensor.house", [0.5] * hours),), (), now, consumers.inputs()
+    )
+    document = consumers.document()
+    assert document["result"]["status"] == "partial_history"
+    assert [item["entity_id"] for item in document["result"]["devices"]] == ["sensor.ready"]
+    coordinator = SimpleNamespace(
+        entry=SimpleNamespace(entry_id="mixed-history", data={"url": "http://app"}),
+        consumer_forecasts=validate(document),
+    )
+    ready = ConsumerSensor(coordinator, "sensor.ready", "Ready appliance", "power")
+    missing = ConsumerSensor(coordinator, "sensor.short", "Short-history appliance", "power")
+    status = ConsumerSensor(coordinator, "sensor.ready", "Ready appliance", "status")
+    for name in ("strings.json", "translations/en.json"):
+        labels = json.loads((COMPONENT / name).read_text(encoding="utf-8"))["entity"]["sensor"]
+        assert (
+            labels[status.translation_key]["state"]["partial_history"] == "Some history unavailable"
+        )
+        assert "partial_history" not in labels["status"]["state"]
+    assert ready.available and ready.native_value == pytest.approx(200)
+    assert not missing.available

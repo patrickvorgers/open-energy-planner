@@ -72,6 +72,12 @@
       "consumer_forecast_status": {
         "name": "Forecast status",
         "state": {
+          "training_history_required": "Waiting for training history",
+          "forward_archive_required": "Waiting for original forecast evidence",
+          "collecting_forward_accuracy": "Collecting daily accuracy evidence",
+          "no_consistent_accuracy_benefit": "Baseline retained after daily comparison",
+          "accuracy_validated": "Daily accuracy validated",
+          "comparison_evidence_unreadable": "Daily comparison evidence unavailable",
           "waiting_for_history": "Waiting for history",
           "active": "Active",
           "shadow_waiting_for_decision_evidence": "Waiting for decision evidence",
@@ -80,7 +86,8 @@
           "existing_exclusions_unsupported": "Existing exclusions unsupported",
           "consumer_overlaps_household_boundary": "Meter overlaps household boundary",
           "energy_consumer_hierarchy_inconsistent": "Energy meter hierarchy inconsistent",
-          "household_boundary_missing": "Household boundary missing"
+          "household_boundary_missing": "Household boundary missing",
+          "partial_history": "Some history unavailable"
         }
       },
       "appliance_task_status": {

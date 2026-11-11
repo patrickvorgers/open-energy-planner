@@ -177,7 +177,7 @@ def test_documentation_appliance_has_a_nonempty_cycle_and_explicit_readiness(app
     }
     page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
     page.route(
-        "**/v1/consumers",
+        "**/v1/consumers{,?view=settings}",
         lambda route: route.fulfill(
             json={
                 "selected": [{"entity_id": "sensor.example_dishwasher"}],

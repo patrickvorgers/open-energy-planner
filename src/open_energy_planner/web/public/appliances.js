@@ -20,7 +20,7 @@ async function api(path, body, method = body ? "POST" : "GET") {
 }
 /** Settle every related read before callers release their refresh guard or report a failure. */
 async function readEvidence() {
-    const results = await Promise.allSettled([api("v1/appliances"), api("v1/consumers"), api("setup/session")]);
+    const results = await Promise.allSettled([api("v1/appliances"), api("v1/consumers?view=settings"), api("setup/session")]);
     if (results.some(result => result.status === "rejected")) throw new Error();
     return results.map(result => result.value);
 }
