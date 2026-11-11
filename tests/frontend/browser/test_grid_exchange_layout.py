@@ -8,11 +8,23 @@ from tests.frontend.browser.helpers import TOKEN
 
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
-def test_grid_exchange_uses_full_planning_width(app_page):
-    """Render a real 48-hour plan at desktop/mobile sizes without horizontal overflow."""
+@pytest.mark.parametrize("renamed", [False, True])
+def test_grid_exchange_uses_full_planning_width(app_page, renamed):
+    """A 48-hour desktop/mobile comparison matches scenario order with solid, individually toggled lines."""
     page, url = app_page
     page.clock.install(time=START)
     page.goto(url + "/overview")
+    headings = ["Optimizer", "Battery self-consumption", "Without battery: Baseline"]
+    if renamed:
+        headings = ["Smart strategy", "Own solar storage", "Household without storage"]
+        for identity, name in zip(
+            ["optimizer-heading", "self-consumption-heading", "reference-heading"],
+            headings,
+            strict=True,
+        ):
+            page.locator(f"#{identity}").evaluate(
+                "(heading, name) => heading.textContent = name", name
+            )
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
@@ -28,7 +40,32 @@ def test_grid_exchange_uses_full_planning_width(app_page):
         "series.data.some(point => point.y > 0) && series.data.some(point => point.y < 0))"
     )
     page.evaluate("document.fonts.ready")
-    comparison.screenshot(path=f"results/ci/grid-exchange-{page.viewport_size['width']}.png")
+    if not renamed:
+        comparison.screenshot(path=f"results/ci/grid-exchange-{page.viewport_size['width']}.png")
+    assert page.locator(".scenario-card h3").all_text_contents() == headings
+    legend = page.locator("#energy-chart-legend")
+    expect(legend.locator("label")).to_have_text(headings)
+    rendering = page.locator("#energy-chart").evaluate("""canvas => {
+        const chart = Chart.getChart(canvas);
+        return chart.data.datasets.map((series, index) => ({
+            label: series.label,
+            dash: Array.from(chart.getDatasetMeta(index).dataset.options.borderDash || []),
+            color: series.borderColor,
+        }));
+    }""")
+    assert [series["label"] for series in rendering] == headings
+    assert [series["dash"] for series in rendering] == [[], [], []]
+    assert [series["color"] for series in rendering] == ["#078b80", "#5d70bc", "#e49b38"]
+    for index, heading in enumerate(headings):
+        toggle = legend.get_by_role("checkbox", name=heading, exact=True)
+        toggle.uncheck()
+        assert page.locator("#energy-chart").evaluate(
+            "(canvas, index) => !Chart.getChart(canvas).isDatasetVisible(index)", index
+        )
+        toggle.check()
+        assert page.locator("#energy-chart").evaluate(
+            "(canvas, index) => Chart.getChart(canvas).isDatasetVisible(index)", index
+        )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
