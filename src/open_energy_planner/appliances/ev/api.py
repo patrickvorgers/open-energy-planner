@@ -48,6 +48,8 @@ PUBLIC_VALIDATION_MESSAGES = (
     "One-off departure must be in the next thirty days",
     "Only controllable EV work enters the solver",
     "Select an AC charging power sensor",
+    "Configure device power consumption in Home Assistant Energy before saving this charge point",
+    "Use the power sensor configured for this device in Home Assistant Energy",
     "Select the charge point's vehicle-connected binary sensor",
     "Select the vehicle's battery percentage sensor",
     "Select the vehicles allowed at this charge point",
@@ -84,15 +86,16 @@ def register(app, service, catalogue, repository, live, lock, thermal):
         """Expose current evidence and the authoritative selection catalogue."""
         async with lock:
             now = datetime.now(UTC)
+            choices = catalogue.choices.catalogue("ev", catalogue.value, now)
             return web.json_response(
                 {
                     **service.document(
                         now,
                         timezone(),
-                        catalogue.choices.catalogue("ev", catalogue.value, now),
+                        choices,
                         repository.state["plan"],
                     ),
-                    "catalogue": catalogue.value,
+                    "catalogue": choices,
                     "energy_consumers": list(service.consumers.options),
                 }
             )

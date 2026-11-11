@@ -65,6 +65,55 @@ def test_explicit_car_uses_its_own_soc_capacity_power_and_local_departure(servic
     )
 
 
+@pytest.mark.parametrize("vehicle_id, maximum_w", [(CAR, 11000), (OTHER_CAR, 3680)])
+def test_fixed_point_uses_each_assigned_cars_rate_without_minimum_mismatch(
+    service, vehicle_id, maximum_w
+):
+    """One 11-kW on/off point admits both 3x16-A and 1x16-A cars at their own fixed AC rate."""
+    data = settings()
+    data["vehicles"][1]["maximum_w"] = 3680
+    data["points"][0].update(control="on_off", minimum_w=11000, maximum_w=11000)
+    service.configure(data, catalogue())
+    service.receive(observations(service), NOW)
+    service.assign(POINT, vehicle_id, SESSION, NOW)
+    (request,) = service.work(NOW, "Europe/Amsterdam")
+    assert request.maximum_w == maximum_w
+    assert request.minimum_w == maximum_w
+    assert request.control == "on_off"
+
+
+@pytest.mark.parametrize("power_source", [None, "sensor.replacement_power"])
+def test_changed_energy_power_link_withdraws_work_until_settings_are_confirmed(
+    service, power_source
+):
+    """Removing or replacing Energy's power link cannot continue scheduling against the old measurement."""
+    service.receive(observations(service), NOW)
+    service.assign(POINT, CAR, SESSION, NOW)
+    assert service.work(NOW, "Europe/Amsterdam")
+    changed = catalogue()
+    changed["suggestions"]["consumers"][0].pop("power_entity")
+    if power_source:
+        changed["suggestions"]["consumers"][0]["power_entity"] = power_source
+        changed["entities"].append({**changed["entities"][3], "entity_id": power_source})
+    service.consumers.sync(changed)
+    assert service.work(NOW, "Europe/Amsterdam") == ()
+    assert (
+        service.document(NOW, "Europe/Amsterdam")["points"][0]["status"]
+        == "energy_source_unavailable"
+    )
+
+
+def test_variable_point_still_rejects_a_vehicle_below_its_minimum(service):
+    """A real variable-power lower bound remains mandatory and cannot admit a 3.68-kW car at 11 kW."""
+    data = settings()
+    data["vehicles"][1]["maximum_w"] = 3680
+    data["points"][0].update(control="variable", minimum_w=11000, maximum_w=11000)
+    service.configure(data, catalogue())
+    service.receive(observations(service), NOW)
+    service.assign(POINT, OTHER_CAR, SESSION, NOW)
+    assert service.work(NOW, "Europe/Amsterdam") == ()
+
+
 def test_reconnect_and_restart_never_reuse_a_previous_vehicle_assignment(service):
     """A new connection nonce or missing post-restart capture withdraws old car authorization."""
     service.receive(observations(service), NOW)

@@ -39,7 +39,7 @@ function displayName(row, vehicle) {
 /** Use the same read-only, Edit and Cancel boundary as the other Appliances editors. */
 function syncEditor() {
     const locked = saveState.busy || !saveState.ready;
-    for (const section of document.querySelectorAll("#vehicles > section, #points > section")) for (const control of section.querySelectorAll("input, select, button")) control.disabled = locked || !editing || section.hidden;
+    for (const section of document.querySelectorAll("#vehicles > section, #points > section")) for (const control of section.querySelectorAll("input, select, button")) control.disabled = locked || !editing || section.hidden || control.dataset.energyOwned === "true";
     find("ev-device-select").disabled = locked || editing || !selected();
     find("edit-ev").disabled = locked || !selected(); find("add-ev").disabled = locked;
     find("ev-editor").hidden = !editing; find("ev-summary").hidden = editing;
@@ -152,7 +152,7 @@ function connectedSource(card, row) {
     const candidates = metadata(entity => entity.entity_id.startsWith("binary_sensor."));
     const searchLabel = node("label"), search = node("input"); searchLabel.className = "ev-field"; searchLabel.append(node("span", "Find connection sensor")); search.type = "search";
     search.setAttribute("aria-label", "Find connection sensor");
-    searchLabel.append(search, node("small", "Search the device, sensor name or entity ID.")); group.append(searchLabel);
+    searchLabel.append(search, node("small", "Optional search filter. Choose the actual sensor under Vehicle connected.")); group.append(searchLabel);
     const control = select(group, row, "connected_entity", "Vehicle connected", "Choose a sensor that stays On while plugged in, even when charging is paused. Charging, door and fault sensors do not establish a connection.", candidates);
     const searchable = [...control.options].filter(option => option.value).map(option => [option.value, option.textContent]);
     const result = node("small"); result.setAttribute("role", "status"); result.style.gridColumn = "1 / -1"; group.append(result);
@@ -212,17 +212,21 @@ function render() {
     }
     for (const row of draft.points) {
         const card = node("section"); card.className = "settings-fields"; card.hidden = row.id !== selectedId; card.append(node("h3", "Home Assistant sources"));
-        const assignedSources = assignedEnergySources(energySources);
-        const savedMeter = current.points.find(saved => saved.id === row.id)?.energy_entity;
-        const meter = select(card, row, "energy_entity", "Charging consumption meter", "Choose the device consumption meter assigned to this charge point in the Home Assistant Energy dashboard. A registered device or integration is not required.", current.energy_consumers.filter(source => source.entity_id === row.energy_entity || source.entity_id === savedMeter || !assignedSources.has(source.entity_id)).map((entity) => [entity.entity_id, entity.name]), "No device consumption meters are configured in Home Assistant Energy. Add the charge point under Individual devices, then refresh Home Assistant sources.");
-        meter.onchange = () => { if (meter.value === row.energy_entity) return; row.energy_entity = meter.value; row.power_entity = current.energy_consumers.find(source => source.entity_id === meter.value)?.power_entity || ""; retainInputs(render); changed(); };
-        select(card, row, "power_entity", "Measured AC charging power", "Selected with the Energy device when Home Assistant defines device power consumption. Otherwise choose its W or kW sensor. You can explicitly override this source.", metadata((entity) => entity.device_class === "power" && ["W", "kW"].includes(entity.unit)));
+        const energySource = current.energy_consumers.find(source => source.entity_id === row.energy_entity);
+        if (editing && energySource) row.power_entity = energySource.power_entity || "";
+        const meter = select(card, row, "energy_entity", "Charging consumption meter", "Defined by the selected Home Assistant Energy device. To use another device, remove this charge point and add it again.", energySource ? [[energySource.entity_id, energySource.name]] : [], "This device is no longer configured in Home Assistant Energy. Restore it there, then refresh Home Assistant sources.");
+        meter.dataset.energyOwned = "true";
+        const measured = select(card, row, "power_entity", "Measured AC charging power", "Defined by device power consumption in Home Assistant Energy. Update the source there, then refresh Home Assistant sources.", metadata(entity => entity.entity_id === energySource?.power_entity), "Configure device power consumption in Home Assistant Energy, then refresh Home Assistant sources before saving.");
+        measured.dataset.energyOwned = "true";
         connectedSource(card, row);
         card.append(node("h3", "Charging limits"));
         const control = select(card, row, "control", "Control capability", "Physical actions remain in your HA automation. Measurement only never produces a charging request.", [["read_only", "Measurement only"], ["on_off", "On/off at fixed power"], ["variable", "Variable power"]]);
         control.parentElement.style.gridColumn = "1 / -1";
-        input(card, row, "minimum_w", "Minimum active charging power (kW)", "The lowest supported charging power. Off remains available.", "number", {min: 0, max: 100, step: 0.001});
-        input(card, row, "maximum_w", "Maximum charging power (kW)", "Point/cable limit. On/off charging uses this fixed level, capped by the vehicle.", "number", {min: 0.001, max: 100, step: 0.001});
+        control.onchange = () => { row.control = control.value; row.minimum_w = row.control === "variable" ? "" : 0; render(); changed(); };
+        const minimum = input(card, row, "minimum_w", "Minimum active charging power (kW)", "Lowest power for variable charging only. On/off charging uses the lower of the point and vehicle maxima. Off remains available.", "number", {min: 0, max: 100, step: 0.001});
+        minimum.required = row.control === "variable";
+        minimum.parentElement.hidden = row.control !== "variable";
+        input(card, row, "maximum_w", "Maximum charging power (kW)", "Point/cable upper limit, not a required vehicle rating. An 11 kW point can charge a 3.68 kW car at 3.68 kW. Set each car's actual AC limit under Vehicles.", "number", {min: 0.001, max: 100, step: 0.001});
         const group = node("fieldset"); group.append(node("legend", "Allowed vehicles"));
         for (const car of draft.vehicles) { const label = node("label"), check = node("input"); check.type = "checkbox"; check.checked = row.vehicle_ids.includes(car.id); check.onchange = () => { row.vehicle_ids = check.checked ? [...row.vehicle_ids, car.id] : row.vehicle_ids.filter((id) => id !== car.id); changed(); }; label.append(check, node("span", current.vehicles.find((vehicle) => vehicle.id === car.id)?.name || car.soc_entity || "New vehicle")); group.append(label); }
         card.append(group); find("points").append(card);
@@ -245,7 +249,7 @@ function renderSummary() {
     const vehicle = draft.vehicles.includes(row);
     find("ev-title").textContent = displayName(row, vehicle); find("ev-kind").textContent = vehicle ? "Vehicle" : "Charge point";
     const sourceFacts = vehicle ? [["State of charge", row.soc_entity, true]] : [["Consumption meter", row.energy_entity, true], ["Measured power", row.power_entity, true], ["Connection status", row.connected_entity, true]];
-    const limits = vehicle ? [["Usable battery", Number.isFinite(row.capacity_kwh) ? row.capacity_kwh.toLocaleString(undefined, {maximumFractionDigits: 3}) + " kWh" : "Unavailable"], ["Maximum AC power", power(row.maximum_w)], ["Physical control", "Through the assigned charge point"]] : [["Control", {read_only: "Measurement only", on_off: "On/off at fixed power", variable: "Variable power"}[row.control]], ["Minimum active power", power(row.minimum_w)], ["Maximum charging power", power(row.maximum_w)], ["Allowed vehicles", row.vehicle_ids.map(id => { const car = draft.vehicles.find(item => item.id === id); return car ? displayName(car, true) : id; }).join(", ") || "None"]];
+    const limits = vehicle ? [["Usable battery", Number.isFinite(row.capacity_kwh) ? row.capacity_kwh.toLocaleString(undefined, {maximumFractionDigits: 3}) + " kWh" : "Unavailable"], ["Maximum AC power", power(row.maximum_w)], ["Physical control", "Through the assigned charge point"]] : [["Control", {read_only: "Measurement only", on_off: "On/off at fixed power", variable: "Variable power"}[row.control]], ...(row.control === "variable" ? [["Minimum active power", power(row.minimum_w)]] : []), ["Maximum charging power", power(row.maximum_w)], ["Allowed vehicles", row.vehicle_ids.map(id => { const car = draft.vehicles.find(item => item.id === id); return car ? displayName(car, true) : id; }).join(", ") || "None"]];
     settingsSummary(find("ev-summary"), [[vehicle ? "Vehicle and source" : "Home Assistant sources", sourceFacts], [vehicle ? "Vehicle limits" : "Charging capability", limits]]);
     find("ev-request-title").textContent = vehicle ? "Charging request" : "Charging sessions";
     find("ev-request-description").textContent = vehicle ? "Target state of charge and departure remain available under Energy and through the HA integration." : "Connection, vehicle assignment and charging evidence remain under Energy. Vehicle identity must be reported explicitly per session.";
@@ -309,7 +313,7 @@ find("continue-add-ev").onclick = async () => {
             find("status").textContent = "The selected Energy device is no longer available. Refresh Home Assistant sources and choose an available device."; return;
         }
     }
-    const row = vehicle ? {id: identity(), soc_entity: "", soc_timestamp_attribute: null, capacity_kwh: "", maximum_w: "", target_soc: 80, departure_time: "07:00"} : {id: identity(), energy_entity: source.entity_id, power_entity: source.power_entity || "", connected_entity: "", minimum_w: "", maximum_w: "", control: "read_only", vehicle_ids: []};
+    const row = vehicle ? {id: identity(), soc_entity: "", soc_timestamp_attribute: null, capacity_kwh: "", maximum_w: "", target_soc: 80, departure_time: "07:00"} : {id: identity(), energy_entity: source.entity_id, power_entity: source.power_entity || "", connected_entity: "", minimum_w: 0, maximum_w: "", control: "read_only", vehicle_ids: []};
     editOriginId = selectedId;
     (vehicle ? draft.vehicles : draft.points).push(row); selectedId = row.id; editing = true;
     render(); changed();

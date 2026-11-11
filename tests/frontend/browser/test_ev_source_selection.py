@@ -243,7 +243,13 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
                 "integration_name": integration_name,
             }
         )
-    body["suggestions"]["consumers"] = [{"entity_id": "sensor.charge_meter", "upstream": None}]
+    body["suggestions"]["consumers"] = [
+        {
+            "entity_id": "sensor.charge_meter",
+            "power_entity": "sensor.charge_power",
+            "upstream": None,
+        }
+    ]
     headers = {"Authorization": "Bearer " + TOKEN}
     response = page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body)
     assert response.ok, "Home Assistant catalogue request failed"
@@ -304,8 +310,8 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     point = page.locator("#points > section:visible")
     expect(point.get_by_label("Home Assistant integration", exact=True)).to_have_count(0)
     expect(point.get_by_label("Home Assistant device", exact=True)).to_have_count(0)
-    page.get_by_label("Charging consumption meter", exact=True).select_option("sensor.charge_meter")
-    page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.charge_power")
+    expect(page.get_by_label("Charging consumption meter", exact=True)).to_be_disabled()
+    expect(page.get_by_label("Measured AC charging power", exact=True)).to_be_disabled()
     connected = page.get_by_label("Vehicle connected", exact=True)
     expect(connected).to_have_value("")
     expect(connected.locator("option")).to_have_count(5)
@@ -314,6 +320,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     page.get_by_label("Find connection sensor", exact=True).fill("plugged")
     expect(connected.locator("option")).to_have_count(2)
     connected.select_option("binary_sensor.charge_plug")
+    page.get_by_label("Control capability", exact=True).select_option("variable")
     page.get_by_label("Minimum active charging power (kW)", exact=True).fill("1.4")
     page.get_by_label("Maximum charging power (kW)", exact=True).fill("11")
     page.get_by_role("checkbox", name="Family car", exact=True).check()
@@ -347,7 +354,8 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     expect(page.get_by_label("Measured AC charging power", exact=True)).to_have_value(
         "sensor.charge_power"
     )
-    page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.empty_power")
+    expect(page.get_by_label("Measured AC charging power", exact=True)).to_be_disabled()
+    page.get_by_label("Maximum charging power (kW)", exact=True).fill("7.4")
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == saved["points"]
@@ -369,14 +377,14 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     expect(page.get_by_label("Measured AC charging power", exact=True)).to_have_value(
         "sensor.charge_power"
     )
-    page.get_by_label("Measured AC charging power", exact=True).select_option("sensor.empty_power")
+    expect(page.get_by_label("Measured AC charging power", exact=True)).to_be_disabled()
     expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
         "binary_sensor.helper_plug"
     )
     page.get_by_role("button", name="Save settings", exact=True).click()
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     saved_point = page.request.get(url + "/v1/ev", headers=headers).json()["points"][0]
-    assert saved_point["power_entity"] == "sensor.empty_power"
+    assert saved_point["power_entity"] == "sensor.charge_power"
     assert saved_point["connected_entity"] == "binary_sensor.helper_plug"
     assert saved_point["energy_entity"] == "sensor.charge_meter"
     page.get_by_role("button", name="Edit settings", exact=True).click()

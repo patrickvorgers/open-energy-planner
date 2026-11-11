@@ -50,9 +50,12 @@ Energy-device chooser before the typed configuration draft is created. The
 Energy display name identifies the choice visually. Its `entity_id` and explicit
 `power_entity` link supply the measurement pair, including meters without a
 device registry entry. There are no device or integration prerequisites.
-Missing power links remain explicit. Manual power overrides survive refresh.
-Choosing another meter replaces the power binding with its defined link or
-clears it when no link exists. Physical connection and vehicle identity are
+The selected Energy device's meter and power link are read-only in the editor.
+Missing power links require correction in Home Assistant Energy before Save.
+Refresh adopts that authoritative power binding while retaining other drafts.
+The configuration boundary rejects missing links and manual power overrides.
+Changing or removing the Energy power link withdraws scheduling eligibility until
+the measurement pair is confirmed again. Physical connection and vehicle identity are
 never inferred. Refresh also rereads current Energy consumer options without
 replacing the configuration draft or saved version. Missing Energy meters remain
 visible as unavailable and server-side membership validation rejects them.
@@ -82,7 +85,12 @@ It also has a desired SoC and daily departure clock.
 Each point links its Energy Dashboard consumption meter, measured AC power and
 vehicle-connected binary sensor. Its minimum/maximum active power and capability
 are explicit: **Measurement only**, **On/off at fixed power** or **Variable power**.
-The lower of vehicle/point maxima applies. Off remains available. The meter cannot
+The lower of vehicle/point maxima applies. For on/off control, this is the fixed
+active rate for that assigned car. The point's variable-power minimum does not
+reject a slower car. An 11-kW point therefore admits both a 3.68-kW one-phase car
+and an 11-kW three-phase car with independently configured vehicle limits.
+This is aggregate AC power modeling, not phase balancing or hardware protection.
+Off remains available. The meter cannot
 also be a shiftable cycle appliance or overlap another selected Energy consumer.
 The app selects each charger's individual forecast automatically. Missing
 component forecasts block replacement of its household contribution. They never

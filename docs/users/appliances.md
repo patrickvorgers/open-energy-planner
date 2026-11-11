@@ -81,20 +81,35 @@ Finish or cancel this choice before editing type-specific details. Cancelling
 does not add a device or save settings. To change an assigned device, use its
 existing editor. Names never determine whether two sources are the same device.
 
-If Home Assistant has no device power consumption link, choose the power sensor
-explicitly. A manual power override is allowed and survives source refresh.
-Choosing another Energy meter applies that device's defined power link or clears
-the old power choice when there is no link. The physical connection sensor and
+The selected Energy device owns both the consumption meter and power sensor.
+These fields are read-only. Correct **device power consumption** in Home Assistant
+Energy, then refresh sources here. A missing power link must be configured there
+before saving. Refresh adopts the configured power link without discarding your
+other edits. To use another Energy device, remove the charge point and add the
+intended device. Historical evidence remains retained. The physical connection sensor and
 vehicle assignment are never inferred. Use **Find connection sensor** to search
 compatible sensors and helpers across integrations by device name, sensor name
 or entity ID. Refresh updates the Energy list without discarding edits.
-A removed meter remains visible as unavailable until you choose a replacement.
+A removed meter remains visible as unavailable until it is restored in Energy.
 It cannot be saved while absent from Home Assistant Energy.
 **Vehicle connected** must be On
 while physically plugged in, including when charging is paused. Charging-active,
 door and fault sensors do not prove a connection. No source is chosen for you.
 Save settings only after checking the sources and limits. Cancel restores the
 confirmed configuration.
+
+**Find connection sensor** is an optional search filter, not another sensor
+binding. **Vehicle connected** is the required selection. Helpers without a
+registered Home Assistant device can also supply connection evidence. Fresh
+discovered choices remain available when the settings page is reloaded.
+
+For a charger that can only start and stop, select **On/off at fixed power**.
+The point's maximum is an upper limit, not a required matching car rating.
+For example, the same 11 kW point can charge a one-phase car limited to
+3.68 kW at 3.68 kW and a three-phase car limited to 11 kW at 11 kW.
+Set each vehicle's actual AC limit for the installation under **Vehicles**.
+The minimum active power applies only to **Variable power** charging. Physical
+phase/current protection remains in the charger and your Home Assistant automation.
 
 Removing a vehicle or charge point opens a confirmation naming that device and
 explaining the retained history. **Cancel** or Escape keeps the configuration

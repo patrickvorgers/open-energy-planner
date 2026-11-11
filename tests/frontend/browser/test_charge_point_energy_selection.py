@@ -71,8 +71,8 @@ def publish_choices(page, url, headers, body, action, scope="ev"):
     expect(page.locator("#status")).to_contain_text("sources refreshed")
 
 
-def test_charge_point_energy_picker_binds_meter_and_power_then_preserves_explicit_edits(app_page):
-    """Energy display names select the defined sensor pair before charging details, with safe overrides and Cancel."""
+def test_charge_point_energy_picker_locks_meter_and_power_and_preserves_cancel(app_page):
+    """Energy owns the locked sensor pair while connection and charging drafts retain Save and Cancel."""
     page, url = app_page
     body, headers = prepare_charge_point(page, url)
     publish_choices(
@@ -88,15 +88,17 @@ def test_charge_point_energy_picker_binds_meter_and_power_then_preserves_explici
     ) == [
         "",
         "sensor.charger_energy",
-        "sensor.second_meter",
     ]
     expect(meter).to_have_value("sensor.charger_energy")
+    expect(meter).to_be_disabled()
     expect(page.locator("#ev-title")).to_have_text("Garage charging")
     power = page.get_by_label("Measured AC charging power", exact=True)
     connected = page.get_by_label("Vehicle connected", exact=True)
     expect(power).to_have_value("sensor.charger_power")
+    expect(power).to_be_disabled()
     expect(connected).to_have_value("")
     connected.select_option("binary_sensor.charger_connected")
+    page.get_by_label("Control capability", exact=True).select_option("variable")
     page.get_by_label("Minimum active charging power (kW)", exact=True).fill("1.4")
     page.get_by_label("Maximum charging power (kW)", exact=True).fill("11")
     page.get_by_role("checkbox", name="Car A", exact=True).check()
@@ -120,10 +122,9 @@ def test_charge_point_energy_picker_binds_meter_and_power_then_preserves_explici
         body,
         lambda: page.get_by_role("button", name="Edit settings", exact=True).click(),
     )
-    meter.select_option("sensor.second_meter")
-    expect(power).to_have_value("")
-    power.select_option("sensor.grid")
-    meter.select_option("sensor.charger_energy")
+    expect(meter).to_be_disabled()
+    expect(power).to_be_disabled()
+    page.get_by_label("Maximum charging power (kW)", exact=True).fill("7.4")
     expect(power).to_have_value("sensor.charger_power")
     expect(connected).to_have_value("binary_sensor.charger_connected")
     page.get_by_role("button", name="Cancel", exact=True).click()
@@ -139,7 +140,7 @@ def test_charge_point_refresh_updates_energy_membership_without_replacing_draft(
         page, url, headers, body, lambda: add_ev_appliance(page, "point", "sensor.charger_energy")
     )
     meter = page.get_by_label("Charging consumption meter", exact=True)
-    meter.select_option("sensor.charger_energy")
+    expect(meter).to_be_disabled()
     maximum = page.get_by_label("Maximum charging power (kW)", exact=True)
     maximum.fill("7.4")
     active = deepcopy(body)
@@ -162,12 +163,11 @@ def test_charge_point_refresh_updates_energy_membership_without_replacing_draft(
     expect(meter.locator('option[value="sensor.charger_energy"]')).to_contain_text("unavailable")
     expect(meter.locator('option[value="sensor.not_in_energy"]')).to_have_count(0)
     expect(maximum).to_have_value("7.4")
-    page.get_by_label("Measured AC charging power", exact=True).select_option(
-        "sensor.charger_power"
-    )
+    expect(page.get_by_label("Measured AC charging power", exact=True)).to_be_disabled()
     page.get_by_label("Vehicle connected", exact=True).select_option(
         "binary_sensor.charger_connected"
     )
+    page.get_by_label("Control capability", exact=True).select_option("variable")
     page.get_by_label("Minimum active charging power (kW)", exact=True).fill("1.4")
     page.get_by_role("checkbox", name="Car A", exact=True).check()
     with page.expect_response(url + "/v1/ev/configuration") as rejected:
@@ -175,7 +175,7 @@ def test_charge_point_refresh_updates_energy_membership_without_replacing_draft(
     assert rejected.value.status == 400
     expect(page.locator("#status")).to_contain_text("Settings were rejected")
     expect(meter).to_have_value("sensor.charger_energy")
-    meter.select_option("sensor.second_meter")
+    expect(meter).to_be_disabled()
     expect(maximum).to_have_value("7.4")
     assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == []
 
@@ -199,8 +199,8 @@ def test_charge_point_without_energy_devices_explains_where_to_add_meter(app_pag
     assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == []
 
 
-def test_energy_device_without_power_definition_keeps_manual_override_during_refresh(app_page):
-    """A device without a power link stays explicit, while refresh never replaces a chosen override."""
+def test_missing_energy_power_link_is_locked_until_corrected_in_energy(app_page):
+    """An absent Energy link gives recovery advice and a refreshed configured link fills the locked field."""
     page, url = app_page
     body, headers = prepare_charge_point(page, url)
     publish_choices(
@@ -212,7 +212,13 @@ def test_energy_device_without_power_definition_keeps_manual_override_during_ref
     )
     power = page.get_by_label("Measured AC charging power", exact=True)
     expect(power).to_have_value("")
-    power.select_option("sensor.grid")
+    expect(power).to_be_disabled()
+    expect(power.locator('option[value="sensor.grid"]')).to_have_count(0)
+    expect(page.get_by_text("Configure device power consumption", exact=False)).to_be_visible()
+    maximum = page.get_by_label("Maximum charging power (kW)", exact=True)
+    maximum.fill("11")
+    body["suggestions"]["consumers"][1]["power_entity"] = "sensor.charger_power"
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
     publish_choices(
         page,
         url,
@@ -222,9 +228,71 @@ def test_energy_device_without_power_definition_keeps_manual_override_during_ref
             "button", name="Refresh Home Assistant sources", exact=True
         ).click(),
     )
-    expect(power).to_have_value("sensor.grid")
+    expect(power).to_have_value("sensor.charger_power")
+    expect(power).to_be_disabled()
+    expect(maximum).to_have_value("11")
     expect(page.get_by_label("Charging consumption meter", exact=True)).to_have_value(
         "sensor.second_meter"
     )
     page.get_by_role("button", name="Cancel", exact=True).click()
     assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == []
+
+
+def test_discovered_plug_helper_survives_reload_and_fixed_point_needs_no_variable_minimum(app_page):
+    """A no-device helper absent from active Energy metadata remains selectable after a page reload."""
+    page, url = app_page
+    body, headers = prepare_charge_point(page, url)
+    active = deepcopy(body)
+    active["entities"] = [
+        source
+        for source in active["entities"]
+        if not source["entity_id"].startswith("binary_sensor.")
+    ]
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=active).ok
+    publish_choices(
+        page, url, headers, body, lambda: add_ev_appliance(page, "point", "sensor.charger_energy")
+    )
+    page.get_by_label("Find connection sensor", exact=True).fill("binary_sensor.charger_connected")
+    page.get_by_label("Vehicle connected", exact=True).select_option(
+        "binary_sensor.charger_connected"
+    )
+    page.get_by_label("Control capability", exact=True).select_option("variable")
+    expect(page.get_by_label("Minimum active charging power (kW)", exact=True)).to_have_value("")
+    page.get_by_label("Minimum active charging power (kW)", exact=True).fill("11")
+    page.get_by_label("Control capability", exact=True).select_option("on_off")
+    expect(page.get_by_label("Minimum active charging power (kW)", exact=True)).to_be_hidden()
+    page.get_by_label("Maximum charging power (kW)", exact=True).fill("11")
+    page.get_by_role("checkbox", name="Car A", exact=True).check()
+    page.get_by_role("checkbox", name="Car B", exact=True).check()
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    page.reload()
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()
+    assert saved["points"][0]["minimum_w"] == 0
+    assert "binary_sensor.charger_connected" in {
+        source["entity_id"] for source in saved["catalogue"]["entities"]
+    }
+    page.get_by_role("combobox", name="Appliance", exact=True).select_option(
+        saved["points"][0]["id"]
+    )
+    publish_choices(
+        page,
+        url,
+        headers,
+        body,
+        lambda: page.get_by_role("button", name="Edit settings", exact=True).click(),
+    )
+    page.get_by_label("Find connection sensor", exact=True).fill("charger_connected")
+    expect(page.get_by_label("Vehicle connected", exact=True)).to_have_value(
+        "binary_sensor.charger_connected"
+    )
+    expect(
+        page.get_by_label("Vehicle connected", exact=True).locator("option").last
+    ).not_to_contain_text("outside this list")
+    expect(page.get_by_label("Charging consumption meter", exact=True)).to_be_disabled()
+    expect(page.get_by_label("Measured AC charging power", exact=True)).to_be_disabled()
+    page.screenshot(
+        path=f"results/ci/charge-point-fixed-{page.viewport_size['width']}.png", full_page=True
+    )
