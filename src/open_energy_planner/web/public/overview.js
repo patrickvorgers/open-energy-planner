@@ -298,6 +298,8 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     }, {capture: true, signal: tooltipEvents.signal});
     const canvas = $(id), legend = $(`${id}-legend`);
     legend.replaceChildren();
+    const deviceLegends = [];
+    let deviceKey = null;
     const axisTime = calendarDates ? value => dateLabel(localDate(value)) : utcDays ? (value) => dateLabel(new Date(value).toISOString().slice(0, 10)) : value => when(value);
     const datasets = series.map((s, index) => {
         const values = [];
@@ -310,7 +312,17 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
+        type: "line", data: {datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {
+            id: "deviceLegend",
+            afterUpdate(instance) {
+                for (const {label, indexes} of deviceLegends) {
+                    label.hidden = !indexes.some(index => datasets[index].data.some(point =>
+                        Number.isFinite(point.y) && point.y !== 0
+                        && point.start < instance.scales.x.max && point.end > instance.scales.x.min));
+                }
+                if (deviceKey) deviceKey.hidden = deviceLegends.every(({label}) => label.hidden);
+            }
+        }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
             interaction: {mode: "nearest", axis: "x", intersect: false},
             onHover: (event, _elements, instance) => {
@@ -384,9 +396,10 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         });
         const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
         label.append(input, swatch, document.createTextNode(s.legendName || s.name)); legend.append(label);
+        if (s.legendId != null) deviceLegends.push({label, indexes});
     }
     if (series.some(s => s.legendId != null)) {
-        const key = document.createElement("p"); key.id = `${id}-device-key`;
+        const key = document.createElement("p"); key.id = `${id}-device-key`; deviceKey = key;
         key.className = "chart-device-key";
         key.textContent = "Striped bars show expected use. Solid bars show scheduled use. Expected use does not authorize a start.";
         legend.append(key);

@@ -63,6 +63,10 @@ Tap or hover over the balance to see both contributions separately. The legend
 switch hides or shows both contributions together. Devices with the same name
 remain separate devices.
 
+Appliances appear in the legend when they have nonzero expected or scheduled
+use in the displayed period. Changing the period updates the entries. Turning
+off an appliance in the legend keeps its switch available so you can show it again.
+
 A scheduled cycle replaces its expected share rather than being added twice.
 Other probable use remains. Reference charts execute acknowledged cycles at their
 immediate reference starts, so their bars can differ from the optimizer's chosen
