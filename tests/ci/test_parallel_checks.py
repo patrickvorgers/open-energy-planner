@@ -11,6 +11,7 @@ import pytest
 from script.ci import check_suite_completion as completion
 from script.ci import parallel_checks as parallel
 from script.ci.ci_groups import ATOMIC_SUITES, PROFILES, focused_profile
+from tests.ci.browser_evidence import write_browser_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -216,6 +217,49 @@ def test_join_requires_every_original_lane_and_rechecks_actual_reports(
             "unit-supervisor": 1,
             "supervisor": 1,
         }
+
+
+@pytest.mark.parametrize("fault", ["none", "browser-extra", "native-extra", "missing-worker"])
+def test_join_validates_nested_xml_without_rejecting_proven_browser_worker_reports(
+    hosted_identity, monkeypatch, fault
+):
+    """Expected worker reports retain identity proof while any unassigned nested XML blocks packaging."""
+    profile = "selected:browser,ci"
+    prepare_plan(profile)
+    lanes = Path(".local/ci-lanes")
+    for lane, suites in {"native": {"ci"}, "browser": {"browser"}}.items():
+        location = lanes / f"ci-reports-{lane}"
+        location.mkdir(parents=True)
+        if lane == "browser":
+            write_browser_evidence(location)
+        else:
+            (location / "ci.xml").write_text('<testsuite><testcase name="ci" /></testsuite>')
+        monkeypatch.setattr(completion, "REPORT", location / "suite-completion.json")
+        parallel.write_lane_completion(profile, lane, suites)
+    monkeypatch.setattr(completion, "REPORT", hosted_identity / "results/ci/suite-completion.json")
+    if fault == "browser-extra":
+        (lanes / "ci-reports-browser/browser-0/extra.xml").write_text(
+            '<testsuite><testcase name="unassigned" /></testsuite>'
+        )
+    elif fault == "native-extra":
+        extra = lanes / "ci-reports-native/unexpected/nested.xml"
+        extra.parent.mkdir()
+        extra.write_text('<testsuite><testcase name="unassigned" /></testsuite>')
+    elif fault == "missing-worker":
+        (lanes / "ci-reports-browser/browser-1/ui.xml").unlink()
+    if fault != "none":
+        with pytest.raises(RuntimeError):
+            parallel.join_reports(profile, lanes)
+        assert not completion.REPORT.exists()
+    else:
+        parallel.join_reports(profile, lanes)
+        completion.verify_completion(profile, "2" * 40)
+        assert json.loads(completion.REPORT.read_text())["executed_tests"] == {
+            "ci": 1,
+            "browser": 1,
+        }
+        for worker in (0, 1):
+            assert (completion.REPORT.parent / f"browser-{worker}/ui.xml").is_file()
 
 
 @pytest.mark.parametrize("fails", [False, True])

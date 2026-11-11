@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from script.ci import check_suite_completion as completion
+from script.ci.browser_suites import BROWSER_WORKERS, worker_directory
 from script.ci.ci_groups import FUNCTIONAL_DATABASE_SUITES, selected_suites
 from script.ci.proof_git import checkout_tree
 
@@ -171,7 +172,12 @@ def join_reports(profile, directory):
             if suite in suites
             for path in paths
         }
-        actual_reports = {path.relative_to(source) for path in source.glob("*.xml")}
+        if "browser" in suites:
+            allowed_reports.update(
+                (worker_directory(source, worker) / "ui.xml").relative_to(source)
+                for worker in range(BROWSER_WORKERS)
+            )
+        actual_reports = {path.relative_to(source) for path in source.rglob("*.xml")}
         if actual_reports != allowed_reports:
             raise RuntimeError("Unexpected or missing lane test reports")
         for path in source.rglob("*"):
