@@ -108,8 +108,10 @@ The point's maximum is an upper limit, not a required matching car rating.
 For example, the same 11 kW point can charge a one-phase car limited to
 3.68 kW at 3.68 kW and a three-phase car limited to 11 kW at 11 kW.
 Set each vehicle's actual AC limit for the installation under **Vehicles**.
-The minimum active power applies only to **Variable power** charging. Physical
-phase/current protection remains in the charger and your Home Assistant automation.
+The minimum active power applies only to **Variable power** charging. In that
+mode, a vehicle is excluded from planning when its maximum AC power is below the
+point's minimum active power. Physical phase/current protection remains in the
+charger and your Home Assistant automation.
 
 Removing a vehicle or charge point opens a confirmation naming that device and
 explaining the retained history. **Cancel** or Escape keeps the configuration

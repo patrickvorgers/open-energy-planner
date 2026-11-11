@@ -671,7 +671,10 @@ usable `capacity_kwh`, AC `maximum_w`, `target_soc`, local `departure_time` and
 optional aware `departure_override`. Point records contain opaque ID, Energy
 `energy_entity`, AC `power_entity`, binary `connected_entity`, active
 `minimum_w`/`maximum_w`, `control` capability and allowed `vehicle_ids`.
-The point's meter/power pair must match its current Home Assistant Energy device.
+Configuration acceptance and current scheduling require the point's meter/power
+pair to match its current Home Assistant Energy device. Retained state and
+immutable `ev-state-<sha256>.json` archives may contain a former pair after an
+Energy link changes. Historical archives are not rewritten to match current Energy.
 `minimum_w` is the variable-control lower bound. On/off work instead uses the
 lower vehicle/point maximum as its fixed active rate, including for slower cars.
 Assignments link point IDs to explicit vehicle IDs and current connection

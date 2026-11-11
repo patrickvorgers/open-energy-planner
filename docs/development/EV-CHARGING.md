@@ -86,8 +86,9 @@ Each point links its Energy Dashboard consumption meter, measured AC power and
 vehicle-connected binary sensor. Its minimum/maximum active power and capability
 are explicit: **Measurement only**, **On/off at fixed power** or **Variable power**.
 The lower of vehicle/point maxima applies. For on/off control, this is the fixed
-active rate for that assigned car. The point's variable-power minimum does not
-reject a slower car. An 11-kW point therefore admits both a 3.68-kW one-phase car
+active rate for that assigned car. For variable power, a vehicle is excluded from
+planning when its maximum is below the point's minimum. An 11-kW on/off point
+therefore admits both a 3.68-kW one-phase car
 and an 11-kW three-phase car with independently configured vehicle limits.
 This is aggregate AC power modeling, not phase balancing or hardware protection.
 Off remains available. The meter cannot

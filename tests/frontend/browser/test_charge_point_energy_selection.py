@@ -271,6 +271,8 @@ def test_discovered_plug_helper_survives_reload_and_fixed_point_needs_no_variabl
     page.get_by_role("button", name="Connect", exact=True).click()
     saved = page.request.get(url + "/v1/ev", headers=headers).json()
     assert saved["points"][0]["minimum_w"] == 0
+    assert saved["points"][0]["control"] == "on_off"
+    assert saved["points"][0]["maximum_w"] == 11000
     assert "binary_sensor.charger_connected" in {
         source["entity_id"] for source in saved["catalogue"]["entities"]
     }
