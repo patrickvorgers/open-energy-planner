@@ -223,6 +223,44 @@ class PlanCoordinator:
         await self.save()
         await self.sync()
 
+    async def _publish_catalogue(self, now, *, force=False):
+        """Publish one captured generation through the existing bounded transfer and acknowledge it.
+
+        The caller owns the synchronization lock and failure recovery. Changes during
+        preparation or HTTP transfer leave discovery dirty and locally unconfirmed.
+        """
+        from .catalogue_transfer import prepare_catalogue
+
+        if self.closed or self.catalogue_bindings_rejected:
+            return
+        catalogue = await self.catalogue_discovery.capture(force=force, now=now)
+        if self.closed or self.catalogue_bindings_rejected or catalogue is None:
+            return
+        generation = self.catalogue_discovery.captured_generation
+        prepared = await self.hass.async_add_executor_job(prepare_catalogue, catalogue)
+        if self.closed or self.catalogue_bindings_rejected:
+            return
+        if generation != self.catalogue_discovery.generation:
+            self.catalogue_confirmed_at = None
+            return
+        for page in prepared.pages:
+            if self.closed or self.catalogue_bindings_rejected:
+                return
+            membership = await self.client.request("POST", "/v1/ha/catalogue", page)
+        if membership.get("accepted") is not True:
+            raise ValueError("Catalogue snapshot was not accepted")
+        if self.closed:
+            return
+        if generation != self.catalogue_discovery.generation:
+            self.catalogue_confirmed_at = None
+            return
+        self.catalogue_discovery.acknowledge(catalogue)
+        self.catalogue_context = prepared
+        self.catalogue_confirmed_at = now
+        self.solar_forecast_sent = None
+        self.solar_forecast_attempted_at = None
+        return membership
+
     async def _confirm_catalogue(self, now):
         """Confirm healthy watched metadata even when independent command transport fails.
 
@@ -238,12 +276,23 @@ class PlanCoordinator:
             and now - self.catalogue_confirmed_at < timedelta(seconds=CATALOGUE_CONFIRM_SECONDS)
         ):
             return
+        generation = self.catalogue_discovery.generation
         try:
             await self.client.request(
                 "POST",
                 "/v1/ha/catalogue",
                 {"confirmed_revision": self.catalogue_context.revision},
             )
+            if self.closed:
+                return
+            if generation != self.catalogue_discovery.generation:
+                self.catalogue_confirmed_at = None
+                membership = await self._publish_catalogue(now)
+                if membership and membership.get("configuration_issue"):
+                    self.schedule.invalidate()
+                    self.refresh()
+            else:
+                self.catalogue_confirmed_at = now
         except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
             raise
         except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
@@ -251,9 +300,6 @@ class PlanCoordinator:
                 self.catalogue_discovery.repair()
                 self.catalogue_failed_at = None
             _LOGGER.debug("Setup catalogue confirmation failed", exc_info=True)
-        else:
-            if not self.closed:
-                self.catalogue_confirmed_at = now
 
     async def sync(self, _now=None):
         """Serialize authenticated snapshots/reports and accept only compatible validated plans.
@@ -435,46 +481,22 @@ class PlanCoordinator:
                         >= timedelta(minutes=CATALOGUE_RETRY_MINUTES)
                     )
                 ):
-                    from .catalogue_transfer import prepare_catalogue
-
                     try:
-                        catalogue = await self.catalogue_discovery.capture(
-                            force=bool(forced_catalogue), now=now
+                        membership = await self._publish_catalogue(
+                            now, force=bool(forced_catalogue)
                         )
                         if self.closed:
                             return
-                        if catalogue is not None:
-                            generation = self.catalogue_discovery.captured_generation
-                            prepared = await self.hass.async_add_executor_job(
-                                prepare_catalogue, catalogue
-                            )
-                            if generation != self.catalogue_discovery.generation:
-                                prepared = None
-                            if prepared is not None:
-                                for page in prepared.pages:
-                                    if self.closed:
-                                        return
-                                    membership = await self.client.request(
-                                        "POST", "/v1/ha/catalogue", page
-                                    )
-                                if membership.get("accepted") is not True:
-                                    raise ValueError("Catalogue snapshot was not accepted")
-                                if self.closed:
-                                    return
-                                self.catalogue_discovery.acknowledge(catalogue)
-                                self.catalogue_context = prepared
-                                self.catalogue_confirmed_at = now
-                                self.solar_forecast_sent = None
-                                self.solar_forecast_attempted_at = None
-                                if membership.get("devices") is not None:
-                                    data["installation"]["devices"] = membership["devices"]
-                                if membership.get("configuration_issue"):
-                                    self.schedule.invalidate()
-                                    data["plan"] = None
-                                    data["planning"] = {
-                                        "status": "not_ready",
-                                        "reason": membership["configuration_issue"],
-                                    }
+                        if membership is not None:
+                            if membership.get("devices") is not None:
+                                data["installation"]["devices"] = membership["devices"]
+                            if membership.get("configuration_issue"):
+                                self.schedule.invalidate()
+                                data["plan"] = None
+                                data["planning"] = {
+                                    "status": "not_ready",
+                                    "reason": membership["configuration_issue"],
+                                }
                         else:
                             await self._confirm_catalogue(now)
                         self.catalogue_failed_at = None

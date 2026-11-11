@@ -120,7 +120,14 @@ an upstream provider generated new measurements.
 If a command snapshot or observation upload fails with a transport error, the
 integration can still send that same bounded revision confirmation. The command
 failure remains visible and its normal command-validity rules still apply.
-This recovery never captures or publishes metadata or forecasts. The app checks
+Unchanged watches need no metadata capture or forecast publication. If a watched
+generation changes while the confirmation is in flight, the integration reuses
+the normal bounded metadata publication before completing synchronization. Only
+an accepted unchanged generation advances local confirmation bookkeeping. A failed
+corrective publication leaves discovery dirty and locally unconfirmed for later
+recovery. An already accepted HTTP confirmation cannot be undone while the app is
+unreachable, so this does not promise instantaneous remote freshness during an
+in-flight change or a subsequent transport failure. The app checks
 all currently configured source bindings under its configuration lock before
 advancing freshness. Missing or malformed bindings, a changed revision and a
 pending transfer reject confirmation without changing the accepted timestamp.

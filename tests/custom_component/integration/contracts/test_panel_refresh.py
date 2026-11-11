@@ -45,27 +45,38 @@ async def _accepted_metadata(*, measurement=False):
         assert coordinator.catalogue_discovery.healthy
         async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
 
-            async def status():
+            async def status(*, metadata=False):
                 """Read provenance without implicitly requesting a metadata refresh."""
-                async with session.get(url + "/v1/ha/catalogue/refresh") as response:
+                path = "/v1/setup" if metadata else "/v1/ha/catalogue/refresh"
+                async with session.get(url + path) as response:
                     assert response.status == 200
-                    return await response.json()
+                    data = await response.json()
+                    return data["catalogue"] if metadata else data
 
             yield hass, coordinator, status
 
 
 @pytest.mark.parametrize("failure_path", ["/v1/snapshot", "/v1/observations"])
 @pytest.mark.parametrize("failure_type", [TimeoutError, ClientConnectionError])
+@pytest.mark.parametrize("measurement", [False, True])
 def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
-    monkeypatch, failure_path, failure_type
+    monkeypatch, failure_path, failure_type, measurement
 ):
     """A failed command snapshot must not prevent confirming unchanged watched source metadata."""
 
     async def scenario():
         """Keep real HA watches and authenticated app confirmation while one command read times out."""
-        async with _accepted_metadata() as (_hass, coordinator, status):
+        async with _accepted_metadata(measurement=measurement) as (_hass, coordinator, status):
             original_request = coordinator.client.request
             confirmations = []
+            if measurement:
+                accepted = await status(metadata=True)
+                assert "sensor.diagnostic_grid" in {
+                    entity["entity_id"] for entity in accepted["data"]["entities"]
+                }
+                snapshot = await original_request("GET", "/v1/snapshot")
+                configuration = snapshot["measurement_config"]
+                assert configuration["bindings"][0]["entity_id"] == "sensor.diagnostic_grid"
 
             async def request(method, path, body=None):
                 """Fail only the command snapshot, retaining every other actual app HTTP request."""
@@ -74,7 +85,11 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
                 if path == "/v1/ha/catalogue" and "confirmed_revision" in (body or {}):
                     confirmations.append(body)
                 data = await original_request(method, path, body)
-                if path == "/v1/snapshot" and failure_path == "/v1/observations":
+                if (
+                    not measurement
+                    and path == "/v1/snapshot"
+                    and failure_path == "/v1/observations"
+                ):
                     data["measurement_config"] = {
                         "revision": "diagnostic-grid",
                         "bindings": [
@@ -109,6 +124,89 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
             monkeypatch.setattr(coordinator.client, "request", original_request)
             await coordinator.sync()
             assert coordinator.issue != "synchronization_failed"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("correction", ["accepted", "unreachable", "changed_again"])
+def test_watch_change_during_confirmation_cannot_leave_old_app_metadata_fresh(
+    monkeypatch, correction
+):
+    """A genuine watched unit change during HTTP confirmation must reach the app before recovery ends."""
+    from open_energy_planner.home_assistant.setup_catalogue import SetupDiscovery
+
+    async def scenario():
+        """Hold the authenticated receiver with Events and inspect its real accepted catalogue afterward."""
+        entered, release = asyncio.Event(), asyncio.Event()
+        original_discovery = SetupDiscovery.discovery
+        hold = False
+
+        async def discovery(owner, request):
+            """Delay only a real confirmation before the existing receiver validates and accepts it."""
+            confirming = not entered.is_set()
+            if hold and not entered.is_set():
+                entered.set()
+                await release.wait()
+            response = await original_discovery(owner, request)
+            if hold and not confirming and correction == "changed_again":
+                hass.states.async_set("sensor.diagnostic_grid", "0", {"unit_of_measurement": "MW"})
+                await hass.async_block_till_done()
+            return response
+
+        monkeypatch.setattr(SetupDiscovery, "discovery", discovery)
+        async with _accepted_metadata(measurement=True) as (hass, coordinator, status):
+            original_request = coordinator.client.request
+            corrections = []
+
+            async def request(method, path, body=None):
+                """Keep actual metadata HTTP traffic while command snapshots cannot be reached."""
+                if path == "/v1/snapshot":
+                    raise TimeoutError("Synthetic command transport failure")
+                if path == "/v1/ha/catalogue" and "confirmed_revision" not in body:
+                    corrections.append(body)
+                    if correction == "unreachable":
+                        raise ClientConnectionError("Synthetic correction transport failure")
+                return await original_request(method, path, body)
+
+            before = await status()
+            accepted = await status(metadata=True)
+            assert not accepted["stale"]
+            assert accepted["data"]["entities"][0]["unit"] == "W"
+            coordinator.catalogue_confirmed_at = dt_util.utcnow() - timedelta(minutes=2)
+            monkeypatch.setattr(coordinator.client, "request", request)
+            hold = True
+            task = asyncio.create_task(coordinator.sync())
+            await entered.wait()
+            try:
+                hass.states.async_set("sensor.diagnostic_grid", "0", {"unit_of_measurement": "kW"})
+                await hass.async_block_till_done()
+                assert not coordinator.catalogue_discovery.healthy
+                assert await status() == before
+                release.set()
+                await task
+                after = await status()
+                accepted = await status(metadata=True)
+                assert coordinator.issue == "synchronization_failed"
+                assert len(corrections) == 1
+                if correction == "unreachable":
+                    assert accepted["data"]["entities"][0]["unit"] == "W"
+                    assert after["revision"] == before["revision"]
+                    assert after["confirmed_at"] > before["confirmed_at"]
+                    assert coordinator.catalogue_confirmed_at is None
+                    assert not coordinator.catalogue_discovery.healthy
+                else:
+                    assert accepted["data"]["entities"][0]["unit"] == "kW"
+                    assert after["revision"] != before["revision"]
+                    if correction == "changed_again":
+                        assert coordinator.catalogue_context.revision != after["revision"]
+                        assert coordinator.catalogue_confirmed_at is None
+                        assert not coordinator.catalogue_discovery.healthy
+                    else:
+                        assert coordinator.catalogue_context.revision == after["revision"]
+                        assert coordinator.catalogue_discovery.healthy
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
 

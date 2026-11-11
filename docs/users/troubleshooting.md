@@ -31,6 +31,18 @@ For a combined power sensor, inspect both constituents in HA. One missing half d
 
 If history is insufficient, enter a confirmed annual whole-home estimate where offered. If linked solar panel metadata cannot be refreshed, repair that link or discovery rather than editing unrelated inverter values. A temporary outage must not silently transfer ownership of linked geometry.
 
+Panel information and command synchronization have separate checks. When a command
+snapshot or measurement upload cannot reach the app, unchanged panel information
+can remain fresh if the integration can still confirm its healthy Home Assistant
+metadata watches. The synchronization failure remains visible. Existing commands
+keep their normal expiry and safety checks.
+
+If panel information remains unavailable, check the selected Forecast.Solar link
+in the Home Assistant Energy dashboard and the app/integration connection. After
+repairing the source, use **Refresh Home Assistant sources**. Changed or missing
+sources require a complete metadata refresh. Retained panel settings do not prove
+that a solar forecast or a physical device is ready.
+
 **Success looks like:** the wizard preview accepts the complete definition and saved settings show the intended sources and ratings. See [Installation settings](installation.md).
 
 ## Some notification sources are unavailable
