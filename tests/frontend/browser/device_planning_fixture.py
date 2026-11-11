@@ -77,8 +77,8 @@ def seed(directory, *, fractional_boundaries=False, legend_devices=False):
             }
 
         def later_rate(step):
-            """Shift 30 W from household base to a named device only on the second day."""
-            return 0.03 if legend_devices and step.start >= START + timedelta(hours=24) else 0
+            """Shift exactly 50 W from household base to a named device on the second day."""
+            return 0.05 if legend_devices and step.start >= START + timedelta(hours=24) else 0
 
         residual = forecast(lambda step: step.load_kwh / step.duration_h - 0.24 - later_rate(step))
         consumers.result = {"devices": [], "residual": residual, "residual_baseline": residual}

@@ -49,6 +49,8 @@ function row(parent, values) {
     parent.append(tr);
 }
 const charts = new Map();
+const syncChartLegends = new WeakMap();
+const DEVICE_ROUNDING_KW = 0.05;
 const hiddenPriceSeries = new Set();
 const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad"];
 const INTERVAL_BAR_FILL = 0.9;
@@ -298,8 +300,33 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     }, {capture: true, signal: tooltipEvents.signal});
     const canvas = $(id), legend = $(`${id}-legend`);
     legend.replaceChildren();
-    const deviceLegends = [];
-    let deviceKey = null;
+    const legendEntries = [];
+    const planningLegend = ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id);
+    let deviceKey = null, selectAll = null;
+    /** Keep rounding eligibility separate from the user's checkbox selection. */
+    function syncLegend(instance) {
+        const minimum = instance.options.scales.x.min ?? -Infinity;
+        const maximum = instance.options.scales.x.max ?? Infinity;
+        for (const {label, input, indexes, device} of legendEntries) {
+            if (!device) continue;
+            const bars = new Map();
+            let unknown = false;
+            for (const index of indexes) for (const point of instance.data.datasets[index].data) {
+                if (!(point.start < maximum && point.end > minimum)) continue;
+                if (!Number.isFinite(point.y)) { unknown = true; continue; }
+                const key = `${point.start}:${point.end}`;
+                bars.set(key, (bars.get(key) || 0) + Math.abs(point.y));
+            }
+            label.hidden = !unknown && ![...bars.values()].some(power => power >= DEVICE_ROUNDING_KW);
+            for (const index of indexes) instance.setDatasetVisibility(index, input.checked && !label.hidden);
+        }
+        if (deviceKey) deviceKey.hidden = !legendEntries.some(({label, device}) => device && !label.hidden);
+        if (selectAll) {
+            const eligible = legendEntries.filter(({label}) => !label.hidden);
+            selectAll.disabled = !eligible.length;
+            selectAll.textContent = eligible.every(({input}) => input.checked) ? "Deselect all" : "Select all";
+        }
+    }
     const axisTime = calendarDates ? value => dateLabel(localDate(value)) : utcDays ? (value) => dateLabel(new Date(value).toISOString().slice(0, 10)) : value => when(value);
     const datasets = series.map((s, index) => {
         const values = [];
@@ -314,14 +341,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     const result = new Chart(canvas, {
         type: "line", data: {datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {
             id: "deviceLegend",
-            afterUpdate(instance) {
-                for (const {label, indexes} of deviceLegends) {
-                    label.hidden = !indexes.some(index => datasets[index].data.some(point =>
-                        Number.isFinite(point.y) && point.y !== 0
-                        && point.start < instance.scales.x.max && point.end > instance.scales.x.min));
-                }
-                if (deviceKey) deviceKey.hidden = deviceLegends.every(({label}) => label.hidden);
-            }
+            beforeUpdate: syncLegend
         }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
             interaction: {mode: "nearest", axis: "x", intersect: false},
@@ -377,6 +397,22 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         }
     });
     charts.set(id, result);
+    syncChartLegends.set(result, syncLegend);
+    if (planningLegend) {
+        selectAll = document.createElement("button");
+        selectAll.type = "button"; selectAll.className = "secondary";
+        selectAll.setAttribute("aria-controls", id);
+        selectAll.addEventListener("click", () => {
+            const eligible = legendEntries.filter(({label}) => !label.hidden);
+            const checked = !eligible.every(({input}) => input.checked);
+            for (const {input, indexes} of eligible) {
+                input.checked = checked;
+                for (const index of indexes) result.setDatasetVisibility(index, checked);
+            }
+            applyRange();
+        });
+        legend.append(selectAll);
+    }
     const legendGroups = new Map();
     series.forEach((s, index) => {
         const identity = s.legendId ?? index;
@@ -396,7 +432,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         });
         const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
         label.append(input, swatch, document.createTextNode(s.legendName || s.name)); legend.append(label);
-        if (s.legendId != null) deviceLegends.push({label, indexes});
+        legendEntries.push({label, input, indexes, device: s.legendId != null});
     }
     if (series.some(s => s.legendId != null)) {
         const key = document.createElement("p"); key.id = `${id}-device-key`; deviceKey = key;
@@ -440,7 +476,8 @@ function applyRange() {
         instance.options.scales.x.min = start ?? bars?.[0]?.start;
         instance.options.scales.x.max = planningHours && start != null ? start + planningHours * MILLISECONDS_PER_HOUR : fullEnd;
     }
-    // Set all windows before synchronizing comparison axes from their joint visible data.
+    // Set all windows and rounding visibility before computing the shared comparison axes.
+    for (const instance of charts.values()) syncChartLegends.get(instance)?.(instance);
     for (const instance of charts.values()) instance.update();
     if (first != null && end != null && start != null) {
         document.querySelector('[data-hours="0"]').textContent = `Full period: ${number(Math.max(0, end - Math.max(first, start)) / MILLISECONDS_PER_HOUR)} hours`;
