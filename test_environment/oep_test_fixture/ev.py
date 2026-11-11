@@ -109,8 +109,14 @@ async def setup_ev(hass, entry):
     manager = await async_get_manager(hass)
     consumers = list((manager.data or {}).get("device_consumption", []))
     for point in points:
-        if not any(row["stat_consumption"] == point["energy"] for row in consumers):
-            consumers.append({"stat_consumption": point["energy"]})
+        for consumer_index, consumer in enumerate(consumers):
+            if consumer["stat_consumption"] == point["energy"]:
+                # Fill only an absent link for this registered simulator meter.
+                if not consumer.get("stat_rate"):
+                    consumers[consumer_index] = {**consumer, "stat_rate": point["power"]}
+                break
+        else:
+            consumers.append({"stat_consumption": point["energy"], "stat_rate": point["power"]})
     if consumers != (manager.data or {}).get("device_consumption", []):
         await manager.async_update({"device_consumption": consumers})
     if saved is None:

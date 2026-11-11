@@ -44,7 +44,7 @@ class ProductBoundary:
                 "upstream": None,
                 **(
                     {"power_entity": f"sensor.oep_test_{name}_power"}
-                    if name in ("dishwasher", "washing_machine", "dryer")
+                    if name in ("dishwasher", "washing_machine", "dryer", "wallbox_a", "wallbox_b")
                     else {}
                 ),
             }
