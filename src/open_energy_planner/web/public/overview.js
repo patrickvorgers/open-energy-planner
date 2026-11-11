@@ -15,6 +15,7 @@ let selectedLinkedPlan = false;
 let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, periodRequest = 0;
 let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
 let planReadPending = false;
+let simulationReadPending = false;
 let evidenceRequest = null;
 let priceRefreshPending = false;
 let periodCostPlan = null, periodCostKey = "", periodCostRequest = 0;
@@ -557,6 +558,7 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
 /** Clear supplementary values as soon as a different original plan is displayed. */
 function clearPlanComparisons() {
     evidenceRequest = null;
+    simulationReadPending = false;
     periodCostPlan = null; periodCostKey = ""; periodCostRequest++;
     for (const chartId of ["reference-chart", "self-consumption-chart"]) {
         chart(chartId, [], {unit: "kW", balance: true});
@@ -571,30 +573,37 @@ function clearPlanComparisons() {
     $("plan-evidence-status").textContent = "Open this panel to load original plan evidence.";
     evidenceCards($("plan-evidence"), []); evidenceCards($("interval-evidence"), []);
 }
-/** Load original evidence on disclosure, deduplicating reads and rejecting stale selections. */
-async function loadPlanEvidence() {
-    if (!$("plan-evidence-panel").open || !renderedPlanId || planEvidence || evidenceRequest) return;
+/**
+ * Load evidence for an open disclosure, sharing completion through rendering and recovery.
+ * Callers joining a pending read await the same lifecycle without issuing another fetch.
+ */
+function loadPlanEvidence() {
+    if (evidenceRequest) return evidenceRequest;
+    if (!$("plan-evidence-panel").open || !renderedPlanId || planEvidence) return Promise.resolve();
     const request = selectionRequest, id = renderedPlanId;
-    const pending = api(`v1/plans/${encodeURIComponent(id)}/comparison?view=evidence`);
-    evidenceRequest = pending;
     $("plan-evidence-status").textContent = "Loading original plan evidence…";
     $("evidence-issue").textContent = "Loading original plan evidence…";
-    try {
-        const data = await pending;
-        if (request !== selectionRequest || id !== renderedPlanId) return;
-        if (data.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
-        planEvidence = data.evidence;
-        $("evidence-period").textContent = planEvidence?.period ? `From ${when(planEvidence.period.start)} to ${when(planEvidence.period.end)}: ${number(planEvidence.period.duration_h)} hours: All totals below cover this whole period.` : "";
-        $("plan-evidence-status").textContent = planEvidence?.issue || "";
-        evidenceCards($("plan-evidence"), planEvidence?.summary || []);
-        inspect();
-    } catch (error) {
-        if (request !== selectionRequest || id !== renderedPlanId) return;
-        const message = `Original plan evidence is unavailable. ${error.message} Close and reopen this panel to retry.`;
-        $("plan-evidence-status").textContent = $("evidence-issue").textContent = message;
-    } finally {
-        if (evidenceRequest === pending) evidenceRequest = null;
-    }
+    const pending = (async () => {
+        try {
+            const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=evidence`);
+            if (request !== selectionRequest || id !== renderedPlanId) return;
+            if (data.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
+            planEvidence = data.evidence;
+            $("evidence-period").textContent = planEvidence?.period ? `From ${when(planEvidence.period.start)} to ${when(planEvidence.period.end)}: ${number(planEvidence.period.duration_h)} hours: All totals below cover this whole period.` : "";
+            $("plan-evidence-status").textContent = planEvidence?.issue || "";
+            evidenceCards($("plan-evidence"), planEvidence?.summary || []);
+            inspect();
+        } catch {
+            if (request !== selectionRequest || id !== renderedPlanId) return;
+            planEvidence = null;
+            const message = "Original plan evidence is unavailable. Close and reopen this panel to retry.";
+            $("plan-evidence-status").textContent = $("evidence-issue").textContent = message;
+        } finally {
+            if (evidenceRequest === pending) evidenceRequest = null;
+        }
+    })();
+    evidenceRequest = pending;
+    return pending;
 }
 $("plan-evidence-panel").addEventListener("toggle", loadPlanEvidence);
 $("interval-evidence-panel").addEventListener("toggle", loadPlanEvidence);
@@ -672,6 +681,8 @@ function renderPlanComparisons(data, plan) {
  * remain unknown rather than zero. Net watts are (import - export) / duration_h *
  * 1000, positive import and negative export. Missing grid evidence leaves null EMS
  * line gaps. Rebuild tables, inspector and charts without changing active commands.
+ * Original-plan success is independent of supplemental availability. Complete the
+ * relevant supplemental reads before releasing the caller's shared loading state.
  */
 async function showPlan(signal, background = false) {
     const request = ++selectionRequest, id = $("plan-version").value;
@@ -689,6 +700,7 @@ async function showPlan(signal, background = false) {
         }
         renderedPlanId = null;
         planReadPending = false;
+        simulationReadPending = false;
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
         $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
         $("planning-window").textContent = "";
@@ -836,23 +848,31 @@ async function showPlan(signal, background = false) {
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
         renderedPlanId = id;
+        if (requestedPlan === id) requestedPlan = null;
         planReadPending = false;
         $("overview-status").textContent = "Plan loaded. Loading simulations…";
-        loadPlanEvidence();
+        const evidenceRead = loadPlanEvidence();
+        let simulationsLoaded = false;
         try {
             const supplementary = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=simulations`);
             if (request !== selectionRequest) return false;
             if (supplementary.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
             renderPlanComparisons(supplementary, plan);
-            $("overview-status").textContent = CONNECTED_MESSAGE;
+            simulationsLoaded = true;
             return true;
-        } catch (error) {
+        } catch {
             if (request !== selectionRequest) return false;
-            planReadPending = true;
-            const message = `Simulations are unavailable. ${error.message} Use Refresh overview to retry.`;
+            simulationReadPending = true;
+            const message = "Simulations are unavailable. Use Refresh overview to retry.";
             $("overview-status").textContent = `Plan loaded. ${message}`;
             for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message;
-            return false;
+            return true;
+        } finally {
+            if (request === selectionRequest && simulationsLoaded && evidenceRequest) $("overview-status").textContent = "Plan loaded. Loading original plan evidence…";
+            await evidenceRead;
+            // A disclosure can start its shared read while the simulations are still loading.
+            if (request === selectionRequest) await evidenceRequest;
+            if (request === selectionRequest && simulationsLoaded) $("overview-status").textContent = CONNECTED_MESSAGE;
         }
     } catch (error) {
         if (request === selectionRequest && retainDisplayedPlan) {
@@ -875,14 +895,17 @@ async function showPlan(signal, background = false) {
 /** Page original plan identities without activating them. */
 async function plans(older = false, signal) {
     planRefreshEnabled = true;
+    const linkedPlan = requestedPlan || (selectedLinkedPlan ? $("plan-version").value : null);
     const data = await api(`v1/plans?limit=20${older && cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`, signal);
     if (!older) $("plan-version").replaceChildren();
     for (const plan of data.plans) {
         const option = document.createElement("option"); option.value = plan.plan_id; option.textContent = planName(plan); $("plan-version").append(option);
     }
     cursor = data.next_before; $("older-plans").hidden = !cursor;
-    if (!older && requestedPlan) {
-        const loaded = await selectOriginal(requestedPlan);
+    if (!older && linkedPlan) {
+        const loading = selectOriginal(linkedPlan), request = selectionRequest;
+        const loaded = await loading;
+        if (request !== selectionRequest) return false;
         if (loaded) requestedPlan = null;
         else $("overview-status").textContent = "The linked plan could not be loaded. Check the connection and choose Refresh to retry. No other plan has been selected.";
         return loaded;
@@ -908,7 +931,7 @@ async function refreshLatestPlan() {
             selector.prepend(option);
             selector.value = followingLatest ? latest.plan_id : selected;
         }
-        const needsPlan = renderedPlanId !== latest.plan_id || planReadPending;
+        const needsPlan = renderedPlanId !== latest.plan_id || planReadPending || simulationReadPending;
         if (followingLatest && needsPlan) {
             const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
             await Promise.all([showPlan(signal, true), priceRead ??= currentPrices(signal)]);
@@ -1167,7 +1190,7 @@ window.addEventListener("pageshow", event => {
     startPlanRefresh(); applyRange(); refreshLatestPlan();
 });
 $("overview-connect").addEventListener("submit", (event) => { event.preventDefault(); token = $("overview-token").value; $("overview-token").value = ""; load(); });
-$("plan-version").addEventListener("change", () => { selectedLinkedPlan = false; showPlan(); });
+$("plan-version").addEventListener("change", () => { requestedPlan = null; selectedLinkedPlan = false; showPlan(); });
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
 $("period").addEventListener("submit", (event) => { event.preventDefault(); savings(); });
 $("evaluation-version").addEventListener("change", () => savings());

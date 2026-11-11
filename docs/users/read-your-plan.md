@@ -6,7 +6,7 @@ Open **Energy > Planning** to inspect one original calculation. Begin with its v
 
 The latest retained plan is the default. **Plan version** lets you inspect history. A historical selection changes the view, not active commands. While the same plan refreshes, the previous complete view can remain visible with an explicit loading status. Choosing a different historical plan clears its predecessor's data until that selection loads.
 
-The selected plan's graph, prices and interval values appear first. The two simulation graphs and their cost comparisons follow without waiting for the detailed evidence. A simulation read failure leaves the selected plan usable and shows a retry message. Choose **Refresh overview** to retry.
+The selected plan's graph, prices and interval values appear first. The two simulation graphs and their cost comparisons follow without waiting for the detailed evidence. A simulation read failure leaves the selected plan usable and shows a retry message. Choose **Refresh overview** to retry. A plan opened through a direct link stays selected during this retry.
 
 A valid older plan can remain in history after a later calculation fails. Its presence does not mean its commands are still applicable. Read the page's status and any source warning.
 

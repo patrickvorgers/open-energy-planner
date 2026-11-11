@@ -49,7 +49,9 @@ def test_slow_listing_does_not_consume_the_plan_or_simulation_deadline(app_page)
     expect(page.locator("#overview-status")).to_contain_text(
         "Plan loaded. Simulations are unavailable"
     )
-    expect(page.locator("#overview-status")).to_contain_text("took too long")
+    expect(page.locator("#overview-status")).to_have_text(
+        "Plan loaded. Simulations are unavailable. Use Refresh overview to retry."
+    )
     expect(page.locator("body")).not_to_contain_text("Private timeout details")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
     expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")

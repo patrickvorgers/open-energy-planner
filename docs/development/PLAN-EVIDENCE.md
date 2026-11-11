@@ -19,6 +19,11 @@ Each read has its own deadline. Selection generations reject late simulation
 and evidence responses. A simulation or evidence failure leaves the displayed
 plan usable. Evidence reads are deduplicated for the displayed plan and can be
 retried by reopening the disclosure after failure.
+The coordinated load waits for simulation and already pending disclosed evidence
+reads before releasing shared loading state. Graph rendering remains progressive.
+Successful original-plan selection is independent of supplemental availability,
+whose retry state does not mark a linked plan as missing. Supplemental failure
+guidance uses canonical text for network and rendering failures alike.
 The primary view covers the **whole original planning period**, with explicit
 start/end/duration, total forecast demand/PV, per-source forecast model/quality,
 total planned grid exchange and per-battery charge/discharge and start/final SoC.
