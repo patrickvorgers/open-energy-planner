@@ -211,7 +211,14 @@ def test_ev_configuration_accepts_twenty_vehicles_and_eight_disjoint_charge_poin
         )
     consumers = SimpleNamespace(
         selected=[],
-        options=[{"entity_id": point["energy_entity"], "upstream": None} for point in points],
+        options=[
+            {
+                "entity_id": point["energy_entity"],
+                "power_entity": point["power_entity"],
+                "upstream": None,
+            }
+            for point in points
+        ],
     )
     result, selected = configuration(
         {"vehicles": vehicles, "points": points},

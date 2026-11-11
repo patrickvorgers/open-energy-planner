@@ -36,7 +36,15 @@ def catalogue():
             metadata("sensor.charger_power", "W", "power", "Wallbox power"),
             metadata("binary_sensor.charger_connected", "", "plug", "Wallbox connected"),
         ],
-        "suggestions": {"consumers": [{"entity_id": "sensor.charger_energy", "upstream": None}]},
+        "suggestions": {
+            "consumers": [
+                {
+                    "entity_id": "sensor.charger_energy",
+                    "power_entity": "sensor.charger_power",
+                    "upstream": None,
+                }
+            ]
+        },
         "timezone": "Europe/Amsterdam",
     }
 

@@ -21,6 +21,11 @@ class HomeAssistantBoundary:
         self.sidebar = False
         self.fail_after = None
         self.ev = examples.ev_configuration()
+        journal.state["ev_configuration"] = deepcopy(self.ev)
+        self.options = [
+            {"entity_id": point["energy_entity"], "power_entity": point["power_entity"]}
+            for point in self.ev["points"]
+        ]
         self.thermal = examples.boiler_configuration()
         self.consumers, self.appliances = [], []
         for name in ("dishwasher", "washing_machine", "dryer"):
@@ -37,7 +42,7 @@ class HomeAssistantBoundary:
             {
                 "/v1/ev": self.ev,
                 "/v1/thermal": {"configuration": self.thermal},
-                "/v1/consumers": {"selected": self.consumers},
+                "/v1/consumers": {"selected": self.consumers, "options": self.options},
                 "/v1/appliances": {"devices": self.appliances},
             }[path]
         )
