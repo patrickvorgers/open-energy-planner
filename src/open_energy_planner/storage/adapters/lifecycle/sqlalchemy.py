@@ -97,9 +97,9 @@ def archive_engine(directory, url=None):
                 hide_parameters=True,
             )
             if parsed.drivername == "postgresql+psycopg":
-                from psycopg import Connection, OperationalError
+                driver = engine.dialect.loaded_dbapi
 
-                class BoundedConnection(Connection):
+                class BoundedConnection(driver.Connection):
                     """Bound client I/O as well as server execution without abandoning SQL worker threads."""
 
                     def wait(
@@ -113,7 +113,7 @@ def archive_engine(directory, url=None):
                         )
                         try:
                             return super().wait(generator, interval=interval, timeout=limit)
-                        except OperationalError:
+                        except driver.OperationalError:
                             self.close()
                             raise
 
