@@ -138,6 +138,12 @@ consumers remain user-owned. Partial foundation setup is left to the wizard.
 An attempted configuration write does not establish ownership. Recovery must
 match the intended simulator identities, source bindings, limits and intent
 before creating dependent automations. Intervening user edits remain untouched.
+EV examples follow the current power link of their Home Assistant Energy meter,
+including an explicitly retained alternative sensor. The simulator continues to
+publish only its own sensors. Before the EV write, the journal records the exact
+intended configuration. Recovery and pending automation creation require both
+that original intent and the current Energy links to match the saved settings.
+Missing original intent never establishes ownership.
 The HA phase rereads current consumer selection, appliance shiftability, EV and
 thermal configuration before constructing pending automations, including while
 waiting for virtual entities. Removed or deselected appliances are skipped. A past

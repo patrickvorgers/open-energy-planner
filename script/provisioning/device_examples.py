@@ -41,7 +41,8 @@ class ExampleJournal:
             else {"version": 1, "completed": [], "appliances": {}}
         )
         if (
-            set(self.state) != {"version", "completed", "appliances"}
+            not {"version", "completed", "appliances"} <= self.state.keys()
+            or not self.state.keys() <= {"version", "completed", "appliances", "ev_configuration"}
             or self.state["version"] != 1
             or not isinstance(self.state["completed"], list)
             or not isinstance(self.state["appliances"], dict)
@@ -186,8 +187,13 @@ def learning_example(entity, powers, now, *, cycles=2):
     }
 
 
-def ev_configuration():
+def ev_configuration(options=None):
     """Configure two explicitly identified cars and shared points, initially retaining disconnection."""
+    power_bindings = (
+        {option["entity_id"]: option.get("power_entity") for option in options}
+        if options is not None
+        else None
+    )
     vehicles, points = [], []
     for suffix, capacity, maximum, departure in (
         ("a", 60, 11000, "07:00"),
@@ -207,7 +213,11 @@ def ev_configuration():
             {
                 "id": identity("wallbox-" + suffix),
                 "energy_entity": f"sensor.oep_test_wallbox_{suffix}_energy",
-                "power_entity": f"sensor.oep_test_wallbox_{suffix}_power",
+                "power_entity": (
+                    power_bindings.get(f"sensor.oep_test_wallbox_{suffix}_energy")
+                    if power_bindings is not None
+                    else f"sensor.oep_test_wallbox_{suffix}_power"
+                ),
                 "connected_entity": f"binary_sensor.oep_test_wallbox_{suffix}_connected",
                 "minimum_w": 1380,
                 "maximum_w": maximum,
@@ -242,13 +252,15 @@ def boiler_configuration():
     }
 
 
-def unchanged_ev_configuration(document):
+def unchanged_ev_configuration(document, intended, options):
     """Recover only the intended simulator bindings/settings, ignoring computed telemetry and names."""
-    for section, intended in ev_configuration().items():
+    if intended is None or intended != ev_configuration(options):
+        return False
+    for section, intended_rows in intended.items():
         saved = document[section]
-        if len(saved) != len(intended):
+        if len(saved) != len(intended_rows):
             return False
-        for expected in intended:
+        for expected in intended_rows:
             actual = next((row for row in saved if row["id"] == expected["id"]), {})
             if any(actual.get(field) != value for field, value in expected.items()):
                 return False
@@ -340,19 +352,6 @@ async def configure(request, journal, now=None):
         "sensor.oep_test_wallbox_b_energy",
         "sensor.oep_test_boiler_energy",
     }
-    choice_sources = {
-        scope: {
-            entity_id
-            for configurations in configuration.values()
-            for device in configurations
-            for field, entity_id in device.items()
-            if field.endswith("_entity")
-        }
-        for scope, configuration in (
-            ("ev", ev_configuration()),
-            ("thermal", boiler_configuration()),
-        )
-    }
     for attempt in range(FIXTURE_READY_ATTEMPTS):
         consumers = await request("GET", "/v1/consumers")
         setup = await request("GET", "/v1/setup")
@@ -368,6 +367,20 @@ async def configure(request, journal, now=None):
             "Development examples require the complete simulated Energy fixture. Missing: "
             + ", ".join(sorted(missing))
         )
+    intended_ev = ev_configuration(consumers["options"])
+    choice_sources = {
+        scope: {
+            entity_id
+            for configurations in configuration.values()
+            for device in configurations
+            for field, entity_id in device.items()
+            if field.endswith("_entity")
+        }
+        for scope, configuration in (
+            ("ev", intended_ev),
+            ("thermal", boiler_configuration()),
+        )
+    }
     for scope, sections in (("ev", ("vehicles", "points")), ("thermal", ("stores",))):
         if scope in completed or "attempted:" + scope in completed:
             continue
@@ -475,16 +488,20 @@ async def configure(request, journal, now=None):
         document = await request("GET", "/v1/ev")
         if not document["vehicles"] and not document["points"] and "attempted:ev" not in completed:
             await ensure_source_choices(request, "ev", choice_sources["ev"])
+            journal.state["ev_configuration"] = intended_ev
+            journal.save()
             await initialize(
                 "ev",
                 "POST",
                 "/v1/ev/configuration",
                 {
-                    "configuration": ev_configuration(),
+                    "configuration": intended_ev,
                     "expected_version": document["configuration_version"],
                 },
             )
-        elif "attempted:ev" in completed and unchanged_ev_configuration(document):
+        elif "attempted:ev" in completed and unchanged_ev_configuration(
+            document, journal.state.get("ev_configuration"), consumers["options"]
+        ):
             journal.complete("owns:ev", "ev")
         journal.complete("ev")
     if "thermal" not in completed:

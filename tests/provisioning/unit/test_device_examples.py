@@ -204,6 +204,75 @@ def provision(boundary, path):
     asyncio.run(examples.configure(boundary.request, examples.ExampleJournal(path), NOW))
 
 
+@pytest.mark.parametrize("lost_response", [False, True])
+def test_existing_energy_power_binding_is_used_and_recovered(tmp_path, lost_response):
+    """A valid retained Energy power source governs choices, the write and recovery ownership."""
+    boundary = ProductBoundary()
+    custom_power = "sensor.retained_wallbox_power"
+    boundary.options[4]["power_entity"] = custom_power
+    boundary.candidates["entities"].append(
+        {"entity_id": custom_power, "unit": "W", "device_class": "power"}
+    )
+    boundary.candidates["entities"] = [
+        row
+        for row in boundary.candidates["entities"]
+        if row["entity_id"] != "sensor.oep_test_wallbox_a_power"
+    ]
+    before = deepcopy(boundary.options)
+    path = tmp_path / "examples.json"
+    if lost_response:
+        boundary.fail_after = "/v1/ev/configuration"
+        with pytest.raises(ConnectionError):
+            provision(boundary, path)
+    provision(boundary, path)
+    assert boundary.ev["points"][0]["power_entity"] == custom_power
+    assert boundary.options == before
+    assert "owns:ev" in examples.ExampleJournal(path).state["completed"]
+    assert (
+        sum(
+            method == "POST" and route == "/v1/ev/configuration"
+            for method, route, _ in boundary.calls
+        )
+        == 1
+    )
+    boundary.calls.clear()
+    provision(boundary, path)
+    assert boundary.calls == []
+
+
+@pytest.mark.parametrize("change", ["settings", "energy_and_settings", "missing_receipt"])
+def test_changed_power_after_ambiguous_write_is_not_claimed(tmp_path, change):
+    """Recovery needs the original intended write, not just a match against today's Energy choices."""
+    boundary = ProductBoundary()
+    path = tmp_path / "examples.json"
+    boundary.fail_after = "/v1/ev/configuration"
+    with pytest.raises(ConnectionError):
+        provision(boundary, path)
+    if change == "missing_receipt":
+        journal = examples.ExampleJournal(path)
+        del journal.state["ev_configuration"]
+        journal.save()
+    else:
+        custom_power = "sensor.user_wallbox_power"
+        boundary.ev["points"][0]["power_entity"] = custom_power
+        boundary.candidates["entities"].append(
+            {"entity_id": custom_power, "unit": "W", "device_class": "power"}
+        )
+        if change == "energy_and_settings":
+            boundary.options[4]["power_entity"] = custom_power
+    before = deepcopy((boundary.ev, boundary.options))
+    provision(boundary, path)
+    assert (boundary.ev, boundary.options) == before
+    assert "owns:ev" not in examples.ExampleJournal(path).state["completed"]
+    assert (
+        sum(
+            method == "POST" and route == "/v1/ev/configuration"
+            for method, route, _ in boundary.calls
+        )
+        == 1
+    )
+
+
 def test_energy_only_active_catalogue_uses_scoped_device_choices(tmp_path, monkeypatch):
     """Unconfigured cars and boiler sources are obtained through choices without enlarging active metadata."""
     boundary = ProductBoundary()

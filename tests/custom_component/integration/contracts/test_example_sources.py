@@ -65,7 +65,8 @@ def test_ev_fixture_fills_only_missing_owned_energy_power_links(existing_power):
     asyncio.run(scenario())
 
 
-def test_example_choices_enable_versioned_saves_without_broadening_active_sources():
+@pytest.mark.parametrize("retained_power", [None, "sensor.retained_wallbox_power"])
+def test_example_choices_enable_versioned_saves_without_broadening_active_sources(retained_power):
     """Energy-linked powers are active while other EV and boiler sources need normal saves."""
 
     async def scenario():
@@ -93,6 +94,38 @@ def test_example_choices_enable_versioned_saves_without_broadening_active_source
                 entry,
                 [{"type": "grid", "stat_energy_from": "sensor.import", "stat_rate": "sensor.grid"}],
             )
+            if retained_power:
+                from homeassistant.components.energy.data import async_get_manager
+                from homeassistant.helpers import entity_registry as er
+
+                registry = er.async_get(hass)
+                registry.async_get_or_create(
+                    "sensor",
+                    "oep_test_fixture",
+                    "retained_wallbox_power",
+                    config_entry=entry,
+                    suggested_object_id="retained_wallbox_power",
+                    original_device_class="power",
+                    unit_of_measurement="W",
+                )
+                hass.states.async_set(
+                    retained_power, "456", {"unit_of_measurement": "W", "device_class": "power"}
+                )
+                meter = registry.async_get_or_create(
+                    "sensor",
+                    "oep_test_fixture",
+                    "ev_wallbox_a_energy",
+                    config_entry=entry,
+                    suggested_object_id="oep_test_wallbox_a_energy",
+                ).entity_id
+                manager = await async_get_manager(hass)
+                await manager.async_update(
+                    {
+                        "device_consumption": [
+                            {"stat_consumption": meter, "stat_rate": retained_power}
+                        ]
+                    }
+                )
             await setup_ev(hass, entry)
             await setup_thermal(hass, entry)
             coordinator = entry.runtime_data
@@ -102,7 +135,7 @@ def test_example_choices_enable_versioned_saves_without_broadening_active_source
                 "ev": {
                     "sensor.oep_test_car_a_soc",
                     "sensor.oep_test_car_b_soc",
-                    "sensor.oep_test_wallbox_a_power",
+                    retained_power or "sensor.oep_test_wallbox_a_power",
                     "sensor.oep_test_wallbox_b_power",
                     "binary_sensor.oep_test_wallbox_a_connected",
                     "binary_sensor.oep_test_wallbox_b_connected",
@@ -124,7 +157,7 @@ def test_example_choices_enable_versioned_saves_without_broadening_active_source
                 before = (await request("GET", "/v1/setup"))["catalogue"]["data"]
                 active_before = {entity["entity_id"] for entity in before["entities"]}
                 energy_powers = {
-                    "sensor.oep_test_wallbox_a_power",
+                    retained_power or "sensor.oep_test_wallbox_a_power",
                     "sensor.oep_test_wallbox_b_power",
                 }
                 assert active_before & set.union(*extra_sources.values()) == energy_powers
@@ -132,7 +165,12 @@ def test_example_choices_enable_versioned_saves_without_broadening_active_source
                     await examples.ensure_source_choices(request, scope, required)
                     assert (await request("GET", "/v1/setup"))["catalogue"]["data"] == before
                 for scope, configuration in (
-                    ("ev", examples.ev_configuration()),
+                    (
+                        "ev",
+                        examples.ev_configuration(
+                            (await request("GET", "/v1/consumers"))["options"]
+                        ),
+                    ),
                     ("thermal", examples.boiler_configuration()),
                 ):
                     current = await request("GET", "/v1/" + scope)
@@ -149,7 +187,16 @@ def test_example_choices_enable_versioned_saves_without_broadening_active_source
                 assert set.union(*extra_sources.values()) <= {
                     entity["entity_id"] for entity in active["entities"]
                 }
-                assert len((await request("GET", "/v1/ev"))["vehicles"]) == 2
+                saved_ev = await request("GET", "/v1/ev")
+                assert len(saved_ev["vehicles"]) == 2
+                assert saved_ev["points"][0]["power_entity"] == (
+                    retained_power or "sensor.oep_test_wallbox_a_power"
+                )
+                if retained_power:
+                    assert "sensor.oep_test_wallbox_a_power" not in {
+                        entity["entity_id"] for entity in active["entities"]
+                    }
+                    assert hass.states.get(retained_power).state == "456"
                 assert len((await request("GET", "/v1/thermal"))["configuration"]["stores"]) == 1
                 for entity in (
                     "sensor.oep_test_wallbox_a_power",

@@ -13,6 +13,39 @@ from script.provisioning import device_examples as examples
 from tests.supervisor.support.examples import HomeAssistantBoundary, run
 
 
+@pytest.mark.parametrize(
+    "change", [None, "settings", "energy_and_settings", "missing_receipt", "removed_energy"]
+)
+def test_retained_power_automation_ownership_requires_original_write(tmp_path, monkeypatch, change):
+    """Retained Energy power is valid, but a later edit or absent origin never authorizes new controls."""
+    journal = examples.ExampleJournal(tmp_path / "examples.json")
+    boundary = HomeAssistantBoundary(journal)
+    custom_power = "sensor.retained_wallbox_power"
+    boundary.ev["points"][0]["power_entity"] = custom_power
+    boundary.options[0]["power_entity"] = custom_power
+    journal.state["ev_configuration"]["points"][0]["power_entity"] = custom_power
+    if change == "missing_receipt":
+        del journal.state["ev_configuration"]
+    elif change == "removed_energy":
+        boundary.options.pop(0)
+    elif change:
+        boundary.ev["points"][0]["power_entity"] = "sensor.user_wallbox_power"
+        if change == "energy_and_settings":
+            boundary.options[0]["power_entity"] = "sensor.user_wallbox_power"
+    journal.save()
+    before = deepcopy((boundary.ev, boundary.options))
+    run(boundary, journal, monkeypatch)
+    assert (boundary.ev, boundary.options) == before
+    assert ("owns:ev" in examples.ExampleJournal(journal.path).state["completed"]) == (
+        change is None
+    )
+    assert ("oep_lab_wallbox_a" in boundary.definitions) == (change is None)
+    assert ("oep_lab_wallbox_b" in boundary.definitions) == (change is None)
+    boundary.calls.clear()
+    run(boundary, journal, monkeypatch)
+    assert boundary.calls == []
+
+
 def test_example_mode_requires_current_product_api_before_ha_changes(tmp_path, monkeypatch):
     """An incomplete helper invocation is rejected before account files or HA requests can be created."""
     monkeypatch.delenv("OEP_DEV_HA_URL", raising=False)
