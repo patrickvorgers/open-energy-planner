@@ -932,8 +932,10 @@ async function showPlan(signal, background = false) {
 /** Page original plan identities without activating them. */
 async function plans(older = false, signal) {
     planRefreshEnabled = true;
+    const selectionGeneration = selectionRequest;
     const linkedPlan = requestedPlan || (selectedLinkedPlan ? $("plan-version").value : null);
     const data = await api(`v1/plans?limit=20${older && cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`, signal);
+    if (selectionGeneration !== selectionRequest) return false;
     if (!older) $("plan-version").replaceChildren();
     for (const plan of data.plans) {
         const option = document.createElement("option"); option.value = plan.plan_id; option.textContent = planName(plan); $("plan-version").append(option);
