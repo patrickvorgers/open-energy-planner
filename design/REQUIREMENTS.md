@@ -572,6 +572,12 @@ The three Planning balance charts show individual expected and scheduled device
 contributions in the bars, with one identity-bound legend entry per device.
 Expected use is striped and scheduled use is solid. Tooltips distinguish both,
 and the device's legend switch toggles both contributions together.
+Omit a device from bars and legend only when combined expected and scheduled
+consumption is strictly below 0.05 kW in every displayed quarter-hour bar.
+Exactly 0.05 kW remains visible. Missing values are not rounded to zero.
+This display rule never changes calculations or archived values. Each scenario
+legend provides a keyboard-accessible Select all / Deselect all button for its
+eligible entries, preserving independent chart selection and rounding exclusions.
 Physical execution still requires readiness
 and permission. See [model selection](../docs/development/MODEL-SELECTION.md) and
 [shiftable appliances](../docs/development/SHIFTABLE-APPLIANCES.md).
