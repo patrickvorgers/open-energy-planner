@@ -129,16 +129,27 @@ def test_device_preparation_does_not_block_authenticated_plan_history(tmp_path, 
 
     entered, release = threading.Event(), threading.Event()
     original_prepare = ApplianceService.prepare
+    loop_thread = threading.get_ident()
 
     def slow_prepare(service, *args, **kwargs):
         """Hold the domain worker long enough to observe a concurrent history request."""
+        assert threading.get_ident() != loop_thread
         entered.set()
         assert release.wait(3)
         return original_prepare(service, *args, **kwargs)
 
     async def scenario():
         """Read an authenticated cheap endpoint before permitting preparation to finish."""
-        async with running_app(tmp_path, FutureSource()) as (session, url):
+        future = FutureSource()
+        original_current = future.current
+
+        def current_basis(*args, **kwargs):
+            """Assert actual HTTP capture and publication revalidation use the source-owning loop."""
+            assert threading.get_ident() == loop_thread
+            return original_current(*args, **kwargs)
+
+        monkeypatch.setattr(future, "current", current_basis)
+        async with running_app(tmp_path, future) as (session, url):
             state = await configure(session, url)
             monkeypatch.setattr(ApplianceService, "prepare", slow_prepare)
             pending = asyncio.create_task(send(session, url, state["measurement_config"]))
@@ -152,6 +163,9 @@ def test_device_preparation_does_not_block_authenticated_plan_history(tmp_path, 
             finally:
                 release.set()
             await pending
+            ready = await wait_ready(session, url)
+            archived = read_plan(tmp_path, ready["plan"]["plan_id"])
+            assert archived["input_snapshot"]["price_version"] == future.future.price_version
 
     asyncio.run(scenario())
 

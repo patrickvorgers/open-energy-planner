@@ -20,8 +20,11 @@ There is no physical-device driver hidden in the HTTP UI. The app's static pages
 ## Keep calculation work outside the interface loop
 
 Live HTTP and background refresh owners await `LiveInputs.refresh_async` or
-`receive_async` while retaining the application state lock. A thread constructs
-the installation basis and appliance, EV and thermal snapshots. Coordinator
+`receive_async` while retaining the application state lock. The event loop first
+captures the coherent nonblocking installation and price basis. Price caches
+publish on that loop outside the application lock, so their values, versions and
+expiry cannot be read across a worker handoff. A thread prepares the appliance,
+EV and thermal snapshots from the captured immutable input. Coordinator
 invalidation, snapshot installation and submission remain on the event loop.
 Cancellation drains the preparation worker before releasing the state lock,
 including repeated cancellation. Installation rechecks measurement and future

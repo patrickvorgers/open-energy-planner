@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -22,6 +23,12 @@ def test_preparation_keeps_loop_free_and_drains_repeated_cancellation_before_unl
         entered, release = threading.Event(), threading.Event()
         loop_thread, installed, invalidated = threading.get_ident(), [], []
         clock = [NOW]
+        price_versions = ["prices-before"]
+
+        def current_basis(*_args, **_kwargs):
+            """Capture one coherent price view on the loop that owns cache publication."""
+            assert threading.get_ident() == loop_thread
+            return replace(basis(), price_version=price_versions[0])
 
         def submit(snapshot):
             """Coordinator submission must never execute on the preparation thread."""
@@ -34,7 +41,7 @@ def test_preparation_keeps_loop_free_and_drains_repeated_cancellation_before_unl
         live = LiveInputs(
             planner,
             repository,
-            SimpleNamespace(current=lambda *args, **kwargs: basis()),
+            SimpleNamespace(current=current_basis),
             clock=lambda: clock[0],
         )
         live.configuration = configuration()
@@ -64,6 +71,7 @@ def test_preparation_keeps_loop_free_and_drains_repeated_cancellation_before_unl
             await asyncio.sleep(0)
             assert lock.locked()
             assert not task.done()
+            price_versions[0] = "prices-after"
             if expire:
                 clock[0] += timedelta(hours=2)
             planner.closed = close
@@ -73,6 +81,8 @@ def test_preparation_keeps_loop_free_and_drains_repeated_cancellation_before_unl
             await task
         assert not lock.locked()
         assert bool(installed) is (not expire and not close)
+        if installed:
+            assert installed[0].price_version == "prices-before"
         assert (live.current_snapshot is None) is (expire or close)
         assert bool(invalidated) is (expire and not close)
 

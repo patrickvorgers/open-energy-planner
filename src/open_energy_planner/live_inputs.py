@@ -124,7 +124,7 @@ class LiveInputs:
         immediately. Ordinary source versions and deviations never bypass the
         five-minute limit. Measurement freshness is validated, not a solve timer.
         """
-        self._install(self._prepare(), force=force)
+        self._install(self._prepare(self._capture()), force=force)
 
     async def refresh_async(self, *, force=False):
         """Prepare off-loop, draining cancellation before releasing the caller-held state lock.
@@ -132,7 +132,8 @@ class LiveInputs:
         Coordinator mutation and submission remain on the event loop. The state
         lock protects the domain services borrowed by the preparation worker.
         """
-        worker = asyncio.create_task(asyncio.to_thread(self._prepare))
+        captured = self._capture()
+        worker = asyncio.create_task(asyncio.to_thread(self._prepare, captured))
         cancellation = None
         while True:
             try:
@@ -147,16 +148,12 @@ class LiveInputs:
         if cancellation is not None:
             raise cancellation
 
-    def _prepare(self):
-        """Build inputs without mutating the event-loop-owned coordinator.
+    def _capture(self):
+        """Capture coherent nonblocking source views before yielding the event loop.
 
-        ``refresh_async`` runs this on a worker. Its caller retains the app state
-        lock because the basis source and appliance preparation borrow mutable
-        domain services, including their readiness issues.
-
-        Returns:
-            An InputsUnavailable value when prerequisites are missing or expired.
-            Otherwise the (now, basis, snapshot) tuple consumed by _install.
+        Price caches publish outside the application state lock. Their versions,
+        values and expiry must therefore be read on their owning loop, before
+        appliance preparation borrows the resulting immutable snapshot.
         """
         now = self.clock()
         try:
@@ -175,10 +172,24 @@ class LiveInputs:
             )
             snapshot = self.assembler.build(self.configuration, self.report, basis, now)
             snapshot = replace(snapshot, strategy=self.requested_strategy())
-            snapshot = self.prepare_snapshot(snapshot, now)
         except InputsUnavailable as error:
             return error
         return now, basis, snapshot
+
+    def _prepare(self, captured):
+        """Prepare appliances on the worker without reading event-loop-owned source caches.
+
+        The async caller retains the application state lock because appliance
+        services can update their readiness issues. Return an InputsUnavailable
+        value on missing prerequisites, otherwise a (now, basis, snapshot) tuple.
+        """
+        if isinstance(captured, InputsUnavailable):
+            return captured
+        now, basis, snapshot = captured
+        try:
+            return now, basis, self.prepare_snapshot(snapshot, now)
+        except InputsUnavailable as error:
+            return error
 
     def _install(self, prepared, *, force):
         """Recheck freshness and install completed preparation on the coordinator's thread."""
