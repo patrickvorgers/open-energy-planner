@@ -19,12 +19,28 @@ from tests.custom_component.support.chain import TOKEN, running_chain
 
 
 @asynccontextmanager
-async def _accepted_metadata():
+async def _accepted_metadata(*, measurement=False):
     """Own real HA watches and an authenticated app with a previously acknowledged catalogue."""
     async with running_chain(live=True) as (hass, entry, url, _root):
         coordinator = entry.runtime_data
         coordinator.poll_cancel()
         coordinator.poll_cancel = None
+        if measurement:
+            hass.states.async_set("sensor.diagnostic_grid", "0", {"unit_of_measurement": "W"})
+            await coordinator.client.request(
+                "PUT",
+                "/v1/sources",
+                {
+                    "bindings": [
+                        {
+                            "key": "grid.power",
+                            "entity_id": "sensor.diagnostic_grid",
+                            "quantity": "power",
+                        }
+                    ],
+                    "expected_revision": None,
+                },
+            )
         await coordinator.sync()
         assert coordinator.catalogue_discovery.healthy
         async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
@@ -93,6 +109,40 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
             monkeypatch.setattr(coordinator.client, "request", original_request)
             await coordinator.sync()
             assert coordinator.issue != "synchronization_failed"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure_path", ["/v1/snapshot", "/v1/observations"])
+def test_http_validation_rejection_does_not_confirm_metadata(monkeypatch, failure_path):
+    """An actual HTTP 400 rejection must not be treated as an unavailable transport."""
+
+    async def scenario():
+        """Use the real report validator and client HTTP exception for either command read boundary."""
+        async with _accepted_metadata(measurement=True) as (_hass, coordinator, status):
+            original = coordinator.client.request
+            rejections, confirmations = [], []
+
+            async def request(method, path, body=None):
+                """Return a genuine app-side HTTP validation rejection with otherwise healthy transport."""
+                if path == failure_path:
+                    try:
+                        return await original("POST", "/v1/observations", {"invalid_report": True})
+                    except ClientResponseError as error:
+                        rejections.append(error.status)
+                        raise
+                if path == "/v1/ha/catalogue":
+                    confirmations.append(body)
+                return await original(method, path, body)
+
+            before = await status()
+            coordinator.catalogue_confirmed_at = dt_util.utcnow() - timedelta(minutes=2)
+            monkeypatch.setattr(coordinator.client, "request", request)
+            await coordinator.sync()
+            assert rejections == [400]
+            assert coordinator.issue == "synchronization_failed"
+            assert confirmations == []
+            assert await status() == before
 
     asyncio.run(scenario())
 

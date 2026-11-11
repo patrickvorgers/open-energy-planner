@@ -5,7 +5,7 @@ import logging
 from dataclasses import replace
 from datetime import timedelta
 
-from aiohttp import ClientError, ServerFingerprintMismatch
+from aiohttp import ClientError, ClientResponseError, ServerFingerprintMismatch
 from homeassistant.components import persistent_notification
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import callback
@@ -290,7 +290,7 @@ class PlanCoordinator:
                 else:
                     try:
                         data = await self.client.snapshot()
-                    except ServerFingerprintMismatch:
+                    except (ClientResponseError, ServerFingerprintMismatch):
                         raise
                     except (ClientError, TimeoutError):
                         await self._confirm_catalogue(dt_util.utcnow())
@@ -325,7 +325,7 @@ class PlanCoordinator:
                         self.refresh()
                     try:
                         data = await self.client.observations(report)
-                    except ServerFingerprintMismatch:
+                    except (ClientResponseError, ServerFingerprintMismatch):
                         raise
                     except (ClientError, TimeoutError):
                         await self._confirm_catalogue(dt_util.utcnow())
