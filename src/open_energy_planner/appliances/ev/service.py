@@ -15,6 +15,10 @@ from open_energy_planner.appliances.ev.model import (
     number,
     refine,
 )
+from open_energy_planner.appliances.ev.notifications import (
+    EXECUTION_DEVIATION_ADVICE,
+    forecast_boundary_issue,
+)
 from open_energy_planner.core.units import FULL_SOC_PERCENT
 from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.home_assistant.names import source_names, vehicle_source_names
@@ -386,6 +390,10 @@ class EVService:
             self.power_deviations.clear()
             return False
         live = {row["id"]: row for row in self.live(now)}
+        captured_at = instant(self.report["at"]) if live else None
+        if captured_at is None or captured_at < instant(active["start"]):
+            self.power_deviations.clear()
+            return False
         retained = {}
         for point in self.state["points"]:
             actual = live.get(point["id"], {})
@@ -402,28 +410,39 @@ class EVService:
                 previous is None
                 or previous["signature"] != signature
                 or abs(power - previous["power_w"]) >= EV_POWER_DEVIATION_W
-                or (now - previous["last_seen"]).total_seconds() >= REPORT_MAX_AGE_SECONDS
+                or (captured_at - previous["last_seen"]).total_seconds() >= REPORT_MAX_AGE_SECONDS
             ):
                 previous = {
                     "signature": signature,
                     "power_w": power,
-                    "since": now,
+                    "since": captured_at,
                     "acknowledged": False,
                 }
-            previous["last_seen"] = now
+            previous["last_seen"] = captured_at
             retained[point["id"]] = previous
         self.power_deviations = retained
         return any(
             not deviation["acknowledged"]
-            and (now - deviation["since"]).total_seconds() >= EV_POWER_DEVIATION_SECONDS
-            for deviation in retained.values()
+            for deviation in self.confirmed_power_deviations(now).values()
         )
+
+    def confirmed_power_deviations(self, now):
+        """Require advancing accepted power captures, not elapsed wall time or SoC sample age."""
+        if not self.live(now):
+            return {}
+        captured_at = instant(self.report["at"])
+        return {
+            point_id: deviation
+            for point_id, deviation in self.power_deviations.items()
+            if deviation["last_seen"] == captured_at
+            and (deviation["last_seen"] - deviation["since"]).total_seconds()
+            >= EV_POWER_DEVIATION_SECONDS
+        }
 
     def accept_execution_deviations(self, now):
         """Coalesce an unchanged deviation after submitting its replacement calculation."""
-        for deviation in self.power_deviations.values():
-            if (now - deviation["since"]).total_seconds() >= EV_POWER_DEVIATION_SECONDS:
-                deviation["acknowledged"] = True
+        for deviation in self.confirmed_power_deviations(now).values():
+            deviation["acknowledged"] = True
 
     def document(self, now, timezone, catalogue=None, plan=None):
         """Expose authoritative configuration, current session issues and explicit predicted shortfall."""
@@ -432,6 +451,7 @@ class EVService:
         live = {row["id"]: row for row in self.live(now)}
         readings = self.vehicle_readings(now)
         works = {work.point_id: work for work in self.work(now, timezone)}
+        confirmed = self.confirmed_power_deviations(now)
         current_revision = self.hard_revision(now, timezone)
         usable = bool(
             plan
@@ -474,14 +494,7 @@ class EVService:
                     "vehicle_id": vehicle_id,
                     "status": status,
                     "execution_issue": (
-                        "Measured charging differs from the plan. Check the vehicle charge limit, "
-                        "charge-point status and Home Assistant charging automation. "
-                        "OEP replans but cannot determine the physical cause."
-                        if point["id"] in self.power_deviations
-                        and actual
-                        and (now - self.power_deviations[point["id"]]["since"]).total_seconds()
-                        >= EV_POWER_DEVIATION_SECONDS
-                        else None
+                        EXECUTION_DEVIATION_ADVICE if point["id"] in confirmed else None
                     ),
                     "schedule": schedules.get(point["id"])
                     if schedules.get(point["id"], {}).get("session_id") == actual.get("session_id")
@@ -492,7 +505,7 @@ class EVService:
             "configuration_version": self.configuration_version,
             "revision": current_revision,
             "observed_at": self.report["at"] if self.report and self.live(now) else None,
-            "issue": self.issue,
+            "issue": forecast_boundary_issue(self.state["points"], names) if self.issue else None,
             "timezone": timezone,
             "vehicles": [
                 {

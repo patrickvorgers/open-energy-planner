@@ -26,6 +26,32 @@ from tests.app.ev.support.devices import (
 from tests.database.support.backends import BACKENDS
 
 
+@pytest.mark.parametrize("consumer", ["detection", "acknowledgement", "projection"])
+def test_retained_power_report_cannot_confirm_a_deviation_by_wall_clock(service, consumer):
+    """One capture at t=0 is still one observation when read at t=60 and t=119."""
+    plan = {
+        "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+        "steps": [
+            {
+                "start": NOW.isoformat(),
+                "end": (NOW + timedelta(hours=1)).isoformat(),
+                "devices": {POINT: {"power_w": 2300}},
+            }
+        ],
+    }
+    service.receive(observations(service), NOW)
+    assert not service.execution_deviated(plan, NOW)
+    for seconds in (60, 119):
+        now = NOW + timedelta(seconds=seconds)
+        if consumer == "detection":
+            assert not service.execution_deviated(plan, now)
+        elif consumer == "acknowledgement":
+            service.accept_execution_deviations(now)
+            assert not service.power_deviations[POINT]["acknowledged"]
+        else:
+            assert service.document(now, "Europe/Amsterdam")["points"][0]["execution_issue"] is None
+
+
 @pytest.mark.parametrize(
     "mode",
     [
@@ -158,7 +184,10 @@ def test_missing_power_and_small_noise_do_not_create_unplanned_charging(service,
         assert not service.execution_deviated(plan, now)
 
 
-def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(service):
+@pytest.mark.parametrize("retained_capture", [False, True])
+def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(
+    service, retained_capture
+):
     """A 2.3-kW unexpected charge hidden at the grid causes one early round, then normal quarters."""
     from open_energy_planner.installation.model import InstallationProblem
     from open_energy_planner.live_inputs import LiveInputs
@@ -190,9 +219,16 @@ def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(servi
         clock[0] = NOW + timedelta(seconds=seconds)
         body = observations(service, clock[0])
         body["points"][0]["power_w"] = 2300
-        service.receive(body, clock[0])
+        if not retained_capture or seconds == 0:
+            service.receive(body, clock[0])
         live._install((clock[0], future, snapshot), force=False)
-        assert len(submitted) == (1 if seconds < 300 else 2 if seconds < 900 else 3)
+        if retained_capture:
+            assert len(submitted) == (1 if seconds < 900 else 2)
+            if seconds == 0:
+                # Allow an early round immediately. Only new power evidence may request it.
+                live.last_submission = NOW - timedelta(minutes=5)
+        else:
+            assert len(submitted) == (1 if seconds < 300 else 2 if seconds < 900 else 3)
 
 
 @pytest.mark.parametrize(

@@ -149,7 +149,9 @@ and consumption forecast readiness when the separation notice appears.
 
 A measured charge-point power difference of at least 500 W lasting one minute
 requests a replacement plan, subject to the normal five-minute limit between
-early planning requests. This detects unexpected charging and charging that
+early planning requests. OEP requires new measurement reports spanning that
+minute. Re-reading an unchanged retained report does not prove that the
+deviation continued. This detects unexpected charging and charging that
 fails to start even when solar or the home battery masks the grid difference.
 Missing power readings do not mean zero consumption. An unchanged deviation
 requests one early round rather than a repeated retry. Normal quarter-hour

@@ -28,6 +28,50 @@ from tests.ha_contract.test_observation_inputs import (
 TOKEN = "local-test-only-0123456789abcdef"
 
 
+def test_ev_forecast_blocker_logs_no_source_identity_but_keeps_authenticated_context(
+    tmp_path, monkeypatch, caplog
+):
+    """Exercise the app explanation through the real coordinator logging boundary."""
+    from open_energy_planner.appliances.ev.service import EVService
+    from open_energy_planner.planning import PlanningCoordinator
+    from tests.app.ev.support.devices import NOW, settings
+
+    captured = {}
+    original_ev_init = EVService.__init__
+    original_planner_init = PlanningCoordinator.__init__
+
+    def capture_ev(service, *arguments, **keywords):
+        """Retain the composed service without replacing any production behavior."""
+        original_ev_init(service, *arguments, **keywords)
+        captured["ev"] = service
+
+    def capture_planner(planner, *arguments, **keywords):
+        """Retain the real coordinator and its app-owned explanation callback."""
+        original_planner_init(planner, *arguments, **keywords)
+        captured["planner"] = planner
+
+    monkeypatch.setattr(EVService, "__init__", capture_ev)
+    monkeypatch.setattr(PlanningCoordinator, "__init__", capture_planner)
+
+    async def scenario():
+        """Use normal startup and cleanup while injecting only synthetic private-value sentinels."""
+        async with running_app(tmp_path, FutureSource()):
+            ev = captured["ev"]
+            ev.state = {**settings(), "assignments": {}}
+            ev.state["points"][0]["energy_entity"] = "sensor.private_ev_meter_sentinel"
+            ev.issue = "Charger component forecast unavailable. EV history cannot be removed safely"
+            with caplog.at_level(logging.INFO, logger="open_energy_planner.planning"):
+                captured["planner"].invalidate("ev_forecast_boundary_unavailable")
+            assert "Planning blocked: ev_forecast_boundary_unavailable" in caplog.text
+            assert "private_ev_meter_sentinel" not in caplog.text
+            assert "sensor.charger_power" not in caplog.text
+            assert (
+                "sensor.private_ev_meter_sentinel" in ev.document(NOW, "Europe/Amsterdam")["issue"]
+            )
+
+    asyncio.run(scenario())
+
+
 class FutureSource:
     """Explicit test forecast/price provider, never a production fallback."""
 

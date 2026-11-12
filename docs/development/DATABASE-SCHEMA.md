@@ -729,6 +729,9 @@ Sustained execution-power deviation episodes and their acknowledged-replan state
 are process-local. They add no database fields and never restore physical
 charging authority after restart. The EV status API projects `execution_issue`
 as current recovery advice, not as a persisted finding or proof of physical cause.
+Confirmation spans advancing accepted EV report capture timestamps rather than
+the wall time of repeated reads. The generic planning notice is fixed and log-safe.
+Configured names and meter identities appear only in authenticated EV recovery views.
 
 ## Price forecast selection
 

@@ -190,13 +190,18 @@ SoC availability, target completion and control capability. Only eligible live
 inferred future arrival. Original component forecasts and actual meter histories
 remain immutable evidence. The existing separation proof is still required.
 `LiveInputs` blocks publication with `ev_forecast_boundary_unavailable` when
-the EV service cannot establish the forecast boundary. The recovery notice names
-the configured meters. Thermal fallback may retain a boiler forecast but cannot
+the EV service cannot establish the forecast boundary. The fixed log-safe recovery
+notice links to the authenticated EV page, which names the configured meters.
+The EV domain owns both projections. Thermal fallback may retain a boiler forecast but cannot
 silently restore an EV forecast.
 
 `EVService.execution_deviated` compares fresh point power with the active
 published command, including zero when no EV command exists. A difference of at
-least 500 W must persist for 60 seconds. Missing readings reset the episode
+least 500 W must span at least 60 seconds of advancing, chronologically accepted
+EV report capture timestamps. Re-reading one retained report as wall time passes
+does not confirm a deviation, acknowledge it or display execution advice. The
+confirmation uses power report capture time, never the SoC sensor's last change.
+Missing readings reset the episode
 rather than proving a stopped charge. Session or requested-power changes and a
 material measured-power change restart confirmation. The existing five-minute
 early-round throttle remains authoritative. Submission acknowledges mature

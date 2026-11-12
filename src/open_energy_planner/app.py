@@ -262,25 +262,14 @@ def create_app(
 
     def explain_live_problem(reason, _detail=None):
         """Keep source-specific actionable context in both planning notices and transition logs."""
-        if reason == "ev_forecast_boundary_unavailable":
-            from .notifications.model import NoticeText
-
-            meters = ", ".join(point["energy_entity"] for point in ev.state["points"])
-            return NoticeText(
-                "Charge-point consumption cannot be separated",
-                f"Planning is paused because the historical charging component for {meters} "
-                "cannot be removed from the household forecast. Check the charge-point Energy "
-                "meter links and consumption forecast readiness. Planning resumes when complete "
-                "component evidence is available. No historical EV fallback is used.",
-                "Check EV charging",
-                "/ev",
-                "warning",
-            )
+        from .appliances.ev.notifications import explain_problem as explain_ev_problem
         from .home_assistant.notifications import explain_live_problem as explain_measurements
 
-        return explain_measurements(
-            live, reason, setup_catalogue.value
-        ) or explain_planning_problem(reason)
+        return (
+            explain_ev_problem(reason)
+            or explain_measurements(live, reason, setup_catalogue.value)
+            or explain_planning_problem(reason)
+        )
 
     from .optimization.performance import register as register_performance
 
