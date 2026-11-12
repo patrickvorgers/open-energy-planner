@@ -38,6 +38,18 @@ def definition(battery):
     ]
 
 
+def available_charge_w(settings, battery, converter):
+    """Bound deadline preparation by terminal, converter and shared connection power in watts."""
+    return min(
+        battery.charge_limit_w,
+        converter.ac_limit_w * converter.efficiency * battery.dc_efficiency,
+        settings.import_limit_w
+        * converter.efficiency
+        * battery.dc_efficiency
+        / max(1, len(settings.batteries)),
+    )
+
+
 class BatteryCalibration:
     """Own one bounded active-database ledger, with durable transitions and minute checkpoints.
 
@@ -88,9 +100,14 @@ class BatteryCalibration:
                     ):
                         raise ValueError("Invalid calibration policy")
                     enabled = instant(row["enabled_at"])
+                    enabled + timedelta(days=policy[4])
                     for key in ("completed_at", "hold_started_at", "observed_at"):
                         if row[key] is not None and instant(row[key]) < enabled:
                             raise ValueError("Calibration evidence precedes enabling")
+                    if row["completed_at"] is not None:
+                        instant(row["completed_at"]) + timedelta(days=policy[4])
+                    if row["hold_started_at"] is not None:
+                        instant(row["hold_started_at"]) + timedelta(hours=policy[5])
                     if any(
                         row[key] is not None
                         and (
@@ -102,7 +119,7 @@ class BatteryCalibration:
                         raise ValueError("Calibration evidence exceeds its observation")
                 self.state = rows
                 self.persisted = deepcopy(rows)
-        except (ValueError, TypeError, KeyError, AttributeError, OSError):
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError, OSError):
             self.issue = "battery_calibration_unreadable"
 
     def configured(self, settings, now):
@@ -154,6 +171,10 @@ class BatteryCalibration:
         if self.issue or battery.device_id not in self.state:
             raise ValueError("Battery calibration progress unavailable")
         row = self.state[battery.device_id]
+        if row["hold_started_at"]:
+            return False, instant(row["hold_started_at"]) + timedelta(
+                hours=battery.calibration_hold_hours
+            )
         # Round up to a whole hour so small fluctuations cannot postpone a started charge.
         charge_hours = ceil(
             battery.capacity_kwh
@@ -166,10 +187,6 @@ class BatteryCalibration:
         )
         if now < start:
             return False, None
-        if row["hold_started_at"]:
-            return False, instant(row["hold_started_at"]) + timedelta(
-                hours=battery.calibration_hold_hours
-            )
         return True, None
 
     def observe(self, settings, report):
@@ -185,6 +202,7 @@ class BatteryCalibration:
             raise OSError("Battery calibration progress unavailable")
         rows = self.configured(settings, report.captured_at)
         readings = {reading.key: reading for reading in report.readings}
+        converters = {converter.inverter_id: converter for converter in settings.inverters}
         force = rows != self.state
         for battery in settings.batteries:
             if not battery.calibration_enabled:
@@ -218,7 +236,16 @@ class BatteryCalibration:
                 or soc.value < CALIBRATION_MINIMUM_HOLD_SOC
             ):
                 row["hold_started_at"] = None
-            if valid and power.value <= 0 and soc.value >= FULL_SOC_PERCENT:
+            start_allowed = (
+                row["completed_at"] is None
+                or old_hold is not None
+                or self.directive(
+                    battery,
+                    report.captured_at,
+                    available_charge_w(settings, battery, converters[battery.inverter_id]),
+                )[0]
+            )
+            if valid and power.value <= 0 and soc.value >= FULL_SOC_PERCENT and start_allowed:
                 row["hold_started_at"] = row["hold_started_at"] or report.captured_at.isoformat()
             if row["hold_started_at"] and report.captured_at >= instant(
                 row["hold_started_at"]

@@ -133,6 +133,7 @@ class BusBattery:
         battery, variables = self.unit.battery, binding.variables
         add_constraint = context.native.addConstr
         clipping = context.binding("inv:" + self.unit.inverter_id).variables["clip"]
+        requested_powers = {}
         for interval_index, step in enumerate(context.intervals):
             if self.unit.calibration_charge or self.unit.calibration_hold_until is not None:
                 add_constraint(variables["discharge"][interval_index] == 0)
@@ -191,6 +192,7 @@ class BusBattery:
                 type=highspy.HighsVarType.kInteger,
                 name=f"power:{self.unit.device_id}[{interval_index}]",
             )
+            requested_powers[interval_index] = power
             average = (
                 (variables["discharge"][interval_index] - variables["charge"][interval_index])
                 * WATTS_PER_KW
@@ -205,11 +207,14 @@ class BusBattery:
             else:
                 add_constraint(power == average)
             if first != interval_index:
-                for name in ("charge", "discharge"):
-                    add_constraint(
-                        variables[name][interval_index] * context.intervals[first].duration_h
-                        == variables[name][first] * duration_hours
-                    )
+                if self.unit.calibration_charge:
+                    add_constraint(power == requested_powers[first])
+                else:
+                    for name in ("charge", "discharge"):
+                        add_constraint(
+                            variables[name][interval_index] * context.intervals[first].duration_h
+                            == variables[name][first] * duration_hours
+                        )
 
 
 @dataclass(frozen=True)

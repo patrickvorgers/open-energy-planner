@@ -12,6 +12,7 @@ from ..demand.basis import DemandEvidence
 from ..demand.basis import forecast_usable as demand_forecast_usable
 from ..optimization.domain import Interval
 from ..solar.basis import SolarEvidence, forecast_usable
+from .calibration import available_charge_w
 from .model import BatteryState, InstallationProblem, PVUnit
 
 COVERAGE_TOLERANCE_HOURS = 1e-08
@@ -118,14 +119,7 @@ class InstallationBasisSource:
                 self.store.calibration.directive(
                     battery,
                     now,
-                    min(
-                        battery.charge_limit_w,
-                        converter.ac_limit_w * converter.efficiency * battery.dc_efficiency,
-                        settings.import_limit_w
-                        * converter.efficiency
-                        * battery.dc_efficiency
-                        / max(1, len(settings.batteries)),
-                    ),
+                    available_charge_w(settings, battery, converter),
                 )
                 if battery.calibration_enabled
                 else (False, None)

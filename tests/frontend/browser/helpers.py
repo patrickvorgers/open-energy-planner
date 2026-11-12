@@ -71,6 +71,7 @@ def discover(
     devices=False,
     country="NL",
     timezone="Europe/Amsterdam",
+    publish=True,
 ):
     """Push normalized HA metadata to the actual app. Incompatible sensors must never enter dropdowns."""
     entities = []
@@ -168,10 +169,11 @@ def discover(
         {"entity_id": entity, "providers": [], "issue": "solar_configuration_not_available"}
         for entity in body["suggestions"]["solar_sources"]
     ]
-    response = page.request.post(
-        url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
-    )
-    assert response.ok
+    if publish:
+        response = page.request.post(
+            url + "/v1/ha/catalogue", headers={"Authorization": f"Bearer {TOKEN}"}, data=body
+        )
+        assert response.ok
     return body
 
 

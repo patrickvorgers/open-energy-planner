@@ -1049,7 +1049,8 @@ def create_app(
                         battery.calibration_enabled for battery in installation.current.batteries
                     ):
                         previous_progress = installation.calibration.command_revision
-                        cancellation = await complete_write(installation.observe, report)
+                        if installation.calibration.issue is None:
+                            cancellation = await complete_write(installation.observe, report)
                         if installation.calibration.command_revision != previous_progress:
                             live.invalidate("battery_calibration_changed")
                             live.last_submission = None

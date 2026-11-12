@@ -143,7 +143,7 @@ class InstallationStore:
             else:
                 self.documents.write(target, body)
             self.documents.write("current.json", settings.version)
-            if progress != self.calibration.state or self.calibration.issue:
+            if progress != self.calibration.persisted or self.calibration.issue:
                 self.calibration.write(progress)
 
         self.current, self.issue = settings, None

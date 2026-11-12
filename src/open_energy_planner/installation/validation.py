@@ -80,6 +80,7 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
         settle(export_bonus, tuple(flow_item.grid_export for flow_item in plan.flows))
         for export_bonus in problem.export_bonuses
     )
+    calibration_commands = {}
     for interval_index, (step, flow) in enumerate(zip(problem.intervals, plan.flows, strict=True)):
         duration_hours = step.duration_h
         battery_flows = {battery_entry.device_id: battery_entry for battery_entry in flow.batteries}
@@ -188,6 +189,9 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
                 ),
                 "Stored energy conservation",
             )
+            remaining_charge = (
+                battery.capacity_kwh - previous[unit.device_id]
+            ) / battery.charge_efficiency
             previous[unit.device_id] = battery_flow.end_kwh
             power = (
                 (battery_flow.discharge_kwh - battery_flow.charge_kwh)
@@ -204,6 +208,19 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
                 )
             else:
                 require(abs(power - round(power)) <= WHOLE_WATT_TOLERANCE, "Whole-watt command")
+            if unit.calibration_charge:
+                group_key = (step.control_group or interval_index, unit.device_id)
+                power = calibration_commands.setdefault(group_key, round(power))
+                require(
+                    -battery.charge_limit_w <= power <= 0, "Whole-watt calibration charge limit"
+                )
+                require(
+                    close(
+                        battery_flow.charge_kwh,
+                        min(-power * duration_hours / WATTS_PER_KW, remaining_charge),
+                    ),
+                    "Calibration charge must follow its whole-watt request until full",
+                )
             commands.append((unit.device_id, round(power)))
             wear += (
                 battery.wear_cost_per_kwh

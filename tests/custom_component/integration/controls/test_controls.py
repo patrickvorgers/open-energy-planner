@@ -600,16 +600,19 @@ def test_actual_ha_reconciles_per_device_capabilities_and_expires_targets():
             assert hass.states.get(reserve_id).state == "recovery_required"
             assert registry.async_get(reserve_id).translation_key == "reserve_status"
             assert hass.states.get(recovery_id).state == "yes"
-            for key, expected, unit in (
+            for setting_key, expected_state, measurement_unit in (
                 ("calibration_enabled", "yes", None),
                 ("calibration_interval_days", "14", "d"),
                 ("calibration_hold_hours", "3", "h"),
             ):
                 entity_id = registry.async_get_entity_id(
-                    "sensor", DOMAIN, f"{entry.entry_id}_unit_store_a_config_{key}"
+                    "sensor", DOMAIN, f"{entry.entry_id}_unit_store_a_config_{setting_key}"
                 )
-                assert hass.states.get(entity_id).state == expected
-                assert hass.states.get(entity_id).attributes.get("unit_of_measurement") == unit
+                assert hass.states.get(entity_id).state == expected_state
+                assert (
+                    hass.states.get(entity_id).attributes.get("unit_of_measurement")
+                    == measurement_unit
+                )
             assert hass.states.get(battery_id).state == "-500"
             assert hass.states.get(solar_id).state == "off"
             coordinator.refresh(now + timedelta(hours=2))

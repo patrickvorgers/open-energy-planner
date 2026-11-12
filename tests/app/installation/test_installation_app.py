@@ -96,6 +96,76 @@ async def observe(session, url, configuration, *, unavailable=None):
         return await response.json()
 
 
+def test_unreadable_calibration_accepts_first_live_capture_and_keeps_recovery_visible(tmp_path):
+    """A restored corrupt ledger blocks calibration, not authenticated measurements, and is never silently reset."""
+    from open_energy_planner.installation.storage import InstallationStore, sources
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+    physical = installation(1)
+    physical["batteries"][0]["calibration_enabled"] = True
+    settings = parse_installation(physical)
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        documents = SqlDocuments(repository.engine, "installation")
+        InstallationStore(documents).save(settings)
+        documents.write("battery-calibration.json", {"schema": 1, "batteries": {}})
+
+    async def scenario():
+        """Submit real HTTP captures and verify the existing unavailable state remains visible."""
+        from aiohttp.test_utils import TestServer
+
+        async with (
+            TestServer(create_app(tmp_path, TOKEN, source="home_assistant")) as server,
+            ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session,
+        ):
+            configuration = asdict(sources(settings))
+            await observe(session, str(server.make_url("")).rstrip("/"), configuration)
+            await observe(session, str(server.make_url("")).rstrip("/"), configuration)
+            async with session.get(server.make_url("/v1/installation")) as response:
+                assert response.status == 200
+                assert (await response.json())["devices"][0]["calibration"] == {
+                    "status": "unavailable"
+                }
+        with closing(SqlPlanRepository(tmp_path)) as repository:
+            restored = InstallationStore(SqlDocuments(repository.engine, "installation"))
+            assert restored.calibration.issue == "battery_calibration_unreadable"
+            assert restored.calibration.state == {}
+
+    asyncio.run(scenario())
+
+
+def test_healthy_calibration_write_failure_still_rejects_capture(tmp_path, monkeypatch):
+    """A genuine observation persistence failure must not be mistaken for a known unreadable-ledger recovery state."""
+    from open_energy_planner.installation.storage import InstallationStore, sources
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+    physical = installation(1)
+    physical["batteries"][0]["calibration_enabled"] = True
+    settings = parse_installation(physical)
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        InstallationStore(SqlDocuments(repository.engine, "installation")).save(settings)
+
+    def refuse_observation(self, report):
+        """Fail the healthy ledger writer without changing its explicit recovery status."""
+        raise OSError("Synthetic observation write failure")
+
+    monkeypatch.setattr(InstallationStore, "observe", refuse_observation)
+
+    async def scenario():
+        """Require the real authenticated route to retain the storage failure rather than report success."""
+        from aiohttp.test_utils import TestServer
+
+        async with (
+            TestServer(create_app(tmp_path, TOKEN, source="home_assistant")) as server,
+            ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session,
+        ):
+            with pytest.raises(AssertionError, match="500"):
+                await observe(
+                    session, str(server.make_url("")).rstrip("/"), asdict(sources(settings))
+                )
+
+    asyncio.run(scenario())
+
+
 def test_calibration_observation_completes_off_loop_without_forecasts(tmp_path, monkeypatch):
     """Authenticated captures advance durable calibration independently of missing forecasts and reject replay."""
     import threading

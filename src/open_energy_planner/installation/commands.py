@@ -80,6 +80,7 @@ def plan_document(snapshot, result, costs, now):
         group_followers.setdefault(group, eligible).intersection_update(eligible)
         stored.update({battery.device_id: battery.end_kwh for battery in flow.batteries})
     previous_group = None
+    calibration_commands = {}
     for interval_index, (interval, flow) in enumerate(
         zip(problem.intervals, result.plan.flows, strict=True)
     ):
@@ -97,6 +98,10 @@ def plan_document(snapshot, result, costs, now):
                 power = -ceil(max(0, -power) - WHOLE_WATT_TOLERANCE)
             if abs(power - round(power)) > WHOLE_WATT_TOLERANCE:
                 raise ValueError("Fractional device command")
+            if unit.calibration_charge:
+                power = calibration_commands.setdefault(
+                    (interval.control_group or interval_index, battery.device_id), round(power)
+                )
             following = battery.device_id in followers
             commands[battery.device_id] = {
                 "kind": "battery",

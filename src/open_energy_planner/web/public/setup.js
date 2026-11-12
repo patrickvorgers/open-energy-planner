@@ -520,7 +520,7 @@ function addBattery(old = {}) {
         status.className = "installation-note calibration-status";
         status.setAttribute("role", "status");
         status.textContent = progress.status === "unavailable" ? "Calibration: Progress unavailable. Check the active database before continuing."
-            : progress.status === "overdue" ? `Calibration: Overdue since ${when(progress.due_at)}. Charging or valid measurements are still required.`
+            : progress.status === "overdue" ? `Calibration: Overdue since ${when(progress.due_at)}. ${progress.hold_until ? `Holding until ${when(progress.hold_until)}. ` : ""}Charging or valid measurements are still required.`
             : progress.hold_until ? `Calibration: Holding until ${when(progress.hold_until)}.`
             : `Calibration: Next deadline ${when(progress.due_at)}. ${progress.completed_at ? `Last completed ${when(progress.completed_at)}.` : "No completed calibration recorded yet."}`;
         node.append(status);

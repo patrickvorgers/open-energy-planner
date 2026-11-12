@@ -26,12 +26,12 @@ from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
 NOW = datetime(2026, 11, 1, tzinfo=UTC)
 
 
-def problem(*, mandatory=False, count=2, grid=4000):
+def problem(*, mandatory=False, interval_count=2, grid_import_limit_w=4000):
     """Specify lossless quarters independently: 4 kW stores 1 kWh in each quarter."""
     return InstallationProblem(
         tuple(
             Interval(NOW + timedelta(minutes=15 * index), 0.25, 10 if index == 0 else 0, 0)
-            for index in range(count)
+            for index in range(interval_count)
         ),
         (SolarInverter("inv", 4000, 1),),
         (
@@ -42,7 +42,7 @@ def problem(*, mandatory=False, count=2, grid=4000):
             ),
         ),
         (),
-        grid,
+        grid_import_limit_w,
         4000,
     )
 
@@ -153,6 +153,55 @@ def test_selected_interval_sets_the_actual_deadline(tracker, interval_days):
     assert tracker.directive(battery, NOW + timedelta(days=interval_days), 4000) == (True, None)
 
 
+@pytest.mark.parametrize("timestamp_key", ["enabled_at", "completed_at", "hold_started_at"])
+def test_unrepresentable_ledger_deadline_is_unreadable(tracker, timestamp_key):
+    """Restoration rejects overflowing schedule and hold deadlines before any UI or planner read."""
+    _settings, battery = configured(tracker)
+    rows = tracker.configured(_settings, NOW)
+    rows["battery"][timestamp_key] = "9999-12-31T23:59:59+00:00"
+    if timestamp_key != "enabled_at":
+        rows["battery"]["observed_at"] = rows["battery"][timestamp_key]
+    tracker.write(rows)
+    restored = BatteryCalibration(tracker.documents)
+    assert restored.issue == "battery_calibration_unreadable"
+    assert restored.document(battery, NOW) == {"status": "unavailable"}
+
+
+@pytest.mark.planner_scenario
+def test_natural_full_charge_enforces_hold_before_charging_window(tracker):
+    """A natural full capture prevents costly discharge immediately, thirteen days before scheduled charging."""
+    from open_energy_planner.installation.commands import plan_document
+    from open_energy_planner.synthetic import capture
+
+    settings, battery = configured(tracker)
+    tracker.observe(settings, observation(NOW))
+    charge, hold_until = tracker.directive(battery, NOW, 4000)
+    original = problem(interval_count=2)
+    unit = replace(
+        original.batteries[0],
+        battery=replace(original.batteries[0].battery, initial_kwh=2),
+        can_follow_grid=True,
+        calibration_charge=charge,
+        calibration_hold_until=hold_until,
+    )
+    inputs = replace(
+        original,
+        batteries=(unit,),
+        intervals=tuple(replace(step, load_kwh=0.5, buy_price=10) for step in original.intervals),
+    )
+    result = HighsSolver().solve(inputs)
+    assert result.status == Status.OPTIMAL, result
+    validate(inputs, result.plan)
+    assert all(flow.batteries[0].discharge_kwh == 0 for flow in result.plan.flows)
+    published = plan_document(
+        replace(capture(now=NOW), problem=inputs), result, result.plan.costs, NOW
+    )
+    assert all(
+        step["devices"]["battery"] == {"kind": "battery", "mode": "fixed_power", "power_w": 0}
+        for step in published["steps"]
+    )
+
+
 @pytest.mark.planner_scenario
 @pytest.mark.parametrize("enabled", [False, True])
 def test_calibration_is_only_planned_when_enabled(tracker, enabled):
@@ -160,7 +209,7 @@ def test_calibration_is_only_planned_when_enabled(tracker, enabled):
     _settings, battery = configured(tracker, calibration_interval_days=180)
     selected = replace(battery, calibration_enabled=enabled)
     charge, hold_until = tracker.directive(selected, NOW + timedelta(days=181), 4000)
-    original = problem(count=4)
+    original = problem(interval_count=4)
     inputs = replace(
         original,
         batteries=(
@@ -186,6 +235,46 @@ def test_measured_hold_accepts_absorption_and_advances_deadline(tracker):
     assert tracker.state["battery"]["hold_started_at"] is None
     restored = BatteryCalibration(tracker.documents)
     assert restored.state == tracker.state
+
+
+@pytest.mark.planner_scenario
+def test_completed_hold_does_not_restart_until_next_calibration_cycle(tracker):
+    """Remaining at 100% after a measured hold releases dispatch until the next charging window, which can start another hold."""
+    settings, battery = configured(tracker)
+    continuous_hold(tracker, settings, NOW, soc=100)
+    completed = NOW + timedelta(hours=3)
+    for seconds in (15, 30, 60):
+        tracker.observe(settings, observation(completed + timedelta(seconds=seconds)))
+        assert tracker.state["battery"]["hold_started_at"] is None
+        assert tracker.state["battery"]["completed_at"] == completed.isoformat()
+    tracker = BatteryCalibration(tracker.documents)
+    charge, hold_until = tracker.directive(battery, completed + timedelta(minutes=1), 4000)
+    original = problem(interval_count=2)
+    inputs = replace(
+        original,
+        batteries=(
+            replace(
+                original.batteries[0],
+                battery=replace(original.batteries[0].battery, initial_kwh=2),
+                calibration_charge=charge,
+                calibration_hold_until=hold_until,
+            ),
+        ),
+        intervals=tuple(replace(step, load_kwh=0.5, buy_price=10) for step in original.intervals),
+    )
+    result = HighsSolver().solve(inputs)
+    assert result.status == Status.OPTIMAL, result
+    validate(inputs, result.plan)
+    assert sum(flow.batteries[0].discharge_kwh for flow in result.plan.flows) == pytest.approx(1)
+    next_due = completed + timedelta(days=14)
+    tracker.observe(settings, observation(next_due - timedelta(hours=4)))
+    assert (
+        tracker.state["battery"]["hold_started_at"] == (next_due - timedelta(hours=4)).isoformat()
+    )
+    assert tracker.directive(battery, next_due - timedelta(hours=4), 4000) == (
+        False,
+        next_due - timedelta(hours=1),
+    )
 
 
 @pytest.mark.parametrize(
@@ -244,7 +333,7 @@ def test_unrelated_setting_preserves_progress_and_disable_clears_it(tracker):
 @pytest.mark.planner_scenario
 def test_calibration_charge_precedes_prices_and_never_discharges():
     """Even with expensive first-quarter import, calibration fills 2 kWh at 4 kW before money, without discharging."""
-    original = problem(mandatory=False, count=4)
+    original = problem(mandatory=False, interval_count=4)
     inputs = replace(original, batteries=(replace(original.batteries[0], calibration_charge=True),))
     result = HighsSolver().solve(inputs)
     assert result.status == Status.OPTIMAL, result
@@ -257,7 +346,7 @@ def test_calibration_charge_precedes_prices_and_never_discharges():
 @pytest.mark.planner_scenario
 def test_hold_waits_for_measured_completion_before_releasing():
     """An elapsed predicted deadline cannot release discharge. A new cleared measured state can."""
-    original = problem(mandatory=False, count=4)
+    original = problem(mandatory=False, interval_count=4)
     start = original.intervals[0].start
     unit = replace(
         original.batteries[0],
@@ -285,15 +374,32 @@ def test_hold_waits_for_measured_completion_before_releasing():
 
 
 @pytest.mark.planner_scenario
-def test_fractional_last_charge_reaches_capacity_with_bounded_whole_watt_request():
-    """A 1.9999 kWh battery accepts 0.0001 kWh, while a 1 W request stops at its real 2 kWh capacity."""
+@pytest.mark.parametrize("split", [False, True])
+@pytest.mark.parametrize("initial_kwh", [1.9999, 1.9998])
+def test_fractional_last_charge_reaches_capacity_with_bounded_whole_watt_request(
+    split, initial_kwh
+):
+    """At a 1 W limit, a 0.0001 kWh deficit fills in the first half and 0.0002 kWh in the second, without changing requests."""
     from open_energy_planner.installation.commands import plan_document
     from open_energy_planner.synthetic import capture
 
-    original = problem(count=1)
+    original = problem(interval_count=1)
+    if split:
+        original = replace(
+            original,
+            intervals=tuple(
+                replace(
+                    original.intervals[0],
+                    start=NOW + timedelta(minutes=7.5 * index),
+                    duration_h=0.125,
+                    control_group="quarter",
+                )
+                for index in range(2)
+            ),
+        )
     unit = replace(
         original.batteries[0],
-        battery=replace(original.batteries[0].battery, initial_kwh=1.9999),
+        battery=replace(original.batteries[0].battery, initial_kwh=initial_kwh, charge_limit_w=1),
         calibration_charge=True,
     )
     inputs = replace(original, batteries=(unit,))
@@ -301,13 +407,39 @@ def test_fractional_last_charge_reaches_capacity_with_bounded_whole_watt_request
     assert result.status == Status.OPTIMAL, result
     validate(inputs, result.plan)
     actual = result.plan.flows[0].batteries[0]
-    assert actual.charge_kwh == pytest.approx(0.0001)
-    assert actual.end_kwh == pytest.approx(2)
+    deficit_kwh = 2 - initial_kwh
+    assert actual.charge_kwh == pytest.approx(min(deficit_kwh, 0.000125) if split else deficit_kwh)
+    assert result.plan.flows[-1].batteries[0].end_kwh == pytest.approx(2)
+    assert sum(flow.batteries[0].charge_kwh for flow in result.plan.flows) == pytest.approx(
+        deficit_kwh
+    )
     snapshot = replace(capture(now=NOW), problem=inputs)
-    command = plan_document(snapshot, result, result.plan.costs, NOW)["steps"][0]["devices"][
-        "battery"
-    ]
+    steps = plan_document(snapshot, result, result.plan.costs, NOW)["steps"]
+    assert len(steps) == 1
+    assert steps[0]["end"] == (NOW + timedelta(minutes=15)).isoformat()
+    command = steps[0]["devices"]["battery"]
     assert command == {"kind": "battery", "mode": "fixed_power", "power_w": -1}
+
+
+@pytest.mark.planner_scenario
+def test_capacity_clipping_cannot_mask_a_request_above_terminal_limit():
+    """A 0.4 W accepted mean at full still requires 1 W, which independent validation rejects against a 0.5 W limit."""
+    original = problem(interval_count=1)
+    unit = replace(
+        original.batteries[0],
+        calibration_charge=True,
+        battery=replace(original.batteries[0].battery, initial_kwh=1.9999, charge_limit_w=1),
+    )
+    inputs = replace(original, batteries=(unit,))
+    result = HighsSolver().solve(inputs)
+    assert result.status == Status.OPTIMAL, result
+    validate(inputs, result.plan)
+    assert result.plan.flows[0].batteries[0].charge_kwh == pytest.approx(0.0001)
+    limited = replace(
+        inputs, batteries=(replace(unit, battery=replace(unit.battery, charge_limit_w=0.5)),)
+    )
+    with pytest.raises(ValueError, match="Whole-watt calibration charge limit"):
+        validate(limited, result.plan)
 
 
 @pytest.mark.planner_scenario
@@ -317,7 +449,7 @@ def test_holding_never_emits_grid_following_and_archived_context_restores_deadli
     from open_energy_planner.savings.context import physical_context
     from open_energy_planner.synthetic import capture
 
-    original = problem(count=2)
+    original = problem(interval_count=2)
     deadline = NOW + timedelta(hours=3)
     unit = replace(
         original.batteries[0],
@@ -382,6 +514,41 @@ def test_normal_captures_checkpoint_once_per_minute(tracker, monkeypatch):
     assert writes == ["battery-calibration.json", "battery-calibration.json"]
 
 
+@pytest.mark.parametrize("fail_write", [False, True])
+def test_unrelated_save_persists_between_checkpoint_observation(tracker, monkeypatch, fail_write):
+    """An installation transaction must commit pending hold evidence or leave both durable settings and progress unchanged."""
+    from open_energy_planner.installation.storage import InstallationStore
+
+    settings, _battery = configured(tracker)
+    store = InstallationStore(tracker.documents)
+    store.save(settings)
+    start = datetime.now(UTC)
+    store.observe(observation(start))
+    persisted = store.calibration.persisted.copy()
+    store.observe(observation(start + timedelta(seconds=15), soc=98))
+    pending = store.calibration.state.copy()
+    assert pending != persisted
+    changed = replace(settings, import_limit_w=3000)
+    if fail_write:
+        original_write = tracker.documents.write
+
+        def refuse_progress(name, body):
+            """Fail only the ledger write inside the existing settings transaction."""
+            if name == "battery-calibration.json":
+                raise OSError("Synthetic checkpoint failure")
+            original_write(name, body)
+
+        monkeypatch.setattr(tracker.documents, "write", refuse_progress)
+        with pytest.raises(OSError):
+            store.save(changed)
+    else:
+        store.save(changed)
+    restored = InstallationStore(tracker.documents)
+    assert restored.current == (settings if fail_write else changed)
+    assert restored.calibration.state == (persisted if fail_write else pending)
+    assert store.calibration.persisted == (persisted if fail_write else pending)
+
+
 def test_failed_completion_write_cannot_advance_memory_or_restart_state(tracker, monkeypatch):
     """A failed ledger write leaves both in-memory and reopened completion absent, and the same capture can be retried."""
     settings, _battery = configured(tracker, calibration_hold_hours=0.25)
@@ -406,7 +573,7 @@ def test_failed_completion_write_cannot_advance_memory_or_restart_state(tracker,
 @pytest.mark.planner_scenario
 def test_no_grid_capacity_keeps_real_bounds_and_unfinished_calibration():
     """A disconnected grid cannot provide energy. Calibration must never invent charge or relax limits."""
-    original = problem(mandatory=False, count=2, grid=0)
+    original = problem(mandatory=False, interval_count=2, grid_import_limit_w=0)
     inputs = replace(original, batteries=(replace(original.batteries[0], calibration_charge=True),))
     result = HighsSolver().solve(inputs)
     assert result.status == Status.OPTIMAL, result

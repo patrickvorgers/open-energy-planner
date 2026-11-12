@@ -23,7 +23,7 @@ from tests.frontend.browser.helpers import (
 
 def _discovered_installation_devices(page, url, kind, count):
     """Provide distinct Energy-owned meters and complete battery metadata without physical hardware."""
-    body = discover(page, url)
+    body = discover(page, url, publish=False)
     hints = body["suggestions"]
 
     def entity(identity, unit, device_class):
@@ -137,10 +137,34 @@ def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
     assert disabled["calibration_hold_hours"] == 2.5
 
 
+@pytest.mark.parametrize("app_site", ["calibration_overdue_hold"], indirect=True)
+def test_overdue_calibration_shows_active_hold_and_deadline(app_page):
+    """Desktop/mobile retain both overdue and active-hold guidance from a real restored ledger."""
+    page, url = app_page
+    assert read_settings(page, url)["installation"]["batteries"][0]["calibration_enabled"] is True
+    _discovered_installation_devices(page, url, "battery", 1)
+    assert read_settings(page, url)["installation"]["batteries"][0]["calibration_enabled"] is True
+    connect(page)
+    installation_area(page, 2)
+    status = page.locator(".calibration-status:visible")
+    expect(status).to_contain_text("Overdue since")
+    expect(status).to_contain_text("Holding until")
+    expect(status).to_contain_text("valid measurements are still required")
+    status.scroll_into_view_if_needed()
+    screenshots = Path("results/ci/calibration-overdue-hold")
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(screenshots / f"calibration-overdue-{page.viewport_size['width']}.png")
+    )
+
+
 @pytest.mark.parametrize(
-    "field,value", [("Calibration interval (days)", ""), ("Calibration hold (hours)", "25")]
+    "calibration_field_label,invalid_draft",
+    [("Calibration interval (days)", ""), ("Calibration hold (hours)", "25")],
 )
-def test_disabled_calibration_can_save_after_invalid_enabled_draft(app_page, field, value):
+def test_disabled_calibration_can_save_after_invalid_enabled_draft(
+    app_page, calibration_field_label, invalid_draft
+):
     """An invalid calibration draft must not block native Save after opting out, including after reload."""
     page, url = app_page
     _discovered_installation_devices(page, url, "battery", 1)
@@ -156,8 +180,8 @@ def test_disabled_calibration_can_save_after_invalid_enabled_draft(app_page, fie
     installation_area(page, 2, edit=True)
     toggle = editor.get_by_label("Periodic battery calibration", exact=True)
     toggle.check()
-    invalid = editor.get_by_label(field, exact=True)
-    invalid.fill(value)
+    invalid = editor.get_by_label(calibration_field_label, exact=True)
+    invalid.fill(invalid_draft)
     assert not invalid.evaluate("element => element.checkValidity()")
     toggle.uncheck()
     page.get_by_role("button", name="Save installation", exact=True).click()
