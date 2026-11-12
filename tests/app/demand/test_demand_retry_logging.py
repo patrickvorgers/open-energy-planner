@@ -41,9 +41,9 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(
         runtimes.append(runtime)
         return runtime
 
-    def live_factory(*args):
+    def live_factory(*args, **options):
         """Retain the real live-input owner without starting unrelated workers."""
-        live = original_live_inputs(*args)
+        live = original_live_inputs(*args, **options)
         live_inputs.append(live)
         return live
 

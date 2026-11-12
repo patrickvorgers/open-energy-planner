@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import re
+from html.parser import HTMLParser
 
 import pytest
 from aiohttp import ClientSession, web
@@ -9,6 +11,21 @@ from aiohttp import ClientSession, web
 from open_energy_planner.app import create_app
 from open_energy_planner.pairing import Pairing
 from tests.ha_contract.support.connection import PEER, SECRET, TOKEN, server
+
+
+class StylesheetLinks(HTMLParser):
+    """Collect stylesheet addresses from the actual rendered document."""
+
+    def __init__(self):
+        """Keep each response's stylesheet destinations separate."""
+        super().__init__()
+        self.links = []
+
+    def handle_starttag(self, tag, attributes):
+        """Retain actual stylesheet links with decoded HTML attributes."""
+        values = dict(attributes)
+        if tag == "link" and values.get("rel") == "stylesheet":
+            self.links.append(values["href"])
 
 
 def test_supervisor_proof_reconnects_same_owner_without_consent(tmp_path):
@@ -52,6 +69,7 @@ def test_supervisor_proof_reconnects_same_owner_without_consent(tmp_path):
 def test_ingress_trust_requires_socket_peer_and_valid_prefix(tmp_path, trusted, monkeypatch):
     """HA ingress authenticates from its actual proxy address. A forged forwarded address never grants access."""
     from open_energy_planner.build_info import BUILD_INFO
+    from open_energy_planner.frontend.assets import PUBLIC
 
     monkeypatch.setitem(BUILD_INFO, "revision", "a" * 40)
     monkeypatch.setitem(BUILD_INFO, "release_tag", "v1.2.3")
@@ -83,9 +101,29 @@ def test_ingress_trust_requires_socket_peer_and_valid_prefix(tmp_path, trusted, 
             async with client.get(url + "/v1/snapshot", headers=headers) as response:
                 assert response.status == (200 if trusted else 401)
             async with client.get(url + "/setup", headers=headers) as response:
+                assert response.status == 200
+                assert response.content_type == "text/html"
+                assert response.headers["Cache-Control"] == "no-store"
                 html = await response.text()
                 assert TOKEN not in html
-                assert ("/api/hassio_ingress/test_123/setup/style.css" in html) == trusted
+                page = StylesheetLinks()
+                page.feed(html)
+                stylesheets = [link for link in page.links if link.endswith("/style.css")]
+                assert len(stylesheets) == 1
+                prefix = "/api/hassio_ingress/test_123" if trusted else ""
+                stylesheet = stylesheets[0]
+                assert re.fullmatch(prefix + r"/setup/static/[0-9a-f]{64}/style\.css", stylesheet)
+            # HA's trusted proxy strips its ingress prefix before forwarding the asset request.
+            async with client.get(url + stylesheet[len(prefix) :], headers=headers) as response:
+                assert response.status == 200
+                assert response.content_type == "text/css"
+                assert await response.read() == (PUBLIC / "style.css").read_bytes()
+                assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+                assert response.headers["X-Content-Type-Options"] == "nosniff"
+                assert response.headers["Referrer-Policy"] == "no-referrer"
+                policy = response.headers["Content-Security-Policy"]
+                assert "script-src 'self'" in policy and "base-uri 'none'" in policy
+                assert "object-src 'none'" in policy and "frame-ancestors 'self'" in policy
             for value in ("https://evil.example", "/api/hassio_ingress/test/../../evil", ""):
                 async with client.get(
                     url + "/v1/snapshot", headers={"X-Ingress-Path": value}
