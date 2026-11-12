@@ -10,7 +10,6 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import (
-    MOBILE_CHART_LEGEND_BREAKPOINT_PX,
     TOKEN,
     assert_floating_save_bar,
     connect,
@@ -166,15 +165,15 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     for viewport in (original_size, alternate_size, original_size):
         page.set_viewport_size(viewport)
         page.wait_for_function(
-            """({breakpoint, width}) => {
+            """({width}) => {
                 const canvas = document.getElementById('quality-chart-0');
                 const plot = canvas.getBoundingClientRect();
                 const legend = document.querySelector('.quality-evidence-controls').getBoundingClientRect();
-                const positioned = window.innerWidth > breakpoint ? legend.left >= plot.right : legend.top >= plot.bottom;
+                const positioned = legend.top >= plot.bottom && Math.abs(legend.width - plot.width) <= 1;
                 const resized = Math.abs(Chart.getChart(canvas).width - canvas.parentElement.clientWidth) <= 1;
                 return window.innerWidth === width && resized && positioned && document.documentElement.scrollWidth <= width;
             }""",
-            arg={"breakpoint": MOBILE_CHART_LEGEND_BREAKPOINT_PX, "width": viewport["width"]},
+            arg={"width": viewport["width"]},
         )
         day_control = page.get_by_label("Day", exact=True).bounding_box()
         refresh_button = page.get_by_role("button", name="Refresh evidence", exact=True)

@@ -4,8 +4,9 @@ Courtyard changes the app's presentation and shared navigation. Planning, Saving
 Contract and Installation retain their existing functional sections. Appliance
 settings are consolidated as described below. Stored data and planning calculations
 remain unchanged. Editable configuration pages share one floating Save and
-Discard bar. Chart legends move
-to the right on desktop and below on mobile. Balance tooltips group the original
+Discard bar. Chart legends sit below the full-width plot on every screen. Custom
+legends use aligned responsive columns on wider screens and compact wrapping on
+phones. Long names wrap within their column. Native chart legends wrap below the plot. Balance tooltips group the original
 signed values under Production and Consumption, with SoC under Battery state.
 Production means supply and includes grid import and battery discharge. No planning, evaluation or device-control behaviour is added.
 
