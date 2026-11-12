@@ -245,12 +245,15 @@ function monthlyEditor(parent, schedule) {
  * the server validates and saves the contract. No allowance is reset here.
  */
 function addBonusEditor(parent, period, value, isEnabled) {
+    const section = document.createElement("section"); section.className = "bonus-settings";
+    section.setAttribute("aria-label", "Export bonus settings"); parent.append(section);
     const label = document.createElement("label"), enabled = document.createElement("input");
     enabled.type = "checkbox"; enabled.checked = isEnabled;
-    label.append(enabled, document.createTextNode("Include export bonus")); parent.append(label);
+    label.append(enabled, document.createTextNode("Include export bonus")); section.append(label);
     const box = document.createElement("fieldset"); box.className = "bonus-editor";
-    const legend = document.createElement("legend"); legend.textContent = "Export bonus"; box.append(legend); parent.append(box);
+    const legend = document.createElement("legend"); legend.textContent = "Export bonus"; box.append(legend); section.append(box);
     information(legend, "export-bonus-help", "Export bonus example");
+    const explanation = document.createElement("p"); explanation.textContent = "These settings apply only to the extra export bonus. The base export formula stays in Import and export above."; box.append(explanation);
     const inputs = {effective_from: period.effective_from, contract_start: period.contract_start};
     const identity = document.createElement("input"); identity.type = "hidden"; identity.value = value.rule_id || ""; identity.dataset.contractStart = period.contract_start.value; box.append(identity); inputs.rule_id = identity;
     const rates = document.createElement("div"); rates.className = "settings-fields"; box.append(rates);
@@ -275,8 +278,8 @@ function addBonusEditor(parent, period, value, isEnabled) {
     }
     inputs.reset_basis.dataset.savedDay = savedDay;
     inputs.window = field(timing, "Paid window", value.window ?? "always", "Always, fixed local hours, sunrise to sunset, or different clock hours per month.", ["always", "clock", "daylight", "monthly_schedule"]);
-    inputs.start_time = field(box, "Window start", value.start_time, "HH:MM, included. Required only for clock windows.");
-    inputs.end_time = field(box, "Window end", value.end_time, "HH:MM, excluded. Clock windows may cross midnight.");
+    inputs.start_time = field(timing, "Window start", value.start_time, "HH:MM, included. Required only for clock windows.");
+    inputs.end_time = field(timing, "Window end", value.end_time, "HH:MM, excluded. Clock windows may cross midnight.");
     inputs.start_time.type = inputs.end_time.type = "time";
     const monthly = monthlyEditor(box, value.monthly_schedule); monthlyEditors.set(inputs, monthly);
     const update = () => {

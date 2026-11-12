@@ -235,6 +235,71 @@ def test_contract_anniversary_is_derived_from_contract_start_not_bonus_start(app
     assert (result["bonuses"][0]["reset_month"], result["bonuses"][0]["reset_day"]) == (5, 12)
 
 
+@pytest.mark.parametrize(
+    "app_page",
+    [{"width": width, "height": 2400} for width in (1440, 768, 390)],
+    indirect=True,
+)
+def test_export_bonus_panel_groups_all_controls_and_preserves_toggle_values(app_page):
+    """The bonus panel contains only bonus controls and keeps drafts when its keyboard toggle changes."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/contract")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_price_rule(page)
+    bonus_toggle = page.get_by_role("checkbox", name="Include export bonus", exact=True)
+    bonus_toggle.check()
+    page.get_by_label("Extra export rate", exact=True).fill("0.50 * market")
+    page.get_by_label("Annual export cap (kWh)", exact=True).fill("6000")
+    page.get_by_label("Paid window", exact=True).select_option("clock")
+    page.get_by_label("Window start", exact=True).fill("06:00")
+    page.get_by_label("Window end", exact=True).fill("22:00")
+    page.get_by_role("checkbox", name="Enable price condition", exact=True).check()
+    directory = Path("results/ci/bonus-settings")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.locator("#contract-periods").screenshot(
+        path=str(directory / f"editor-{page.viewport_size['width']}.png")
+    )
+    panel = page.get_by_role("region", name="Export bonus settings", exact=True)
+    expect(panel).to_be_visible()
+    expect(panel.get_by_role("checkbox", name="Include export bonus", exact=True)).to_be_checked()
+    for label in (
+        "Extra export rate",
+        "Annual export cap (kWh)",
+        "Price expression",
+        "Comparison",
+        "Threshold (€/kWh)",
+        "Annual reset",
+        "Paid window",
+        "Window start",
+        "Window end",
+    ):
+        expect(panel.get_by_label(label, exact=True)).to_be_visible()
+    expect(panel.get_by_label("Export formula", exact=True)).to_have_count(0)
+    expect(panel.get_by_label("Import formula", exact=True)).to_have_count(0)
+    expect(
+        panel.get_by_role("checkbox", name="Prevent battery export during paid window", exact=True)
+    ).to_be_visible()
+    assert panel.evaluate("element => parseFloat(getComputedStyle(element).borderLeftWidth) >= 1")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    panel.screenshot(path=str(directory / f"panel-{page.viewport_size['width']}.png"))
+    bonus_toggle.focus()
+    page.keyboard.press("Space")
+    expect(panel.get_by_label("Extra export rate", exact=True)).not_to_be_visible()
+    expect(bonus_toggle).to_be_enabled()
+    page.keyboard.press("Space")
+    expect(panel.get_by_label("Extra export rate", exact=True)).to_have_value("0.50 * market")
+    expect(panel.get_by_label("Annual export cap (kWh)", exact=True)).to_have_value("6000")
+    expect(panel.get_by_role("checkbox", name="Enable price condition", exact=True)).to_be_checked()
+    assert (
+        page.request.get(
+            url + "/v1/contracts", headers={"Authorization": "Bearer " + TOKEN}
+        ).json()["version"]
+        is None
+    )
+
+
 def test_optional_price_comparison_previews_saves_reloads_and_disables(app_page):
     """Desktop/mobile edit an explicit gate using native controls. Save/reload preserves it and disabling removes it."""
     page, url = app_page
@@ -838,7 +903,13 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(dialog).to_contain_text("total income €0.22")
     expect(dialog).to_contain_text("0.50 kWh of quota")
     expect(dialog).to_contain_text("Source exclusions are unsupported")
-    check_layout(dialog.get_by_role("tabpanel", name="Zonneplan", exact=True))
+    zonneplan_bonus = dialog.get_by_role("tabpanel", name="Zonneplan", exact=True)
+    expect(
+        zonneplan_bonus.get_by_text("Prevent battery export during paid window", exact=True)
+    ).to_be_visible()
+    expect(zonneplan_bonus.locator(".example-value").last).to_have_text("Check signed terms")
+    expect(zonneplan_bonus).to_contain_text("does not control your equipment")
+    check_layout(zonneplan_bonus)
     nextenergy = dialog.get_by_role("tab", name="NextEnergy", exact=True)
     nextenergy.click()
     panel = dialog.get_by_role("tabpanel", name="NextEnergy", exact=True)
@@ -847,6 +918,16 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(panel).to_contain_text("Contract anniversary")
     expect(panel).to_contain_text("06:00")
     expect(panel).to_contain_text("22:00")
+    expect(
+        panel.get_by_text("Prevent battery export during paid window", exact=True)
+    ).to_be_visible()
+    expect(panel.locator(".example-value").last).to_have_text("Enabled")
+    expect(panel).to_contain_text("does not identify the source of actual export")
+    protection = panel.get_by_text("Prevent battery export during paid window", exact=True)
+    protection.scroll_into_view_if_needed()
+    page.screenshot(
+        path=str(Path("results/ci") / f"bonus-battery-protection-{page.viewport_size['width']}.png")
+    )
     check_layout(panel)
     check_tabs(dialog, nextenergy, "bonus")
     nextenergy.press("ArrowRight")
@@ -860,6 +941,10 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(budget_panel).to_contain_text("The planner counts all grid export")
     expect(budget_panel).to_contain_text("including unpaid hours and battery export")
     expect(budget_panel).to_contain_text("Supplier source exclusions are not reproduced")
+    expect(
+        budget_panel.get_by_text("Prevent battery export during paid window", exact=True)
+    ).to_be_visible()
+    expect(budget_panel.locator(".example-value").last).to_have_text("Enabled")
     expect(budget_panel.get_by_role("row")).to_have_count(13)
     check_layout(budget_panel)
     check_tabs(dialog, budget, "budget", keyboard=True)
