@@ -28,7 +28,8 @@ export class InstallationLayout {
         this.wizard = true;
         this.editing = false;
         this.area = -1;
-        this.controls = new Map();
+        // Capture this static field before read-only rendering can disable it.
+        this.controls = new Map([[find("export"), find("export").disabled]]);
         this.config = null;
         bindSettingsActions();
         find("installation-area").onchange = event => this.select(Number(event.target.value));
@@ -153,7 +154,7 @@ export class InstallationLayout {
         const locked = this.saveState.busy;
         if (this.wizard && this.area < 4) this.editing = this.ready;
         if (!locked) for (const [control, managed] of this.controls) if (control.isConnected) control.disabled = managed || !this.editing;
-        if (!locked) find("export").disabled = !this.editing || !find("allow-feed-in").checked;
+        if (!locked) find("export").disabled = this.controls.get(find("export")) !== false || !this.editing || !find("allow-feed-in").checked;
         const strategyPanel = find("strategy-settings");
         const strategyParent = document.querySelector(`[data-step="${this.wizard && this.area < 4 ? 3 : 4}"]`);
         if (strategyPanel.parentElement !== strategyParent) strategyParent.append(strategyPanel);
