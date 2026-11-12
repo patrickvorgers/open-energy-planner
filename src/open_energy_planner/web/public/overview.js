@@ -1,7 +1,7 @@
 // Read-only views never activate an archived plan or reset the reference scenario.
 import "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
-import {money, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
+import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
@@ -84,7 +84,7 @@ function evidenceCards(parent, cards) {
         for (const fact of card.facts) {
             const term = document.createElement("dt"), value = document.createElement("dd");
             term.textContent = fact.label;
-            value.textContent = fact.value == null ? "Not recorded" : typeof fact.value === "number" ? `${valueText(fact.value, fact.unit)} ${fact.unit}`.trim() : fact.value;
+            value.textContent = fact.value == null ? "Not recorded" : typeof fact.value === "number" ? `${fact.key === "wear_cost_per_kwh" ? configuredRate(fact.value) : valueText(fact.value, fact.unit)} ${fact.unit}`.trim() : fact.value;
             list.append(term, value);
         }
         article.append(list);

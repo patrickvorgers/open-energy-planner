@@ -81,7 +81,7 @@ For each window segment:
 - Convert the allocated AC amount to internal kWh. Its net rate is:
 
   ```text
-  effective price * cell discharge efficiency * DC efficiency * inverter efficiency - cycle fee / capacity
+  effective price * cell discharge efficiency * DC efficiency * inverter efficiency - wear cost per internal kWh discharged
   ```
 
 - Retain only positive-net-value opportunities. There is no obligation to

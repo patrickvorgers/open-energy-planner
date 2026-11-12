@@ -499,7 +499,7 @@ def test_actual_ha_reconciles_per_device_capabilities_and_expires_targets():
                         "capacity_kwh": 10,
                         "recover_reserve": True,
                         "can_follow_grid": True,
-                        "cycle_fee": 0,
+                        "wear_cost_per_kwh": 0.025,
                         "minimum_soc": 20,
                         "charge_limit_w": 2000,
                         "inverter": {
@@ -562,7 +562,7 @@ def test_actual_ha_reconciles_per_device_capabilities_and_expires_targets():
                 "sensor", DOMAIN, f"{entry.entry_id}_unit_store_a_config_can_follow_grid"
             )
             wear_id = registry.async_get_entity_id(
-                "sensor", DOMAIN, f"{entry.entry_id}_unit_store_a_config_cycle_fee"
+                "sensor", DOMAIN, f"{entry.entry_id}_unit_store_a_config_wear_cost_per_kwh"
             )
             assert hass.states.get(permission_id).state == "yes"
             assert registry.async_get(permission_id).translation_key == "permission"
@@ -572,7 +572,10 @@ def test_actual_ha_reconciles_per_device_capabilities_and_expires_targets():
                 "sensor", DOMAIN, f"{entry.entry_id}_unit_store_a_mode"
             )
             assert registry.async_get(mode_id).translation_key == "battery_mode"
-            assert hass.states.get(wear_id).state == "0"
+            assert hass.states.get(wear_id).state == "0.025"
+            assert hass.states.get(wear_id).attributes["cost_basis"] == (
+                "contract_currency_per_internal_discharged_kwh"
+            )
             assert "capacity_kwh" not in hass.states.get(details_id).attributes
             assert hass.states.get(fixed_id).state == "1200"
             meter_id = registry.async_get_entity_id(
@@ -607,7 +610,7 @@ def test_actual_ha_reconciles_per_device_capabilities_and_expires_targets():
             assert hass.states.get(reserve_id).state == "reserve_satisfied"
             assert hass.states.get(capacity_id).state == "12"
             assert hass.states.get(permission_id).state == "no"
-            assert hass.states.get(wear_id).state == "0"
+            assert hass.states.get(wear_id).state == "0.025"
             assert hass.states.get(capacity_id).attributes["unit_of_measurement"] == "kWh"
             coordinator.devices = [coordinator.devices[0]]
             coordinator.refresh(now + timedelta(hours=2))

@@ -11,7 +11,7 @@ No competitor code or test scenarios are copied.
   and [basic configuration](https://github.com/corneel27/day-ahead/wiki/02.-Installatie-en-basis-configuratie).
   Its documented settings include price-driven versus import-minimizing strategy,
   dated tariff components, hour/quarter planning, battery power/SoC limits,
-  staged conversion efficiencies, cycle cost, zero-grid balancing and boiler/EV
+  staged conversion efficiencies, discharge wear cost, zero-grid balancing and boiler/EV
   parameters. Some settings can reference HA entities. The basic configuration covers dated tariffs and database connections. The
   settings reference covers controller/helper entities. Historical
   hourly-price wording is not evidence of today's exchange settlement resolution.
@@ -50,7 +50,7 @@ Existing implementation does not imply completed product-release acceptance.
 | DAO dated tariff components. GBB dated definitions | Existing implementation: generic formulas and separate bonus rules in `contract_*`, PRICE-03–06 | One effective-date model works across markets. Preview positive/zero/negative spot rates and preserve original contract versions. No country-specific rule engine is added from this research. |
 | DAO staged conversion. EMHASS efficiency/power settings | Existing implementation: `installation` and HiGHS device/route models, MODEL-03–07 | Share physical limits and AC/DC losses across OEP and reference simulations. Verify multiple sources sharing an inverter, not just isolated device ratings. |
 | Battery SoC bounds and recovery | Existing implementation: reserve recovery and independent validation, BAT-05–06 | Safety-related planning floors remain hard. Current measured stock is never fabricated. Physical protection remains in equipment/HA. |
-| DAO cycle cost. EMHASS usage weights. GBB usage cost | Existing implementation: optional equivalent-cycle compensation, BAT-07/12 | Keep the agreed zero default and proportional discharged-energy accounting. Do not copy another system's charge-plus-discharge unit convention or imply a physical lifetime prediction. |
+| DAO cycle cost. EMHASS usage weights. GBB usage cost | Existing implementation: optional wear cost per internal kWh discharged, BAT-07/12 | Keep the agreed zero default and proportional discharged-energy accounting. Do not copy another system's charge-plus-discharge unit convention or imply a physical lifetime prediction. |
 | EMHASS final SoC and optional dwell penalties | Keep existing automatic terminal value and consumption-stock correction, HORIZON-09 | Avoid arbitrary penalties or a mandatory end-SoC setting. An end target can prevent useful use of stored energy. Test energy retained beyond the horizon and unchanged cumulative-import accounting. |
 | EMHASS charge-power derating by SoC | Future candidate | Useful where a fixed maximum repeatedly overstates feasible charging. Start with measured evidence and a small validated curve. Test interpolation, capacity/power limits and independent accounting. Do not add this advanced wizard input pre-emptively. |
 | EMHASS deferrable-load energy/deadline | Highest-value future device increment, MODEL-01–02 and deferred flexible consumption scope | A required kWh request, available time window and power bounds have clear user value. Preserve total-household forecast exclusions and make infeasible deadlines explicit. HA still translates virtual commands. |

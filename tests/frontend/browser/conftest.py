@@ -50,7 +50,7 @@ def documentation_url():
 
 @pytest.fixture
 def savings_now():
-    """Return None for wall-clock seeding unless a clock-sensitive test overrides this fixture."""
+    """Default to None so savings uses the wall clock unless a test overrides this fixture."""
 
 
 @pytest.fixture

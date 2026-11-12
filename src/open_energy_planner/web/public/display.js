@@ -1,5 +1,6 @@
 /** Shared presentation only: preserve calculation precision and use the HA installation timezone. */
 export const MONEY_DECIMALS = 2;
+const CONFIGURED_RATE_SIGNIFICANT_DIGITS = 21;
 const SOURCE_NAMES_REFRESH_MS = 30000;
 /** Refresh read-only views after a metadata rename, preserving their selected plan/day. */
 export function watchSourceNames(readSession, refresh, revision) {
@@ -51,6 +52,11 @@ function dateLanguage(locale, format) {
 }
 export function useHomeAssistantTimezone(value) { timeZone = value || "UTC"; }
 export function money(value) { return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {minimumFractionDigits: MONEY_DECIMALS, maximumFractionDigits: MONEY_DECIMALS}) : "-"; }
+/** Retain a configured source coefficient instead of rounding a small nonzero rate to zero. */
+export function configuredRate(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+    return Number(value.toFixed(MONEY_DECIMALS)) === value ? money(value) : value.toLocaleString(undefined, {maximumSignificantDigits: CONFIGURED_RATE_SIGNIFICANT_DIGITS});
+}
 /** Format percent units, not fractions, with one locale decimal. Separate-unit tables omit the suffix. */
 export function percentage(value, withUnit = true) {
     return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {minimumFractionDigits: PERCENTAGE_DECIMALS, maximumFractionDigits: PERCENTAGE_DECIMALS}) + (withUnit ? "%" : "") : "Unavailable";

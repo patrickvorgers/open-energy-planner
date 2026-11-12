@@ -8,7 +8,7 @@ Use HA Energy source links first, prefilling other properties only if reliably a
 
 ## DAO and HAEO research
 
-- DAO includes capacity, SoC/limits, charge/discharge curves, DC limits/efficiencies and device-specific output entities/extra control rules. Do not copy output bindings. Its investigated `cycle_cost` charges per kWh for both directions, unlike our equivalent-full-cycle fee. [Battery schema](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/config/models/devices/battery.py).
+- DAO includes capacity, SoC/limits, charge/discharge curves, DC limits/efficiencies and device-specific output entities/extra control rules. Do not copy output bindings. Its investigated `cycle_cost` charges per kWh for both directions. Our wear rate applies only to internal discharged kWh. [Battery schema](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/config/models/devices/battery.py).
 - DAO solar includes capacity, tilt/orientation/strings, production links and ML settings. Retain our simple orientation/automatic model choice. [Solar schema](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/config/models/devices/solar.py).
 - HAEO separates capacity/SoC/directional ratings/efficiencies/terminal value and economic SoC preferences. Retain hard limits. Do not add penalties/partitions. Although its power fields can be optional, our controllable devices need finite applicable bounds. [Battery](https://haeo.io/latest/user-guide/elements/battery/).
 - HAEO's separate DC-connected inverter with directional conversion ratings/efficiencies supports our route/device distinction. [Inverter](https://haeo.io/latest/user-guide/elements/inverter/).
@@ -30,7 +30,7 @@ Use HA Energy source links first, prefilling other properties only if reliably a
 | Installation | Own inverter or shared hybrid. Derive connections |
 | Grid following | Existing capability choice, without selecting physical controller |
 | Losses | Simple installation-type assumptions, editable if known. Numeric defaults remain open |
-| Cost/equivalent full cycle | Agreed default zero, optional fee |
+| Cost/internal kWh discharged | Default zero, optional wear rate |
 | Reserve recovery | Existing choice below minimum |
 
 Unknown hard power limits do not imply infinity. Ask for a rating or prove an applicable shared bound limits the device adequately. Do not ambiguously mix AC and battery DC power under a generic “Battery power” field.

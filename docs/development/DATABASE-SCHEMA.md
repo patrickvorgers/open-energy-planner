@@ -184,7 +184,7 @@ Current calculations freeze an `InstallationProblem` under
 | --- | --- |
 | `intervals` | Contiguous absolute start/duration, buy/sell prices, household/PV energy, per-source PV quantities and optional original `control_group`. Billing splits retain each original control decision. |
 | `inverters` | Stable converter identities, AC ratings, efficiency and topology. |
-| `batteries` | Per-device `device_id`, `inverter_id`, nested battery capacity/initial stock/reserve/terminal limits/cell losses/wear/recovery state, DC efficiency and grid-following permission. |
+| `batteries` | Per-device `device_id`, `inverter_id`, nested battery capacity/initial stock/reserve/terminal limits/cell losses, `wear_cost_per_kwh` in contract currency per internal kWh discharged, recovery state, DC efficiency and grid-following permission. |
 | `pv_sources` | Source identity, converter connection and on/off curtailment capability. |
 | `grid_import_limit_w`, `grid_export_limit_w` | Aggregate installation connection limits. |
 | `export_bonuses` | Aligned compiled aggregate-grid-export rules with chronological counters and quotas. No inert singular `bonus` member or source-attribution bonus contract. |
@@ -616,6 +616,13 @@ state evolution from the permission boundary for starting new heat.
 The `installation` JSON additionally retains Energy-owned battery
 `charge_energy_entity` (the cumulative charging meter) alongside `energy_entity`
 (discharging), `soc_entity`, normalized `power_entity` and usable `capacity_kwh`.
+Each installed battery's `wear_cost_per_kwh` is a finite nonnegative rate in
+contract currency per internal kWh discharged, defaulting to zero. It is copied
+into the solver battery and immutable plan input snapshot. Wear is internal
+discharged energy times this rate, without a capacity divisor or a second
+charging cost. Cell, DC and inverter losses are applied according to the
+measurement boundary before measured wear is calculated. This field changes
+the installation definition hash through the normal versioned save contract.
 `additional_grid_power_entities` is an ordered list of normalized grid power
 sensors after the first `grid_power_entity`. All participate in the same required
 measurement generation. `additional_grid_export_entities` similarly retains all
@@ -847,8 +854,8 @@ support SQL period aggregation without loading years of JSON.
 | `reference_bonus` | Double | Reference scenario's earned bonus, with independent period counters. |
 | `actual_grid_cash` | Double | Actual purchase minus sale minus bonus. |
 | `reference_grid_cash` | Double | Reference purchase minus sale minus bonus. |
-| `actual_wear` | Double | Actual configured proportional battery cycle cost. |
-| `reference_wear` | Double | Reference proportional cycle cost under the same settings. |
+| `actual_wear` | Double | Actual internal discharged kWh times the configured per-kWh wear rate. |
+| `reference_wear` | Double | Reference internal discharged kWh times the same per-kWh wear rate. |
 | `actual_inventory_change` | Double | Actual closing minus opening stored-energy value. |
 | `reference_inventory_change` | Double | Reference closing minus opening stored-energy value. |
 | `actual_economic_cost` | Double | Actual grid cash + wear − inventory value change. |
@@ -863,7 +870,7 @@ support SQL period aggregation without loading years of JSON.
 | `duration_h` | Double | Interval duration in hours, used for coverage rather than assuming one row equals one quarter. |
 
 `actual` derives import/export from measured channels and wear from measured
-battery discharge with configured losses and cycle costs. Contract and inventory
+battery discharge with configured losses and per-internal-kWh wear costs. Contract and inventory
 valuation assumptions determine the financial amounts. Recorded advice is
 retained for provenance and curtailment/reference reconstruction. It does not
 replace measured quantities or prove that physical devices followed the plan.
