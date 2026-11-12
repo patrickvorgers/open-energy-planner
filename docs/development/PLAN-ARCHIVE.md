@@ -62,7 +62,13 @@ local directory/database are owner-only. Blocking reads/writes run outside reque
 processing on worker threads. Startup initializes before serving requests. One app
 lock serializes mutations. Cancellation drains a writer before releasing that lock.
 Hard invalidation revokes commands immediately in memory, then commits off-loop
-before an HTTP response. Background invalidations are also flushed at the existing
+before a protected API response. Public page and static-asset GET/HEAD requests,
+and the bounded public setup-session metadata, do not wait for this write. They
+contain no device commands or authenticated settings. This keeps the Home Assistant
+sidebar and Installation page shell available during a slow or failed archive write.
+Responses from authenticated API handlers retain the durability barrier, including
+handler errors. Authentication failures return immediately without waiting for writes.
+Background invalidations are also flushed at the existing
 worker cadence and shutdown. Failed invalidation persistence never reinstates
 commands. Failed publication retains only the previous normally valid plan.
 
