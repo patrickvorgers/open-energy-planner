@@ -464,19 +464,27 @@ def test_notification_timezone_does_not_change_saved_ev_departure(
     """Notification metadata formats its own incident without changing an existing EV editor's timezone."""
     page, url = app_page
     page.clock.install()
+    charging_request = {
+        "id": "00000000-0000-4000-8000-000000000301",
+        "version": "original",
+        "status": "planned",
+        "target_soc": 80,
+        "departure": "2026-10-25T01:30:42+00:00",
+        "repeat_weekdays": [],
+    }
     vehicle = {
         "id": "00000000-0000-4000-8000-000000000201",
         "name": "Family car",
         "actual": {"soc": 50},
         "target_soc": 80,
         "departure_time": "07:00",
-        "departure_override": "2026-10-25T01:30:42+00:00",
-        "next_departure": "2026-10-25T01:30:42+00:00",
+        "default_departure": "2026-10-25T06:00:00+00:00",
+        "charging_request": charging_request,
     }
     document = {"timezone": "Europe/Amsterdam", "vehicles": [vehicle], "points": [], "issue": None}
     notices = blocked()
     notices["notifications"][0]["action_path"] = "/ev"
-    intents = []
+    requests = []
     page.route(
         "**/setup/session",
         lambda route: route.fulfill(json={"ingress": False, "timezone": "Europe/Amsterdam"}),
@@ -484,16 +492,31 @@ def test_notification_timezone_does_not_change_saved_ev_departure(
     page.route("**/v1/ev", lambda route: route.fulfill(json=document))
     page.route("**/v1/notifications", lambda route: route.fulfill(json=notices))
 
-    def accept_intent(route):
-        """Capture the unchanged departure sent through the real form submission."""
-        intents.append(route.request.post_data_json)
-        route.fulfill(json={"accepted": True})
+    def request_route(route):
+        """Serve retained history and accept an atomic edit only for the saved request version."""
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            requests.append(body)
+            assert body["expected_version"] == charging_request["version"]
+            charging_request.update(
+                target_soc=body["target_soc"], departure=body["departure"], version="updated"
+            )
+            route.fulfill(json=document)
+        else:
+            route.fulfill(
+                json={
+                    "requests": [{**charging_request, "vehicle_name": vehicle["name"]}],
+                    "next_cursor": None,
+                }
+            )
 
-    page.route("**/v1/ev/intent", accept_intent)
+    page.route("**/v1/ev/requests", request_route)
     page.goto(url + "/ev")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.get_by_label("One-off departure", exact=True)).to_have_value("2026-10-25T02:30")
+    page.get_by_role("button", name="Edit charging request", exact=True).click()
+    departure = page.get_by_label("Ready by", exact=True)
+    expect(departure).to_have_value("2026-10-25T02:30")
     page.evaluate(
         """async timezone => {
             const pageModule = document.querySelector('script[type="module"][src]').src;
@@ -503,13 +526,17 @@ def test_notification_timezone_does_not_change_saved_ev_departure(
         notification_timezone,
     )
     expect(page.get_by_role("region", name="Notifications")).to_contain_text(notification_time)
-    page.get_by_role("button", name="Apply one-off departure", exact=True).click()
-    expect(page.get_by_label("One-off departure", exact=True)).to_be_enabled()
-    assert intents == [
+    expect(departure).to_have_value("2026-10-25T02:30")
+    page.get_by_role("button", name="Save changes", exact=True).click()
+    expect(page.get_by_role("button", name="Edit charging request", exact=True)).to_be_enabled()
+    assert requests == [
         {
+            "request_id": charging_request["id"],
             "vehicle_id": vehicle["id"],
-            "field": "departure_override",
-            "value": "2026-10-25T01:30:42+00:00",
+            "target_soc": 80,
+            "departure": "2026-10-25T01:30:42+00:00",
+            "repeat_weekdays": [],
+            "expected_version": "original",
         }
     ]
 
