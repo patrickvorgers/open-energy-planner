@@ -23,6 +23,9 @@ only when opened, using the latest confirmed plan and supplemental comparison.
 An already open table follows confirmed refreshes and plan selection.
 Savings reads start only when Savings opens or its period is explicitly refreshed.
 Opening Savings directly does not request a plan list or replay comparisons.
+Successful Connect or Refresh on Savings confirms the shared connection status
+only while that period and view remain current. A late successful response cannot
+clear a newer period or plan-selection failure.
 Source-name changes detected on Savings mark the retained Planning labels stale.
 Reopening Planning refreshes its selected plan without reading hidden Savings.
 This also applies when the session starts on Savings and opens an original plan

@@ -144,6 +144,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         datetime.fromisoformat(body["plan"]["input_snapshot"]["problem"]["intervals"][0]["start"])
     )
     held = []
+    page.add_init_script("window.projectionRouteHeld = false")
     page.route(
         "**/v1/plans?**",
         lambda route: route.fulfill(
@@ -162,6 +163,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         source = selected if identity == "selected-plan" else body
         if identity == original["plan_id"] and view == stage:
             held.append(route)
+            page.evaluate("window.projectionRouteHeld = true")
             return
         if view == "plan":
             response = {"plan": source["plan"]}
@@ -185,6 +187,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         expect(page.locator("#plan-evidence-status")).to_contain_text("Loading")
     else:
         expect(page.locator("#overview-status")).to_contain_text("Loading simulations")
+    page.wait_for_function("() => window.projectionRouteHeld")
     assert len(held) == 1
     page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
     page.locator("#plan-version").select_option("selected-plan")

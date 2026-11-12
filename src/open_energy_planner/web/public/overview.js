@@ -1229,14 +1229,15 @@ async function currentPrices(signal) {
         return false;
     }
 }
-/** Refresh independent views. Only the plan reader reports success, preserving newer selection errors. */
+/** Refresh the active view, preserving errors owned by a newer selection or period. */
 async function load() {
     if (!overviewSessionReady && !await initializeOverview()) return;
     overviewLoads++;
     try {
         const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
         if (location.hash === "#savings") {
-            await savings(signal);
+            const selection = selectionRequest, read = savings(signal), period = periodRequest;
+            if (await read && period === periodRequest && selection === selectionRequest && location.hash === "#savings") $("overview-status").textContent = CONNECTED_MESSAGE;
             return;
         }
         const planRead = plans(false, signal);
