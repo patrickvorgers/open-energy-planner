@@ -366,7 +366,7 @@ def test_hybrid_converter_name_refresh_keeps_battery_draft(app_page):
         if index == 0:
             source.get_by_label("Hybrid inverter with battery connection", exact=True).check()
     page.get_by_role("button", name="Continue", exact=True).click()
-    battery = page.locator("#battery-rows fieldset").first
+    battery = page.locator("#battery-rows > fieldset").first
     connection = battery.get_by_label("Converter connection", exact=True)
     connection.select_option("converter0")
     battery.get_by_label("Maximum charge power (kW)", exact=True).fill("2.35")
@@ -697,7 +697,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     page.get_by_role("button", name="Continue", exact=True).click()
     for index in range(2):
         page.locator("#installation-battery").select_option(str(index))
-        item = page.locator("#battery-rows fieldset").nth(index)
+        item = page.locator("#battery-rows > fieldset").nth(index)
         expect(item.get_by_label("State of charge sensor", exact=True)).to_be_hidden()
         options = (
             item.get_by_label("State of charge sensor", exact=True)
@@ -783,7 +783,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     expect(page.locator("#installation-area")).to_have_value("2")
     page.locator("#installation-battery").select_option("1")
     page.get_by_role("button", name="Edit installation", exact=True).click()
-    page.locator("#battery-rows fieldset").nth(1).get_by_label(
+    page.locator("#battery-rows > fieldset").nth(1).get_by_label(
         "Maximum charge power (kW)", exact=True
     ).fill("3")
     page.get_by_role("button", name="Cancel", exact=True).click()
@@ -827,7 +827,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     expect(page.locator("#solar-rows > fieldset")).to_have_count(1)
     expect(page.get_by_label("Production energy sensor", exact=True)).to_be_disabled()
     installation_area(page, 2)
-    expect(page.locator("#battery-rows fieldset")).to_have_count(1)
+    expect(page.locator("#battery-rows > fieldset")).to_have_count(1)
     expect(page.get_by_label("Energy dashboard battery", exact=True)).to_be_disabled()
     # Energy synchronization persists removals without a redundant manual save.
     expect(page.locator("#save")).to_be_disabled()
@@ -941,7 +941,7 @@ def test_configured_grid_and_solar_remain_visible_without_measurements_or_histor
     sensor = page.get_by_label("Production energy sensor", exact=True)
     expect(sensor).to_have_value("sensor.roof")
     expect(sensor.locator("option:checked")).to_contain_text("Missing or incompatible")
-    expect(page.locator("#battery-rows fieldset")).to_have_count(0)
+    expect(page.locator("#battery-rows > fieldset")).to_have_count(0)
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -1257,7 +1257,7 @@ def test_installation_duplicate_solar_names_keep_distinct_hybrid_choices(app_pag
         .input_value()
     )
     page.get_by_role("button", name="Continue", exact=True).click()
-    connection = page.locator("#battery-rows fieldset").first.get_by_label(
+    connection = page.locator("#battery-rows > fieldset").first.get_by_label(
         "Converter connection", exact=True
     )
     expect(connection.locator("option")).to_have_text(

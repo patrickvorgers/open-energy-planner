@@ -94,7 +94,7 @@ def test_documentation_installation_shows_saved_limits_and_real_source_relations
     page.get_by_role("button", name="Continue", exact=True).click()
     for index in range(2):
         page.locator("#installation-battery").select_option(str(index))
-        battery = page.locator("#battery-rows fieldset").nth(index)
+        battery = page.locator("#battery-rows > fieldset").nth(index)
         battery.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
         battery.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
         battery.get_by_label("Minimum state of charge (%)", exact=True).fill("20")
