@@ -7,7 +7,6 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import (
-    MOBILE_CHART_LEGEND_BREAKPOINT_PX,
     TOKEN,
     balances,
     physical_plan,
@@ -370,10 +369,8 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     ]
     plot_bounds = canvas.bounding_box()
     legend_bounds = page.locator("#plan-chart-legend").bounding_box()
-    if page.viewport_size["width"] <= MOBILE_CHART_LEGEND_BREAKPOINT_PX:
-        assert legend_bounds["y"] >= plot_bounds["y"] + plot_bounds["height"]
-    else:
-        assert legend_bounds["x"] >= plot_bounds["x"] + plot_bounds["width"]
+    assert legend_bounds["y"] >= plot_bounds["y"] + plot_bounds["height"]
+    assert legend_bounds["width"] == pytest.approx(plot_bounds["width"], abs=1)
     edges = popup.locator(".chart-tooltip-value").evaluate_all(
         "cells => cells.map(cell => cell.getBoundingClientRect().right)"
     )
