@@ -79,7 +79,12 @@ def test_completed_hold_survives_restart_and_unrelated_edit(documents):
             captured_at=start + timedelta(minutes=minute),
             readings=tuple(
                 SimpleNamespace(
-                    key=f"battery.battery.{key}", entity_id=entity, value=value, unit=unit
+                    key=f"battery.battery.{key}",
+                    entity_id=entity,
+                    value=value,
+                    unit=unit,
+                    timestamp_kind="ha_state",
+                    observed_at=start + timedelta(minutes=minute),
                 )
                 for key, entity, value, unit in (
                     ("soc", "sensor.soc", 100 if minute == 0 else 98, "%"),

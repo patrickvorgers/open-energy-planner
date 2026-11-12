@@ -62,7 +62,12 @@ def test_battery_calibration_transfers_without_source_dependency(route):
                 captured_at=start + timedelta(minutes=minute),
                 readings=tuple(
                     SimpleNamespace(
-                        key=f"battery.battery.{key}", entity_id=entity, value=value, unit=unit
+                        key=f"battery.battery.{key}",
+                        entity_id=entity,
+                        value=value,
+                        unit=unit,
+                        timestamp_kind="ha_state",
+                        observed_at=start + timedelta(minutes=minute),
                     )
                     for key, entity, value, unit in (
                         ("soc", "sensor.soc", 100 if minute == 0 else 98, "%"),

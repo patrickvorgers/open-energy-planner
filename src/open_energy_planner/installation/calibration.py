@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from math import ceil, isfinite
 
-from open_energy_planner.core.units import FULL_SOC_PERCENT, WATTS_PER_KW
+from open_energy_planner.core.units import FULL_SOC_PERCENT, SECONDS_PER_HOUR, WATTS_PER_KW
 
 DEFAULT_CALIBRATION_INTERVAL_DAYS = 14
 DEFAULT_CALIBRATION_HOLD_HOURS = 3
@@ -42,7 +42,10 @@ def available_charge_w(settings, battery, converter):
     """Bound deadline preparation by terminal, converter and shared connection power in watts."""
     return min(
         battery.charge_limit_w,
-        converter.ac_limit_w * converter.efficiency * battery.dc_efficiency,
+        converter.ac_limit_w
+        * converter.efficiency
+        * battery.dc_efficiency
+        / sum(unit.inverter_id == battery.inverter_id for unit in settings.batteries),
         settings.import_limit_w
         * converter.efficiency
         * battery.dc_efficiency
@@ -176,25 +179,29 @@ class BatteryCalibration:
                 hours=battery.calibration_hold_hours
             )
         # Round up to a whole hour so small fluctuations cannot postpone a started charge.
-        charge_hours = ceil(
+        charge_hours = (
             battery.capacity_kwh
             / max(available_charge_w, 1)
             * WATTS_PER_KW
             / battery.charge_efficiency
         )
-        start = self.due_at(battery) - timedelta(
-            hours=charge_hours + battery.calibration_hold_hours + CALIBRATION_CHARGE_MARGIN_HOURS
+        remaining_charge_hours = (
+            (self.due_at(battery) - now).total_seconds() / SECONDS_PER_HOUR
+            - battery.calibration_hold_hours
+            - CALIBRATION_CHARGE_MARGIN_HOURS
         )
-        if now < start:
-            return False, None
-        return True, None
+        if charge_hours >= remaining_charge_hours:
+            return True, None
+        return ceil(charge_hours) >= remaining_charge_hours, None
 
     def observe(self, settings, report):
         """Advance only fresh SoC/power captures. Gaps, discharge and excessive sag restart the hold.
 
         Completion requires a real full-charge observation and continuous captures
         through the hold. Small SoC absorption drift is allowed without positive
-        terminal discharge power. Successful natural full-charge holds also count.
+        terminal discharge power. Explicit device samples must be at most 300 seconds
+        old. Ordinary HA state/report timestamps remain provenance rather than a
+        heartbeat. Successful natural full-charge holds also count.
         """
         if not any(battery.calibration_enabled for battery in settings.batteries):
             return
@@ -222,6 +229,13 @@ class BatteryCalibration:
                 and power.entity_id == battery.power_entity
                 and soc.unit == "%"
                 and power.unit == "W"
+                and all(
+                    reading.timestamp_kind != "device_sample"
+                    or 0
+                    <= (report.captured_at - reading.observed_at).total_seconds()
+                    <= CALIBRATION_MAX_CAPTURE_GAP_SECONDS
+                    for reading in (soc, power)
+                )
             )
             interrupted = (
                 previous is None

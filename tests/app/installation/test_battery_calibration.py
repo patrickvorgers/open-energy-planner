@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine
 
-from open_energy_planner.installation.calibration import BatteryCalibration
+from open_energy_planner.installation.calibration import BatteryCalibration, available_charge_w
 from open_energy_planner.installation.model import (
     BatteryState,
     Installation,
@@ -81,7 +81,14 @@ def observation(at, soc=100, power=0, *, present=True):
     """Provide normalized terminal discharge-positive captures, never predicted plan energy."""
     readings = (
         tuple(
-            SimpleNamespace(key=f"battery.battery.{key}", entity_id=entity, value=value, unit=unit)
+            SimpleNamespace(
+                key=f"battery.battery.{key}",
+                entity_id=entity,
+                value=value,
+                unit=unit,
+                timestamp_kind="ha_state",
+                observed_at=at,
+            )
             for key, entity, value, unit in (
                 ("soc", "sensor.soc", soc, "%"),
                 ("power", "sensor.power", power, "W"),
@@ -91,6 +98,57 @@ def observation(at, soc=100, power=0, *, present=True):
         else ()
     )
     return SimpleNamespace(captured_at=at, readings=readings)
+
+
+def wire_observation(settings, at, *, sampled_at, timestamp_kind="device_sample"):
+    """Parse real wire/config contracts while varying explicit device sample times independently of fresh captures."""
+    from open_energy_planner.home_assistant.observation_wire import (
+        parse_configuration,
+        parse_report,
+    )
+    from open_energy_planner.installation.storage import sources
+
+    configuration = parse_configuration(
+        {
+            "bindings": [
+                {
+                    "key": binding.key,
+                    "entity_id": binding.entity_id,
+                    "quantity": binding.quantity,
+                    **(
+                        {"timestamp_attribute": "sampled_at"}
+                        if binding.key.startswith("battery.") and timestamp_kind == "device_sample"
+                        else {}
+                    ),
+                }
+                for binding in sources(settings).bindings
+            ]
+        },
+        revision=settings.version,
+    )
+    return parse_report(
+        {
+            "config_revision": settings.version,
+            "captured_at": at.isoformat(),
+            "issues": [],
+            "readings": [
+                {
+                    "key": binding.key,
+                    "entity_id": binding.entity_id,
+                    "value": 100 if binding.quantity == "soc" else 0,
+                    "unit": "%" if binding.quantity == "soc" else "W",
+                    "timestamp_kind": timestamp_kind
+                    if binding.key.startswith("battery.")
+                    else "ha_state",
+                    "observed_at": sampled_at.get(binding.key, at).isoformat(),
+                    "reported_at": at.isoformat(),
+                }
+                for binding in configuration.bindings
+            ],
+        },
+        configuration,
+        at,
+    )
 
 
 def continuous_hold(tracker, settings, start, *, duration_minutes=180, soc=98):
@@ -319,6 +377,130 @@ def test_policy_starts_before_deadline_and_does_not_complete_from_a_plan(tracker
     assert tracker.directive(battery, NOW + timedelta(days=13, hours=20), 4000) == (True, None)
     assert tracker.document(battery, NOW + timedelta(days=15))["status"] == "overdue"
     assert tracker.state["battery"]["completed_at"] is None
+
+
+@pytest.mark.parametrize("shared_converter", [True, False])
+@pytest.mark.planner_scenario
+def test_start_time_shares_converter_capacity_between_connected_batteries(
+    tracker, shared_converter
+):
+    """Two 10 kWh batteries require 5 h through one 4 kW inverter, or 3 rounded hours each on separate inverters."""
+    settings, original_battery = configured(tracker, charge_efficiency=1)
+    battery = replace(original_battery, capacity_kwh=10)
+    other = replace(
+        battery,
+        device_id="other",
+        inverter_id="inv" if shared_converter else "other_inv",
+        soc_entity="sensor.other_soc",
+        power_entity="sensor.other_power",
+    )
+    converters = (SolarInverter("inv", 4000, 1),)
+    if not shared_converter:
+        converters += (SolarInverter("other_inv", 4000, 1),)
+    settings = replace(
+        settings, import_limit_w=10000, inverters=converters, batteries=(battery, other)
+    )
+    rows = tracker.configured(settings, NOW)
+    tracker.write(rows)
+    tracker.install(rows)
+    expected_hours = 5 if shared_converter else 3
+    deadline = NOW + timedelta(days=14)
+    start = deadline - timedelta(hours=expected_hours + 3.25)
+    for selected in settings.batteries:
+        converter = next(unit for unit in converters if unit.inverter_id == selected.inverter_id)
+        power_w = available_charge_w(settings, selected, converter)
+        assert tracker.directive(selected, start - timedelta(seconds=1), power_w) == (False, None)
+        assert tracker.directive(selected, start, power_w) == (True, None)
+    if shared_converter:
+        inputs = InstallationProblem(
+            tuple(Interval(NOW + timedelta(hours=index), 1, 1, 0) for index in range(5)),
+            converters,
+            tuple(
+                BatteryState(
+                    unit.device_id,
+                    unit.inverter_id,
+                    Battery(10, 0, charge_limit_w=4000),
+                    calibration_charge=True,
+                )
+                for unit in settings.batteries
+            ),
+            (),
+            10000,
+            10000,
+        )
+        result = HighsSolver().solve(inputs)
+        assert result.status == Status.OPTIMAL, result
+        validate(inputs, result.plan)
+        assert sum(unit.end_kwh for unit in result.plan.flows[3].batteries) == pytest.approx(16)
+        assert [unit.end_kwh for unit in result.plan.flows[4].batteries] == pytest.approx([10, 10])
+
+
+def test_extreme_charge_duration_starts_immediately_without_datetime_underflow(tracker):
+    """An accepted 20,000 kWh battery at 1 W needs 20 million hours and must charge now rather than subtract past year one."""
+    settings, original_battery = configured(tracker, charge_efficiency=1)
+    battery = replace(original_battery, capacity_kwh=20000, charge_limit_w=1)
+    settings = replace(settings, batteries=(battery,))
+    rows = tracker.configured(settings, NOW)
+    tracker.write(rows)
+    tracker.install(rows)
+    assert tracker.directive(battery, NOW, 1) == (True, None)
+    assert tracker.directive(battery, NOW + timedelta(days=15), 1) == (True, None)
+    tracker.observe(settings, observation(NOW))
+    assert tracker.directive(battery, NOW, 1) == (False, NOW + timedelta(hours=3))
+
+
+@pytest.mark.parametrize("stale_key", ["soc", "power"])
+def test_stale_device_samples_interrupt_hold_and_fresh_wire_evidence_recovers(tracker, stale_key):
+    """Fresh captures cannot complete a 15-minute hold using repeated old device samples from either required source."""
+    settings, _battery = configured(tracker, calibration_hold_hours=0.25)
+
+    def wire_capture(at, *, stale=False):
+        """Hold one selected device sample fixed while all other evidence advances."""
+        samples = {f"battery.battery.{stale_key}": NOW} if stale else {}
+        return wire_observation(settings, at, sampled_at=samples)
+
+    for minute in (0, 5, 10, 15):
+        tracker.observe(settings, wire_capture(NOW + timedelta(minutes=minute), stale=True))
+    assert tracker.state["battery"]["completed_at"] is None
+    assert tracker.state["battery"]["hold_started_at"] is None
+    for minute in (20, 25, 30, 35):
+        tracker.observe(settings, wire_capture(NOW + timedelta(minutes=minute)))
+    completed = NOW + timedelta(minutes=35)
+    assert tracker.state["battery"]["completed_at"] == completed.isoformat()
+    tracker.observe(settings, wire_capture(NOW + timedelta(minutes=40), stale=True))
+    assert tracker.state["battery"]["completed_at"] == completed.isoformat()
+
+
+@pytest.mark.parametrize(
+    "timestamp_kind,sample_age_seconds,can_complete",
+    [
+        ("device_sample", 300, True),
+        ("device_sample", 301, False),
+        ("ha_state", 28800, True),
+        ("ha_report", 28800, True),
+    ],
+)
+def test_sample_age_boundary_preserves_constant_ha_state_captures(
+    tracker, timestamp_kind, sample_age_seconds, can_complete
+):
+    """Device evidence allows at most 300 seconds, while unchanged HA state/report times still complete a real three-hour capture hold."""
+    settings, _battery = configured(tracker)
+    for minute in range(0, 181, 5):
+        at = NOW + timedelta(minutes=minute)
+        sample_time = (at if timestamp_kind == "device_sample" else NOW) - timedelta(
+            seconds=sample_age_seconds
+        )
+        report = wire_observation(
+            settings,
+            at,
+            timestamp_kind=timestamp_kind,
+            sampled_at={f"battery.battery.{role}": sample_time for role in ("soc", "power")},
+        )
+        tracker.observe(settings, report)
+    assert tracker.state["battery"]["completed_at"] == (
+        (NOW + timedelta(hours=3)).isoformat() if can_complete else None
+    )
+    assert tracker.state["battery"]["hold_started_at"] is None
 
 
 def test_unrelated_setting_preserves_progress_and_disable_clears_it(tracker):

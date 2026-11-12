@@ -189,7 +189,12 @@ def test_calibration_observation_completes_off_loop_without_forecasts(tmp_path, 
                 captured_at=start + timedelta(minutes=minute),
                 readings=tuple(
                     SimpleNamespace(
-                        key=f"battery.bat0.{key}", entity_id=entity, value=value, unit=unit
+                        key=f"battery.bat0.{key}",
+                        entity_id=entity,
+                        value=value,
+                        unit=unit,
+                        timestamp_kind="ha_state",
+                        observed_at=start + timedelta(minutes=minute),
                     )
                     for key, entity, value, unit in (
                         ("soc", "sensor.soc0", 100 if minute == 0 else 98, "%"),
