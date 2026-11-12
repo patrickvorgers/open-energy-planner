@@ -66,8 +66,8 @@ switch hides or shows both contributions together. Devices with the same name
 remain separate devices.
 
 An appliance is omitted from both bars and legend when its combined expected
-and scheduled consumption is below **0.05 kW in every displayed quarter-hour bar**.
-One bar at exactly 0.05 kW or above keeps the appliance visible. This is visual
+and scheduled consumption is below **0.1 kW in every displayed quarter-hour bar**.
+One bar at exactly 0.1 kW or above keeps the appliance visible. This is visual
 rounding only. Original forecasts, calculations and costs retain all consumption.
 The visible bars can therefore have a small imbalance from omitted device use.
 Missing values remain unavailable, rather than being rounded to zero.

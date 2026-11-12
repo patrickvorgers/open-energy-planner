@@ -16,7 +16,13 @@ def test_failed_same_plan_refresh_settles_retained_evidence(app_page, outcome):
     page, url = app_page
     page.clock.install()
     evidence = []
-    page.route("**/comparison?view=evidence", lambda route: evidence.append(route))
+
+    def hold_evidence(route):
+        """Signal interception only after the Python callback has retained the route."""
+        evidence.append(route)
+        page.evaluate("window.retainedEvidenceReadCaptured = true")
+
+    page.route("**/comparison?view=evidence", hold_evidence)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -27,6 +33,7 @@ def test_failed_same_plan_refresh_settles_retained_evidence(app_page, outcome):
     page.evaluate("window.retainedChart=Chart.getChart(document.getElementById('plan-chart'))")
     page.get_by_text("Understand this plan", exact=True).click()
     expect(page.locator("#plan-evidence-status")).to_have_text("Loading original plan evidence…")
+    page.wait_for_function("window.retainedEvidenceReadCaptured === true")
     assert len(evidence) == 1
     page.route("**/comparison?view=plan", lambda route: route.fulfill(status=503))
     page.get_by_role("button", name="Refresh overview", exact=True).click()
@@ -87,6 +94,7 @@ def test_old_evidence_cannot_replace_a_new_read_after_a_b_a_selection(app_page, 
         if view == "evidence":
             if plan_id == identity and not held:
                 held.append(route)
+                page.evaluate("window.revisitedEvidenceReadCaptured = true")
             else:
                 route.fulfill(
                     json={"plan_id": plan_id, "evidence": {**current_evidence, "plan_id": plan_id}}
@@ -111,6 +119,7 @@ def test_old_evidence_cannot_replace_a_new_read_after_a_b_a_selection(app_page, 
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     page.get_by_text("Understand this plan", exact=True).click()
     expect(page.locator("#plan-evidence-status")).to_contain_text("Loading")
+    page.wait_for_function("window.revisitedEvidenceReadCaptured === true")
     assert len(held) == 1
     page.locator("#plan-version").select_option("plan-b")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
