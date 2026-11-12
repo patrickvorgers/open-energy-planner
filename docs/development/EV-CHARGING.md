@@ -119,7 +119,8 @@ Each new plan recalculates useful energy in kWh from measured SoC:
 
 The app owns one active request per vehicle. A stable caller-supplied UUID
 `request_id` makes creation retries idempotent, even after cancellation or restart.
-Editing uses `expected_version` from the projected `charging_request.version`.
+Editing uses `expected_version` from the projected `charging_request.version`,
+even when all submitted values equal the saved values.
 Cancelling requires that version and `vehicle_id`. Reusing a cancelled creation
 ID never revives it. All outcomes remain in history. Removing a vehicle cancels
 its active request and retains history. No defaults, historical demand, startup,
@@ -130,7 +131,9 @@ Values are distinct integers, Monday `0` through Sunday `6`. Each completed or
 expired repeating occurrence creates at most one next occurrence on an explicitly
 selected day. The next occurrence cannot start before the previous deadline and
 cannot complete from the earlier occurrence's reading. Missed occurrences are
-not replayed. Cancelling the current request stops this chain.
+not replayed. Editing an occurrence retains its existing readiness lower bound.
+A new departure cannot precede that readiness. Cancelling the current request
+stops this chain.
 
 HA's installation timezone is authoritative. There is no OEP timezone setting.
 Manual departures must be aware timestamps in the next thirty days. The browser
@@ -174,9 +177,20 @@ under the current request and a matching valid plan.
 The browser distinguishes durable write acceptance from subsequent state/history
 reads. Cancellation is confirmed as cancellation. If a follow-up read fails,
 the accepted result remains visible and the page asks for an evidence refresh.
-Only an actual failed write retains its editable draft and retry identity.
+A rejected or unconfirmed write retains its editable draft and retry identity.
 History replies must match the current state generation. Load more admits each
 cursor once and cannot append duplicate pages after repeated activation.
+
+Each EV read has a thirty-second deadline covering response-body consumption.
+Manual refresh shares the active state/history load until it settles. A replacing
+load or confirmed intent cancels superseded reads and waits for the preceding
+load to settle before starting its new evidence cohort. A timeout releases the
+controls for an independent manual retry and never discards a request draft.
+Writes have no automatic read deadline or automatic retry. A lost write reply
+does not prove failure. Refresh and inspect the saved request before explicitly
+retrying. A create retry keeps its original UUID. An edit still requires the
+current saved version. Only fixed owned advice and exact canonical validation
+messages enter diagnostics, never arbitrary response or exception text.
 
 ## Joint model and execution
 
@@ -286,7 +300,12 @@ rounded. Automatic efficiency learning and paid vehicle APIs are outside this st
 
 EV settings/intent use the shared SQLAlchemy `planning` document namespace. State
 versions and current pointer commit atomically and join full cross-backend
-transfer. No separate database/configuration file is created. Fresh HA telemetry
+transfer. Global revisions retain active intent and link changed immutable request
+versions through their preceding revision. Terminal history is stored per request
+rather than copied into each later global archive. Request versions, current
+records and global revision/pointer commit atomically. See the
+[EV database dictionary](DATABASE-SCHEMA.md#ev-document-extension) for replay.
+No separate database/configuration file is created. Fresh HA telemetry
 is mandatory after app restart. Credentials remain outside these documents.
 
 SoC reports retain separate sample/report timestamps and timestamp provenance.

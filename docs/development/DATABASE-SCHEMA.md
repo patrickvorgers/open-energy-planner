@@ -690,37 +690,51 @@ four-backend transfer includes all of these documents. See
 
 ### EV document extension
 
-The existing `planning` namespace stores `ev-state.json` and immutable
-`ev-state-<sha256>.json` archives. Their JSON contains `vehicles`, `points` and
-`assignments`, `requests` and `active_requests`. Vehicle records contain opaque ID, HA percentage-SoC entity,
+The existing `planning` namespace stores the `ev-state.json` current pointer
+and immutable `ev-state-<sha256>.json` global intent revisions. Each contains
+`vehicles`, `points`, `assignments`, `active_requests` and only the active
+`requests`. Vehicle records contain opaque ID, HA percentage-SoC entity,
 usable `capacity_kwh`, AC `maximum_w`, default `target_soc` and local default
-`departure_time`. Point records contain opaque ID, Energy
-`energy_entity`, AC `power_entity`, binary `connected_entity`, active
-`minimum_w`/`maximum_w`, `control` capability and allowed `vehicle_ids`.
-Configuration acceptance and current scheduling require the point's meter/power
-pair to match its current Home Assistant Energy device. Retained state and
-immutable `ev-state-<sha256>.json` archives may contain a former pair after an
-Energy link changes. Historical archives are not rewritten to match current Energy.
-`minimum_w` is the variable-control lower bound. On/off work instead uses the
-lower vehicle/point maximum as its fixed active rate, including for slower cars.
-Assignments link point IDs to explicit vehicle IDs and current connection
-`session_id` nonces. They are intent, not fresh measurement evidence. A restart
-requires new HA readings and matching connection identity before use.
+`departure_time`. Point records contain opaque ID, Energy `energy_entity`, AC
+`power_entity`, binary `connected_entity`, active `minimum_w`/`maximum_w`,
+`control` capability and allowed `vehicle_ids`. Current scheduling requires the
+point's meter/power pair to match Home Assistant Energy. Retained archives may
+contain a former pair and are never rewritten to match current Energy.
+`minimum_w` is the variable-control lower bound. On/off work uses the lower
+vehicle/point maximum as its fixed active rate. Assignments link point IDs to
+explicit vehicle IDs and connection `session_id` nonces. They are intent, not
+fresh measurements. Restart requires new HA readings and connection identity.
 
-`requests` maps stable UUIDs to retained request records. Each contains `id`,
-`vehicle_id`, target percentage `target_soc`, aware `departure`, `ready_at`,
-`created_at` and `updated_at`, `repeat_weekdays` (Monday 0 through Sunday 6),
-HA `timezone`, local `repeat_time`, `creation_digest` for idempotent retries and
-`status` (`planned`, `completed`, `expired` or `cancelled`). Repeated occurrences
-link through `previous_request_id` and `continued_by`. `active_requests` maps a
-vehicle ID to its single planned request ID. Request versions are hashes of the
-saved record and guard edits/cancellation. Terminal history survives vehicle
-removal. Repeated requests are explicit, never inferred from legacy defaults.
+Each request has a current `ev-request-current-<uuid>.json` record and immutable
+`ev-request-version-<sha256>.json` versions. Records contain `id`, `vehicle_id`,
+target percentage `target_soc`, aware `departure`, `ready_at`, `created_at` and
+`updated_at`, `repeat_weekdays` (Monday 0 through Sunday 6), HA `timezone`, local
+`repeat_time`, `creation_digest` for create retries and `status` (`planned`,
+`completed`, `expired` or `cancelled`). Repeated occurrences link through
+`previous_request_id` and `continued_by`. `active_requests` maps a vehicle ID to
+its single planned request ID. Edit versions are hashes of the complete saved
+record. Even a no-op edit requires the current version. Explicit create UUID
+retries and already-cancelled retries remain idempotent. An edited future
+occurrence cannot move `ready_at` before its existing lower bound, and its
+`departure` must remain strictly later than readiness.
 
-Each accepted mutation archives the complete state and updates its pointer in
-one SQLAlchemy transaction. No SQL column/index/table is added. Queries use the
-existing document primary key. Cross-backend transfer includes every pointer and
-archive. Credentials and technical logs are excluded.
+A global revision's `request_changes` maps only changed request IDs to immutable
+request-version hashes. `previous_revision` references the preceding global
+revision hash, or null at the beginning. To reconstruct the complete request
+history as of a global revision, walk that chain newest first and take the first
+version of each ID. Resolve each version through its immutable request document.
+The embedded active records preserve the exact intent at that revision without
+copying every terminal request into every later snapshot. Runtime restart loads
+the current global state and request current records. History survives vehicle
+removal. Repeated requests are explicit, never inferred from saved defaults.
+
+Changed request versions, their current records, the bounded global revision and
+its current pointer commit in one SQLAlchemy transaction. Any failure rolls back
+all of them. Request archive payload grows with actual request changes rather
+than all prior history multiplied by later commits. No SQL column, index or table
+is added. Reads use existing document keys or namespace-bound prefix streaming.
+Cross-backend transfer includes every pointer and immutable revision. Credentials
+and technical logs are excluded. This unreleased request format has no converter.
 
 Original plan JSON adds `input_snapshot.ev_revision`, `ev_evidence` and typed
 `problem.ev_work`. It freezes session/point/vehicle IDs, aware readiness/departure,

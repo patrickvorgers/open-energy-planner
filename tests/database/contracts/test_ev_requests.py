@@ -182,3 +182,118 @@ def test_completion_uses_available_capture_without_retiming_old_sample_provenanc
     if capture in ("current", "different_session"):
         assert ev_service.report["vehicles"][0]["observed_at"] == old_sample
         assert ev_service.report["vehicles"][0]["reported_at"] == old_sample
+
+
+def test_request_archive_payload_growth_is_linear_and_history_survives_restart(
+    ev_service, record_testsuite_property
+):
+    """Eight then sixteen independently specified occurrences retain edits/outcomes without rearchiving all predecessors."""
+    counts = []
+    expected = {}
+    checkpoints = []
+    for index in range(16):
+        now = NOW + timedelta(minutes=index * 5)
+        ev_service.receive(observations(ev_service, now, soc=50), now)
+        ev_service.assign(POINT, CAR, SESSION, now)
+        request_id = str(uuid4())
+        ev_service.save_request(
+            {"request_id": request_id, "vehicle_id": CAR, "target_soc": 65}, now, "Europe/Amsterdam"
+        )
+        current = ev_service.document(now, "Europe/Amsterdam")["vehicles"][0]["charging_request"]
+        if index == 0:
+            checkpoints.append(
+                (ev_service.documents.read("ev-state.json"), {request_id: ("planned", 65)})
+            )
+        ev_service.save_request(
+            {
+                "request_id": request_id,
+                "vehicle_id": CAR,
+                "target_soc": 75,
+                "departure": current["departure"],
+                "expected_version": current["version"],
+            },
+            now + timedelta(seconds=1),
+            "Europe/Amsterdam",
+        )
+        current = ev_service.document(now, "Europe/Amsterdam")["vehicles"][0]["charging_request"]
+        if index % 2 == 0:
+            ev_service.cancel_request(
+                request_id, current["version"], now + timedelta(seconds=2), CAR
+            )
+            expected[request_id] = "cancelled"
+        else:
+            ev_service.receive(
+                observations(ev_service, now + timedelta(seconds=2), soc=85),
+                now + timedelta(seconds=2),
+            )
+            expected[request_id] = "completed"
+        if index in (7, 15):
+            documents = list(ev_service.documents.iter_prefix("ev-"))
+            counts.append(
+                sum(
+                    len(document.get("requests", {}))
+                    + int("vehicle_id" in document and "status" in document)
+                    for document in documents
+                )
+            )
+            checkpoints.append(
+                (
+                    ev_service.documents.read("ev-state.json"),
+                    {request_id: (status, 75) for request_id, status in expected.items()},
+                )
+            )
+    record_testsuite_property(
+        "ev_request_records_8_16_" + ev_service.documents.engine.dialect.name, str(counts)
+    )
+    assert counts[1] <= counts[0] * 2.5, counts
+    restored = EVService(ev_service.documents, ev_service.consumers, ev_service.appliances)
+    assert {
+        row["id"]: row["status"] for row in restored.request_history(catalogue())["requests"]
+    } == expected
+    assert all(request["target_soc"] == 75 for request in restored.state["requests"].values())
+    for archived, outcomes in checkpoints:
+        retained = ev_support.reconstruct_requests(ev_service.documents, archived)
+        assert {
+            request_id: (request["status"], request["target_soc"])
+            for request_id, request in retained.items()
+        } == outcomes
+
+
+def test_request_versions_and_compact_state_roll_back_together(ev_service, monkeypatch):
+    """A failed current-state write must leave neither a new request nor a partial immutable history."""
+    before = sorted(ev_service.documents.iter_prefix("ev-"), key=lambda row: str(row))
+    original_write = ev_service.documents.write
+
+    def fail_pointer(name, document):
+        """Fail after request/version persistence but before the global pointer can commit."""
+        if name == "ev-state.json":
+            raise OSError("Synthetic write interruption")
+        original_write(name, document)
+
+    monkeypatch.setattr(ev_service.documents, "write", fail_pointer)
+    with pytest.raises(OSError):
+        ev_service.save_request(
+            {"request_id": str(uuid4()), "vehicle_id": CAR}, NOW, "Europe/Amsterdam"
+        )
+    assert sorted(ev_service.documents.iter_prefix("ev-"), key=lambda row: str(row)) == before
+    restored = EVService(ev_service.documents, ev_service.consumers, ev_service.appliances)
+    assert restored.state["requests"] == {}
+
+
+def test_saved_vehicle_defaults_without_request_fields_remain_compatible(ev_service):
+    """A released configuration document gains no implicit work and remains the parent of the first explicit request."""
+    from open_energy_planner.demand.calculation.model import digest
+
+    previous = {**settings(), "assignments": {}}
+    previous_revision = digest(previous)
+    ev_service.documents.write("ev-state-" + previous_revision + ".json", previous)
+    ev_service.documents.write("ev-state.json", previous)
+    restored = EVService(ev_service.documents, ev_service.consumers, ev_service.appliances)
+    assert restored.state["requests"] == {}
+    assert restored.state["active_requests"] == {}
+    assert restored.state["vehicles"][0]["target_soc"] == 80
+    restored.save_request({"request_id": str(uuid4()), "vehicle_id": CAR}, NOW, "Europe/Amsterdam")
+    current = restored.documents.read("ev-state.json")
+    assert current["previous_revision"] == previous_revision
+    assert restored.documents.read("ev-state-" + previous_revision + ".json") == previous
+    assert len(ev_support.reconstruct_requests(restored.documents, current)) == 1

@@ -34,6 +34,8 @@ from open_energy_planner.home_assistant.names import source_names, vehicle_sourc
 from open_energy_planner.optimization.adapters.process.worker import DEFAULT_WORKER_TIMEOUT_SECONDS
 
 STATE_KEY = "ev-state.json"
+REQUEST_CURRENT_PREFIX = "ev-request-current-"
+REQUEST_VERSION_PREFIX = "ev-request-version-"
 REPORT_MAX_AGE_SECONDS = 120
 CLOCK_SKEW_SECONDS = 5
 HA_HANDOVER_SECONDS = 5
@@ -48,25 +50,56 @@ class EVService:
     def __init__(self, documents, consumers, appliances):
         """Restore intent without promoting retained SoC or old vehicle assignments to live facts."""
         self.documents, self.consumers, self.appliances = documents, consumers, appliances
-        self.state = (
-            documents.read(STATE_KEY)
-            if documents.exists(STATE_KEY)
-            else {"vehicles": [], "points": [], "assignments": {}}
+        persisted = documents.read(STATE_KEY) if documents.exists(STATE_KEY) else None
+        self.archive_revision = digest(persisted) if persisted else None
+        self.state = {
+            "vehicles": [],
+            "points": [],
+            "assignments": {},
+            "requests": {},
+            "active_requests": {},
+        }
+        if persisted:
+            self.state.update({key: persisted[key] for key in self.state if key in persisted})
+        self.state["requests"].update(
+            {record["id"]: record for record in documents.iter_prefix(REQUEST_CURRENT_PREFIX)}
         )
         self.report = None
         self.issue = None
         self.power_deviations = {}
-        self.state.setdefault("requests", {})
-        self.state.setdefault("active_requests", {})
 
     def commit(self, state):
-        """Archive a complete intent revision and update its pointer in one database transaction."""
+        """Atomically archive only changed requests and link bounded global intent revisions."""
         if state == self.state:
             return
+        changed = {
+            request_id: record
+            for request_id, record in state["requests"].items()
+            if record != self.state["requests"].get(request_id)
+        }
+        snapshot = {
+            **{key: state[key] for key in ("vehicles", "points", "assignments", "active_requests")},
+            "requests": {
+                request_id: state["requests"][request_id]
+                for request_id in state["active_requests"].values()
+            },
+            "request_changes": {
+                request_id: digest(record) for request_id, record in changed.items()
+            },
+            "previous_revision": self.archive_revision,
+        }
+        revision = digest(snapshot)
         with self.documents.transaction():
-            self.documents.write("ev-state-" + digest(state) + ".json", state)
-            self.documents.write(STATE_KEY, state)
+            for request_id, record in changed.items():
+                self.documents.write(
+                    REQUEST_VERSION_PREFIX + snapshot["request_changes"][request_id] + ".json",
+                    record,
+                )
+                self.documents.write(REQUEST_CURRENT_PREFIX + request_id + ".json", record)
+            self.documents.write("ev-state-" + revision + ".json", snapshot)
+            self.documents.write(STATE_KEY, snapshot)
         self.state = state
+        self.archive_revision = revision
 
     @property
     def revision(self):

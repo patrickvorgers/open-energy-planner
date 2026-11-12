@@ -131,6 +131,10 @@ that confirmation remains valid. Use **Refresh charging evidence** to retry the
 read. An actual rejected write keeps your edits. Native Home Assistant
 cancellation withdraws EV permission immediately after acceptance, even if the
 following connection to the app fails.
+A read that does not finish within thirty seconds stops with recovery advice.
+Refresh again when the connection is available. Your pending edits are retained.
+If the reply to a write is lost, OEP cannot confirm its outcome. Check the saved
+request before explicitly retrying. OEP never automatically repeats that write.
 
 A request is one-off unless you enable **Repeat on selected weekdays** and select
 its days. Selecting every day means daily repetition. Each occurrence uses the

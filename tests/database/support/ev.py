@@ -29,3 +29,20 @@ def ev_service(request):
     yield service
     SCHEMA.drop_all(engine)
     engine.dispose()
+
+
+def reconstruct_requests(documents, archived):
+    """Replay a historical global revision from its immutable request versions or complete original document."""
+    requests = {}
+    while archived is not None:
+        if "request_changes" not in archived:
+            for request_id, request in archived.get("requests", {}).items():
+                requests.setdefault(request_id, request)
+            break
+        for request_id, version in archived["request_changes"].items():
+            requests.setdefault(
+                request_id, documents.read("ev-request-version-" + version + ".json")
+            )
+        previous = archived["previous_revision"]
+        archived = documents.read("ev-state-" + previous + ".json") if previous else None
+    return requests

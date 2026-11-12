@@ -8,13 +8,53 @@ const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
 const drafts = new Map();
 const historyPages = new Set();
+const activeReads = new Set();
+const EV_READ_TIMEOUT_MILLISECONDS = 30000;
+const READ_FAILURE = "Charging evidence could not be read. Check the connection and try Refresh.";
+const WRITE_UNCERTAIN = "Charging request outcome could not be confirmed. Your edits are retained. Refresh charging evidence before retrying.";
+const validationMessages = new Map([
+    "Charging request belongs to a different vehicle", "Invalid charging request fields",
+    "Charging request ID was already used", "Charging departure must be in the next thirty days",
+    "Charging departure must be after this request's readiness",
+    "Choose distinct repeat weekdays between zero and six", "Only a planned charging request can be edited",
+    "Charging request changed. Refresh before saving", "Charging request no longer exists",
+    "This vehicle already has a planned charging request", "Charging request changed. Refresh before cancelling",
+    "Invalid EV physical quantity", "Unknown vehicle",
+].map(message => [message, message]));
+const preparationMessages = new Map([
+    "Choose at least one repeat weekday.", "Choose a valid date and time.",
+    "This time does not exist in the Home Assistant installation timezone.",
+].map(message => [message, message]));
+/** Only explicit app-owned messages may enter visible request diagnostics. */
+class EVRequestError extends Error {
+    constructor(publicMessage) { super(); this.publicMessage = publicMessage; }
+}
+/** Keep arbitrary transport and preparation exception values outside the page. */
+function requestMessage(error) { return error instanceof EVRequestError ? error.publicMessage : READ_FAILURE; }
+/** Cancel superseded read bodies without cancelling a potentially durable write. */
+function abortReads() { for (const controller of activeReads) controller.abort(); }
 const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-let generation = 0, token = "", current = null, busy = false;
-/** Keep credentials within the existing authenticated app connection. */
+let generation = 0, token = "", current = null, busy = false, loading = null;
+/** Bound reads through body consumption. Unconfirmed writes retain their exact retry identity. */
 async function api(path, body) {
-    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store"});
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
+    const controller = body ? null : new AbortController();
+    if (controller) activeReads.add(controller);
+    const deadline = controller ? setTimeout(() => controller.abort(), EV_READ_TIMEOUT_MILLISECONDS) : null;
+    try {
+        const response = await fetch(base + path, {method: body ? "POST" : "GET", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal: controller?.signal});
+        if (response.status === 401) throw new EVRequestError("The installation token was rejected.");
+        if (!response.ok) {
+            if (body && [400, 409].includes(response.status)) {
+                const canonical = validationMessages.get(await response.text());
+                if (canonical) throw new EVRequestError(canonical);
+            } else await response.body?.cancel();
+            throw new EVRequestError(body ? WRITE_UNCERTAIN : READ_FAILURE);
+        }
+        const data = await response.json(); controller?.signal.throwIfAborted(); return data;
+    } catch (error) {
+        if (error instanceof EVRequestError) throw error;
+        throw new EVRequestError(body ? WRITE_UNCERTAIN : READ_FAILURE);
+    } finally { if (controller) { clearTimeout(deadline); activeReads.delete(controller); } }
 }
 /** Provider names and diagnostics remain text. */
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
@@ -46,7 +86,7 @@ function edit(vehicle) {
 }
 /** Keep durable acceptance separate from optional follow-up reads. */
 async function mutate(path, body, status, afterSave) {
-    if (busy) return; busy = true; generation += 1;
+    if (busy) return; busy = true; generation += 1; abortReads(); find("refresh-evidence").disabled = true;
     find("vehicle-controls").querySelectorAll("input, button").forEach(control => { control.disabled = true; });
     let accepted = false;
     const confirmation = path.endsWith("/cancel") ? "Charging request cancelled." : "Charging request saved. A plan does not confirm physical charging.";
@@ -54,12 +94,12 @@ async function mutate(path, body, status, afterSave) {
         const result = await api(path, body); accepted = true; afterSave();
         current = result; useHomeAssistantTimezone(current.timezone); renderSessions(); renderControls();
         find("status").textContent = confirmation;
-        await load(); find("status").textContent = confirmation;
+        await load(true); find("status").textContent = confirmation;
     } catch (error) {
         if (accepted) find("status").textContent = `${confirmation} Refresh charging evidence to reload the latest status and history.`;
-        else status.textContent = error.message;
+        else status.textContent = requestMessage(error);
     } finally {
-        busy = false; find("vehicle-controls").querySelectorAll("input, button").forEach(control => { control.disabled = false; });
+        busy = false; find("refresh-evidence").disabled = Boolean(loading); find("vehicle-controls").querySelectorAll("input, button").forEach(control => { control.disabled = false; });
     }
 }
 /** Submit all overrides together without changing configuration defaults. */
@@ -89,7 +129,7 @@ function requestForm(card, vehicle, draft) {
             const body = {request_id: draft.id, vehicle_id: vehicle.id, target_soc: inputNumber(target), departure: date.value === localDateTime(draft.departure) ? draft.departure : localInstant(date.value), repeat_weekdays: draft.repeat ? draft.days : []};
             if (draft.version) body.expected_version = draft.version;
             mutate("v1/ev/requests", body, status, () => drafts.delete(vehicle.id));
-        } catch (error) { status.textContent = error.message; }
+        } catch (error) { status.textContent = preparationMessages.get(error?.message) || "Charging request could not be prepared. Check target, departure and repeat weekdays."; }
     };
     card.append(form);
 }
@@ -130,22 +170,31 @@ async function loadHistory(cursor = null, requested = generation) {
         for (const request of result.requests) find("request-history").append(node("p", `${request.vehicle_name}: ${request.status.replace(/^./, letter => letter.toUpperCase())}: Target: ${percentage(request.target_soc)}: Ready by: ${when(request.departure)}: ${repeatText(request.repeat_weekdays)}`));
         if (!cursor && !result.requests.length) find("request-history").append(node("p", "No charging requests yet."));
         find("more-history").hidden = !result.next_cursor;
-        find("more-history").onclick = () => loadHistory(result.next_cursor, requested).catch(error => { if (requested === generation) find("status").textContent = error.message; });
+        find("more-history").onclick = () => loadHistory(result.next_cursor, requested).catch(error => { if (requested === generation) find("status").textContent = requestMessage(error); });
     } catch (error) {
         if (requested !== generation) return;
         historyPages.delete(key); throw error;
     } finally { if (requested === generation) find("more-history").disabled = false; }
 }
-/** Refresh measurements without replacing complete request drafts. */
-async function load() {
-    const requested = ++generation; historyPages.clear();
-    const data = await api("v1/ev"); if (requested !== generation) return;
-    current = data; useHomeAssistantTimezone(current.timezone); find("connect").hidden = true;
-    find("status").textContent = current.issue || "Connected: Only explicit requests for identified connected vehicles can be planned.";
-    renderSessions(); renderControls(); await loadHistory(null, requested);
+/** Share manual refreshes and settle cancelled predecessors before reading a new evidence cohort. */
+function load(replace = false) {
+    if (loading && !replace) return loading.promise;
+    const previous = loading, requested = ++generation, owner = {};
+    abortReads(); historyPages.clear(); loading = owner; find("refresh-evidence").disabled = true;
+    owner.promise = (async () => {
+        if (previous) await previous.promise.catch(() => {});
+        if (requested !== generation) return;
+        const data = await api("v1/ev"); if (requested !== generation) return;
+        current = data; useHomeAssistantTimezone(current.timezone); find("connect").hidden = true;
+        find("status").textContent = current.issue || "Connected: Only explicit requests for identified connected vehicles can be planned.";
+        renderSessions(); renderControls(); await loadHistory(null, requested);
+    })().catch(error => { if (requested === generation) throw error; }).finally(() => {
+        if (loading === owner) { loading = null; find("refresh-evidence").disabled = busy; }
+    });
+    return owner.promise;
 }
-find("refresh-evidence").onclick = () => { if (!busy) load().catch(error => { find("status").textContent = error.message; }); };
-find("connect").onsubmit = event => { event.preventDefault(); token = find("token").value; load().catch(error => { find("status").textContent = error.message; }); };
+find("refresh-evidence").onclick = () => { if (!busy) load().catch(error => { find("status").textContent = requestMessage(error); }); };
+find("connect").onsubmit = event => { event.preventDefault(); token = find("token").value; load(true).catch(error => { find("status").textContent = requestMessage(error); }); };
 window.addEventListener("beforeunload", event => { if (drafts.size) { event.preventDefault(); event.returnValue = ""; } });
 document.addEventListener("oep-before-navigation", event => {
     if (!drafts.size) return;
@@ -153,4 +202,4 @@ document.addEventListener("oep-before-navigation", event => {
     if (busy) return;
     confirmAction({title: "Discard charging request changes?", message: "The charging request changes have not been saved. Leave this page and discard them?", confirmLabel: "Discard changes"}).then(accepted => { if (accepted) { drafts.clear(); event.detail.navigate(); } });
 });
-fetch(base + "setup/session", {redirect: "error", cache: "no-store"}).then(response => response.json()).then(session => { useHomeAssistantTimezone(session.timezone); if (session.ingress) return load(); }).catch(error => { find("status").textContent = error.message; });
+api("setup/session").then(session => { useHomeAssistantTimezone(session.timezone); if (session.ingress) return load(); }).catch(error => { if (!current) find("status").textContent = requestMessage(error); });

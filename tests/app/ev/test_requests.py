@@ -181,3 +181,54 @@ def test_invalid_repeat_days_cannot_change_saved_state(days):
             "Europe/Amsterdam",
         )
     assert state == before
+
+
+def test_stale_noop_edit_must_still_validate_the_saved_version():
+    """Equal desired fields cannot turn an unrelated stale version into successful optimistic editing."""
+    state, body = create()
+    before = deepcopy(state)
+    with pytest.raises(ValueError, match="changed"):
+        save_request(state, {**body, "expected_version": "stale-editor"}, NOW, "Europe/Amsterdam")
+    assert state == before
+    assert save_request(state, body, NOW, "Europe/Amsterdam") == state
+
+
+def test_editing_a_future_repeat_preserves_its_readiness_boundary():
+    """Changing a future occurrence must not reuse the already completed period's charge."""
+    state, body = create(repeat=range(7))
+    now = NOW + timedelta(minutes=1)
+    state = advance_requests(state, report(now), now)
+    following = active_request(state, CAR)
+    original_ready = following["ready_at"]
+    edited = save_request(
+        state,
+        {
+            "request_id": following["id"],
+            "vehicle_id": CAR,
+            "target_soc": 80,
+            "departure": following["departure"],
+            "repeat_weekdays": following["repeat_weekdays"],
+            "expected_version": request_document(following)["version"],
+        },
+        now,
+        "Europe/Amsterdam",
+    )
+    assert active_request(edited, CAR)["ready_at"] == original_ready == body["departure"]
+    assert (
+        advance_requests(
+            edited, report(now + timedelta(seconds=1), soc=90), now + timedelta(seconds=1)
+        )
+        == edited
+    )
+    with pytest.raises(ValueError, match="readiness"):
+        save_request(
+            edited,
+            {
+                "request_id": following["id"],
+                "vehicle_id": CAR,
+                "departure": (now + timedelta(minutes=10)).isoformat(),
+                "expected_version": request_document(active_request(edited, CAR))["version"],
+            },
+            now,
+            "Europe/Amsterdam",
+        )

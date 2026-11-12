@@ -120,25 +120,28 @@ def save_request(state, body, now, timezone):
     if existing:
         if existing["vehicle_id"] != vehicle["id"] or existing["status"] != RequestStatus.PLANNED:
             raise ValueError("Only a planned charging request can be edited")
+        if expected != digest(existing):
+            raise ValueError("Charging request changed. Refresh before saving")
         if (
             existing["target_soc"] == target
             and instant(existing["departure"]) == deadline
             and existing["repeat_weekdays"] == weekdays
         ):
             return state
-        if expected != digest(existing):
-            raise ValueError("Charging request changed. Refresh before saving")
     elif expected is not None:
         raise ValueError("Charging request no longer exists")
     elif active_request(state, vehicle["id"]):
         raise ValueError("This vehicle already has a planned charging request")
+    ready_at = max(now, instant(existing["ready_at"])) if existing else now
+    if deadline <= ready_at:
+        raise ValueError("Charging departure must be after this request's readiness")
     updated = deepcopy(state)
     record = {
         "id": body["request_id"],
         "vehicle_id": vehicle["id"],
         "target_soc": target,
         "departure": deadline.isoformat(),
-        "ready_at": now.isoformat(),
+        "ready_at": ready_at.isoformat(),
         "repeat_weekdays": weekdays,
         "repeat_time": deadline.astimezone(ZoneInfo(timezone)).strftime("%H:%M"),
         "timezone": timezone,

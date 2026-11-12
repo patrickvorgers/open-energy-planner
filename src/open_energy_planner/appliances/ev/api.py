@@ -19,6 +19,7 @@ PUBLIC_VALIDATION_MESSAGES = (
     "Invalid charging request fields",
     "Charging request ID was already used",
     "Charging departure must be in the next thirty days",
+    "Charging departure must be after this request's readiness",
     "Choose distinct repeat weekdays between zero and six",
     "Only a planned charging request can be edited",
     "Charging request changed. Refresh before saving",
