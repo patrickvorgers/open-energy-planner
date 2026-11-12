@@ -129,6 +129,7 @@ def initial_plan_view(plan):
 
 
 SAVINGS_WORKER_SECONDS = 30
+CAPTURE_REQUEST_FAILURE = "Settlement capture unavailable. Inspect application logs"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -190,10 +191,13 @@ def register(
                         raise
                     cancellation = error
         except Exception:
-            runtime.issue = "Settlement capture unavailable. Inspect application logs"
+            runtime.issue = CAPTURE_REQUEST_FAILURE
             runtime.attention = True
             _LOGGER.exception("Settlement request failed. Planning remains independent")
             result = None
+        else:
+            if runtime.issue == CAPTURE_REQUEST_FAILURE:
+                runtime.issue, runtime.attention = None, False
         if cancellation is not None:
             raise cancellation
         return result

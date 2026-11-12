@@ -76,6 +76,14 @@ rechecks newer pause/resume/closed intent before accepting an older snapshot.
 Pending capture reuses one immutable binding projection per plan rather than
 reconstructing its full archive on every HA poll.
 
+Accepting raw measurements does not establish financial recovery and must not
+clear a pending financial or prerequisite issue. A recovered capture-request
+read clears only its own failure and its action-required flag together, including
+when no new measurements or completed calendar day are available. The daily
+worker clears a recovered configuration prerequisite after checking the current
+contract and location. Home Assistant retains an action-required notification
+with owned fallback guidance when its explanation is missing or empty.
+
 ## Measured evidence and coverage
 
 Comparison starts after the first newly recorded plan publication, at the next
