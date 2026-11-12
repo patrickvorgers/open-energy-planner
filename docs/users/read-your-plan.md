@@ -36,7 +36,7 @@ Above zero is supply to the modeled balance: used solar, grid import and battery
 
 The series together should balance around zero. Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
-Use **Next 6 hours**, **Next 24 hours** or **Full period** (with its available duration). Day bands and date labels identify calendar boundaries in the installation timezone. On a phone, the legend sits below the chart. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
+Use **Next 6 hours**, **Next 24 hours** or **Full period** (with its available duration). Day bands and date labels identify calendar boundaries in the installation timezone. The legend sits below the full-width chart, with aligned columns on wider screens and compact wrapping on phones. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
 
 Hover over a date above any of the three scenario charts to see its energy totals.
 You can also focus the date with the keyboard or tap it on a phone. Press Escape

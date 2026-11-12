@@ -56,12 +56,13 @@
 .chart-day-headings .chart-day-summary { all:unset; display:block; width:100%; height:100%; cursor:help; text-align:center; }
 .chart-day-summary > span { display:block; white-space:nowrap; }
 .chart-day-summary:focus-visible { outline:2px solid #324f9d; outline-offset:-2px; border-radius:3px; }
-.chart-legend { display:flex; flex-wrap:wrap; gap:4px 16px; padding-top:14px; }
-.chart-legend label { display:flex; align-items:center; gap:7px; margin:4px 0; font-size:11px; cursor:pointer; }
-.chart-legend input { accent-color:#087f76; }
+.chart-legend { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr)); gap:4px 20px; padding-top:14px; min-width:0; }
+.chart-legend label { display:flex; align-items:center; gap:7px; margin:4px 0; min-width:0; overflow-wrap:anywhere; font-size:11px; cursor:pointer; }
+.chart-legend input { accent-color:#087f76; flex-shrink:0; }
+.chart-legend .series-swatch,.chart-legend .quality-line-swatch { flex-shrink:0; }
+.chart-legend > button,.chart-legend > p { grid-column:1/-1; }
+.chart-legend > button { justify-self:start; }
 .workspace details { border:1px solid #dee6ec; border-radius:10px; background:#fff; padding:16px; margin:16px 0; font-size:13px; }
-.workspace #savings-view .daily-savings-chart { grid-template-columns:minmax(0,1fr); }
-.workspace .daily-savings-chart > .chart-legend { flex-direction:row; flex-wrap:wrap; padding-top:14px; }
 .workspace #daily-savings-details .table-scroll { max-height:none; }
 .workspace #daily-savings-details details { margin:0; padding:6px 10px; }
 .workspace #daily-savings-details td { vertical-align:top; font-variant-numeric:tabular-nums; }
@@ -266,15 +267,13 @@
 
 .workspace .page-heading { display:flex; align-items:center; gap:12px; }
 .workspace .page-icon { width:32px; height:32px; flex-shrink:0; }
-.chart-card:has(> .chart-legend),.chart-plot { display:grid; grid-template-columns:minmax(0,1fr) minmax(140px,180px); column-gap:16px; }
+.chart-card:has(> .chart-legend),.chart-plot { display:grid; grid-template-columns:minmax(0,1fr); }
 .chart-card:has(> .chart-legend) > figcaption,.chart-card:has(> .chart-legend) > p { grid-column:1/-1; }
-.chart-card > .chart-legend,.chart-plot > .chart-legend { flex-direction:column; flex-wrap:nowrap; align-self:start; padding-top:0; min-width:0; }
 .chart-tooltip-balance { max-height:calc(100dvh - 24px); overflow-y:auto; }
 .balance-tooltip-groups h4 { margin:10px 0 4px; color:inherit; }
 .chart-tooltip-state { margin-top:8px; padding-top:4px; border-top:1px solid #ffffff40; }
 @media(max-width:640px) {
-    .chart-card:has(> .chart-legend),.chart-plot { grid-template-columns:minmax(0,1fr); }
-    .chart-card > .chart-legend,.chart-plot > .chart-legend { flex-direction:row; flex-wrap:wrap; padding-top:14px; }
+    .chart-legend { display:flex; flex-wrap:wrap; gap:4px 16px; }
 }
 
 .chart-tooltip-balance .chart-tooltip-value { width:64px; }

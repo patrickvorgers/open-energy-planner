@@ -1,5 +1,4 @@
 /** Scale visible data, synchronize comparison groups and share responsive legends without changing series. */
-const mobile = window.matchMedia("(max-width: 640px)");
 const AXIS_MARGIN_FRACTION = 0.10;
 const VALUE_AXIS_INTERVALS = 6;
 const AXIS_SIGNIFICANT_DIGITS = 14;
@@ -88,14 +87,9 @@ Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options
         }
     } finally { synchronizingGroup = false; }
 }});
-/** Apply the same legend placement to new and existing Chart.js instances. */
-function positionLegends() {
-    const position = mobile.matches ? "bottom" : "right";
-    Chart.defaults.plugins.legend.position = position;
-    for (const chart of Object.values(Chart.instances)) {
-        chart.options.plugins.legend.position = position;
-        chart.update("none");
-    }
+// Keep native legends below the plot, including charts created before the theme loads.
+Chart.defaults.plugins.legend.position = "bottom";
+for (const chart of Object.values(Chart.instances)) {
+    chart.options.plugins.legend.position = "bottom";
+    chart.update("none");
 }
-positionLegends();
-mobile.addEventListener("change", positionLegends);
