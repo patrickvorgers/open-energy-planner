@@ -102,16 +102,16 @@ def register(app, installation, demand, solar):
                     and solar.configuration is not None
                     else "/setup"
                 )
-                selected_page = request.query.get("page", default_page)
-                if selected_page.split("#", 1)[0] not in page_routes:
-                    selected_page = default_page
+                selected_page, separator, fragment = request.query.get(
+                    "page", default_page
+                ).partition("#")
+                selected_page = PAGE_ALIASES.get(selected_page, selected_page)
+                if selected_page not in page_routes:
+                    selected_page, separator, fragment = default_page, "", ""
                 html = html.replace(
                     "__OEP_START_PAGE__",
                     escape(
-                        base
-                        + selected_page.split("#", 1)[0]
-                        + "?embedded=1"
-                        + ("#" + selected_page.split("#", 1)[1] if "#" in selected_page else ""),
+                        base + selected_page + "?embedded=1" + separator + fragment,
                         quote=True,
                     ),
                 )

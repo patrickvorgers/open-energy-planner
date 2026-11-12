@@ -56,7 +56,9 @@ instead. Companion/HTTPS reachability and final public distribution retain their
 separate acceptance gates. The app never installs the HA integration itself.
 
 The workspace iframe has its initial content URL in the HTML. The browser starts
-that document without waiting for workspace navigation scripts. Navigation stays
+that document without waiting for workspace navigation scripts. The initial page
+uses the registered canonical route for aliases such as `/setup/` and `/consumers`,
+preserving its fragment and trusted ingress prefix. Navigation stays
 inert until its draft-preserving handlers are attached. Notifications load as an
 optional module and cannot hold the initial document or Planning module graph.
 A failed notification module shows reload advice while ordinary navigation stays
