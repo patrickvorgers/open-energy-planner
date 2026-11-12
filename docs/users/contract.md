@@ -33,6 +33,13 @@ The Home Assistant timezone governs calendar dates. A future rule does not rewri
 
 Keep the base export formula and extra bonus separate. Review qualifying price conditions, allowed hours, annual volume cap and reset date. The **Bonus budget** panel shows the remaining allowance, used volume and opening evidence.
 
+The **Include export bonus** switch and all bonus controls share one bordered panel.
+The price condition, battery export protection, annual reset and paid window belong
+to that bonus. Base import and export formulas remain outside the panel.
+Each supplier tab in **Bonus examples** also explains battery export protection.
+The Zonneplan example leaves this choice to your signed terms. The NextEnergy and
+Budget Energie examples enable it for their described battery restrictions.
+
 Home Assistant history normally establishes the opening volume. If complete history is missing, use manual confirmation only when the panel offers that recovery. Confirm the amount against the displayed **Opening as of** measurement date. Do not enter today's estimate against an older baseline.
 
 Planned export does not consume the measured annual allowance. OEP evaluates proposed scenarios with separate counters. Changing a rule does not reset actual exported energy or create a new allowance automatically.
