@@ -34,12 +34,11 @@ def register_services(hass):
         operation = "requests" if call.service == "ev_schedule" else "cancel"
         body["vehicle_id"] = vehicle["id"]
         try:
-            await coordinator.client.request("POST", "/v1/ev/" + operation, body)
-            await coordinator.sync()
-        except (ClientError, ValueError, KeyError) as error:
+            accepted = await coordinator.write_ev(operation, body)
+        except (ClientError, TimeoutError, ValueError, KeyError) as error:
             raise HomeAssistantError("The app could not accept this charging request") from error
         current = next(
-            (row for row in coordinator.ev.get("vehicles", []) if row["id"] == vehicle["id"]), {}
+            (row for row in accepted.get("vehicles", []) if row["id"] == vehicle["id"]), {}
         )
         return {"charging_request": current.get("charging_request")}
 

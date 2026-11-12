@@ -1244,7 +1244,7 @@ def test_ev_unchanged_fold_departures_keep_exact_latest_saved_instant(app_page):
         body = route.request.post_data_json
         writes.append(body)
         request.update(target_soc=body["target_soc"], departure=body["departure"])
-        route.fulfill(json={"accepted": True})
+        route.fulfill(json=document)
 
     page.goto(url + "/ev")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)

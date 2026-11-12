@@ -84,9 +84,8 @@ class EVEntity(PlannerEntity):
     async def write(self, operation, body):
         """Forward intent without optimistic state and resynchronize after durable acceptance."""
         try:
-            await self.coordinator.client.request("POST", "/v1/ev/" + operation, body)
-            await self.coordinator.sync()
-        except (ClientError, ValueError, KeyError) as error:
+            await self.coordinator.write_ev(operation, body)
+        except (ClientError, TimeoutError, ValueError, KeyError) as error:
             raise HomeAssistantError("The app could not accept this EV request") from error
 
     async def intent(self, field, value):

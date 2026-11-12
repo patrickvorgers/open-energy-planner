@@ -67,6 +67,7 @@ class PlanCoordinator:
         self.solar_feedback_attempts = {}
         self.solar_feedback_reads = {}
         self.ev = {}
+        self.ev_intent_generation = 0
         self.ev_sessions = {}
         self.ev_watch = ()
         self.ev_cancel = None
@@ -302,6 +303,15 @@ class PlanCoordinator:
                 self.catalogue_failed_at = None
             _LOGGER.debug("Setup catalogue confirmation failed", exc_info=True)
 
+    async def write_ev(self, operation, body):
+        """Revoke only EV permission after confirmed intent, before any fallible refresh."""
+        response = await self.client.request("POST", "/v1/ev/" + operation, body)
+        self.ev_intent_generation += 1
+        self.ev = {**self.ev, "revision": None}
+        self.refresh()
+        await self.sync()
+        return response
+
     async def sync(self, _now=None):
         """Serialize authenticated snapshots/reports and accept only compatible validated plans.
 
@@ -327,11 +337,16 @@ class PlanCoordinator:
                         self.schedule.invalidate()
                         self.refresh()
                 intent_at_request = self.schedule.resume_after
+                ev_intent_at_request = self.ev_intent_generation
                 if self.pending_enabled is not None:
                     await self.client.enabled(
                         self.pending_enabled, self.schedule.resume_after.isoformat()
                     )
-                    if self.closed or self.schedule.resume_after != intent_at_request:
+                    if (
+                        self.closed
+                        or self.schedule.resume_after != intent_at_request
+                        or self.ev_intent_generation != ev_intent_at_request
+                    ):
                         return
                     self.pending_enabled = None
                     return
@@ -343,7 +358,11 @@ class PlanCoordinator:
                     except (ClientError, TimeoutError):
                         await self._confirm_catalogue(dt_util.utcnow())
                         raise
-                if self.closed or self.schedule.resume_after != intent_at_request:
+                if (
+                    self.closed
+                    or self.schedule.resume_after != intent_at_request
+                    or self.ev_intent_generation != ev_intent_at_request
+                ):
                     return
                 if data.get("release") != RELEASE:
                     self.action_required(
@@ -378,7 +397,11 @@ class PlanCoordinator:
                     except (ClientError, TimeoutError):
                         await self._confirm_catalogue(dt_util.utcnow())
                         raise
-                    if self.closed or self.schedule.resume_after != intent_at_request:
+                    if (
+                        self.closed
+                        or self.schedule.resume_after != intent_at_request
+                        or self.ev_intent_generation != ev_intent_at_request
+                    ):
                         return
                     if data.get("release") != RELEASE:
                         raise ValueError("Observation response release mismatch")
@@ -392,7 +415,11 @@ class PlanCoordinator:
                                 # Invalid/gapped history is diagnosed by the app. A fresh
                                 # snapshot retains that reason and normal plan validation.
                                 data = await self.client.snapshot()
-                        if self.closed or self.schedule.resume_after != intent_at_request:
+                        if (
+                            self.closed
+                            or self.schedule.resume_after != intent_at_request
+                            or self.ev_intent_generation != ev_intent_at_request
+                        ):
                             return
                         if data.get("release") != RELEASE:
                             raise ValueError("History response release mismatch")
@@ -404,7 +431,11 @@ class PlanCoordinator:
                                 data = await self.client.demand_history(historical)
                             except ClientError:
                                 data = await self.client.snapshot()
-                        if self.closed or self.schedule.resume_after != intent_at_request:
+                        if (
+                            self.closed
+                            or self.schedule.resume_after != intent_at_request
+                            or self.ev_intent_generation != ev_intent_at_request
+                        ):
                             return
                         if data.get("release") != RELEASE:
                             raise ValueError("Demand history response release mismatch")
@@ -418,7 +449,11 @@ class PlanCoordinator:
                                 )
                             except ClientError:
                                 data = await self.client.snapshot()
-                        if self.closed or self.schedule.resume_after != intent_at_request:
+                        if (
+                            self.closed
+                            or self.schedule.resume_after != intent_at_request
+                            or self.ev_intent_generation != ev_intent_at_request
+                        ):
                             return
                         if data.get("release") != RELEASE:
                             raise ValueError("Solar history response release mismatch")
@@ -558,6 +593,8 @@ class PlanCoordinator:
                     # A persisted manual pause cannot be silently cancelled by a stale app.
                     self.pending_enabled = False
                 self.planning_status = data.get("planning")
+                if self.ev_intent_generation != ev_intent_at_request:
+                    return
                 if "ev" in data:
                     from .ev import capture as capture_ev
                     from .ev import receive as receive_ev
@@ -566,13 +603,14 @@ class PlanCoordinator:
                     self.ev = receive_ev(data["ev"])
                     watch_connections(self)
                     if self.ev["vehicles"] or self.ev["points"]:
-                        self.ev = receive_ev(
-                            await self.client.request(
-                                "POST",
-                                "/v1/ev/observations",
-                                capture_ev(self, self.ev, dt_util.utcnow()),
-                            )
+                        ev_reply = await self.client.request(
+                            "POST",
+                            "/v1/ev/observations",
+                            capture_ev(self, self.ev, dt_util.utcnow()),
                         )
+                        if self.closed or self.ev_intent_generation != ev_intent_at_request:
+                            return
+                        self.ev = receive_ev(ev_reply)
                     if data.get("plan") and data["plan"].get("ev_context", {}).get(
                         "revision"
                     ) not in (None, self.ev["revision"]):
@@ -628,7 +666,11 @@ class PlanCoordinator:
                             # A transport outage retains only locally fresh, guarded permissions.
                             _LOGGER.debug("Thermal observations transfer failed", exc_info=True)
                         else:
-                            if self.closed or self.schedule.resume_after != intent_at_request:
+                            if (
+                                self.closed
+                                or self.schedule.resume_after != intent_at_request
+                                or self.ev_intent_generation != ev_intent_at_request
+                            ):
                                 return
                             self.thermal = receive_thermal(thermal_reply)
                 except (AuthenticationError, ReleaseMismatchError):
@@ -869,7 +911,11 @@ class PlanCoordinator:
                 from .solar_feedback import synchronize as synchronize_solar_feedback
 
                 await synchronize_solar_feedback(self, data)
-                if self.closed or self.schedule.resume_after != intent_at_request:
+                if (
+                    self.closed
+                    or self.schedule.resume_after != intent_at_request
+                    or self.ev_intent_generation != ev_intent_at_request
+                ):
                     return
                 for request_key, bridge, endpoint, label in (
                     (
@@ -905,7 +951,11 @@ class PlanCoordinator:
                             label,
                             exc_info=True,
                         )
-                    if self.closed or self.schedule.resume_after != intent_at_request:
+                    if (
+                        self.closed
+                        or self.schedule.resume_after != intent_at_request
+                        or self.ev_intent_generation != ev_intent_at_request
+                    ):
                         return
             except ReleaseMismatchError:
                 self.action_required(

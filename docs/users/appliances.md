@@ -126,6 +126,11 @@ request, then choose **Plan charging request** to save the complete request.
 These overrides never change the vehicle defaults in Appliances settings.
 Choose **Edit charging request** to change it or **Cancel charging request** to
 stop it. Cancelled, completed and expired requests remain in **Request history**.
+If OEP confirms a saved or cancelled request but cannot reload its latest status,
+that confirmation remains valid. Use **Refresh charging evidence** to retry the
+read. An actual rejected write keeps your edits. Native Home Assistant
+cancellation withdraws EV permission immediately after acceptance, even if the
+following connection to the app fails.
 
 A request is one-off unless you enable **Repeat on selected weekdays** and select
 its days. Selecting every day means daily repetition. Each occurrence uses the

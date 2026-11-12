@@ -26,7 +26,10 @@ from tests.custom_component.support.chain import (
 from tests.ha_contract.support.commands import command_plan
 
 
-def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
+@pytest.mark.parametrize("cancel_path", ["button", "service"])
+def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
+    monkeypatch, cancel_path
+):
     """Real HA selects car B, persists its target/departure and drives only a simulated wallbox. SoC/identity loss withdraw permission."""
     from homeassistant.components.energy.data import async_get_manager
     from homeassistant.helpers import device_registry as dr
@@ -282,6 +285,12 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
                         "session_id": nonce,
                     }
                 }
+            for step in plan["steps"]:
+                step["devices"]["battery"] = {
+                    "kind": "battery",
+                    "mode": "fixed_power",
+                    "power_w": -1000,
+                }
             coordinator.schedule.accept(plan, now)
             coordinator.refresh(now)
             await hass.async_block_till_done()
@@ -289,15 +298,96 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             assert hass.states.get(power).state == "2000"
             assert fixture["data"]["points"][0]["power_w"] == 2000
             assert fixture["data"]["points"][1]["power_w"] == 0
-            await hass.services.async_call(
-                "button",
-                "press",
-                {"entity_id": entity("button", OTHER_CAR, "cancel_charging")},
-                blocking=True,
+            retained_battery = next(
+                target
+                for target in coordinator.projection.command.devices
+                if target.kind == "battery"
             )
-            await hass.async_block_till_done()
+            assert retained_battery.power_w == -1000
+            from copy import deepcopy
+
+            from aiohttp import ClientConnectionError
+
+            original_snapshot, original_request = (
+                coordinator.client.snapshot,
+                coordinator.client.request,
+            )
+            older = await original_snapshot()
+            older.update(
+                plan=deepcopy(plan),
+                ev=deepcopy(coordinator.ev),
+                measurement_config=None,
+                config_revision=coordinator.schedule.config_revision,
+                source="demo",
+                installation={},
+            )
+            snapshot_started, release_snapshot, accepted_cancel = (
+                asyncio.Event(),
+                asyncio.Event(),
+                asyncio.Event(),
+            )
+
+            async def delayed_then_disconnected():
+                """Retain one pre-cancel snapshot and fail the subsequent post-write refresh."""
+                if not snapshot_started.is_set():
+                    snapshot_started.set()
+                    await release_snapshot.wait()
+                    return older
+                raise ClientConnectionError("Synthetic app outage after accepted cancel")
+
+            async def confirmed_request(method, path, body=None):
+                """Record durable cancellation acceptance without changing the authentic response."""
+                result = await original_request(method, path, body)
+                if path == "/v1/ev/cancel":
+                    accepted_cancel.set()
+                return result
+
+            monkeypatch.setattr(coordinator.client, "snapshot", delayed_then_disconnected)
+            monkeypatch.setattr(coordinator.client, "request", confirmed_request)
+            old_sync = asyncio.create_task(coordinator.sync())
+            await snapshot_started.wait()
+            vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+            request = vehicle["charging_request"]
+            if cancel_path == "button":
+                domain, action, payload = (
+                    "button",
+                    "press",
+                    {"entity_id": entity("button", OTHER_CAR, "cancel_charging")},
+                )
+            else:
+                domain, action, payload = (
+                    DOMAIN,
+                    "ev_cancel",
+                    {
+                        "device_id": device_id,
+                        "request_id": request["id"],
+                        "expected_version": request["version"],
+                    },
+                )
+            cancelling = asyncio.create_task(
+                hass.services.async_call(domain, action, payload, blocking=True)
+            )
+            await accepted_cancel.wait()
+            await asyncio.sleep(0)
+            try:
+                assert hass.states.get(permission).state == "off"
+                assert fixture["data"]["points"][0]["power_w"] == 0
+                assert retained_battery in coordinator.projection.command.devices
+            finally:
+                release_snapshot.set()
+                await asyncio.gather(old_sync, cancelling)
             assert hass.states.get(permission).state == "off"
             assert fixture["data"]["points"][0]["power_w"] == 0
+            assert retained_battery in coordinator.projection.command.devices
+            monkeypatch.setattr(coordinator.client, "snapshot", original_snapshot)
+            monkeypatch.setattr(coordinator.client, "request", original_request)
+            await coordinator.sync()
+            assert (
+                next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)[
+                    "charging_request"
+                ]
+                is None
+            )
             await hass.services.async_call(
                 DOMAIN,
                 "ev_schedule",

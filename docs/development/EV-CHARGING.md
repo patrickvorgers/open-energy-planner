@@ -162,6 +162,22 @@ Any request edit or cancellation invalidates old plan commands through the EV
 revision. Native command admission also checks the current request window and
 published revision, independently of local SoC/session safety.
 
+After a confirmed native or automation EV write, the integration immediately
+revokes only EV permission before attempting synchronization. A subsequent
+transport failure cannot retain the earlier permission. The shared intent
+generation prevents an older in-flight snapshot or observation reply from
+restoring it. Other devices retain their ordinary offline-validity rules.
+Automation actions return the accepted write's request, rather than stale
+pre-refresh state. A successful fresh synchronization can restore permission only
+under the current request and a matching valid plan.
+
+The browser distinguishes durable write acceptance from subsequent state/history
+reads. Cancellation is confirmed as cancellation. If a follow-up read fails,
+the accepted result remains visible and the page asks for an evidence refresh.
+Only an actual failed write retains its editable draft and retry identity.
+History replies must match the current state generation. Load more admits each
+cursor once and cannot append duplicate pages after repeated activation.
+
 ## Joint model and execution
 
 EV AC intake joins the existing bus exactly once, jointly with PV, stationary

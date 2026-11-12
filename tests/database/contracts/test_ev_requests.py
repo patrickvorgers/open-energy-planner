@@ -139,3 +139,46 @@ def test_removed_vehicle_cancels_repeat_and_retains_history_after_restart(ev_ser
     assert len(history) == 1
     assert history[0]["status"] == "cancelled"
     assert history[0]["vehicle_name"] == "Removed vehicle"
+
+
+@pytest.mark.parametrize("timestamp_kind", ["ha_report", "device_sample"])
+@pytest.mark.parametrize("capture", ["current", "expired", "unknown_soc", "different_session"])
+def test_completion_uses_available_capture_without_retiming_old_sample_provenance(
+    ev_service, timestamp_kind, capture
+):
+    """Current available SoC can complete despite old provenance. Expired, unknown or unassigned evidence cannot."""
+    configuration = settings()
+    if timestamp_kind == "device_sample":
+        configuration["vehicles"][0]["soc_timestamp_attribute"] = "sample_time"
+    ev_service.configure(configuration, catalogue(), NOW)
+    old_sample = (NOW - timedelta(days=3)).isoformat()
+    initial = observations(ev_service, NOW, soc=85)
+    initial["vehicles"][0].update(
+        observed_at=old_sample, reported_at=old_sample, timestamp_kind=timestamp_kind
+    )
+    ev_service.receive(initial, NOW)
+    ev_service.assign(POINT, CAR, SESSION, NOW)
+    request_id = str(uuid4())
+    ev_service.save_request({"request_id": request_id, "vehicle_id": CAR}, NOW, "Europe/Amsterdam")
+    now = NOW + timedelta(seconds=5)
+    report = observations(ev_service, now, soc=85)
+    report["vehicles"][0].update(
+        observed_at=old_sample, reported_at=old_sample, timestamp_kind=timestamp_kind
+    )
+    if capture == "unknown_soc":
+        report["vehicles"][0].update(
+            soc=None, observed_at=None, reported_at=None, timestamp_kind=None
+        )
+    elif capture == "different_session":
+        report["points"][0]["session_id"] = str(uuid4())
+    if capture == "expired":
+        with pytest.raises(ValueError, match="stale"):
+            ev_service.receive(report, now + timedelta(seconds=120), "Europe/Amsterdam")
+    else:
+        ev_service.receive(report, now, "Europe/Amsterdam")
+    assert ev_service.state["requests"][request_id]["status"] == (
+        "completed" if capture == "current" else "planned"
+    )
+    if capture in ("current", "different_session"):
+        assert ev_service.report["vehicles"][0]["observed_at"] == old_sample
+        assert ev_service.report["vehicles"][0]["reported_at"] == old_sample
