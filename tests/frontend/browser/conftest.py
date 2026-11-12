@@ -49,7 +49,12 @@ def documentation_url():
 
 
 @pytest.fixture
-def app_site(request):
+def savings_now():
+    """Allow clock-sensitive cases to seed savings independently of the wall clock."""
+
+
+@pytest.fixture
+def app_site(request, savings_now):
     """Run a fresh real HA-mode app on a background loop. Browser tests configure actual stores, not route mocks."""
     ready, shutdown = Event(), Event()
     result = {}
@@ -97,7 +102,9 @@ def app_site(request):
             ):
                 from tests.frontend.browser.savings_fixture import seed
 
-                seed(Path(directory), corrected=request.param == "savings_corrected")
+                seed(
+                    Path(directory), corrected=request.param == "savings_corrected", now=savings_now
+                )
 
             @asynccontextmanager
             async def price_sources(database_engine):
