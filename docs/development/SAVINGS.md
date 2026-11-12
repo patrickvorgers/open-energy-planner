@@ -314,6 +314,9 @@ reload without activating an old plan.
 * `POST /v1/settlement`: integration-only bounded, version-matched capture.
 * `GET /v1/savings?start=…&end=…[&revision=…]`: authenticated stored period results.
 * `GET /v1/plans/{plan_id}/comparison`: original expectations, reference and separate contract valuation.
+* `GET /v1/plans/{plan_id}/comparison?view=plan`: original display plan without evidence, replay or repricing.
+* `GET /v1/plans/{plan_id}/comparison?view=simulations`: comparison scenarios and valuations without repeating the plan or evidence.
+* `GET /v1/plans/{plan_id}/comparison?view=evidence`: original evidence and plan identity without replay or repricing. Planning requests this only when its evidence disclosure is open.
 * `GET /v1/evaluations[?before=…]`: bounded evaluation-version pagination.
 * `/overview`: public static shell. All private data retains API/ingress authentication.
 

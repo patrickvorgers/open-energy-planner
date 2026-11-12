@@ -106,7 +106,20 @@ def automatic_plan_overview(app_page, request):
         "window.forceHidden = false; Object.defineProperty(document, 'hidden', {get: () => window.forceHidden});"
     )
     page.route("**/v1/plans?**", plan_listing)
-    page.route("**/v1/plans/*/comparison", plan_comparison)
+    page.route("**/v1/plans/*/comparison?view=plan", plan_comparison)
+
+    def simulations(route):
+        """Keep supplemental replay paired with the synthetic plan selected by the first-stage route."""
+        plan_id = route.request.url.rsplit("/", 2)[1]
+        body = state["comparisons"][plan_id]
+        route.fulfill(
+            json={
+                "plan_id": plan_id,
+                **{key: value for key, value in body.items() if key not in ("plan", "evidence")},
+            }
+        )
+
+    page.route("**/v1/plans/*/comparison?view=simulations", simulations)
     page.route("**/v1/prices/inputs", current_prices)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
@@ -176,7 +189,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
     state = automatic_plan_overview
     page = state["page"]
     state["hold_comparison"] = True
-    with page.expect_request("**/v1/plans/older-plan/comparison"):
+    with page.expect_request("**/v1/plans/older-plan/comparison?view=plan"):
         page.locator("#plan-version").select_option("older-plan")
     expect(page.locator("#overview-status")).to_have_text("Loading selected plan…")
     expect(page.locator("#plan-description")).to_have_text("Loading selected plan…")
@@ -239,7 +252,7 @@ def test_late_current_preview_cannot_replace_selected_plan_prices(
     page.evaluate("Promise.resolve()")
     assert len(state["held_prices"]) == 1
     state["plans"].insert(0, state["newer"])
-    with page.expect_response("**/v1/plans/newly-published-plan/comparison"):
+    with page.expect_response("**/v1/plans/newly-published-plan/comparison?view=plan"):
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
     if late_response == "failure":
@@ -316,12 +329,12 @@ def test_current_prices_recover_independently_of_plan_selection(automatic_plan_o
         state["plans"].clear()
     if plan_view == "historical":
         original_id = state["original"]["plan_id"]
-        with page.expect_response(f"**/v1/plans/{original_id}/comparison"):
+        with page.expect_response(f"**/v1/plans/{original_id}/comparison?view=plan"):
             page.get_by_role("button", name="Refresh overview", exact=True).click()
     else:
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     if plan_view == "historical":
-        with page.expect_response("**/v1/plans/older-plan/comparison") as selected:
+        with page.expect_response("**/v1/plans/older-plan/comparison?view=plan") as selected:
             page.locator("#plan-version").select_option("older-plan")
         assert selected.value.json()["plan"]["strategy"] == "minimize consumption"
         expect(page.locator("#plan-version")).to_have_value("older-plan")
@@ -493,7 +506,7 @@ def test_price_read_failures_never_display_private_exception_values(
     endpoint = "/v1/plans/older-plan/comparison" if selected else "/v1/prices/inputs"
     if failure == "json":
         page.route(
-            "**" + endpoint,
+            "**" + endpoint + ("?view=plan" if selected else ""),
             lambda route: route.fulfill(
                 content_type="application/json", body="PRIVATE_REVIEW_SENTINEL is not JSON"
             ),
@@ -594,7 +607,7 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
     pattern = {
         "listing": "**/v1/plans?limit=20",
         "savings": "**/v1/savings?**",
-        "comparison": "**/v1/plans/*/comparison",
+        "comparison": "**/v1/plans/*/comparison?view=plan",
         "prices": "**/v1/prices/inputs",
     }[hung_view]
     held = []
@@ -615,7 +628,7 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
     page.unroute(pattern, hold_read)
     wait_for_product_reads(page)
     state["plans"].insert(0, state["newer"])
-    with page.expect_response("**/v1/plans/newly-published-plan/comparison"):
+    with page.expect_response("**/v1/plans/newly-published-plan/comparison?view=plan"):
         page.clock.run_for(15000 - 5001)
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
@@ -731,7 +744,7 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
     state["plans"].insert(0, state["newer"])
     state["hold_" + hung_view] = True
     if hung_view == "prices":
-        with page.expect_response("**/v1/plans/newly-published-plan/comparison"):
+        with page.expect_response("**/v1/plans/newly-published-plan/comparison?view=plan"):
             page.clock.run_for(15000)
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
@@ -744,7 +757,7 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
         )
         return
     held_path = (
-        "/v1/plans/newly-published-plan/comparison"
+        "/v1/plans/newly-published-plan/comparison?view=plan"
         if hung_view == "comparison"
         else "/v1/prices/inputs"
     )
@@ -772,7 +785,9 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
     details["plan"]["input_snapshot"]["tariff_evidence"][0]["buy_price"] = 0.73
     state["comparisons"][later["plan_id"]] = details
     state["plans"].insert(0, later)
-    with page.expect_response("**/v1/plans/later-completed-plan/comparison", timeout=8000):
+    with page.expect_response(
+        "**/v1/plans/later-completed-plan/comparison?view=plan", timeout=8000
+    ):
         # Reach the next poll without skipping past that request's new deadline.
         page.clock.run_for(15000 - 5001)
     expect(page.locator("#plan-version")).to_have_value("later-completed-plan")
@@ -916,7 +931,7 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
         "issue": None,
         "intervals": deepcopy(tariffs),
     }
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=comparison))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=comparison))
     page.route("**/v1/prices/inputs", lambda route: route.fulfill(json=current))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
@@ -1017,7 +1032,7 @@ def test_missing_middle_tariff_segment_stays_a_gap_in_all_original_price_series(
         body["plan"]["input_snapshot"]["tariff_evidence"] = [tariffs[0], later]
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", missing_quarter)
+    page.route("**/v1/plans/*/comparison?view=plan", missing_quarter)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1050,7 +1065,16 @@ def test_partial_first_interval_uses_quarter_axis_without_inventing_prior_energy
     body["comparison"] = None
     body["scenarios"] = {}
     page.clock.set_fixed_time(partial)
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=body))
+    page.route(
+        "**/v1/plans/*/comparison?view=simulations",
+        lambda route: route.fulfill(
+            json={
+                "plan_id": body["plan"]["plan_id"],
+                **{key: value for key, value in body.items() if key not in ("plan", "evidence")},
+            }
+        ),
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1092,7 +1116,7 @@ def test_missing_spot_price_is_a_gap_while_original_effective_prices_remain_visi
         body["plan"]["input_snapshot"]["tariff_evidence"] = []
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", remove_prices)
+    page.route("**/v1/plans/*/comparison?view=plan", remove_prices)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1124,7 +1148,13 @@ def test_original_wear_coefficient_preserves_precision_without_changing_other_mo
     plan["input_snapshot"]["problem"]["terminal_valuations"][0]["rate"] = 0.004
     plan["independent_costs"]["import_cost"] = 0.025
     body["evidence"] = evidence(plan)
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.route(
+        "**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json={"plan": plan})
+    )
+    page.route(
+        "**/v1/plans/*/comparison?view=evidence",
+        lambda route: route.fulfill(json={"plan_id": identity, "evidence": body["evidence"]}),
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1216,7 +1246,7 @@ def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
     """Desktop/mobile preserve loading status on forced slider input, show a real failure, and recover on retry."""
     page, url = app_page
     held = []
-    page.route("**/v1/plans/*/comparison", lambda route: held.append(route))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: held.append(route))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1237,7 +1267,7 @@ def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
     expect(page.locator("#plan-evidence-status")).to_contain_text("could not be loaded")
     expect(page.locator("#ems-costs > dl dd")).to_have_text(["- ", "- "])
     expect(page.locator("#inspect-time")).to_be_disabled()
-    page.unroute("**/v1/plans/*/comparison")
+    page.unroute("**/v1/plans/*/comparison?view=plan")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#inspect-time")).to_be_enabled()
@@ -1266,7 +1296,16 @@ def test_same_named_batteries_keep_independent_graph_series(app_page):
         )
     for step in plan["steps"]:
         step["devices"]["spare"] = {"mode": "follow_grid_target", "power_w": None}
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=body))
+    page.route(
+        "**/v1/plans/*/comparison?view=simulations",
+        lambda route: route.fulfill(
+            json={
+                "plan_id": body["plan"]["plan_id"],
+                **{key: value for key, value in body.items() if key not in ("plan", "evidence")},
+            }
+        ),
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1284,14 +1323,15 @@ def test_plan_detail_failure_survives_initial_load_and_recovers(app_page):
     """An original-plan detail outage remains visible, and a successful refresh restores the actual comparison."""
     page, url = app_page
     page.route(
-        "**/v1/plans/*/comparison", lambda route: route.fulfill(status=503, body="Unavailable")
+        "**/v1/plans/*/comparison?view=plan",
+        lambda route: route.fulfill(status=503, body="Unavailable"),
     )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
     expect(page.locator("#ems-costs > dl dd")).to_have_text(["- ", "- "])
-    page.unroute("**/v1/plans/*/comparison")
+    page.unroute("**/v1/plans/*/comparison?view=plan")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-rows tr")).to_have_count(2)
@@ -1322,7 +1362,7 @@ def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page
             route.fulfill(json=details)
 
     page.route("**/v1/plans?**", lambda route: route.fulfill(json=listing))
-    page.route("**/v1/plans/*/comparison", comparison_route)
+    page.route("**/v1/plans/*/comparison?view=plan", comparison_route)
     if late == "savings":
         page.route("**/v1/savings?**", lambda route: held.append(route))
     page.goto(url + "/overview")
@@ -1336,7 +1376,7 @@ def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page
     assert len(held) == 1
     with page.expect_response(
         lambda response_item: (
-            response_item.url.endswith("/" + original["plan_id"] + "/comparison")
+            response_item.url.endswith("/" + original["plan_id"] + "/comparison?view=plan")
             if late == "plan"
             else "/v1/savings?" in response_item.url
         )
@@ -1515,7 +1555,7 @@ def test_financial_reference_issue_keeps_physical_bars_visible(app_page):
         reference.pop("expected_savings_vs_without_battery", None)
         route.fulfill(json=body)
 
-    page.route("**/v1/plans/*/comparison", unknown_budget)
+    page.route("**/v1/plans/*/comparison?view=simulations", unknown_budget)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

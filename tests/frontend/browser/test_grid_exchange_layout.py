@@ -73,10 +73,10 @@ def test_loading_grid_canvas_stays_inside_its_chart_space(app_page):
     """An uninitialized chart cannot cover the evidence control while plan loading waits."""
     page, url = app_page
     held = []
-    page.route("**/v1/plans/*/comparison", lambda route: held.append(route))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: held.append(route))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
-    with page.expect_request("**/v1/plans/*/comparison"):
+    with page.expect_request("**/v1/plans/*/comparison?view=plan"):
         page.get_by_role("button", name="Connect", exact=True).click()
     canvas = page.locator("#energy-chart")
     assert canvas.evaluate("canvas => !Chart.getChart(canvas)")
