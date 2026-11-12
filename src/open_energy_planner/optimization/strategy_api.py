@@ -1,49 +1,21 @@
-"""Expose authenticated planning-objective settings and retained active-plan evidence."""
-
-import asyncio
-from datetime import UTC, datetime
+"""Expose authenticated planning-objective settings independently of plan archives."""
 
 from aiohttp import web
 
 from .domain import Strategy
 
 
-def register(app, store, repository, live, lock, persist):
+def register(app, store, live, lock, persist):
     """Expose an authenticated manual choice. Retain current commands until validated replacement."""
 
-    async def state():
-        """Read archive evidence off-loop under the caller-held lock. Report unavailable/corrupt data as 503."""
-        plan = repository.state["plan"]
-        acknowledged = repository.state["acknowledged_plan"]
-        try:
-            accepted = (
-                await asyncio.to_thread(repository.get_plan, acknowledged) if acknowledged else None
-            )
-            expiry = datetime.fromisoformat(accepted["valid_until"]) if accepted else None
-            active = (
-                accepted
-                if (
-                    plan
-                    and accepted
-                    and repository.state["enabled"]
-                    and plan["config_revision"] == accepted["config_revision"]
-                    and datetime.now(UTC) < expiry
-                )
-                else None
-            )
-            return {
-                "requested": store.current.value,
-                "published": Strategy(plan["strategy"]).value if plan else None,
-                "active": Strategy(active["strategy"]).value if active else None,
-                "issue": store.issue,
-            }
-        except (OSError, ValueError, KeyError, TypeError):
-            raise web.HTTPServiceUnavailable(text="Plan archive unavailable or invalid") from None
+    def state():
+        """Return saved intent and its configuration issue without reading historical plans."""
+        return {"requested": store.current.value, "issue": store.issue}
 
     async def read(_request):
-        """Read the persistent request and published plan metadata under the app lock."""
+        """Read the saved preference consistently with configuration writes."""
         async with lock:
-            return web.json_response(await state())
+            return web.json_response(state())
 
     async def write(request):
         """Compare-and-set manual intent without resetting measurements, reference or history."""
@@ -61,7 +33,7 @@ def register(app, store, repository, live, lock, persist):
                 raise web.HTTPConflict(text="Strategy changed. Reload before saving")
             if candidate != store.current or store.issue:
                 await persist(store.save, candidate, contract_input=False)
-            return web.json_response(await state())
+            return web.json_response(state())
 
     app.router.add_get("/v1/strategy", read)
     app.router.add_put("/v1/strategy", write)

@@ -455,7 +455,7 @@ def test_manual_strategy_choice_is_persistent_and_explains_stock_correction(app_
     expect(page.locator("#strategy-help")).to_contain_text("depleted starting battery stock")
     page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
     page.get_by_role("button", name="Save planning strategy", exact=True).click()
-    expect(page.locator("#strategy-status")).to_contain_text("Requested: Minimize consumption")
+    expect(page.locator("#strategy-status")).to_be_empty()
     edit_strategy(page)
     page.get_by_label("Optimization goal", exact=True).select_option("minimize cost")
     with page.expect_response(
@@ -463,7 +463,7 @@ def test_manual_strategy_choice_is_persistent_and_explains_stock_correction(app_
     ):
         page.clock.fast_forward(31000)
     expect(page.get_by_label("Optimization goal", exact=True)).to_have_value("minimize cost")
-    expect(page.locator("#strategy-status")).to_contain_text("Requested: Minimize consumption")
+    expect(page.locator("#strategy-status")).to_be_empty()
     page.reload()
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -517,7 +517,7 @@ def test_strategy_summary_matches_saved_fields_and_retains_edit_save_cancel(app_
     expect(page.locator("#strategy-help")).to_contain_text("Export does not offset import")
     comparison.click()
     expect(page.locator("#strategy-help")).to_be_hidden()
-    expect(page.get_by_role("status", name="Strategy status")).to_contain_text("Requested:")
+    expect(page.get_by_role("status", name="Strategy status")).to_be_empty()
     screenshots = Path("results/ci")
     screenshots.mkdir(parents=True, exist_ok=True)
     width = page.viewport_size["width"]
@@ -590,9 +590,7 @@ def test_strategy_status_failure_does_not_block_setup_or_retry(app_page):
     page.get_by_role("button", name="Edit installation", exact=True).click()
     page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
     expect(page.get_by_role("button", name="Save planning strategy", exact=True)).to_be_enabled()
-    expect(page.get_by_role("status", name="Strategy status")).to_contain_text(
-        "Requested: Minimize cost"
-    )
+    expect(page.get_by_role("status", name="Strategy status")).to_be_empty()
 
 
 def test_missing_energy_capacity_directs_user_to_home_assistant(app_page):
@@ -1227,32 +1225,24 @@ def test_installation_lists_four_solar_sources_and_all_grid_meters(app_page):
     assert read_settings(page, url)["installation"] is None
 
 
-@pytest.mark.parametrize("aligned", [False, True])
-def test_installation_strategy_only_expands_when_activation_differs(app_page, aligned):
-    """Requested, published and accepted are expanded only while their states differ. Drafts remain separate."""
+def test_installation_is_usable_before_strategy_preference_arrives(app_page):
+    """A held preference response cannot block setup. Its eventual arrival preserves physical drafts."""
     page, url = app_page
     discover(page, url)
-    page.route(
-        "**/v1/strategy",
-        lambda route: route.fulfill(
-            json={
-                "requested": "minimize cost",
-                "published": "minimize cost" if aligned else None,
-                "active": "minimize cost" if aligned else None,
-                "issue": None,
-            }
-        ),
-    )
+    pending = []
+    page.route("**/v1/strategy", lambda route: pending.append(route))
     connect(page)
+    expect(page.get_by_label("Maximum grid import (kW)", exact=True)).to_be_visible()
+    page.get_by_label("Maximum grid import (kW)", exact=True).fill("7")
+    assert pending
+    for route in pending:
+        route.fulfill(json={"requested": "minimize cost", "issue": None})
+    page.unroute("**/v1/strategy")
     page.get_by_role("button", name="Home Assistant", exact=True).click()
     page.get_by_role("button", name="Planning strategy", exact=True).click()
-    expect(page.locator("#installation-strategy-value")).to_contain_text("Minimize cost")
-    if aligned:
-        expect(page.locator("#strategy-status")).to_contain_text("published and accepted")
-        expect(page.locator("#strategy-status")).not_to_contain_text("Requested:")
-    else:
-        expect(page.locator("#strategy-status")).to_contain_text("Requested: Minimize cost")
-        expect(page.locator("#strategy-status")).to_contain_text("Published plan: No accepted plan")
+    expect(page.get_by_label("Optimization goal", exact=True)).to_have_value("minimize cost")
+    expect(page.locator("#strategy-status")).to_be_empty()
+    expect(page.get_by_label("Maximum grid import (kW)", exact=True)).to_have_value("7")
 
 
 def test_installation_duplicate_solar_names_keep_distinct_hybrid_choices(app_page):

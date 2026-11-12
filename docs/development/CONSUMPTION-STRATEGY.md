@@ -87,7 +87,8 @@ store. Complete backend transfer includes it. No secrets or connection settings
 are stored there. Unreadable strategy settings explicitly block new planning
 until a valid manual choice is saved.
 
-Authenticated `GET /v1/strategy` exposes requested, published and active strategy.
+Authenticated `GET /v1/strategy` exposes the saved `requested` preference and its
+configuration `issue`. It does not read published or acknowledged plan archives.
 `PUT /v1/strategy` accepts `strategy` and `expected_strategy` for compare-and-set.
 Strategy saves do not alter the physical configuration revision, discard fresh
 measurements, reset reference simulation, or rewrite history/counters. They
@@ -95,16 +96,17 @@ request an immediate complete replacement round. An in-flight candidate for
 the previous strategy cannot replace it.
 
 An existing published plan retains only its normal validity until replacement.
-Failed calculation does not extend it. Active strategy is taken from the last
-HA-acknowledged plan while enabled and unexpired. A newly published plan need
-not yet be accepted by HA. Acceptance never proves physical execution. No
-integration protocol change or additional HA command entity is necessary.
-Revoking a plan or changing its physical configuration clears active strategy.
-An old acknowledgement cannot reinstate invalid commands. Archive reads run
-off-loop under the app lock and unavailable/corrupt evidence returns HTTP 503.
-The settings page refreshes acceptance status automatically without overwriting
-an unsaved selection or its compare-and-set baseline. A failed auxiliary strategy
-read does not prevent Energy setup/discovery from continuing.
+Failed calculation does not extend it. Home Assistant acknowledgement and command
+validity remain part of plan execution, independent of Installation settings.
+Acceptance never proves physical execution. No integration protocol change or
+additional HA command entity is necessary.
+
+Installation loads its saved preference independently of the physical settings.
+A slow or unavailable preference request does not delay rendering the connection,
+solar or battery settings. The preference refresh preserves unsaved selections
+and their compare-and-set baseline. Configuration read failures remain visible
+beside the preference and retry automatically. Installation does not compare
+requested, published and accepted strategies or reconstruct archived plans.
 
 ## Regression evidence
 
