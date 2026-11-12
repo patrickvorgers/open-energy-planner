@@ -9,12 +9,37 @@ configuration, revised forecasts or corrected contract prices.
 Implemented by `savings/evidence.py`, exposed on the authenticated original-plan
 comparison response, and rendered in **Planning > Understand this plan**.
 Planning first requests `comparison?view=plan`, then `comparison?view=simulations`.
-The first projection skips evidence, scenario replay and repricing. The second
+The first projection includes only the original chart, command and interval
+inputs. It omits archived forecast/training evidence, source bindings and replay
+results, and skips evidence construction, scenario replay and repricing. The second
 omits the repeated plan and evidence while retaining the original financial basis.
 Only opening the evidence disclosure requests `comparison?view=evidence`, which
 returns the plan identity and evidence without scenario replay or repricing.
 The unfiltered comparison response and financial period queries retain their
 existing contracts. JSON encoding runs outside the application event loop.
+The complete original archive remains unchanged and available through its
+authenticated original-plan route. Closed original-plan detail tables are built
+only when opened, using the latest confirmed plan and supplemental comparison.
+An already open table follows confirmed refreshes and plan selection.
+Savings reads start only when Savings opens or its period is explicitly refreshed.
+Opening Savings directly does not request a plan list or replay comparisons.
+Successful Connect or Refresh on Savings confirms the shared connection status
+only while that period and view remain current. A late successful response cannot
+clear a newer period or plan-selection failure.
+Source-name changes detected on Savings mark the retained Planning labels stale.
+Reopening Planning refreshes its selected plan without reading hidden Savings.
+This also applies when the session starts on Savings and opens an original plan
+without enabling live publication polling.
+Only a successful plan render confirms that name generation. Failed refreshes
+retain the prior plan and retry state, including historical selections and
+manual chart visibility choices.
+Manual energy-chart visibility also survives the first supplemental simulation
+response for the displayed plan. Selecting a different original plan resets those
+choices to that plan's defaults.
+Grid-exchange checkbox choices follow stable scenario identities when an
+independent comparison becomes available later. Identity alone does not mark a
+series as a physical device. Device rounding and expected/scheduled bar guidance
+apply only to series carrying that device state.
 Each read has its own deadline. Selection generations reject late plan-list and
 simulation responses. Evidence belongs to its active shared read and displayed
 plan, so a failed refresh retaining that plan can still complete its evidence.

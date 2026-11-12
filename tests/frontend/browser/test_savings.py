@@ -5,16 +5,16 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover, open_primary_navigation
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    discover,
+    open_primary_navigation,
+    wait_for_product_reads,
+)
 
 
-@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-@pytest.mark.parametrize("initially_hidden", [False, True])
-def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
-    app_page, initially_hidden
-):
-    """Desktop/mobile update a selected historical plan automatically while raw plan content and chart data stay frozen."""
-    page, url = app_page
+def named_archive_battery(page, url):
+    """Match the synthetic catalogue to the archived battery's frozen metering binding."""
     metadata = discover(page, url, devices=True)
     metadata["suggestions"]["batteries"][0]["energy_entity"] = "sensor.discharge"
     for term in metadata["suggestions"]["terms"]:
@@ -26,6 +26,18 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
             row.update(energy_name="Garage battery", device_name="Deye")
     headers = {"Authorization": "Bearer " + TOKEN}
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=metadata).ok
+    return metadata
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("initially_hidden", [False, True])
+def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
+    app_page, initially_hidden
+):
+    """Desktop/mobile update a selected historical plan automatically while raw plan content and chart data stay frozen."""
+    page, url = app_page
+    metadata = named_archive_battery(page, url)
+    headers = {"Authorization": "Bearer " + TOKEN}
     path = url + "/v1/plans/browser-original-plan"
     original = page.request.get(path, headers=headers).json()
     page.clock.install()
@@ -36,6 +48,7 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
+    page.get_by_text("Expected state and commands per battery", exact=True).click()
     expect(page.locator("#plan-battery-rows")).to_contain_text("Garage battery")
     selected = page.locator("#plan-version").input_value()
     before = page.evaluate(
@@ -65,6 +78,87 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=metadata).ok
     page.clock.fast_forward(31000)
     expect(page.locator("#plan-battery-rows")).to_contain_text("Original battery")
+    assert page.request.get(path, headers=headers).json() == original
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("failed_refresh", [False, True])
+@pytest.mark.parametrize("entry_view", ["planning", "savings"])
+def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
+    app_page, failed_refresh, entry_view
+):
+    """A hidden pinned plan catches up on source names, retries failures and retains chart choices."""
+    page, url = app_page
+    metadata = named_archive_battery(page, url)
+    headers = {"Authorization": "Bearer " + TOKEN}
+    path = url + "/v1/plans/browser-original-plan"
+    original = page.request.get(path, headers=headers).json()
+    reads = []
+    page.on(
+        "request",
+        lambda request: reads.append(request.url) if "/v1/savings?" in request.url else None,
+    )
+    page.clock.install()
+    page.goto(url + "/overview#" + entry_view)
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    if entry_view == "planning":
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
+        open_primary_navigation(page)
+        page.get_by_role("link", name="Savings", exact=True).click()
+    expect(page.locator("#evaluation-rows tr")).to_have_count(2)
+    page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
+    page.get_by_role("button", name="View original plan").first.click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    page.get_by_text("Expected state and commands per battery", exact=True).click()
+    expect(page.locator("#plan-battery-rows")).to_contain_text("Garage battery")
+    page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
+    page.locator("#plan-chart-legend").get_by_label("Garage battery: SoC", exact=True).uncheck()
+    for chart in ("reference-chart", "self-consumption-chart"):
+        page.locator(f"#{chart}-legend").get_by_label("Grid import: AC", exact=True).uncheck()
+    open_primary_navigation(page)
+    with page.expect_response("**/v1/savings?*") as savings_read:
+        page.get_by_role("link", name="Savings", exact=True).click()
+    savings_read.value.finished()
+    wait_for_product_reads(page)
+    for row in metadata["entities"]:
+        if row["entity_id"] == "sensor.discharge":
+            row["energy_name"] = "Renamed archive battery"
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=metadata).ok
+    page.clock.fast_forward(31000)
+    wait_for_product_reads(page)
+    before_return = len(reads)
+    if failed_refresh:
+        page.route("**/comparison?view=plan", lambda route: route.fulfill(status=503))
+    open_primary_navigation(page)
+    page.get_by_role("link", name="Planning", exact=True).click()
+    if failed_refresh:
+        expect(page.locator("#overview-status")).to_contain_text("503")
+        expect(page.locator("#plan-battery-rows")).to_contain_text("Garage battery")
+        assert len(reads) == before_return
+        page.unroute("**/comparison?view=plan")
+        open_primary_navigation(page)
+        with page.expect_response("**/v1/savings?*") as retry_savings_read:
+            page.get_by_role("link", name="Savings", exact=True).click()
+        retry_savings_read.value.finished()
+        wait_for_product_reads(page)
+        before_return = len(reads)
+        open_primary_navigation(page)
+        page.get_by_role("link", name="Planning", exact=True).click()
+    expect(page.locator("#plan-battery-rows")).to_contain_text("Renamed archive battery")
+    wait_for_product_reads(page)
+    expect(page.locator("#plan-version")).to_have_value("browser-original-plan")
+    expect(
+        page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True)
+    ).not_to_be_checked()
+    expect(
+        page.locator("#plan-chart-legend").get_by_label("Renamed archive battery: SoC", exact=True)
+    ).not_to_be_checked()
+    for chart in ("reference-chart", "self-consumption-chart"):
+        expect(
+            page.locator(f"#{chart}-legend").get_by_label("Grid import: AC", exact=True)
+        ).not_to_be_checked()
+    assert len(reads) == before_return
     assert page.request.get(path, headers=headers).json() == original
 
 
@@ -101,6 +195,7 @@ def test_savings_overview_compares_realized_costs_and_original_plan(app_page):
     page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
     page.get_by_role("button", name="View original plan").first.click()
     expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
+    page.get_by_text("Detailed interval energy", exact=True).click()
     expect(page.locator("#plan-rows tr")).to_have_count(2)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 

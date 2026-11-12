@@ -299,7 +299,8 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
             check_intervals()
         expected_title = page.evaluate(
             """async ({start,end}) => {
-                const {when}=await import('/setup/display.js');
+                const pageModule = document.querySelector('script[type="module"][src]').src;
+                const {when}=await import(new URL('./display.js', pageModule).href);
                 return `${when(start)} to ${when(end,{hour:'2-digit',minute:'2-digit'})}`;
             }""",
             {"start": last_start.isoformat(), "end": last_end.isoformat()},

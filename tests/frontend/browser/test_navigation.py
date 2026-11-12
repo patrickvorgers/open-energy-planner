@@ -1,5 +1,6 @@
 """Responsive app-owned setup against real authenticated API/storage, without physical devices."""
 
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -547,7 +548,12 @@ def test_grouped_navigation_is_consistent_accessible_with_courtyard_theme(app_pa
             == "rgb(245, 251, 255)"
         )
         logo = page.locator(".brand-mark img")
-        expect(logo).to_have_attribute("src", urlsplit(url).path + "/setup/icons/app.svg")
+        expect(logo).to_have_attribute(
+            "src",
+            re.compile(
+                "^" + re.escape(urlsplit(url).path) + r"/setup/static/[0-9a-f]{64}/icons/app\.svg$"
+            ),
+        )
         assert logo.evaluate("element => element.complete && element.naturalWidth > 0")
         page.evaluate("document.fonts.ready")
         assert page.evaluate("document.fonts.check('16px Outfit')")

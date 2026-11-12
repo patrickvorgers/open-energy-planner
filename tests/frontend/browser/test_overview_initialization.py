@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    discover,
+    open_primary_navigation,
+    wait_for_product_reads,
+)
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -31,6 +36,42 @@ def test_initialization_render_error_is_safe_and_explicit_retry_recovers(app_pag
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("newer_failure", ["plan", "period"])
+def test_late_savings_connection_cannot_clear_newer_view_or_period_failure(app_page, newer_failure):
+    """A held successful connection cannot overwrite a later plan or Savings-period failure."""
+    page, url = app_page
+    held = []
+
+    def savings_read(route):
+        """Retain the first real Savings response and fail only a later selected period."""
+        if not held:
+            held.append(route)
+            page.evaluate("window.savingsConnectionHeld = true")
+        else:
+            route.fulfill(status=503)
+
+    page.route("**/v1/savings?*", savings_read)
+    page.goto(url + "/overview#savings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.wait_for_function("() => window.savingsConnectionHeld === true")
+    if newer_failure == "plan":
+        page.route("**/comparison?view=plan", lambda route: route.fulfill(status=503))
+        open_primary_navigation(page)
+        page.get_by_role("link", name="Planning", exact=True).click()
+        expect(page.locator("#overview-status")).to_contain_text("503")
+    else:
+        page.get_by_role("button", name="Show period", exact=True).click()
+        expect(page.locator("#coverage")).to_contain_text("503")
+    retained_status = page.locator("#overview-status").inner_text()
+    held[0].fulfill(response=held[0].fetch())
+    wait_for_product_reads(page)
+    expect(page.locator("#overview-status")).to_have_text(retained_status)
+    if newer_failure == "period":
+        expect(page.locator("#coverage")).to_contain_text("503")
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("stalled", [1, 2], ids=["initial", "name-refresh"])
 def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
     """Both initial and metadata reads abort at five seconds, then retry with a new live deadline."""
@@ -52,9 +93,15 @@ def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
       };
     })();""")
     page.goto(url + "/overview#savings")
-    page.wait_for_function("window.sessionReads.length >= window.stalledSessionRead")
+    if stalled == 2:
+        page.wait_for_function("() => window.sessionReads[0]?.completed")
+        assert page.evaluate("window.sessionReads.length") == 1
+        page.clock.fast_forward(30100)
+    page.wait_for_function("() => window.sessionReads.length >= window.stalledSessionRead")
     page.clock.fast_forward(5100)
-    page.wait_for_function("window.sessionReads[window.stalledSessionRead-1].aborted", timeout=1500)
+    page.wait_for_function(
+        "() => window.sessionReads[window.stalledSessionRead-1].aborted", timeout=1500
+    )
     expect(page.locator("body")).not_to_contain_text("PRIVATE-SESSION-SENTINEL")
     if stalled == 1:
         expect(page.locator("#overview-status")).to_contain_text("took too long")
@@ -68,8 +115,8 @@ def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
         expect(page.locator("#period-end")).to_have_value("2026-10-30")
     if stalled == 2:
         page.clock.fast_forward(31000)
-    page.wait_for_function("window.sessionReads.length > window.stalledSessionRead")
-    page.wait_for_function("window.sessionReads.at(-1).completed")
+    page.wait_for_function("() => window.sessionReads.length > window.stalledSessionRead")
+    page.wait_for_function("() => window.sessionReads.at(-1).completed")
     assert page.evaluate("window.sessionReads.every(record=>record.budget===5000)")
     assert page.evaluate(
         "new Set(window.sessionReads.map(record=>record.signal)).size===window.sessionReads.length"
@@ -147,15 +194,20 @@ def test_overview_probe_retains_unexpected_comparison_queries(app_page):
 def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     app_page, stalled, savings_now, browser_now, quarter_start, quarter_end
 ):
-    """Abort either stalled view at five seconds and retry names across a UTC-quarter cost refresh."""
+    """Explicitly visit both views, abort either at five seconds and retry names across a UTC-quarter cost refresh."""
     page, url = app_page
     page.clock.install(time=browser_now)
     metadata = discover(page, url)
     overview_read_probe(page, stalled)
-    page.goto(url + "/overview#savings")
+    page.goto(url + "/overview#planning")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
+    wait_for_product_reads(page)
+    open_primary_navigation(page)
+    with page.expect_response("**/v1/savings?*"):
+        page.get_by_role("link", name="Savings", exact=True).click()
+    expect(page.locator("#savings-view")).to_be_visible()
     wait_for_product_reads(page)
     assert page.evaluate(
         "window.overviewReads.filter(record=>!record.armed).every(record=>record.budget===5000)"
@@ -163,6 +215,10 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     assert page.evaluate("window.overviewReads[0].signal!==window.overviewReads[1].signal")
     page.locator("#period-start").fill("2026-10-01")
     page.locator("#period-end").fill("2026-10-30")
+    if stalled == "plan":
+        open_primary_navigation(page)
+        page.get_by_role("link", name="Planning", exact=True).click()
+        expect(page.locator("#planning-view")).to_be_visible()
     page.evaluate("window.armOverviewReads=true")
     next(entry for entry in metadata["entities"] if entry["entity_id"] == "sensor.incoming")[
         "energy_name"
@@ -171,6 +227,13 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
         url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=metadata
     ).ok
     page.clock.fast_forward(31000)
+    page.wait_for_function("() => window.overviewReads.some(record=>record.armed)")
+    assert page.evaluate("window.overviewReads.filter(record=>record.armed).length") == 1
+    open_primary_navigation(page)
+    page.get_by_role(
+        "link", name="Savings" if stalled == "plan" else "Planning", exact=True
+    ).click()
+    expect(page.locator("#savings-view" if stalled == "plan" else "#planning-view")).to_be_visible()
     page.wait_for_function("() => window.overviewReads.filter(record=>record.armed).length>=2")
     assert page.evaluate(
         "window.overviewReads.filter(record=>record.armed).every(record=>record.budget===5000&&!record.signal.aborted)"
@@ -184,10 +247,17 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
         "took too long"
     )
     expect(page.locator("body")).not_to_contain_text("PRIVATE-READ-SENTINEL")
+    open_primary_navigation(page)
+    page.get_by_role(
+        "link", name="Planning" if stalled == "plan" else "Savings", exact=True
+    ).click()
+    expect(page.locator("#planning-view" if stalled == "plan" else "#savings-view")).to_be_visible()
+    wait_for_product_reads(page)
     page.clock.fast_forward(31000)
     page.wait_for_function(
         "() => window.overviewReads.filter(record=>record.armed&&record.completed).length>=3"
     )
+    wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#coverage")).not_to_contain_text("took too long")
     expect(page.locator("#period-start")).to_have_value("2026-10-01")
@@ -195,6 +265,12 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     assert page.evaluate(
         "() => {const reads=window.overviewReads.filter(record=>record.armed);return new Set(reads.map(record=>record.signal)).size===reads.length;}"
     )
+    if stalled == "savings":
+        open_primary_navigation(page)
+        page.get_by_role("link", name="Planning", exact=True).click()
+        expect(page.locator("#planning-view")).to_be_visible()
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
+        wait_for_product_reads(page)
     count = page.evaluate("window.overviewReads.length")
     page.clock.fast_forward(31000)
     assert page.evaluate("window.overviewReads.length") == count

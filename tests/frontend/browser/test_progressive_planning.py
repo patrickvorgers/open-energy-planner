@@ -26,12 +26,16 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
     expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
+    expect(page.locator("#plan-rows tr")).to_have_count(0)
+    page.get_by_text("Detailed interval energy", exact=True).click()
     expect(page.locator("#plan-rows tr")).to_have_count(120)
+    page.get_by_text("Detailed interval energy", exact=True).click()
     assert evidence == []
     page.evaluate(
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"
     )
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
+    page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
     assert len(simulations) == 1
     simulations.pop().fulfill(response=simulations_response(page, url))
     expect(page.locator("#overview-status")).to_contain_text("Connected")
@@ -42,6 +46,9 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     )
     expect(
         page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True)
+    ).not_to_be_checked()
+    expect(
+        page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
     ).not_to_be_checked()
     assert evidence == []
     captures = Path("results/ci/progressive-planning")
@@ -137,6 +144,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         datetime.fromisoformat(body["plan"]["input_snapshot"]["problem"]["intervals"][0]["start"])
     )
     held = []
+    page.add_init_script("window.projectionRouteHeld = false")
     page.route(
         "**/v1/plans?**",
         lambda route: route.fulfill(
@@ -155,6 +163,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         source = selected if identity == "selected-plan" else body
         if identity == original["plan_id"] and view == stage:
             held.append(route)
+            page.evaluate("window.projectionRouteHeld = true")
             return
         if view == "plan":
             response = {"plan": source["plan"]}
@@ -178,7 +187,9 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         expect(page.locator("#plan-evidence-status")).to_contain_text("Loading")
     else:
         expect(page.locator("#overview-status")).to_contain_text("Loading simulations")
+    page.wait_for_function("() => window.projectionRouteHeld")
     assert len(held) == 1
+    page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
     page.locator("#plan-version").select_option("selected-plan")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
@@ -204,4 +215,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
     expect(page.locator("#plan-evidence")).to_contain_text("Selected plan evidence")
     expect(page.locator("body")).not_to_contain_text("Old plan evidence")
     expect(page.locator("body")).not_to_contain_text("Old plan simulation")
+    expect(
+        page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
+    ).to_be_checked()
     assert page.locator("#ems-costs").inner_text() == before

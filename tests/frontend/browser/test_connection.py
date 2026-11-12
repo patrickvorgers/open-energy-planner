@@ -19,7 +19,7 @@ def test_ingress_never_paints_token_forms_before_scripts_or_session_discovery(ap
     """Initial HTML hides token prompts only for trusted ingress, even when scripts cannot run."""
     page, url = app_page
     ingress = "/api/hassio_ingress/" in url
-    page.route("**/setup/*.js", lambda route: route.abort())
+    page.route("**/setup/**/*.js", lambda route: route.abort())
     if not ingress:
         page.set_extra_http_headers({"X-Ingress-Path": "/api/hassio_ingress/forged"})
     for path in (

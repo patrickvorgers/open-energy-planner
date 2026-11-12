@@ -35,6 +35,12 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
             identity,
         )
         expect(legend.get_by_role("checkbox", name="Charge point", exact=True)).to_be_visible()
+        expect(legend.get_by_role("checkbox", name="Charge point", exact=True)).to_have_attribute(
+            "aria-describedby", f"{identity}-device-key"
+        )
+        expect(page.locator(f"#{identity}-device-key")).to_contain_text(
+            "Striped bars show expected use. Solid bars show scheduled use."
+        )
         later = legend.get_by_role("checkbox", name="Later appliance", exact=True)
         expect(later).to_be_visible()
         later.focus()

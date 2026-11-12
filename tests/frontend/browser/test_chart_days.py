@@ -182,7 +182,8 @@ def test_overview_calendar_headers_refresh_without_duplicates(app_page):
         path=f"results/ci/calendar-overview-{page.viewport_size['width']}.png"
     )
     page.evaluate("""async () => {
-        const {useHomeAssistantTimezone}=await import('/setup/display.js');
+        const pageModule = document.querySelector('script[type="module"][src]').src;
+        const {useHomeAssistantTimezone}=await import(new URL('./display.js', pageModule).href);
         useHomeAssistantTimezone('Europe/Amsterdam');
         const chart=Chart.getChart(document.getElementById('price-chart'));
         chart.data.datasets=chart.data.datasets.slice(0,1);

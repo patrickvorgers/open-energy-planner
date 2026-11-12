@@ -32,8 +32,8 @@ def test_appliance_connect_waits_for_module_initialization(app_page, action):
             document_requests.append(request.url) if request.resource_type == "document" else None
         ),
     )
-    page.route("**/setup/appliances.js", lambda route: held_modules.append(route))
-    with page.expect_request("**/setup/appliances.js"):
+    page.route("**/appliances.js", lambda route: held_modules.append(route))
+    with page.expect_request("**/appliances.js"):
         page.goto(url + "/appliances", wait_until="commit")
     connect = page.get_by_role("button", name="Connect", exact=True)
     token_field = page.get_by_label("Installation API token", exact=True)
@@ -46,7 +46,7 @@ def test_appliance_connect_waits_for_module_initialization(app_page, action):
     finally:
         for route in held_modules:
             route.continue_()
-        page.unroute("**/setup/appliances.js")
+        page.unroute("**/appliances.js")
     expect(connect).to_be_enabled()
     token_field.fill(TOKEN)
     if action == "click":
