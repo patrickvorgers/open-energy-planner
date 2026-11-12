@@ -12,7 +12,7 @@ from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 @pytest.mark.parametrize("app_site", ["device_planning_legend"], indirect=True)
 def test_appliance_legends_follow_window_without_losing_visibility_choices(app_page):
-    """Sub-50-W use is omitted, exactly 50 W follows the window, and choices remain recoverable."""
+    """Sub-100-W use is omitted, exactly 100 W follows the window, and choices remain recoverable."""
     page, url = app_page
     page.clock.set_fixed_time(START)
     page.goto(url + "/overview")
@@ -47,6 +47,8 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
             legend = page.locator(f"#{identity}-legend")
             expect(legend.locator("label").filter(has_text="Later appliance")).not_to_be_visible()
             expect(legend.get_by_role("checkbox", name="Charge point", exact=True)).to_be_visible()
+            if hours == 6:
+                expect(legend.locator("label").filter(has_text="Dryer")).not_to_be_visible()
     page.get_by_role("button", name=re.compile(r"^Full period:")).click()
     for identity in identities:
         later = page.locator(f"#{identity}-legend").get_by_role(
@@ -154,9 +156,11 @@ def test_rounding_uses_combined_displayed_bar_and_preserves_unknowns(app_page):
     wait_for_product_reads(page)
     legend = page.locator("#plan-chart-legend")
     for expected, scheduled, visible in (
-        (-0.024, -0.025, False),
-        (-0.025, -0.025, True),
-        (0, -0.05, True),
+        (-0.025, -0.025, False),
+        (-0.049, -0.05, False),
+        (-0.05, -0.05, True),
+        (0, -0.1, True),
+        (-0.101, 0, True),
         (None, 0, True),
     ):
         result = page.evaluate(

@@ -575,8 +575,8 @@ contributions in the bars, with one identity-bound legend entry per device.
 Expected use is striped and scheduled use is solid. Tooltips distinguish both,
 and the device's legend switch toggles both contributions together.
 Omit a device from bars and legend only when combined expected and scheduled
-consumption is strictly below 0.05 kW in every displayed quarter-hour bar.
-Exactly 0.05 kW remains visible. Missing values are not rounded to zero.
+consumption is strictly below 0.1 kW in every displayed quarter-hour bar.
+Exactly 0.1 kW remains visible. Missing values are not rounded to zero.
 This display rule never changes calculations or archived values. Each scenario
 legend provides a keyboard-accessible Select all / Deselect all button for its
 eligible entries, preserving independent chart selection and rounding exclusions.

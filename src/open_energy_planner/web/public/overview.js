@@ -52,7 +52,7 @@ function row(parent, values) {
 }
 const charts = new Map();
 const syncChartLegends = new WeakMap();
-const DEVICE_ROUNDING_KW = 0.05;
+const DEVICE_ROUNDING_KW = 0.1;
 const hiddenPriceSeries = new Set();
 const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad"];
 const INTERVAL_BAR_FILL = 0.9;

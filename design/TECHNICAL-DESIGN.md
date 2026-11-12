@@ -1168,7 +1168,7 @@ The shared value-axis plugin unions visible signed stacks for the three scenario
 charts and refreshes their bounds and ticks together. Other charts remain independent.
 After quarter projection, the chart legend groups device contributions by identity.
 It sums absolute expected and scheduled consumption within each displayed bar.
-Devices whose every bar is below 0.05 kW are hidden through dataset visibility,
+Devices whose every bar is below 0.1 kW are hidden through dataset visibility,
 without changing the data. Unknown values keep their device eligible. Rounding
 eligibility stays separate from manual checkbox selection, including after range
 changes. Synchronize all charts' eligibility before computing their shared axes.
