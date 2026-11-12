@@ -322,7 +322,16 @@ def create_app(
 
     @web.middleware
     async def persist_invalidations(request, handler):
-        """Persist hard revocations off-loop before sending a response, even when a handler fails."""
+        """Drain hard revocations for protected responses without blocking public navigation.
+
+        Public pages, assets and bounded session metadata contain no commands or
+        authenticated state. Their reads must not wait behind archive writes.
+        Protected responses retain the durability barrier even on handler failure.
+        """
+        if is_public(request) or (
+            request.method in {"GET", "HEAD"} and request.path == "/setup/session"
+        ):
+            return await handler(request)
         try:
             return await handler(request)
         finally:
