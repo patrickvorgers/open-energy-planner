@@ -27,7 +27,6 @@ def test_overview_retains_original_expectations_beside_successful_contract_corre
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#expected-benefit")).to_contain_text("Contract updated")
-    page.get_by_text("Original and repriced expected costs", exact=True).click()
     expect(page.locator("#expected-benefit")).to_contain_text("without re-optimization")
     page.get_by_text("Original and repriced expected costs", exact=True).click()
     expect(page.locator("#expected-cost-rows tr")).to_have_count(6)
