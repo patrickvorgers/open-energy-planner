@@ -20,7 +20,9 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
     plan = {
         "input_snapshot": {
             "problem": json.loads(
-                json.dumps(asdict(problem()), default=lambda value: value.isoformat())
+                json.dumps(
+                    asdict(problem()), default=lambda datetime_value: datetime_value.isoformat()
+                )
             )
         },
         "expected_flows": [
@@ -125,7 +127,9 @@ def test_real_evidence_projection_returns_cards_or_an_explicit_issue(tmp_path, c
         "generated_at": START.isoformat(),
         "input_snapshot": {
             "problem": json.loads(
-                json.dumps(asdict(problem()), default=lambda value: value.isoformat())
+                json.dumps(
+                    asdict(problem()), default=lambda datetime_value: datetime_value.isoformat()
+                )
             )
         },
     }

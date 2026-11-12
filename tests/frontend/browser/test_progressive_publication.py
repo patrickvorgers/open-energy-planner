@@ -32,7 +32,7 @@ def test_publication_retry_waits_for_disclosed_evidence_before_releasing_polling
     page.route("**/comparison?view=simulations", lambda route: route.fulfill(status=503))
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text(
-        "Plan loaded. Simulations are unavailable"
+        "Simulation update is unavailable. Showing the previously loaded comparisons."
     )
     wait_for_product_reads(page)
     page.unroute("**/comparison?view=simulations")

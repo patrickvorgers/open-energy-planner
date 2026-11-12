@@ -341,6 +341,8 @@ def register(
         Raises:
             web.HTTPBadRequest: A period bound is missing, invalid, naive or
                 non-increasing (400).
+            web.HTTPBadRequest: The view is unsupported, or a view is combined
+                with start or end (400).
             web.HTTPNotFound: The selected original plan does not exist (404).
             web.HTTPServiceUnavailable: Period calculation cannot read usable
                 original evidence (503). Its explanation never exposes raw errors.

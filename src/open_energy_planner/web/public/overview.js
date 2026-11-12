@@ -667,13 +667,16 @@ function gridExchangeSeries(plan, comparison = null, baseline = null) {
 function renderPlanComparisons(data, plan) {
     const id = plan.plan_id, currency = plan.currency || "";
     const comparison = data.comparison, valuation = data.valuation;
+    const confirmedProjection = periodCostPlan?.projection === data;
     const withoutBattery = data.scenarios?.without_battery;
     const selfConsumption = data.scenarios?.self_consumption;
-    for (const [chartId, entry, issueId] of [["reference-chart", withoutBattery, "reference-issue"], ["self-consumption-chart", selfConsumption, "self-consumption-issue"]]) {
-        const balance = entry?.chart ? energyBalances(entry.chart, new Map(Object.entries(plan.comparison_names || {})))[0] : null;
-        $(chartId).closest(".chart-wrap").hidden = !balance;
-        chart(chartId, balance?.series || [], {unit: "kW", balance: true});
-        $(issueId).textContent = entry?.issue || (balance?.missing ? `${balance.missing} interval(s) have incomplete physical evidence.` : "");
+    if (!confirmedProjection) {
+        for (const [chartId, entry, issueId] of [["reference-chart", withoutBattery, "reference-issue"], ["self-consumption-chart", selfConsumption, "self-consumption-issue"]]) {
+            const balance = entry?.chart ? energyBalances(entry.chart, new Map(Object.entries(plan.comparison_names || {})))[0] : null;
+            $(chartId).closest(".chart-wrap").hidden = !balance;
+            chart(chartId, balance?.series || [], {unit: "kW", balance: true});
+            $(issueId).textContent = entry?.issue || (balance?.missing ? `${balance.missing} interval(s) have incomplete physical evidence.` : "");
+        }
     }
     const baseline = withoutBattery?.comparison;
     const self = selfConsumption?.comparison;
@@ -686,6 +689,7 @@ function renderPlanComparisons(data, plan) {
     if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
     $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
     const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
+    $("expected-cost-rows").replaceChildren();
     for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row($("expected-cost-rows"), [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
     const intervals = plan.input_snapshot?.problem?.intervals || [];
     let batteryRow = 0;
@@ -702,9 +706,11 @@ function renderPlanComparisons(data, plan) {
             if (cell) cell.textContent = number(ref?.stored[battery.device_id]);
         }
     });
-    chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W"});
-    periodCostPlan = {id, currency, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
-    periodCostKey = ""; periodCostRequest++;
+    if (!confirmedProjection) {
+        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W"});
+        periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
+        periodCostKey = ""; periodCostRequest++;
+    }
     inspect(); applyRange();
 }
 
@@ -765,10 +771,10 @@ async function showPlan(signal, background = false) {
     try {
         const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=plan`, signal);
         if (request !== selectionRequest) return false;
-        periodCostPlan = null; periodCostRequest++;
         const plan = data.plan;
         if (plan?.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
-        clearPlanComparisons();
+        const samePlan = renderedPlanId === id;
+        if (!samePlan) clearPlanComparisons();
         const selectedOption = [...$("plan-version").options].find(option => option.value === id);
         if (selectedOption) selectedOption.textContent = planName(plan);
         $("inspect-time").disabled = false;
@@ -778,7 +784,7 @@ async function showPlan(signal, background = false) {
             const objective = plan.consumption_objective;
             $("plan-description").textContent += `: Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
         }
-        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
+        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows"]) $(name).replaceChildren();
         const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
         const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
         const batteryLabels = new Map();
@@ -859,7 +865,7 @@ async function showPlan(signal, background = false) {
             warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
             $("plan-chart-legend").append(warning);
         }
-        chart("energy-chart", gridExchangeSeries(plan), {unit: "W"});
+        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W"});
         chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0});
         const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
         if (tariffEvidence.length) {
@@ -881,6 +887,7 @@ async function showPlan(signal, background = false) {
         $("price-chart").closest(".chart-wrap").hidden = false;
         $("current-price-status").textContent = `Selected plan: ${when(plan.generated_at)}: Original contract rates. ${bonusRules.length ? "Potential export bonus is shown before the volume cap." : "No bonus applies in this plan."}`;
         chart("price-chart", priceSeries, {unit: `${currency}/kWh`});
+        if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan);
         const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
@@ -895,12 +902,13 @@ async function showPlan(signal, background = false) {
             if (request !== selectionRequest) return false;
             if (supplementary.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
             renderPlanComparisons(supplementary, plan);
+            simulationReadPending = false;
             simulationsLoaded = true;
             return true;
         } catch {
             if (request !== selectionRequest) return false;
             simulationReadPending = true;
-            const message = "Simulations are unavailable. Use Refresh overview to retry.";
+            const message = periodCostPlan ? "Simulation update is unavailable. Showing the previously loaded comparisons. Use Refresh overview to retry." : "Simulations are unavailable. Use Refresh overview to retry.";
             $("overview-status").textContent = `Plan loaded. ${message}`;
             for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message;
             return true;
