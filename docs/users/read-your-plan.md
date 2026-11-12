@@ -63,9 +63,19 @@ Tap or hover over the balance to see both contributions separately. The legend
 switch hides or shows both contributions together. Devices with the same name
 remain separate devices.
 
-Appliances appear in the legend when they have nonzero expected or scheduled
-use in the displayed period. Changing the period updates the entries. Turning
-off an appliance in the legend keeps its switch available so you can show it again.
+An appliance is omitted from both bars and legend when its combined expected
+and scheduled consumption is below **0.05 kW in every displayed quarter-hour bar**.
+One bar at exactly 0.05 kW or above keeps the appliance visible. This is visual
+rounding only. Original forecasts, calculations and costs retain all consumption.
+The visible bars can therefore have a small imbalance from omitted device use.
+Missing values remain unavailable, rather than being rounded to zero.
+Changing the period updates the entries and preserves your checkbox choices.
+Turning off an eligible appliance keeps its switch available so you can show it again.
+
+Each of the three legends has a **Deselect all** button. After any series is
+unchecked it becomes **Select all**. It controls only that chart's available
+legend entries, including both contributions of each device and the battery
+percentage line. It cannot reveal devices excluded by the rounding rule.
 
 A scheduled cycle replaces its expected share rather than being added twice.
 Other probable use remains. Reference charts execute acknowledged cycles at their

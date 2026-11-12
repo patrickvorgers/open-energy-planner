@@ -206,10 +206,9 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
                 require(abs(power - round(power)) <= WHOLE_WATT_TOLERANCE, "Whole-watt command")
             commands.append((unit.device_id, round(power)))
             wear += (
-                battery.cycle_fee
+                battery.wear_cost_per_kwh
                 * battery_flow.discharge_kwh
                 / battery.discharge_efficiency
-                / battery.capacity_kwh
             )
         for source in problem.pv_sources:
             solar_flow = solar_flows[source.source_id]

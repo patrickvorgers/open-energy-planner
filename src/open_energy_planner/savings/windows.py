@@ -37,10 +37,9 @@ def _optimizer_rows(plan, problem):
                 "export_kwh": flow["grid_export"],
                 "stored": {key: row["end_kwh"] for key, row in batteries.items()},
                 "wear": fsum(
-                    unit.battery.cycle_fee
+                    unit.battery.wear_cost_per_kwh
                     * _energy(batteries[unit.device_id]["discharge_kwh"])
                     / unit.battery.discharge_efficiency
-                    / unit.battery.capacity_kwh
                     for unit in problem.batteries
                 ),
             }

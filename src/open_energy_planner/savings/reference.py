@@ -92,7 +92,7 @@ def dispatch(problem, step, stored):
         states[unit.device_id] = (
             old + charge * battery.charge_efficiency - discharge / battery.discharge_efficiency
         )
-        wear += discharge / battery.discharge_efficiency * battery.cycle_fee / battery.capacity_kwh
+        wear += discharge / battery.discharge_efficiency * battery.wear_cost_per_kwh
         flows[unit.device_id] = {
             "charge_kwh": charge,
             "discharge_kwh": discharge,

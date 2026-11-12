@@ -51,6 +51,18 @@ Energy supplies each battery's usable capacity, state-of-charge source and norma
 
 Review any suggested efficiency or rating against the manufacturer's information and your physical configuration. A planning reserve is not a battery-management-system protection setting. If the battery is below reserve, the measured value remains real. The optional reserve-recovery policy can prioritize restoring it within the modeled limits.
 
+### Battery wear cost
+
+Set **Cost per kWh (optional)** to your estimated wear cost in the contract currency per internal kWh discharged. Leave it at **0** to exclude wear from the economic comparison. This is an optional valuation, not a measured aging cost or a manufacturer warranty calculation.
+
+For example, a rate of **0.02 EUR/kWh** and **5 kWh** removed from internal battery storage adds **0.10 EUR** wear. Charging is not charged again. A larger battery has the same cost for that same 5 kWh discharge. The reserve percentage does not change the rate.
+
+Internal energy includes cell discharge losses. With 80.0% discharge efficiency, supplying 4 kWh at the battery terminal removes 5 kWh internally. When calculating actual costs from an AC discharge meter, inverter and DC losses are also accounted for before applying the same rate.
+
+The saved summary and the original plan's **Starting conditions** retain the configured rate, including values such as **0.025** or **0.004**. Cost totals still show two decimals.
+
+The optimizer, self-consumption reference, expected period costs and measured comparison use this same basis. The estimated value of remaining energy deducts its future discharge wear. Neither the without-battery baseline nor charging alone incurs battery wear.
+
 Enable **Can follow zero grid target** only if your own controller or automation can implement that mode. It is a capability permission, not a promise of physically exact zero grid exchange.
 
 ### Periodic battery calibration

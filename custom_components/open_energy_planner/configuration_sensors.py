@@ -18,7 +18,7 @@ PROPERTIES = {
     "charge_efficiency": ("Charge efficiency", "%"),
     "discharge_efficiency": ("Discharge efficiency", "%"),
     "dc_efficiency": ("DC efficiency", "%"),
-    "cycle_fee": ("Wear cost per cycle", None),
+    "wear_cost_per_kwh": ("Wear cost per kWh", None),
     "can_follow_grid": ("Grid following permitted", None),
     "recover_reserve": ("Mandatory reserve recovery", None),
     "calibration_enabled": ("Periodic calibration enabled", None),
@@ -75,7 +75,7 @@ class DeviceProperty(PlannerEntity, SensorEntity):
         self.planning_group = self.kind if self.kind != "grid" else None
         self._attr_device_info["name"] = device.get("name", device["id"])
         self._attr_native_unit_of_measurement = unit
-        if key == "cycle_fee":
+        if key == "wear_cost_per_kwh":
             self._attr_suggested_display_precision = MONEY_DISPLAY_DECIMALS
         if unit == "W":
             self._attr_device_class = SensorDeviceClass.POWER
@@ -120,7 +120,7 @@ class DeviceProperty(PlannerEntity, SensorEntity):
     def extra_state_attributes(self):
         """Describe wear-cost units without assuming a contract currency or inventing statistics."""
         return (
-            {"cost_basis": "contract_currency_per_full_equivalent_cycle"}
-            if self.key == "cycle_fee"
+            {"cost_basis": "contract_currency_per_internal_discharged_kwh"}
+            if self.key == "wear_cost_per_kwh"
             else None
         )

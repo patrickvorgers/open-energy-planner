@@ -129,8 +129,8 @@ Terminal-inventory policy is the conservative grid-replacement correction in GOA
 - BAT-04: Desired and actual power are separate.
 - BAT-05: Per-battery minimum SoC is a hard planning limit. If already below it, block further planned discharge but retain the measured initial state.
 - BAT-06: Mandatory reserve recovery is configurable. When enabled, restore minimum SoC as soon as possible within battery/inverter/grid limits, ahead of both economic and import objectives. Then resume the selected strategy. Without mandatory recovery, the strategy chooses timing. Neither mode permits further discharge below reserve or replaces physical safety.
-- BAT-07: Include losses. Configurable wear cost per equivalent full cycle defaults to zero. Apply a positive setting consistently to planning and both savings scenarios. Savings include the difference in wear costs. Show nonzero wear separately as a user-valued estimate. Do not infer it from purchase cost or claim measured/total aging. Unused batteries also age. Stored energy's decision value includes future use, not just historic acquisition cost.
-- BAT-12: Count partial cycles proportionally: two 50% cycles equal one equivalent full cycle. For the simple economic model divide battery-side discharged energy by full configured reference capacity. Do not count charge and discharge twice. Minimum SoC does not change this reference capacity. Document capacity/measurement boundaries so AC/DC losses do not silently change cycle counting. Wear equals cycles times configured compensation. This is a linear cost model, not a physical-aging or manufacturer-warranty equivalence claim.
+- BAT-07: Include losses. Configurable wear cost per internal kWh discharged defaults to zero. Apply a positive setting consistently to planning and both savings scenarios. Savings include the difference in wear costs. Show nonzero wear separately as a user-valued estimate. Do not infer it from purchase cost or claim measured/total aging. Unused batteries also age. Stored energy's decision value includes future use, not just historic acquisition cost.
+- BAT-12: Multiply internal discharged energy by the configured per-kWh wear rate. Do not divide the rate by capacity or charge the same energy again on charging. Capacity and minimum SoC do not change the rate. Convert battery-terminal discharge through cell discharge efficiency to the internal energy basis. Convert measured AC discharge through inverter, DC and cell discharge efficiencies before applying the same rate. Partial discharge is proportional. This is a linear cost model, not a physical-aging or manufacturer-warranty equivalence claim.
 - BAT-08: A configured battery is core equipment. Individually excluding it temporarily is not normal battery operation. Individual exclusions concern additional devices.
 - BAT-09: Manual battery takeover pauses the whole EMS. Physical release is handled by automation.
 - BAT-10: Replan from measured SoC deviations. Replanning is not safety or fast regulation.
@@ -574,6 +574,12 @@ The three Planning balance charts show individual expected and scheduled device
 contributions in the bars, with one identity-bound legend entry per device.
 Expected use is striped and scheduled use is solid. Tooltips distinguish both,
 and the device's legend switch toggles both contributions together.
+Omit a device from bars and legend only when combined expected and scheduled
+consumption is strictly below 0.05 kW in every displayed quarter-hour bar.
+Exactly 0.05 kW remains visible. Missing values are not rounded to zero.
+This display rule never changes calculations or archived values. Each scenario
+legend provides a keyboard-accessible Select all / Deselect all button for its
+eligible entries, preserving independent chart selection and rounding exclusions.
 Physical execution still requires readiness
 and permission. See [model selection](../docs/development/MODEL-SELECTION.md) and
 [shiftable appliances](../docs/development/SHIFTABLE-APPLIANCES.md).

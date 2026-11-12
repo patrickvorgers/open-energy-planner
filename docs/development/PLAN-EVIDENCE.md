@@ -38,6 +38,11 @@ Expandable plan assumptions show strategy, solver quality, original contract
 version, starting battery energy/reserve, cell losses, wear and the bounded
 remaining-energy estimate. Original expected financial components remain
 separate, including inventory value, which is not cash income.
+The battery wear source coefficient retains its original numeric precision. Its
+projected fact uses the owned `key: wear_cost_per_kwh`, so presentation never
+identifies it by label text. Other money and rates, including remaining-energy
+valuation, retain the ordinary two-decimal display. This projection does not
+modify archived inputs or calculated amounts.
 
 A reached charge/discharge, grid or converter rating is an observation. So are
 ending at reserve/capacity and a disabled PV command. They do **not** prove that

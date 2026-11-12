@@ -120,8 +120,8 @@ solver/provider/HA objects.
 
 Each converter has a local DC bus behind the shared household AC bus. PV retains
 canonical available DC per source. Each battery retains its own internal energy,
-reserve, terminal ratings, cell efficiencies and optional cycle fee. The latter
-defaults to zero and is proportional to equivalent full internal discharges.
+reserve, terminal ratings, cell efficiencies and optional wear rate per internal
+kWh discharged. The rate defaults to zero and does not scale with capacity.
 An optional battery `dc_efficiency` describes DC-bus-to-terminal conversion in
 both directions, default one. It is separate from cell and AC-inverter losses.
 
@@ -243,7 +243,7 @@ Add/remove solar sources and storage in Home Assistant Settings > Dashboards > E
 
 New plans and publication require matching Energy solar/storage membership and the complete current household balance. Changes invalidate incompatible commands immediately when discovery arrives. Source/settings API writes cannot bypass the membership check. Integration discovery normally refreshes every five minutes, or on a requested setup refresh. All commands remain unavailable until the reconciled settings and ordinary live inputs are usable. Ordinary sensor-value updates are not membership changes and retain the anti-starvation behavior.
 
-Grid, PV and battery devices expose separate read-only diagnostic sensors for relevant confirmed settings: grid import/export limits. Battery usable capacity, charge/discharge power limits, minimum SoC, efficiencies, wear cost and grid-following permission. PV panel capacity, orientation, tilt and curtailment permission. Inverter AC limit, efficiency and hybrid connection. Selected measurement bindings are separate text sensors. Each property has a stable entity ID and its own meaningful unit (W, kWh, percent, degrees). Stored fractional efficiencies are presented as percent. Permissions are read-only yes/no enum sensors, never switches that could modify the model. Wear cost is explicitly in contract currency per full equivalent cycle, without assuming EUR.
+Grid, PV and battery devices expose separate read-only diagnostic sensors for relevant confirmed settings: grid import/export limits. Battery usable capacity, charge/discharge power limits, minimum SoC, efficiencies, wear cost and grid-following permission. PV panel capacity, orientation, tilt and curtailment permission. Inverter AC limit, efficiency and hybrid connection. Selected measurement bindings are separate text sensors. Each property has a stable entity ID and its own meaningful unit (W, kWh, percent, degrees). Stored fractional efficiencies are presented as percent. Permissions are read-only yes/no enum sensors, never switches that could modify the model. The `wear_cost_per_kwh` property is in contract currency per internal kWh discharged, without assuming EUR. Its diagnostic sensor states that basis explicitly. Charging is not charged again, and capacity does not scale the rate.
 
 Settings remain readable without a valid plan and describe last confirmed settings, not measured performance. They have no measurement state class and are not energy counters. New or changed values update existing entities without recreation. A Setup status sensor distinguishes `configured` from `setup_required`. It links the Energy meter and does not bundle property values into attributes. Fixed PV has settings sensors but no Enabled target. Missing required configuration produces an actionable HA notification. Only withdrawing an actual command capability triggers the automation-impact notification.
 
