@@ -86,7 +86,9 @@ class EVEntity(PlannerEntity):
         try:
             await self.coordinator.write_ev(operation, body)
         except (ClientError, TimeoutError, ValueError, KeyError) as error:
-            raise HomeAssistantError("The app could not accept this EV request") from error
+            raise HomeAssistantError(
+                "The EV request could not be confirmed. Refresh vehicle status before retrying."
+            ) from error
 
     async def intent(self, field, value):
         """Keep all departure and charging calculations in the application."""

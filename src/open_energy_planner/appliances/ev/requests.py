@@ -91,9 +91,6 @@ def save_request(state, body, now, timezone):
     ):
         raise ValueError("Invalid charging request fields")
     identity(body["request_id"])
-    vehicle = next((car for car in state["vehicles"] if car["id"] == body["vehicle_id"]), None)
-    if vehicle is None:
-        raise ValueError("Unknown vehicle")
     creation_digest = digest(
         {key: value for key, value in body.items() if key != "expected_version"}
     )
@@ -103,6 +100,9 @@ def save_request(state, body, now, timezone):
         if existing["creation_digest"] == creation_digest:
             return state
         raise ValueError("Charging request ID was already used")
+    vehicle = next((car for car in state["vehicles"] if car["id"] == body["vehicle_id"]), None)
+    if vehicle is None:
+        raise ValueError("Unknown vehicle")
     target = number(body.get("target_soc", vehicle["target_soc"]), 0, FULL_SOC_PERCENT)
     deadline = (
         instant(body["departure"]) if body.get("departure") else departure(vehicle, now, timezone)

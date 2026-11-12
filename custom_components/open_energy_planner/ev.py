@@ -255,6 +255,7 @@ def command(coordinator, point):
     state = coordinator.hass.states.get(point["connected_entity"])
     if (
         not projection.command
+        or getattr(coordinator, "ev_writes_pending", 0)
         or state is None
         or state.state != "on"
         or local.get("connected") is not True
@@ -270,6 +271,7 @@ def command(coordinator, point):
     )
     if (
         not target
+        or target.power_w is None
         or target.session_id != local.get("session_id")
         or target.vehicle_id != point.get("vehicle_id")
     ):

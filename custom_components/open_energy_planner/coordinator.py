@@ -68,6 +68,7 @@ class PlanCoordinator:
         self.solar_feedback_reads = {}
         self.ev = {}
         self.ev_intent_generation = 0
+        self.ev_writes_pending = 0
         self.ev_sessions = {}
         self.ev_watch = ()
         self.ev_cancel = None
@@ -142,6 +143,25 @@ class PlanCoordinator:
             targets = tuple(
                 replace(target, power_w=None)
                 if target.kind == "thermal" and thermal_command(self, target.device_id) is None
+                else target
+                for target in self.projection.command.devices
+            )
+            self.projection = replace(
+                self.projection, command=replace(self.projection.command, devices=targets)
+            )
+        if self.projection.command and any(
+            target.kind == "ev" for target in self.projection.command.devices
+        ):
+            from .ev import command as ev_command
+
+            points = {point["id"]: point for point in self.ev.get("points", [])}
+            targets = tuple(
+                replace(target, power_w=None)
+                if target.kind == "ev"
+                and (
+                    target.device_id not in points
+                    or ev_command(self, points[target.device_id]) is None
+                )
                 else target
                 for target in self.projection.command.devices
             )
@@ -304,11 +324,18 @@ class PlanCoordinator:
             _LOGGER.debug("Setup catalogue confirmation failed", exc_info=True)
 
     async def write_ev(self, operation, body):
-        """Revoke only EV permission after confirmed intent, before any fallible refresh."""
-        response = await self.client.request("POST", "/v1/ev/" + operation, body)
+        """Withhold EV permission throughout uncertain intent and reconcile only from fresh state."""
+        self.ev_writes_pending += 1
         self.ev_intent_generation += 1
         self.ev = {**self.ev, "revision": None}
-        self.refresh()
+        try:
+            self.refresh()
+            response = await self.client.request("POST", "/v1/ev/" + operation, body)
+        finally:
+            self.ev_writes_pending -= 1
+            self.ev_intent_generation += 1
+            self.ev = {**self.ev, "revision": None}
+            self.refresh()
         await self.sync()
         return response
 

@@ -297,3 +297,24 @@ def test_saved_vehicle_defaults_without_request_fields_remain_compatible(ev_serv
     assert current["previous_revision"] == previous_revision
     assert restored.documents.read("ev-state-" + previous_revision + ".json") == previous
     assert len(ev_support.reconstruct_requests(restored.documents, current)) == 1
+
+
+def test_exact_creation_retry_after_vehicle_removal_preserves_cancelled_history(ev_service):
+    """The original UUID/fingerprint remains a no-op after removal, while new intent still requires a configured vehicle."""
+    body = {"request_id": str(uuid4()), "vehicle_id": CAR, "target_soc": 65}
+    ev_service.save_request(body, NOW, "Europe/Amsterdam")
+    current = ev_service.document(NOW, "Europe/Amsterdam")["vehicles"][0]["charging_request"]
+    ev_service.configure({"vehicles": [], "points": []}, catalogue(), NOW)
+    restored = EVService(ev_service.documents, ev_service.consumers, ev_service.appliances)
+    before = deepcopy(restored.state)
+    restored.save_request(body, NOW + timedelta(days=1), "Europe/Amsterdam")
+    assert restored.state == before
+    assert restored.state["requests"][body["request_id"]]["status"] == "cancelled"
+    with pytest.raises(ValueError):
+        restored.save_request({**body, "target_soc": 75}, NOW, "Europe/Amsterdam")
+    with pytest.raises(ValueError, match="Unknown vehicle"):
+        restored.save_request({**body, "request_id": str(uuid4())}, NOW, "Europe/Amsterdam")
+    with pytest.raises(ValueError, match="Unknown vehicle"):
+        restored.save_request(
+            {**body, "expected_version": current["version"]}, NOW, "Europe/Amsterdam"
+        )

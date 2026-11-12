@@ -128,9 +128,11 @@ Choose **Edit charging request** to change it or **Cancel charging request** to
 stop it. Cancelled, completed and expired requests remain in **Request history**.
 If OEP confirms a saved or cancelled request but cannot reload its latest status,
 that confirmation remains valid. Use **Refresh charging evidence** to retry the
-read. An actual rejected write keeps your edits. Native Home Assistant
-cancellation withdraws EV permission immediately after acceptance, even if the
-following connection to the app fails.
+read. An actual rejected write keeps your edits. The history panel is marked
+unavailable if it cannot reload after a saved change. Saved history is retained.
+Native Home Assistant requests withhold EV permission while being sent. If a
+reply is lost, permission remains withdrawn until current app state is reloaded.
+Refresh vehicle status to check the saved request before retrying.
 A read that does not finish within thirty seconds stops with recovery advice.
 Refresh again when the connection is available. Your pending edits are retained.
 If the reply to a write is lost, OEP cannot confirm its outcome. Check the saved

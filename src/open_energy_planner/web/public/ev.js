@@ -92,11 +92,15 @@ async function mutate(path, body, status, afterSave) {
     const confirmation = path.endsWith("/cancel") ? "Charging request cancelled." : "Charging request saved. A plan does not confirm physical charging.";
     try {
         const result = await api(path, body); accepted = true; afterSave();
+        find("request-history").replaceChildren(node("p", "Refreshing charging request history.")); find("more-history").hidden = true;
         current = result; useHomeAssistantTimezone(current.timezone); renderSessions(); renderControls();
         find("status").textContent = confirmation;
         await load(true); find("status").textContent = confirmation;
     } catch (error) {
-        if (accepted) find("status").textContent = `${confirmation} Refresh charging evidence to reload the latest status and history.`;
+        if (accepted) {
+            find("status").textContent = `${confirmation} Refresh charging evidence to reload the latest status and history.`;
+            find("request-history").replaceChildren(node("p", "Charging request history is unavailable. Refresh charging evidence to reload it.")); find("more-history").hidden = true;
+        }
         else status.textContent = requestMessage(error);
     } finally {
         busy = false; find("refresh-evidence").disabled = Boolean(loading); find("vehicle-controls").querySelectorAll("input, button").forEach(control => { control.disabled = false; });

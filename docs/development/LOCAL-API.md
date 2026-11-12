@@ -21,6 +21,13 @@ EV endpoints share the same authenticated boundary:
 - `GET /v1/ev/requests?cursor=...`: admin-only history, at most 25 records and a `next_cursor`. Peer credentials cannot read it.
 - `POST /v1/ev/intent`: native scalar edits of an existing request only. It never implicitly creates a request or changes saved defaults.
 
+Native EV intent withholds EV permission before transport and throughout an
+uncertain write. The HA `open_energy_planner_command` event projects that EV
+`power_w` as null, including boundary refreshes. Null is unavailable, while zero
+is an active idle command. Other device commands retain their own validity.
+An exact creation UUID/fingerprint retry remains idempotent after vehicle removal.
+New requests and edits still require configured vehicles.
+
 See [EV charging](EV-CHARGING.md#request-lifecycle-and-automation-actions) for request lifecycle, HA actions and timezone contracts. Peer credentials allow request writes but cannot replace technical EV configuration.
 
 Battery positive W means discharge, negative W means charge. A non-applicable fixed target is `unknown`. Pause/expiry means `unavailable`. 0 W is a real idle command. An `open_energy_planner_command` event carries the coherent current command after entity writes. Filter by `entry_id`. Do not convert missing numeric states to zero. The active-plan timestamp diagnostic carries the current plan ID. Per-device target attributes contain command interpretation only, so accepting an identical command in a new plan does not retrigger target automations. Separate HA entities are not a general transactional system.

@@ -157,6 +157,7 @@ def test_confirmed_request_stays_confirmed_when_followup_read_fails(app_page, fa
     assert len(page.request.get(url + "/v1/ev/requests", headers=headers).json()["requests"]) == 1
     page.locator("#refresh-evidence").click()
     expect(card).to_contain_text("Target: 65.0%")
+    expect(page.locator("#request-history")).to_contain_text("Planned")
     page.route(
         pattern,
         lambda route: (
@@ -172,6 +173,15 @@ def test_confirmed_request_stays_confirmed_when_followup_read_fails(app_page, fa
     expect(page.locator("#status")).to_contain_text("Charging request cancelled")
     expect(page.locator("#status")).to_contain_text("Refresh")
     expect(card).to_contain_text("No planned charging request")
+    expect(page.locator("#request-history")).not_to_contain_text("Planned")
+    expect(page.locator("#request-history")).to_contain_text("unavailable")
+    if failed_read == "history":
+        page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
+        Path("results/ci").mkdir(parents=True, exist_ok=True)
+        page.screenshot(
+            path=f"results/ci/ev-cancel-history-unavailable-{page.viewport_size['width']}.png",
+            full_page=True,
+        )
     page.unroute(pattern)
     assert (
         page.request.get(url + "/v1/ev/requests", headers=headers).json()["requests"][0]["status"]

@@ -36,7 +36,9 @@ def register_services(hass):
         try:
             accepted = await coordinator.write_ev(operation, body)
         except (ClientError, TimeoutError, ValueError, KeyError) as error:
-            raise HomeAssistantError("The app could not accept this charging request") from error
+            raise HomeAssistantError(
+                "The EV request could not be confirmed. Refresh vehicle status before retrying."
+            ) from error
         current = next(
             (row for row in accepted.get("vehicles", []) if row["id"] == vehicle["id"]), {}
         )

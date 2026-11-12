@@ -122,7 +122,9 @@ The app owns one active request per vehicle. A stable caller-supplied UUID
 Editing uses `expected_version` from the projected `charging_request.version`,
 even when all submitted values equal the saved values.
 Cancelling requires that version and `vehicle_id`. Reusing a cancelled creation
-ID never revives it. All outcomes remain in history. Removing a vehicle cancels
+ID never revives it. An exact UUID and creation-fingerprint retry also remains
+unchanged after vehicle removal. New requests and edits still require a configured
+vehicle. All outcomes remain in history. Removing a vehicle cancels
 its active request and retains history. No defaults, historical demand, startup,
 refresh or connection event implicitly creates a request.
 
@@ -165,14 +167,19 @@ Any request edit or cancellation invalidates old plan commands through the EV
 revision. Native command admission also checks the current request window and
 published revision, independently of local SoC/session safety.
 
-After a confirmed native or automation EV write, the integration immediately
-revokes only EV permission before attempting synchronization. A subsequent
-transport failure cannot retain the earlier permission. The shared intent
-generation prevents an older in-flight snapshot or observation reply from
-restoring it. Other devices retain their ordinary offline-validity rules.
-Automation actions return the accepted write's request, rather than stale
-pre-refresh state. A successful fresh synchronization can restore permission only
-under the current request and a matching valid plan.
+Before forwarding native or automation EV intent, the integration withdraws
+only EV permission. It remains withheld while any EV write is pending, including
+when concurrent synchronization reports a still-planned request. Both write
+boundaries advance the intent generation and revoke the cached revision. A lost
+reply or delayed snapshot cannot retain or reinstall older permission. Only a
+fresh authoritative reconciliation after the write settles can restore it.
+Other devices retain their ordinary validity and scheduled boundary changes.
+The shared command-event projection also withdraws invalid EV targets with
+`power_w: null`, including later boundary refreshes. Null means unavailable.
+Zero remains a real active idle target. This projection does not modify the
+immutable original plan. Automation actions return the accepted write's request,
+rather than stale pre-refresh state. Unconfirmed native actions report uncertainty
+and require checking current vehicle status before retrying.
 
 The browser distinguishes durable write acceptance from subsequent state/history
 reads. Cancellation is confirmed as cancellation. If a follow-up read fails,
@@ -180,6 +187,10 @@ the accepted result remains visible and the page asks for an evidence refresh.
 A rejected or unconfirmed write retains its editable draft and retry identity.
 History replies must match the current state generation. Load more admits each
 cursor once and cannot append duplicate pages after repeated activation.
+A confirmed write marks the prior displayed history as refreshing. If its
+follow-up state/history read fails, the history panel is explicitly unavailable
+until refreshed. It cannot retain an old Planned row beside confirmed cancellation.
+Stored historical records remain intact.
 
 Each EV read has a thirty-second deadline covering response-body consumption.
 Manual refresh shares the active state/history load until it settles. A replacing
