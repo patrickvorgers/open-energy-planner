@@ -19,6 +19,22 @@ for the effect of a larger installation.
 
 Confirm **Maximum grid import (kW)** and **Maximum grid export (kW)** for the complete modeled connection. These are aggregate planning limits, not per-phase protection. Use the permitted limits for your equipment and connection rather than copying the example.
 
+At a nominal 230 V per phase, three-phase 25 A gives `3 × 230 × 25 ÷ 1000 = 17.25 kW`. Single-phase 35 A gives `230 × 35 ÷ 1000 = 8.05 kW`. These are approximate connection examples at power factor 1, not permission to import or export those amounts. Your permitted export limit can differ from your import limit. Confirm the actual limits with your installer or network operator.
+
+### Allow grid feed-in
+
+**Allow grid feed-in** is on by default. Turn it off and save to forbid planned export for the whole installation. This stores **Maximum grid export** as **0 kW**. Existing installations already configured with a zero export limit show the option off. The same limit applies to both the cost and consumption optimization goals.
+
+With feed-in off, the battery can discharge only to meet consumption within the installation, including appliances. It cannot be scheduled to sell energy. Surplus solar can charge available storage or serve consumption. If that is insufficient, the planner can propose switching off solar sources only where curtailment permission is configured. That permission still requires your own working Home Assistant automation. Switching is on/off per source, not an assumed proportional export limiter.
+
+**A zero-export plan may be impossible.** For example, a full battery and fixed solar production greater than consumption leave nowhere for the surplus to go. Even if some sources are controllable, the remaining fixed production can still make the plan infeasible. The planner does not relax the export prohibition, invent solar control, or publish an invalid solution. Review the affected sources and arrange suitable physical export control with your installer. Neither this setting nor a forecast-based plan physically guarantees zero export. Your equipment and automations remain responsible for real-world control and safety.
+
+The Planning comparisons also respect the export limit. The unmanaged self-consumption reference does not execute the planner's solar shutdowns. If that counterfactual would exceed the limit, its comparison is unavailable rather than showing invented zero-export results. This can happen even when the optimizer has a feasible plan using permitted solar shutdowns.
+
+To permit feed-in again, choose **Edit installation**, enable the option and confirm a permitted export limit before saving. The previous positive limit is retained only while toggling an unsaved draft. After saving zero and reloading, it must be entered again. **Cancel** restores the saved configuration.
+
+Grid source identities and annual-consumption evidence are available under **Home Assistant**. Connection and household keeps the physical limits and the inputs you need to confirm, without repeating the source diagnostic paragraphs.
+
 Household energy is reconstructed from the same measured boundary:
 
 ```text
@@ -29,7 +45,7 @@ grid imports + solar production + battery discharge
 
 OEP can estimate annual household use from a common complete history period. A shorter period is explicitly extrapolated and may have seasonal bias. With insufficient usable history, confirm **Annual whole-home consumption (kWh)** as a startup estimate. Empty history does not mean zero demand.
 
-[![Saved connection and household settings with separate import/export limits and a synthetic annual consumption estimate.](../assets/installation-connection.png)](../assets/installation-connection.png)
+[![Saved connection with feed-in disabled, a zero export limit and a synthetic annual consumption estimate.](../assets/installation-connection.png)](../assets/installation-connection.png)
 
 *The limits describe the connection. The annual consumption figure describes household scale. They have different units and purposes. All displayed values are synthetic examples.*
 

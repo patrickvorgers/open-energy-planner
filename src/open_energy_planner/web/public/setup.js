@@ -34,6 +34,11 @@ const saveState = new SaveBar({form: "wizard", bar: "installation-save-bar", sav
     ...(priceSettings.dirty ? [["price-sources", priceSettings.values]] : []),
 ]});
 const layout = new InstallationLayout(saveState, value => { if (!busy) showStep(value); });
+$("allow-feed-in").addEventListener("change", () => {
+    const limit = $("export");
+    if ($("allow-feed-in").checked) limit.value = limit.dataset.previousLimit || "";
+    else { limit.dataset.previousLimit = limit.value; limit.value = "0"; }
+});
 $("edit-installation").addEventListener("click", () => { ++configurationGeneration; });
 for (const type of ["input", "change"]) $("wizard").addEventListener(type, event => {
     if (!event.target.hasAttribute("data-view-control")) ++configurationGeneration;
@@ -657,7 +662,7 @@ function definitions() {
             grid_export_entity: $("export-energy").value.trim() || null,
             additional_grid_export_entities: (config.catalogue.data.suggestions.settlement?.exports || []).slice(1),
             import_limit_w: Number($("import").value) * 1000,
-            export_limit_w: Number($("export").value) * 1000,
+            export_limit_w: $("allow-feed-in").checked ? Number($("export").value) * 1000 : 0,
             batteries,
             inverters: [...used.values()],
             expected_version: config.installation?.version ?? null,
@@ -874,9 +879,6 @@ async function load(refresh = false, discard = false, signal) {
         showStep(layout.area >= 4 ? layout.area : -1);
         return;
     }
-    $("energy-summary").textContent =
-        `Energy dashboard: ${hints.terms.filter((t) => t.sign === 1 && !hints.solar_sources.includes(t.entity_id) && !hints.batteries.some((b) => b.energy_entity === t.entity_id)).map((t) => t.entity_id).join(", ")} (grid import): ` +
-        `Solar sources: ${hints.solar_sources.length}: Batteries: ${hints.batteries.length}: Configuration is independent of available history. Devices removed from Energy are excluded automatically.`;
     for (const [id, kind, selected] of [
         [
             "grid",
@@ -908,18 +910,12 @@ async function load(refresh = false, discard = false, signal) {
     $("export").value = config.installation
         ? config.installation.export_limit_w / 1000
         : "";
+    $("allow-feed-in").checked = config.installation?.export_limit_w !== 0;
+    delete $("export").dataset.previousLimit;
     const estimate = config.annual_estimate;
     $("annual").value = estimate?.annual_kwh ?? config.demand?.annual_kwh ?? "";
     $("annual-field").hidden = Boolean(estimate || config.demand);
-    $("household-summary").textContent = estimate
-        ? `Whole-home consumption uses the complete Energy dashboard balance. Startup scale: ${estimate.annual_kwh} kWh/year. ${estimate.extrapolated === false
-            ? `Measured over ${estimate.days} complete days.`
-            : `Extrapolated from ${estimate.days} complete days within the last year. This is an estimate, not a measured annual total. Seasonal differences may affect it.`} Historical load forecasting is initialized after saving.`
-        : "Whole-home consumption uses the complete Energy dashboard balance. Fewer than seven complete recent days are available. Confirm an annual estimate for the startup forecast.";
     $("grid-field").hidden = Boolean($("grid").value);
-    $("grid-summary").textContent = $("grid-field").hidden
-        ? `Grid power from Home Assistant: ${(hints.grid_power_entities || [$("grid").value]).join(", ")}. All connections are summed. Import/export energy meters are reused separately for history and costs.`
-        : "Configure net grid power in Settings > Dashboards > Energy in Home Assistant.";
     $("timezone").value = catalogue.data.timezone;
     useHomeAssistantTimezone(catalogue.data.timezone);
     const savedSolar = config.solar?.sources || [];
@@ -938,8 +934,7 @@ async function load(refresh = false, discard = false, signal) {
     });
     for (const battery of detectedBatteries)
         addBattery(battery);
-    if (savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length)
-        $("energy-summary").textContent += " Device membership changed in Home Assistant. Removed devices are excluded automatically. Confirm missing properties and save to resume planning. Historical plans remain unchanged.";
+    const membershipChanged = savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length;
     $("connect").hidden = true;
     $("wizard").hidden = false;
     $("installation-save-bar").hidden = false;
@@ -954,13 +949,9 @@ async function load(refresh = false, discard = false, signal) {
     saveState.update();
     layout.sync();
     status(
-        layout.wizard ? "Home Assistant Energy configuration is ready. Confirm your physical ratings before saving." : pendingSolarSources.length ? `Review and save new Home Assistant solar sources: ${pendingSolarSources.map(solarName).join(", ")}.` : "Saved configuration loaded.",
+        membershipChanged ? "Device membership changed in Home Assistant. Removed devices are excluded automatically. Confirm missing properties and save to resume planning. Historical plans remain unchanged." : layout.wizard ? "Home Assistant Energy configuration is ready. Confirm your physical ratings before saving." : pendingSolarSources.length ? `Review and save new Home Assistant solar sources: ${pendingSolarSources.map(solarName).join(", ")}.` : "Saved configuration loaded.",
     );
 }
-$("edit-detected").onclick = () => {
-    $("grid-field").hidden = false;
-    $("annual-field").hidden = false;
-};
 $("connect").onsubmit = async (event) => {
     event.preventDefault();
     token = $("token").value;

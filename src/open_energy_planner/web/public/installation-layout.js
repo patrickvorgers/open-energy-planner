@@ -115,10 +115,12 @@ export class InstallationLayout {
             ["Grid export energy meters", (hints?.settlement?.exports || meters(-1)).map(name)],
         ];
         for (const [title, value] of [["Energy configuration", this.ready ? "Ready" : "Waiting for complete configuration"], ...this.gridSources, ["Solar sources", hints?.solar_sources?.map(name) || []], ["Batteries", hints?.batteries?.map(battery => name(battery.energy_entity)) || []], ["Timezone", catalogue?.timezone || "Unavailable"]]) summaryFact(facts, title, value);
+        const estimate = this.config.annual_estimate;
+        if (estimate) summaryFact(facts, "Annual household consumption", `${estimate.annual_kwh} kWh/year. ${estimate.extrapolated === false ? `Measured over ${estimate.days} complete days.` : `Extrapolated from ${estimate.days} complete days within the last year. Seasonal differences may affect it.`}`);
         const connectionSources = find("installation-grid-sources"); connectionSources.replaceChildren();
         for (const [title, value] of this.gridSources) summaryFact(connectionSources, title, value);
         find("ha-installation-summary").textContent = catalogue
-            ? "Manage source membership, meters and battery capacity in Home Assistant Settings > Dashboards > Energy. All configured grid connections contribute to the balance."
+            ? "Manage source membership, meters and battery capacity in Home Assistant Settings > Dashboards > Energy. All configured grid connections contribute to the balance. Devices removed from Energy are excluded automatically."
             : "Waiting for the Home Assistant integration to upload its Energy configuration.";
         find("installation-shell").hidden = false;
         find("wizard").hidden = false;
@@ -151,6 +153,8 @@ export class InstallationLayout {
         const locked = this.saveState.busy;
         if (this.wizard && this.area < 4) this.editing = this.ready;
         if (!locked) for (const [control, managed] of this.controls) if (control.isConnected) control.disabled = managed || !this.editing;
+        if (!locked) find("export").disabled = !this.editing || !find("allow-feed-in").checked;
+        find("feed-in-warning").hidden = find("allow-feed-in").checked;
         const strategyPanel = find("strategy-settings");
         const strategyParent = document.querySelector(`[data-step="${this.wizard && this.area < 4 ? 3 : 4}"]`);
         if (strategyPanel.parentElement !== strategyParent) strategyParent.append(strategyPanel);
@@ -193,7 +197,6 @@ export class InstallationLayout {
         }
         find("grid-field").hidden = false;
         find("annual-field").hidden = false;
-        find("edit-detected").hidden = true;
         find("next").disabled = locked || !this.ready;
         find("next").hidden = this.area === 3 || this.area > 3;
         find("back").disabled = locked || this.area === -1;
@@ -263,8 +266,8 @@ export class InstallationLayout {
         summary.append(tag, heading, list, ...panelSections);
         for (const status of root?.querySelectorAll(".calibration-status") || []) summary.append(status.cloneNode(true));
         if (!root) { const empty = document.createElement("p"); empty.textContent = `No ${this.area === 1 ? "solar sources" : "batteries"} configured in Home Assistant Energy.`; summary.append(empty); }
-        if (this.area === 0) for (const id of ["grid-summary", "household-summary"]) {
-            const note = document.createElement("p"); note.className = "installation-note"; note.textContent = find(id).textContent; summary.append(note);
+        if (this.area === 0 && !find("allow-feed-in").checked) {
+            const warning = find("feed-in-warning").cloneNode(true); warning.removeAttribute("id"); summary.append(warning);
         }
     }
 

@@ -8,7 +8,7 @@ import pytest
 from open_energy_planner.installation.model import BatteryState, InstallationProblem, PVUnit
 from open_energy_planner.installation.validation import validate
 from open_energy_planner.optimization.adapters.highs import HighsSolver
-from open_energy_planner.optimization.domain import Battery, Interval, Status
+from open_energy_planner.optimization.domain import Battery, Interval, SolveOptions, Status
 from open_energy_planner.optimization.export_bonus import ExportBonus
 from open_energy_planner.solar.calculation.model import SolarInverter
 from tests.database.support.archive import corrupt_document, list_documents, make_store
@@ -374,4 +374,71 @@ def test_fixed_pv_does_not_gain_export_limiting_permission(export_limit):
     solar.configuration.sources = (replace(source, can_curtail=True),)
     assert warnings(store, solar) == []
     permitted = replace(inputs, pv_sources=(PVUnit("pv", "inverter", True),))
-    assert solve(permitted).status == Status.OPTIMAL
+    result = solve(permitted)
+    assert result.status == Status.OPTIMAL
+    assert result.plan.flows[0].grid_export == pytest.approx(0)
+    assert result.plan.flows[0].solar[0].enabled is False
+
+
+@pytest.mark.planner_scenario
+@pytest.mark.parametrize("can_curtail", [False, True])
+@pytest.mark.parametrize("strategy", ["minimize cost", "minimize consumption"])
+def test_no_feed_in_keeps_mixed_solar_permissions_and_battery_self_consumption(
+    can_curtail, strategy
+):
+    """A full battery supplies 0.25 kWh beside 0.25 fixed PV for 0.5 demand. Surplus 2 kWh PV must switch off.
+
+    A high export price cannot authorize export. Without permission to stop the
+    surplus source, neither export nor invented proportional clipping can absorb
+    it. The fixed source must remain enabled in the feasible plan.
+    """
+    inputs = problem(prices=(1,), loads=(0.5,), pv=(2,), initial=1, curtail=can_curtail)
+    inputs = replace(
+        inputs,
+        grid_export_limit_w=0,
+        inverters=(*inputs.inverters, SolarInverter("fixed", 1000, 1)),
+        pv_sources=(*inputs.pv_sources, PVUnit("fixed", "fixed", False)),
+        intervals=(
+            replace(
+                inputs.intervals[0],
+                sell_price=10,
+                pv_kwh=2.25,
+                pv_sources=(("pv", 2), ("fixed", 0.25)),
+            ),
+        ),
+    )
+    result = HighsSolver().solve(inputs, SolveOptions(strategy=strategy))
+    if not can_curtail:
+        assert result.status == Status.INFEASIBLE
+        assert result.plan is None
+        return
+    assert result.status == Status.OPTIMAL
+    validate(inputs, result.plan)
+    flow = result.plan.flows[0]
+    assert flow.grid_export == pytest.approx(0)
+    assert flow.grid_import == pytest.approx(0)
+    assert flow.batteries[0].discharge_kwh == pytest.approx(0.25)
+    assert {source.source_id: source.enabled for source in flow.solar} == {
+        "pv": False,
+        "fixed": True,
+    }
+
+
+@pytest.mark.parametrize("surplus", [False, True])
+def test_no_feed_in_reference_cannot_sell_battery_energy_or_ignore_surplus(surplus):
+    """The unmanaged reference uses 0.5 battery kWh locally or rejects excess PV rather than inventing zero export."""
+    from open_energy_planner.savings.reference import dispatch
+
+    inputs = replace(
+        problem(prices=(1,), loads=(0.5,), pv=(2 if surplus else 0,), initial=1, curtail=True),
+        grid_export_limit_w=0,
+    )
+    interval = replace(inputs.intervals[0], sell_price=10)
+    if surplus:
+        with pytest.raises(ValueError, match="exceeds configured grid limit"):
+            dispatch(inputs, interval, {"battery": 1})
+        return
+    result = dispatch(inputs, interval, {"battery": 1})
+    assert result["export_kwh"] == pytest.approx(0)
+    assert result["import_kwh"] == pytest.approx(0)
+    assert result["batteries"]["battery"]["discharge_kwh"] == pytest.approx(0.5)
