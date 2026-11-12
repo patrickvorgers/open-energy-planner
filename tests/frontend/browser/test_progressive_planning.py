@@ -35,6 +35,7 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"
     )
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
+    page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
     assert len(simulations) == 1
     simulations.pop().fulfill(response=simulations_response(page, url))
     expect(page.locator("#overview-status")).to_contain_text("Connected")
@@ -45,6 +46,9 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     )
     expect(
         page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True)
+    ).not_to_be_checked()
+    expect(
+        page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
     ).not_to_be_checked()
     assert evidence == []
     captures = Path("results/ci/progressive-planning")
@@ -182,6 +186,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
     else:
         expect(page.locator("#overview-status")).to_contain_text("Loading simulations")
     assert len(held) == 1
+    page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
     page.locator("#plan-version").select_option("selected-plan")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
@@ -207,4 +212,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
     expect(page.locator("#plan-evidence")).to_contain_text("Selected plan evidence")
     expect(page.locator("body")).not_to_contain_text("Old plan evidence")
     expect(page.locator("body")).not_to_contain_text("Old plan simulation")
+    expect(
+        page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
+    ).to_be_checked()
     assert page.locator("#ems-costs").inner_text() == before

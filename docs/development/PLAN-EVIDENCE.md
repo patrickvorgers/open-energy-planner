@@ -25,9 +25,14 @@ Savings reads start only when Savings opens or its period is explicitly refreshe
 Opening Savings directly does not request a plan list or replay comparisons.
 Source-name changes detected on Savings mark the retained Planning labels stale.
 Reopening Planning refreshes its selected plan without reading hidden Savings.
+This also applies when the session starts on Savings and opens an original plan
+without enabling live publication polling.
 Only a successful plan render confirms that name generation. Failed refreshes
 retain the prior plan and retry state, including historical selections and
 manual chart visibility choices.
+Manual energy-chart visibility also survives the first supplemental simulation
+response for the displayed plan. Selecting a different original plan resets those
+choices to that plan's defaults.
 Each read has its own deadline. Selection generations reject late plan-list and
 simulation responses. Evidence belongs to its active shared read and displayed
 plan, so a failed refresh retaining that plan can still complete its evidence.

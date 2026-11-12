@@ -595,7 +595,7 @@ function view() {
     for (const tooltip of document.querySelectorAll(".chart-tooltip")) tooltip.hidden = true;
     if (overviewSessionReady && (overviewIngress || token)) {
         if (selected === "savings") savings();
-        else if (planRefreshEnabled && planSourceNamesGeneration !== sourceNamesGeneration) showPlan();
+        else if (renderedPlanId && renderedPlanId === $("plan-version").value && planSourceNamesGeneration !== sourceNamesGeneration) showPlan();
         else if (!planRefreshEnabled && !selectedLinkedPlan) load();
     }
 }
@@ -715,7 +715,7 @@ function gridExchangeSeries(plan, comparison = null, baseline = null) {
 /** Add same-plan simulations and server-owned costs without rebuilding the user's plan charts. */
 function renderPlanComparisons(data, plan) {
     const id = plan.plan_id, currency = plan.currency || "";
-    const samePlan = periodCostPlan?.id === id;
+    const samePlan = renderedPlanId === id;
     const comparison = data.comparison, valuation = data.valuation;
     const confirmedProjection = periodCostPlan?.projection === data;
     const withoutBattery = data.scenarios?.without_battery;
@@ -1189,7 +1189,7 @@ function selectOriginal(id, signal) {
         const option = document.createElement("option"); option.value = id; option.textContent = "Selected archived plan"; $("plan-version").append(option);
     }
     selectedLinkedPlan = true;
-    location.hash = "planning"; view(); $("plan-version").value = id;
+    $("plan-version").value = id; location.hash = "planning"; view();
     const loaded = showPlan(signal); $("plan-heading").scrollIntoView({behavior: "smooth"});
     return loaded;
 }

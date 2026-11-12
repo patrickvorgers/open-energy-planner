@@ -80,8 +80,11 @@ def test_savings_opens_independently_and_failed_reads_retry(app_page):
     expect(page.locator("#coverage")).to_contain_text("503")
     assert not plans
     page.unroute("**/v1/savings?*")
-    page.get_by_role("button", name="Refresh overview", exact=True).click()
-    expect(page.locator("#coverage")).not_to_be_empty()
+    with page.expect_response("**/v1/savings?*") as recovered:
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    assert recovered.value.status == 200
+    expect(page.locator("#coverage")).to_contain_text("Quarters evaluated: 0 of 96")
+    expect(page.locator("#coverage")).not_to_contain_text("503")
     assert not plans
 
 
