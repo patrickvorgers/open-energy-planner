@@ -66,7 +66,8 @@ before a protected API response. Public page and static-asset GET/HEAD requests,
 and the bounded public setup-session metadata, do not wait for this write. They
 contain no device commands or authenticated settings. This keeps the Home Assistant
 sidebar and Installation page shell available during a slow or failed archive write.
-Protected API responses retain the durability barrier, including error responses.
+Responses from authenticated API handlers retain the durability barrier, including
+handler errors. Authentication failures return immediately without waiting for writes.
 Background invalidations are also flushed at the existing
 worker cadence and shutdown. Failed invalidation persistence never reinstates
 commands. Failed publication retains only the previous normally valid plan.
