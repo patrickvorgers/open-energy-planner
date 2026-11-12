@@ -125,10 +125,30 @@ def test_overview_probe_retains_unexpected_comparison_queries(app_page):
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("stalled", ["plan", "savings"])
-def test_source_name_refresh_bounds_both_views_and_retries_the_revision(app_page, stalled):
+@pytest.mark.parametrize(
+    "savings_now,browser_now,quarter_start,quarter_end",
+    [
+        (
+            datetime(2026, 11, 11, tzinfo=UTC),
+            datetime(2026, 11, 10, 12, 13, 30, tzinfo=UTC),
+            "2026-11-10T12:15:00.000Z",
+            "2026-11-10T12:30:00.000Z",
+        ),
+        (
+            datetime(2026, 11, 12, tzinfo=UTC),
+            datetime(2026, 11, 11, 12, 13, 30, tzinfo=UTC),
+            "2026-11-11T12:15:00.000Z",
+            "2026-11-11T12:30:00.000Z",
+        ),
+    ],
+    ids=["before-midnight", "after-midnight"],
+)
+def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
+    app_page, stalled, savings_now, browser_now, quarter_start, quarter_end
+):
     """Abort either stalled view at five seconds and retry names across a UTC-quarter cost refresh."""
     page, url = app_page
-    page.clock.install(time=datetime(2026, 11, 10, 12, 13, 30, tzinfo=UTC))
+    page.clock.install(time=browser_now)
     metadata = discover(page, url)
     overview_read_probe(page, stalled)
     page.goto(url + "/overview#savings")
@@ -177,9 +197,12 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(app_page
     count = page.evaluate("window.overviewReads.length")
     page.clock.fast_forward(31000)
     assert page.evaluate("window.overviewReads.length") == count
-    assert page.evaluate("""window.overviewPeriodReads.some(record=>
-      record.start==='2026-11-10T12:15:00.000Z'&&record.end==='2026-11-10T12:30:00.000Z'&&record.budget===5000
-    )""")
+    assert page.evaluate(
+        """expected => window.overviewPeriodReads.some(record=>
+          record.start===expected.start&&record.end===expected.end&&record.budget===5000
+        )""",
+        {"start": quarter_start, "end": quarter_end},
+    )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
