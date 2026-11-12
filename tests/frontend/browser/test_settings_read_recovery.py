@@ -32,7 +32,7 @@ def test_cancelled_strategy_read_retains_installation_and_allows_source_retry(ap
             + "\nwindow.__installationProbe = {refresh:refreshSourceNames, ready:()=>installationReady, config:()=>structuredClone(config)};",
         )
 
-    page.route("**/setup/setup.js", expose_probe)
+    page.route("**/setup.js", expose_probe)
     page.goto(url + "/setup")
     discover(page, url)
     connect(page)

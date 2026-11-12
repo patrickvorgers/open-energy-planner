@@ -15,6 +15,62 @@ from custom_components.open_energy_planner.const import DOMAIN
 from tests.custom_component.support.chain import TOKEN, find, running_chain
 
 
+@pytest.mark.parametrize(
+    "explanation", [None, "", "missing", "Recorded savings evidence is invalid"]
+)
+def test_savings_warning_has_an_explanation_and_clears_after_recovery(explanation):
+    """Real HA keeps unexplained failures visible with useful guidance and dismisses recovered warnings."""
+    from unittest.mock import patch
+
+    from homeassistant.components import persistent_notification
+
+    async def scenario():
+        """Exercise the authenticated snapshot and actual persistent-notification lifecycle."""
+        async with running_chain() as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            snapshot = coordinator.client.snapshot
+            status = {"action_required": True}
+            if explanation != "missing":
+                status["issue"] = explanation
+
+            async def with_savings_status():
+                """Keep the real snapshot and substitute only the business status under test."""
+                data = await snapshot()
+                data["savings_status"] = dict(status)
+                return data
+
+            with (
+                patch.object(coordinator.client, "snapshot", with_savings_status),
+                patch.object(
+                    persistent_notification,
+                    "async_create",
+                    wraps=persistent_notification.async_create,
+                ) as notify,
+                patch.object(
+                    persistent_notification,
+                    "async_dismiss",
+                    wraps=persistent_notification.async_dismiss,
+                ) as dismiss,
+            ):
+                await coordinator.sync()
+                assert coordinator.issue == "savings_unavailable"
+                message = notify.call_args.args[1]
+                expected = (
+                    explanation
+                    if explanation not in (None, "", "missing")
+                    else "No detailed settlement explanation is available"
+                )
+                assert expected in message
+                assert "attention: None" not in message
+                assert "Physical commands remain governed by their own plan validity" in message
+                status.update(action_required=False, issue=None)
+                await coordinator.sync()
+                assert coordinator.issue is None
+                dismiss.assert_called_with(hass, f"{DOMAIN}.{entry.entry_id}")
+
+    asyncio.run(scenario())
+
+
 def test_loaded_integration_reports_a_different_build_as_action_required(monkeypatch):
     """A real HA coordinator refuses a different app/integration build even when their release numbers agree."""
     from custom_components.open_energy_planner import client as client_module

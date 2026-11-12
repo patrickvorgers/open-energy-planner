@@ -23,7 +23,19 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                 json.dumps(
                     asdict(problem()), default=lambda datetime_value: datetime_value.isoformat()
                 )
-            )
+            ),
+            "tariff_evidence": [
+                {
+                    "start": START.isoformat(),
+                    "end": "2026-10-22T10:15:00+00:00",
+                    "market_price": 0.1,
+                    "buy_price": 0.2,
+                    "sell_price": 0.1,
+                    "price_kind": "published",
+                    "native_resolution_minutes": 15,
+                    "source_version": "synthetic-archived-price-version",
+                }
+            ],
         },
         "expected_flows": [
             {
@@ -34,6 +46,8 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
         ],
         "plan_id": "projection-original",
         "generated_at": START.isoformat(),
+        "reference_forecast": {"private_replay": "synthetic-large-archive"},
+        "solar_evidence": {"roof": {"training": list(range(1000))}},
         "currency": "EUR",
     }
     before = deepcopy(plan)
@@ -91,7 +105,26 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                     projected = await response.json()
                 assert calls == expected_calls
                 if view == "plan":
-                    assert projected == {"plan": complete["plan"]}
+                    expected = {
+                        key: value
+                        for key, value in complete["plan"].items()
+                        if key
+                        not in ("reference_forecast", "solar_evidence", "forecast_quality_names")
+                    }
+                    expected["input_snapshot"] = {
+                        **expected["input_snapshot"],
+                        "tariff_evidence": [
+                            {
+                                key: value
+                                for key, value in before["input_snapshot"]["tariff_evidence"][
+                                    0
+                                ].items()
+                                if key != "source_version"
+                            }
+                        ],
+                    }
+                    assert projected == {"plan": expected}
+                    assert len(json.dumps(projected)) < len(json.dumps(complete["plan"]))
                 elif view == "simulations":
                     assert projected == {
                         "plan_id": "projection-original",

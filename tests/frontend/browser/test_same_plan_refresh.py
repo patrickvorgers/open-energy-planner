@@ -9,6 +9,60 @@ from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("missing", ["self_consumption", "without_battery"])
+def test_scenario_legend_choices_follow_scenarios_when_a_comparison_recovers(app_page, missing):
+    """A recovered scenario starts visible without inheriting another scenario's checkbox or device semantics."""
+    page, url = app_page
+    simulations = []
+
+    def comparison(route):
+        """Remove one independent comparison only from the first real simulation response."""
+        response = route.fetch().json()
+        if not simulations:
+            if missing == "self_consumption":
+                response["comparison"] = None
+            else:
+                response["scenarios"]["without_battery"]["comparison"] = None
+        simulations.append(response)
+        route.fulfill(json=response)
+
+    page.route("**/comparison?view=simulations", comparison)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    wait_for_product_reads(page)
+    names = {
+        "self_consumption": "Battery self-consumption",
+        "without_battery": "Without battery: Baseline",
+    }
+    recovered = names[missing]
+    retained = names["without_battery" if missing == "self_consumption" else "self_consumption"]
+    legend = page.locator("#energy-chart-legend")
+    expect(legend.get_by_role("checkbox", name=recovered, exact=True)).to_have_count(0)
+    retained_choice = legend.get_by_role("checkbox", name=retained, exact=True)
+    retained_choice.focus()
+    retained_choice.press("Space")
+    expect(retained_choice).not_to_be_checked()
+    legend.get_by_role("checkbox", name="Optimizer", exact=True).uncheck()
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(legend.get_by_role("checkbox", name=recovered, exact=True)).to_be_visible()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    wait_for_product_reads(page)
+    expect(legend.get_by_role("checkbox", name=retained, exact=True)).not_to_be_checked()
+    expect(legend.get_by_role("checkbox", name=recovered, exact=True)).to_be_checked()
+    expect(legend.get_by_role("checkbox", name="Optimizer", exact=True)).not_to_be_checked()
+    for name in ("Optimizer", retained, recovered):
+        choice = legend.get_by_role("checkbox", name=name, exact=True)
+        expect(choice).to_be_visible()
+        assert choice.get_attribute("aria-describedby") is None
+    expect(page.locator("#energy-chart-device-key")).to_have_count(0)
+    expect(
+        page.get_by_role("img", name="Expected EMS and reference net grid power", exact=True)
+    ).to_be_visible()
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("evidence_state", ["loaded", "pending"])
 @pytest.mark.parametrize("replacement", ["success", "failure"])
 def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_state, replacement):
@@ -43,6 +97,15 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
         )
     assert len(evidence_reads) == 1
     page.locator("#reference-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
+    for label in (
+        "Original and repriced expected costs",
+        "Detailed interval energy",
+        "Expected state and commands per battery",
+    ):
+        page.get_by_text(label, exact=True).click()
+    expect(page.locator("#expected-cost-rows tr")).to_have_count(6)
+    expect(page.locator("#plan-rows tr")).to_have_count(2)
+    expect(page.locator("#plan-battery-rows tr")).to_have_count(2)
     costs = page.locator("#expected-cost-rows").inner_text()
     rows = page.locator("#plan-rows").inner_text()
     battery_rows = page.locator("#plan-battery-rows").inner_text()

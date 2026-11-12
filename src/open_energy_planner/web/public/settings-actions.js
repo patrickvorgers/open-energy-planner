@@ -1,4 +1,4 @@
-import {bindNotifications, refreshNotifications} from "./notifications.js";
+let notifications;
 
 /** Dismiss the shared mobile menu, including interactions originating in the content document. */
 export function closeSettingsNavigation(focus = false) {
@@ -19,6 +19,13 @@ export function closeSettingsNavigation(focus = false) {
  * Leave page-specific editing and persistence to their existing owners.
  */
 export function bindSettingsActions() {
+    let lastSession;
+    let pendingToken = "";
+    // A quick standalone connection can precede the optional module's submit listener.
+    const captureConnection = event => {
+        if (["connect", "overview-connect", "contract-connect"].includes(event.target.id)) pendingToken = event.target.querySelector('input[type="password"]')?.value || "";
+    };
+    document.addEventListener("submit", captureConnection, true);
     const versionStatus = document.getElementById("integration-version-status");
     const integrationDetail = document.getElementById("integration-version-detail");
     const versionRefreshMilliseconds = 15000;
@@ -27,10 +34,12 @@ export function bindSettingsActions() {
     async function refreshVersion() {
         if (!versionStatus) return;
         try {
-            const response = await fetch(new URL("session", import.meta.url), {cache: "no-store", redirect: "error", signal: AbortSignal.timeout(versionReadTimeoutMilliseconds)});
+            const base = new URL(document.querySelector('meta[name="oep-api-base"]').content, location.href);
+            const response = await fetch(new URL("setup/session", base), {cache: "no-store", redirect: "error", signal: AbortSignal.timeout(versionReadTimeoutMilliseconds)});
             if (!response.ok) throw new Error("Version status unavailable");
             const session = await response.json(), info = session.build_info;
-            await refreshNotifications(session);
+            lastSession = session;
+            await notifications?.refreshNotifications(session);
             versionStatus.hidden = info?.status !== "mismatch";
             const integration = info?.integration;
             if (integrationDetail) {
@@ -39,7 +48,7 @@ export function bindSettingsActions() {
             }
             versionStatus.title = integration ? `Last observed integration: ${integration.version || "Unknown"}: Build: ${integration.build || "Development"}` : "No recent integration contact";
         } catch {
-            await refreshNotifications();
+            await notifications?.refreshNotifications();
             versionStatus.hidden = true;
             versionStatus.removeAttribute("title");
             if (integrationDetail) integrationDetail.hidden = true;
@@ -52,7 +61,25 @@ export function bindSettingsActions() {
     toggle.type = "button"; toggle.className = "secondary"; toggle.textContent = "Menu";
     sidebar.id = "settings-navigation"; toggle.setAttribute("aria-controls", sidebar.id); toggle.setAttribute("aria-expanded", "false");
     mobileBar.append(name, toggle); document.body.prepend(mobileBar);
-    bindNotifications();
+    import("./notifications.js").then(module => {
+        notifications = module;
+        module.bindNotifications(pendingToken);
+        pendingToken = "";
+        document.removeEventListener("submit", captureConnection, true);
+        module.refreshNotifications(lastSession);
+    }).catch(() => {
+        pendingToken = "";
+        document.removeEventListener("submit", captureConnection, true);
+        const status = document.createElement("p");
+        status.setAttribute("role", "status");
+        status.textContent = "Notifications could not be loaded. Reload this page to retry.";
+        sidebar.append(status);
+        document.oepNotificationState = {payload: {notifications: []}, warning: status.textContent};
+        try {
+            const frame = parent !== window && parent.document.getElementById("workspace-content");
+            if (frame?.contentWindow === window) frame.dispatchEvent(new CustomEvent("oep-notifications", {detail: {source: document, ...document.oepNotificationState}}));
+        } catch { /* A standalone document keeps its recovery advice in its own navigation. */ }
+    });
     const closeNavigation = () => closeSettingsNavigation();
     toggle.onclick = () => { const open = sidebar.classList.toggle("settings-menu-open"); toggle.setAttribute("aria-expanded", String(open)); };
     const mobileViewport = window.matchMedia("(max-width: 640px)");

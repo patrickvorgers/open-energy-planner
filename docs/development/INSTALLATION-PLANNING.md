@@ -55,6 +55,31 @@ never in links or browser storage. HA OS ingress uses the existing HA session
 instead. Companion/HTTPS reachability and final public distribution retain their
 separate acceptance gates. The app never installs the HA integration itself.
 
+The workspace iframe has its initial content URL in the HTML. The browser starts
+that document without waiting for workspace navigation scripts. The initial page
+uses the registered canonical route for aliases such as `/setup/` and `/consumers`,
+preserving its fragment and trusted ingress prefix. Navigation stays
+inert until its draft-preserving handlers are attached. Notifications load as an
+optional module and cannot hold the initial document or Planning module graph.
+A failed notification module shows reload advice while ordinary navigation stays
+usable. Optimizer charts render before supplemental comparisons finish.
+The shell replays a display-only notification snapshot if it binds after the
+content read. A pending content module preserves the last confirmed notices.
+Early standalone Connect submissions stay in page memory until the optional
+module binds. Credentials never enter the shared display snapshot.
+Module binding also starts an authenticated notification read after failed
+initial session discovery when Connect has already supplied a token. Unknown
+session state without a token preserves pending notices until authentication is
+confirmed, rather than reporting recovery during navigation.
+
+Public scripts, styles and fonts use a content-addressed asset namespace and a
+one-year immutable browser cache. Relative module imports and font URLs share
+that namespace. Each running app freezes the public bytes with their address.
+Changed public content receives a new namespace after restart. HTML, session
+discovery, unversioned public files and authenticated data retain their existing
+cache and authorization boundaries. The versioned route admits only registered
+public bytes and never resolves a request path against the filesystem.
+
 The integration pushes bounded sensor identity/name/unit/device metadata and
 validated Energy suggestions to `/v1/ha/catalogue` at initialization and after
 relevant events. Explicit refresh is handled on the next normal synchronization.

@@ -1,6 +1,8 @@
 """Serve app pages and assets using the existing ingress policy and browser security headers."""
 
+from hashlib import sha256
 from html import escape
+from mimetypes import guess_type
 from pathlib import Path
 
 from aiohttp import web
@@ -13,6 +15,7 @@ PUBLIC = WEB / "public"
 PARTIALS = WEB / "partials"
 PUBLIC_RESOURCES = web.AppKey("public-page-resources", set)
 PAGE_ALIASES = {"/": "/workspace", "/setup/": "/setup", "/consumers": "/quality"}
+STATIC_ASSET_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
     "X-Content-Type-Options": "nosniff",
@@ -31,6 +34,30 @@ def is_public(request):
 
 def register(app, installation, demand, solar):
     """Register page rendering without owning HA catalogue exchange or configuration writes."""
+
+    # Freeze bytes with their address so an in-place development edit cannot poison a cached version.
+    public_files = {
+        path.relative_to(PUBLIC).as_posix(): path.read_bytes()
+        for path in sorted(PUBLIC.rglob("*"))
+        if path.is_file()
+        and not path.is_symlink()
+        and path.resolve().is_relative_to(PUBLIC.resolve())
+    }
+    asset_hash = sha256()
+    for name, content in public_files.items():
+        asset_hash.update(name.encode() + b"\0" + sha256(content).digest())
+    asset_prefix = "/setup/static/" + asset_hash.hexdigest() + "/"
+
+    async def versioned_asset(request):
+        """Serve only frozen public bytes under their exact content-addressed namespace."""
+        content = public_files.get(request.match_info["filename"])
+        if content is None:
+            raise web.HTTPNotFound()
+        return web.Response(
+            body=content,
+            content_type=guess_type(request.match_info["filename"])[0]
+            or "application/octet-stream",
+        )
 
     pages = {
         "/" + path.relative_to(PAGES).with_suffix("").as_posix(): path
@@ -75,16 +102,16 @@ def register(app, installation, demand, solar):
                     and solar.configuration is not None
                     else "/setup"
                 )
-                selected_page = request.query.get("page", default_page)
-                if selected_page.split("#", 1)[0] not in page_routes:
-                    selected_page = default_page
+                selected_page, separator, fragment = request.query.get(
+                    "page", default_page
+                ).partition("#")
+                selected_page = PAGE_ALIASES.get(selected_page, selected_page)
+                if selected_page not in page_routes:
+                    selected_page, separator, fragment = default_page, "", ""
                 html = html.replace(
                     "__OEP_START_PAGE__",
                     escape(
-                        base
-                        + selected_page.split("#", 1)[0]
-                        + "?embedded=1"
-                        + ("#" + selected_page.split("#", 1)[1] if "#" in selected_page else ""),
+                        base + selected_page + "?embedded=1" + separator + fragment,
                         quote=True,
                     ),
                 )
@@ -114,6 +141,8 @@ def register(app, installation, demand, solar):
                     f'href="{active_route}"', f'href="{active_route}" aria-current="page"'
                 )
             html = html.replace("<!-- OEP_NAVIGATION -->", navigation)
+            if filename == "workspace.html":
+                html = html.replace('class="sidebar"', 'class="sidebar" inert aria-busy="true"', 1)
             settings_navigation = (PARTIALS / "appliance-settings-navigation.html").read_text(
                 encoding="utf-8"
             )
@@ -122,8 +151,8 @@ def register(app, installation, demand, solar):
             )
             html = html.replace("<!-- OEP_APPLIANCE_SETTINGS -->", settings_navigation)
             html = (
-                html.replace('href="/setup/', 'href="' + base + "/setup/")
-                .replace('src="/setup/', 'src="' + base + "/setup/")
+                html.replace('href="/setup/', 'href="' + base + asset_prefix)
+                .replace('src="/setup/', 'src="' + base + asset_prefix)
                 .replace("__OEP_BASE__", base + "/")
                 .replace('href="/overview"', 'href="' + base + '/overview"')
                 .replace('href="/overview#', 'href="' + base + "/overview#")
@@ -151,6 +180,8 @@ def register(app, installation, demand, solar):
     for path in routes:
         route = app.router.add_get(path, asset)
         app[PUBLIC_RESOURCES].add(route.resource)
+    cached_resource = app.router.add_get(asset_prefix + "{filename:.*}", versioned_asset).resource
+    app[PUBLIC_RESOURCES].add(cached_resource)
     resource = app.router.add_static("/setup/", PUBLIC, show_index=False, follow_symlinks=False)
     app[PUBLIC_RESOURCES].add(resource)
 
@@ -158,5 +189,9 @@ def register(app, installation, demand, solar):
         """Apply the same browser policy to streamed static files, HEAD and page responses."""
         if is_public(request):
             response.headers.update(SECURITY_HEADERS)
+            if request.match_info.route.resource is cached_resource and response.status == 200:
+                response.headers["Cache-Control"] = (
+                    f"public, max-age={STATIC_ASSET_MAX_AGE_SECONDS}, immutable"
+                )
 
     app.on_response_prepare.append(prepare_public_response)

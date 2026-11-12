@@ -85,7 +85,8 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
         page.locator("#" + identity).scroll_into_view_if_needed()
         hover = page.evaluate(
             """async id => {const chart = Chart.getChart(document.getElementById(id));
-                const {when} = await import('./setup/display.js');
+                const pageModule = document.querySelector('script[type="module"][src]').src;
+                const {when} = await import(new URL('./display.js', pageModule).href);
                 const datasetIndex = chart.data.datasets.findIndex(dataset => dataset.label === 'Washing machine: Scheduled');
                 const intervalIndex = chart.data.datasets[datasetIndex].data.findIndex(point => point.y < 0);
                 const bar = chart.getDatasetMeta(datasetIndex).data[intervalIndex];

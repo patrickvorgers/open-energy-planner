@@ -33,7 +33,7 @@ def test_delayed_background_reload_preserves_newer_installation_ownership(
             + "\nwindow.__installationProbe={refresh:refreshSourceNames,config:()=>structuredClone(config)};",
         )
 
-    page.route("**/setup/setup.js", expose_probe)
+    page.route("**/setup.js", expose_probe)
     page.goto(url + "/setup")
     discover(page, url)
     connect(page)

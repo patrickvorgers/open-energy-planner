@@ -256,7 +256,8 @@ class SavingsRuntime:
 
         Returns:
             None after immutable frames and capture.json have committed in one
-            transaction and the previous ingestion issue has been cleared.
+            transaction. Capture acceptance does not resolve an outstanding
+            financial or prerequisite issue. Its owner confirms recovery.
 
         Raises:
             ValueError: Request identity, interval coverage, contiguity, quarter
@@ -338,7 +339,6 @@ class SavingsRuntime:
         with self.documents.transaction():
             self.store.put_frames(frames, context, self.documents.pending.connection)
             self.documents.write("capture.json", {"end": frames[-1].end.isoformat()})
-        self.issue = None
 
     def advance_reference(self):
         """Persist counter-free physical progress before attempting financial settlement.
