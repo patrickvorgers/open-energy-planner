@@ -146,8 +146,11 @@ def test_bulk_legend_selection_is_local_and_keeps_rounding_filter(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
-def test_rounding_uses_combined_displayed_bar_and_preserves_unknowns(app_page):
-    """Renderer boundaries use combined quarter powers, including scheduled use and unavailable bars."""
+@pytest.mark.parametrize("rounded_expected,rounded_scheduled", [(-0.09, -0.01), (-0.01, -0.09)])
+def test_rounding_uses_combined_displayed_bar_and_preserves_unknowns(
+    app_page, rounded_expected, rounded_scheduled
+):
+    """Exact 100 W survives addition error in both orders while truly lower use stays hidden."""
     page, url = app_page
     page.clock.set_fixed_time(START)
     page.goto(url + "/overview")
@@ -156,8 +159,11 @@ def test_rounding_uses_combined_displayed_bar_and_preserves_unknowns(app_page):
     wait_for_product_reads(page)
     legend = page.locator("#plan-chart-legend")
     for expected, scheduled, visible in (
+        (rounded_expected, rounded_scheduled, True),
         (-0.025, -0.025, False),
         (-0.049, -0.05, False),
+        (-0.09, -0.0099999999999999, False),
+        (-0.0099999999999999, -0.09, False),
         (-0.05, -0.05, True),
         (0, -0.1, True),
         (-0.101, 0, True),

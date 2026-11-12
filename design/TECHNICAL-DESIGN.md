@@ -1169,9 +1169,10 @@ charts and refreshes their bounds and ticks together. Other charts remain indepe
 After quarter projection, the chart legend groups device contributions by identity.
 It sums absolute expected and scheduled consumption within each displayed bar.
 Devices whose every bar is below 0.1 kW are hidden through dataset visibility,
-without changing the data. Unknown values keep their device eligible. Rounding
-eligibility stays separate from manual checkbox selection, including after range
-changes. Synchronize all charts' eligibility before computing their shared axes.
+without changing the data. Unknown values keep their device eligible. The
+comparison tolerates only machine-precision addition error at the threshold.
+Rounding eligibility stays separate from manual checkbox selection, including
+after range changes. Synchronize all charts' eligibility before computing their shared axes.
 Each scenario legend's bulk button toggles eligible entries only in that chart.
 
 The planning page shows all three scenario balances without a comparison selector.
