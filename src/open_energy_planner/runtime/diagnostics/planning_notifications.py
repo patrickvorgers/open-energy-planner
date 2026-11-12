@@ -80,6 +80,25 @@ def planning_notifications(state: PlanningStatus, explain):
 
 def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeText:
     """Explain assembled planning inputs and calculation outcomes, with an honest unknown fallback."""
+    if reason == "battery_calibration_changed":
+        return NoticeText(
+            "Updating the battery calibration plan",
+            "Battery calibration progressed. A replacement plan is being calculated and checked "
+            "before normal battery commands can resume.",
+            "View planning",
+            "/overview",
+            "info",
+        )
+    if reason == "battery_calibration_unreadable":
+        return NoticeText(
+            "Battery calibration progress is unavailable",
+            "The retained calibration progress for the configured batteries is missing or unreadable. "
+            "Planning cannot assume a completed calibration. Check the active database, "
+            "or disable periodic calibration in Installation > Batteries and save before enabling it again. "
+            "This explicitly starts a new calibration schedule.",
+            "Check battery calibration",
+            "/setup",
+        )
     if reason == "waiting_for_energy_configuration":
         return NoticeText(
             "Waiting for Home Assistant Energy configuration",

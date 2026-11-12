@@ -2,7 +2,7 @@
 
 import asyncio
 import shutil
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -59,6 +59,44 @@ def app_site(request, savings_now):
     ready, shutdown = Event(), Event()
     result = {}
     with TemporaryDirectory() as directory:
+        if getattr(request, "param", None) == "calibration_overdue_hold":
+            from open_energy_planner.installation.model import Installation, InstalledBattery
+            from open_energy_planner.installation.storage import InstallationStore
+            from open_energy_planner.solar.calculation.model import SolarInverter
+            from open_energy_planner.storage.adapters.documents import SqlDocuments
+            from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+
+            with closing(SqlPlanRepository(Path(directory))) as repository:
+                store = InstallationStore(SqlDocuments(repository.engine, "installation"))
+                settings = Installation(
+                    "sensor.grid",
+                    4000,
+                    4000,
+                    (SolarInverter("inv", 4000, 1),),
+                    (
+                        InstalledBattery(
+                            "battery",
+                            "inv",
+                            "sensor.battery_00_soc_entity",
+                            "sensor.battery_00_power_entity",
+                            10,
+                            4000,
+                            4000,
+                            energy_entity="sensor.battery_00_energy_entity",
+                            charge_energy_entity="sensor.battery_00_charge_energy_entity",
+                            calibration_enabled=True,
+                        ),
+                    ),
+                )
+                store.save(settings)
+                now = datetime.now(UTC)
+                rows = store.calibration.configured(settings, now)
+                rows[settings.batteries[0].device_id].update(
+                    enabled_at=(now - timedelta(days=15)).isoformat(),
+                    hold_started_at=now.isoformat(),
+                    observed_at=now.isoformat(),
+                )
+                store.calibration.write(rows)
         if getattr(request, "param", None) == "solar_feedback_quality":
             from tests.app.forecast.support.solar_feedback import seed
 

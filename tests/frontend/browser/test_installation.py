@@ -23,7 +23,7 @@ from tests.frontend.browser.helpers import (
 
 def _discovered_installation_devices(page, url, kind, count):
     """Provide distinct Energy-owned meters and complete battery metadata without physical hardware."""
-    body = discover(page, url)
+    body = discover(page, url, publish=False)
     hints = body["suggestions"]
 
     def entity(identity, unit, device_class):
@@ -78,6 +78,123 @@ def _discovered_installation_devices(page, url, kind, count):
     )
     assert response.ok, f"Synthetic catalogue request failed (HTTP {response.status})"
     return body
+
+
+def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
+    """Desktop/mobile can enable defaults, save a different interval and discard an unsaved disable."""
+    page, url = app_page
+    _discovered_installation_devices(page, url, "battery", 1)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    editor = page.locator("#battery-rows > fieldset").first
+    editor.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Own inverter AC rating (kW)", exact=True).fill("3")
+    toggle = editor.get_by_label("Periodic battery calibration", exact=True)
+    expect(toggle).not_to_be_checked()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).not_to_be_visible()
+    toggle.check()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("14")
+    expect(editor.get_by_label("Calibration hold (hours)", exact=True)).to_have_value("3")
+    interval = editor.get_by_label("Calibration interval (days)", exact=True)
+    interval.fill("181")
+    assert interval.evaluate("element => element.validity.rangeOverflow")
+    interval.fill("180")
+    editor.get_by_label("Calibration hold (hours)", exact=True).fill("2.5")
+    toggle.uncheck()
+    toggle.check()
+    expect(interval).to_have_value("180")
+    expect(editor.get_by_label("Calibration hold (hours)", exact=True)).to_have_value("2.5")
+    finish(page)
+    saved = read_settings(page, url)["installation"]["batteries"][0]
+    assert saved["calibration_enabled"] is True
+    assert saved["calibration_interval_days"] == 180
+    assert saved["calibration_hold_hours"] == 2.5
+    page.reload()
+    connect(page)
+    installation_area(page, 2, edit=True)
+    expect(toggle).to_be_checked()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("180")
+    screenshots = Path("results/ci/battery-calibration")
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(screenshots / f"installation-{page.viewport_size['width']}.png"), full_page=True
+    )
+    toggle.evaluate("element => element.closest('label').scrollIntoView({block: 'start'})")
+    page.evaluate("window.scrollBy(0, -130)")
+    page.screenshot(path=str(screenshots / f"calibration-{page.viewport_size['width']}.png"))
+    toggle.uncheck()
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    installation_area(page, 2, edit=True)
+    expect(toggle).to_be_checked()
+    toggle.uncheck()
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    disabled = read_settings(page, url)["installation"]["batteries"][0]
+    assert disabled["calibration_enabled"] is False
+    assert disabled["calibration_interval_days"] == 180
+    assert disabled["calibration_hold_hours"] == 2.5
+
+
+@pytest.mark.parametrize("app_site", ["calibration_overdue_hold"], indirect=True)
+def test_overdue_calibration_shows_active_hold_and_deadline(app_page):
+    """Desktop/mobile retain both overdue and active-hold guidance from a real restored ledger."""
+    page, url = app_page
+    assert read_settings(page, url)["installation"]["batteries"][0]["calibration_enabled"] is True
+    _discovered_installation_devices(page, url, "battery", 1)
+    assert read_settings(page, url)["installation"]["batteries"][0]["calibration_enabled"] is True
+    connect(page)
+    installation_area(page, 2)
+    status = page.locator(".calibration-status:visible")
+    expect(status).to_contain_text("Overdue since")
+    expect(status).to_contain_text("Holding until")
+    expect(status).to_contain_text("valid measurements are still required")
+    status.scroll_into_view_if_needed()
+    screenshots = Path("results/ci/calibration-overdue-hold")
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(screenshots / f"calibration-overdue-{page.viewport_size['width']}.png")
+    )
+
+
+@pytest.mark.parametrize(
+    "calibration_field_label,invalid_draft",
+    [("Calibration interval (days)", ""), ("Calibration hold (hours)", "25")],
+)
+def test_disabled_calibration_can_save_after_invalid_enabled_draft(
+    app_page, calibration_field_label, invalid_draft
+):
+    """An invalid calibration draft must not block native Save after opting out, including after reload."""
+    page, url = app_page
+    _discovered_installation_devices(page, url, "battery", 1)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    editor = page.locator("#battery-rows > fieldset").first
+    editor.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Own inverter AC rating (kW)", exact=True).fill("3")
+    editor.get_by_label("Periodic battery calibration", exact=True).check()
+    finish(page)
+    installation_area(page, 2, edit=True)
+    toggle = editor.get_by_label("Periodic battery calibration", exact=True)
+    toggle.check()
+    invalid = editor.get_by_label(calibration_field_label, exact=True)
+    invalid.fill(invalid_draft)
+    assert not invalid.evaluate("element => element.checkValidity()")
+    toggle.uncheck()
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    saved = read_settings(page, url)["installation"]["batteries"][0]
+    assert saved.get("calibration_enabled", False) is False
+    page.reload()
+    connect(page)
+    installation_area(page, 2, edit=True)
+    expect(toggle).not_to_be_checked()
+    toggle.check()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("14")
+    expect(editor.get_by_label("Calibration hold (hours)", exact=True)).to_have_value("3")
 
 
 @pytest.mark.parametrize("kind", ["solar", "battery"])
@@ -273,7 +390,7 @@ def test_hybrid_converter_name_refresh_keeps_battery_draft(app_page):
         if index == 0:
             source.get_by_label("Hybrid inverter with battery connection", exact=True).check()
     page.get_by_role("button", name="Continue", exact=True).click()
-    battery = page.locator("#battery-rows fieldset").first
+    battery = page.locator("#battery-rows > fieldset").first
     connection = battery.get_by_label("Converter connection", exact=True)
     connection.select_option("converter0")
     battery.get_by_label("Maximum charge power (kW)", exact=True).fill("2.35")
@@ -604,7 +721,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     page.get_by_role("button", name="Continue", exact=True).click()
     for index in range(2):
         page.locator("#installation-battery").select_option(str(index))
-        item = page.locator("#battery-rows fieldset").nth(index)
+        item = page.locator("#battery-rows > fieldset").nth(index)
         expect(item.get_by_label("State of charge sensor", exact=True)).to_be_hidden()
         options = (
             item.get_by_label("State of charge sensor", exact=True)
@@ -690,7 +807,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     expect(page.locator("#installation-area")).to_have_value("2")
     page.locator("#installation-battery").select_option("1")
     page.get_by_role("button", name="Edit installation", exact=True).click()
-    page.locator("#battery-rows fieldset").nth(1).get_by_label(
+    page.locator("#battery-rows > fieldset").nth(1).get_by_label(
         "Maximum charge power (kW)", exact=True
     ).fill("3")
     page.get_by_role("button", name="Cancel", exact=True).click()
@@ -734,7 +851,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     expect(page.locator("#solar-rows > fieldset")).to_have_count(1)
     expect(page.get_by_label("Production energy sensor", exact=True)).to_be_disabled()
     installation_area(page, 2)
-    expect(page.locator("#battery-rows fieldset")).to_have_count(1)
+    expect(page.locator("#battery-rows > fieldset")).to_have_count(1)
     expect(page.get_by_label("Energy dashboard battery", exact=True)).to_be_disabled()
     # Energy synchronization persists removals without a redundant manual save.
     expect(page.locator("#save")).to_be_disabled()
@@ -848,7 +965,7 @@ def test_configured_grid_and_solar_remain_visible_without_measurements_or_histor
     sensor = page.get_by_label("Production energy sensor", exact=True)
     expect(sensor).to_have_value("sensor.roof")
     expect(sensor.locator("option:checked")).to_contain_text("Missing or incompatible")
-    expect(page.locator("#battery-rows fieldset")).to_have_count(0)
+    expect(page.locator("#battery-rows > fieldset")).to_have_count(0)
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -1164,7 +1281,7 @@ def test_installation_duplicate_solar_names_keep_distinct_hybrid_choices(app_pag
         .input_value()
     )
     page.get_by_role("button", name="Continue", exact=True).click()
-    connection = page.locator("#battery-rows fieldset").first.get_by_label(
+    connection = page.locator("#battery-rows > fieldset").first.get_by_label(
         "Converter connection", exact=True
     )
     expect(connection.locator("option")).to_have_text(

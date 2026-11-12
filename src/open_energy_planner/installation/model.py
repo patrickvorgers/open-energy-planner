@@ -15,6 +15,13 @@ from open_energy_planner.solar.calculation.model import SolarInverter, identity,
 
 from ..optimization.domain import Battery, Costs, Interval, nonnegative
 from ..optimization.export_bonus import ExportBonus
+from .calibration import (
+    DEFAULT_CALIBRATION_HOLD_HOURS,
+    DEFAULT_CALIBRATION_INTERVAL_DAYS,
+    MAX_CALIBRATION_HOLD_HOURS,
+    MAX_CALIBRATION_INTERVAL_DAYS,
+    MIN_CALIBRATION_HOLD_HOURS,
+)
 from .valuation import TerminalValuation
 
 DEFAULT_MINIMUM_SOC_PERCENT = 10
@@ -49,6 +56,9 @@ class InstalledBattery:
     energy_entity: str | None = None
     charge_energy_entity: str | None = None
     recover_reserve: bool = False
+    calibration_enabled: bool = False
+    calibration_interval_days: int = DEFAULT_CALIBRATION_INTERVAL_DAYS
+    calibration_hold_hours: float = DEFAULT_CALIBRATION_HOLD_HOURS
 
     def __post_init__(self):
         """Validate finite terminal ratings and keep investment-related wear disabled by default."""
@@ -87,6 +97,17 @@ class InstalledBattery:
             raise TypeError("Grid-following permission must be boolean")
         if type(self.recover_reserve) is not bool:
             raise TypeError("Reserve recovery must be boolean")
+        if type(self.calibration_enabled) is not bool:
+            raise TypeError("Calibration permission must be boolean")
+        if (
+            type(self.calibration_interval_days) is not int
+            or not 1 <= self.calibration_interval_days <= MAX_CALIBRATION_INTERVAL_DAYS
+        ):
+            raise ValueError("Calibration interval must be between 1 and 180 whole days")
+        number(self.calibration_hold_hours, MIN_CALIBRATION_HOLD_HOURS, MAX_CALIBRATION_HOLD_HOURS)
+        object.__setattr__(self, "calibration_hold_hours", float(self.calibration_hold_hours))
+        if self.calibration_enabled and not self.charge_limit_w:
+            raise ValueError("Calibration requires charging capability")
         self.state(self.minimum_soc)
 
     def state(self, soc):
@@ -193,6 +214,17 @@ class Installation:
                 battery.pop("can_follow_grid")
             if not battery["recover_reserve"]:
                 battery.pop("recover_reserve")
+            if (
+                not battery["calibration_enabled"]
+                and battery["calibration_interval_days"] == DEFAULT_CALIBRATION_INTERVAL_DAYS
+                and battery["calibration_hold_hours"] == DEFAULT_CALIBRATION_HOLD_HOURS
+            ):
+                for key in (
+                    "calibration_enabled",
+                    "calibration_interval_days",
+                    "calibration_hold_hours",
+                ):
+                    battery.pop(key)
         return data
 
 
@@ -221,6 +253,8 @@ class BatteryState:
     battery: Battery
     dc_efficiency: float = 1
     can_follow_grid: bool = False
+    calibration_charge: bool = False
+    calibration_hold_until: datetime | None = None
 
     def __post_init__(self):
         """Keep each battery's measured state typed and independently identified."""
@@ -231,6 +265,13 @@ class BatteryState:
         number(self.dc_efficiency, MIN_POSITIVE_BATTERY_SETTING, 1)
         if type(self.can_follow_grid) is not bool:
             raise TypeError("Grid-following permission must be boolean")
+        if type(self.calibration_charge) is not bool:
+            raise TypeError("Calibration charge must be boolean")
+        if self.calibration_hold_until is not None and (
+            not isinstance(self.calibration_hold_until, datetime)
+            or self.calibration_hold_until.utcoffset() is None
+        ):
+            raise ValueError("Calibration hold requires an aware deadline")
 
 
 @dataclass(frozen=True)

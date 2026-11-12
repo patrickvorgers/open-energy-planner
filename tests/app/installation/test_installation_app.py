@@ -96,6 +96,170 @@ async def observe(session, url, configuration, *, unavailable=None):
         return await response.json()
 
 
+def test_unreadable_calibration_accepts_first_live_capture_and_keeps_recovery_visible(tmp_path):
+    """A restored corrupt ledger blocks calibration, not authenticated measurements, and is never silently reset."""
+    from open_energy_planner.installation.storage import InstallationStore, sources
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+    physical = installation(1)
+    physical["batteries"][0]["calibration_enabled"] = True
+    settings = parse_installation(physical)
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        documents = SqlDocuments(repository.engine, "installation")
+        InstallationStore(documents).save(settings)
+        documents.write("battery-calibration.json", {"schema": 1, "batteries": {}})
+
+    async def scenario():
+        """Submit real HTTP captures and verify the existing unavailable state remains visible."""
+        from aiohttp.test_utils import TestServer
+
+        async with (
+            TestServer(create_app(tmp_path, TOKEN, source="home_assistant")) as server,
+            ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session,
+        ):
+            configuration = asdict(sources(settings))
+            await observe(session, str(server.make_url("")).rstrip("/"), configuration)
+            await observe(session, str(server.make_url("")).rstrip("/"), configuration)
+            async with session.get(server.make_url("/v1/installation")) as response:
+                assert response.status == 200
+                assert (await response.json())["devices"][0]["calibration"] == {
+                    "status": "unavailable"
+                }
+        with closing(SqlPlanRepository(tmp_path)) as repository:
+            restored = InstallationStore(SqlDocuments(repository.engine, "installation"))
+            assert restored.calibration.issue == "battery_calibration_unreadable"
+            assert restored.calibration.state == {}
+
+    asyncio.run(scenario())
+
+
+def test_healthy_calibration_write_failure_still_rejects_capture(tmp_path, monkeypatch):
+    """A genuine observation persistence failure must not be mistaken for a known unreadable-ledger recovery state."""
+    from open_energy_planner.installation.storage import InstallationStore, sources
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+    physical = installation(1)
+    physical["batteries"][0]["calibration_enabled"] = True
+    settings = parse_installation(physical)
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        InstallationStore(SqlDocuments(repository.engine, "installation")).save(settings)
+
+    def refuse_observation(self, report):
+        """Fail the healthy ledger writer without changing its explicit recovery status."""
+        raise OSError("Synthetic observation write failure")
+
+    monkeypatch.setattr(InstallationStore, "observe", refuse_observation)
+
+    async def scenario():
+        """Require the real authenticated route to retain the storage failure rather than report success."""
+        from aiohttp.test_utils import TestServer
+
+        async with (
+            TestServer(create_app(tmp_path, TOKEN, source="home_assistant")) as server,
+            ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session,
+        ):
+            with pytest.raises(AssertionError, match="500"):
+                await observe(
+                    session, str(server.make_url("")).rstrip("/"), asdict(sources(settings))
+                )
+
+    asyncio.run(scenario())
+
+
+def test_calibration_observation_completes_off_loop_without_forecasts(tmp_path, monkeypatch):
+    """Authenticated captures advance durable calibration independently of missing forecasts and reject replay."""
+    import threading
+
+    from open_energy_planner.installation.storage import InstallationStore, sources
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+    physical = installation(1)
+    physical["batteries"][0].update(calibration_enabled=True, calibration_hold_hours=0.25)
+    settings = parse_installation(physical)
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        store = InstallationStore(SqlDocuments(repository.engine, "installation"))
+        store.save(settings)
+        start = datetime.now(UTC) - timedelta(minutes=15, seconds=2)
+        rows = store.calibration.configured(settings, start - timedelta(hours=1))
+        rows["bat0"]["enabled_at"] = (start - timedelta(hours=1)).isoformat()
+        store.calibration.write(rows)
+        store.calibration.install(rows)
+        for minute in (0, 5, 10, 14):
+            capture = SimpleNamespace(
+                captured_at=start + timedelta(minutes=minute),
+                readings=tuple(
+                    SimpleNamespace(
+                        key=f"battery.bat0.{key}",
+                        entity_id=entity,
+                        value=value,
+                        unit=unit,
+                        timestamp_kind="ha_state",
+                        observed_at=start + timedelta(minutes=minute),
+                    )
+                    for key, entity, value, unit in (
+                        ("soc", "sensor.soc0", 100 if minute == 0 else 98, "%"),
+                        ("power", "sensor.power0", 0, "W"),
+                    )
+                ),
+            )
+            store.observe(capture)
+        assert store.calibration.state["bat0"]["completed_at"] is None
+
+    async def scenario():
+        """Run the real authenticated app route and inspect committed evidence after its response."""
+        from aiohttp.test_utils import TestServer
+
+        loop_thread = threading.get_ident()
+        worker_threads = []
+        original = InstallationStore.observe
+
+        def record_thread(self, report):
+            """Keep SQL progress writes off the interface loop while executing the real observer."""
+            worker_threads.append(threading.get_ident())
+            original(self, report)
+
+        monkeypatch.setattr(InstallationStore, "observe", record_thread)
+
+        async with (
+            TestServer(create_app(tmp_path, TOKEN, source="home_assistant")) as server,
+            ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session,
+        ):
+            now = datetime.now(UTC).isoformat()
+            configuration = sources(settings)
+            body = {
+                "version": "calibration-final",
+                "config_revision": settings.version,
+                "captured_at": now,
+                "issues": [],
+                "readings": [
+                    {
+                        "key": binding.key,
+                        "entity_id": binding.entity_id,
+                        "value": 98 if binding.quantity == "soc" else 0,
+                        "unit": "%" if binding.quantity == "soc" else "W",
+                        "observed_at": now,
+                        "reported_at": now,
+                        "timestamp_kind": "ha_state",
+                    }
+                    for binding in configuration.bindings
+                ],
+            }
+            async with session.post(server.make_url("/v1/observations"), json=body) as response:
+                assert response.status == 200, await response.text()
+            async with session.get(server.make_url("/v1/installation")) as response:
+                assert response.status == 200
+                device = (await response.json())["devices"][0]
+                assert device["calibration"]["completed_at"] == now
+            async with session.post(server.make_url("/v1/observations"), json=body) as response:
+                assert response.status == 400
+            assert worker_threads and all(thread != loop_thread for thread in worker_threads)
+        with closing(SqlPlanRepository(tmp_path)) as repository:
+            restored = InstallationStore(SqlDocuments(repository.engine, "installation"))
+            assert restored.calibration.state["bat0"]["completed_at"] == now
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "count,solar,reference_error",
     [

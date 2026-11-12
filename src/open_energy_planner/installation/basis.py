@@ -12,6 +12,7 @@ from ..demand.basis import DemandEvidence
 from ..demand.basis import forecast_usable as demand_forecast_usable
 from ..optimization.domain import Interval
 from ..solar.basis import SolarEvidence, forecast_usable
+from .calibration import available_charge_w
 from .model import BatteryState, InstallationProblem, PVUnit
 
 COVERAGE_TOLERANCE_HOURS = 1e-08
@@ -111,6 +112,18 @@ class InstallationBasisSource:
                 state = battery.state(readings[f"battery.{battery.device_id}.soc"].value)
             except ValueError:
                 raise InputsUnavailable("battery_state_outside_configured_bounds") from None
+            if battery.calibration_enabled and self.store.calibration.issue:
+                raise InputsUnavailable("battery_calibration_unreadable")
+            converter = converters[battery.inverter_id]
+            charge, hold_until = (
+                self.store.calibration.directive(
+                    battery,
+                    now,
+                    available_charge_w(settings, battery, converter),
+                )
+                if battery.calibration_enabled
+                else (False, None)
+            )
             states.append(
                 BatteryState(
                     battery.device_id,
@@ -118,6 +131,8 @@ class InstallationBasisSource:
                     state,
                     battery.dc_efficiency,
                     battery.can_follow_grid,
+                    calibration_charge=charge,
+                    calibration_hold_until=hold_until,
                 )
             )
         rows = {source.source_id: [] for source in solar.configuration.sources}
@@ -187,6 +202,16 @@ class InstallationBasisSource:
                     settings.version,
                     load.version,
                     pv.version if rows else solar.configuration.version,
+                    tuple(
+                        (
+                            unit.device_id,
+                            unit.calibration_charge,
+                            unit.calibration_hold_until.isoformat()
+                            if unit.calibration_hold_until
+                            else None,
+                        )
+                        for unit in states
+                    ),
                 )
             ),
             "contract_required",

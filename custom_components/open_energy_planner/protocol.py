@@ -11,6 +11,9 @@ from .const import RELEASE
 from .wire_limits import MAX_SNAPSHOT_RESPONSE_BYTES, validate_projection_size
 
 MAX_INSTALLATION_STEPS = 1024
+MAX_CALIBRATION_INTERVAL_DAYS = 180
+MIN_CALIBRATION_HOLD_HOURS = 0.25
+MAX_CALIBRATION_HOLD_HOURS = 24
 MAX_THERMAL_HEATER_W = 30000
 THERMAL_CONFIGURATION_BOUNDS = {
     "volume_litres": (1, 10000),
@@ -98,6 +101,9 @@ def validate_device_configuration(device):
         "dc_efficiency",
         "can_follow_grid",
         "recover_reserve",
+        "calibration_enabled",
+        "calibration_interval_days",
+        "calibration_hold_hours",
         "energy_entity",
         "charge_energy_entity",
         "inverter",
@@ -110,6 +116,18 @@ def validate_device_configuration(device):
     if not isinstance(configuration, dict) or configuration.keys() - fields:
         raise ValueError("Invalid device configuration")
     for key, value in configuration.items():
+        if key == "calibration_enabled" and type(value) is not bool:
+            raise ValueError("Invalid calibration permission")
+        if key == "calibration_interval_days" and (
+            type(value) is not int or not 1 <= value <= MAX_CALIBRATION_INTERVAL_DAYS
+        ):
+            raise ValueError("Invalid calibration interval")
+        if key == "calibration_hold_hours" and (
+            type(value) not in (int, float)
+            or not isfinite(value)
+            or not MIN_CALIBRATION_HOLD_HOURS <= value <= MAX_CALIBRATION_HOLD_HOURS
+        ):
+            raise ValueError("Invalid calibration hold")
         if key == "recover_reserve" and type(value) is not bool:
             raise ValueError("Invalid reserve recovery permission")
         if key == "inverter":

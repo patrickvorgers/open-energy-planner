@@ -1,8 +1,11 @@
 """Atomic versioned installation settings. No copies of HA history or provider objects."""
 
 import json
+from datetime import UTC, datetime
 
 from open_energy_planner.home_assistant.observation_wire import parse_configuration
+from open_energy_planner.installation.calibration import BatteryCalibration
+from open_energy_planner.installation.calibration import definition as calibration_definition
 from open_energy_planner.installation.model import (
     Installation,
     InstalledBattery,
@@ -96,6 +99,7 @@ class InstallationStore:
     def __init__(self, documents):
         """Restore checked settings. Corruption is explicit and cannot become an empty installation."""
         self.documents = documents
+        self.calibration = BatteryCalibration(documents)
         self.current, self.issue = None, None
         try:
             pointer = "current.json"
@@ -112,9 +116,24 @@ class InstallationStore:
                     raise ValueError("Installation evidence mismatch")
         except (ValueError, TypeError, KeyError, OSError):
             self.current, self.issue = None, "installation_configuration_unreadable"
+        if self.current and any(
+            battery.calibration_enabled
+            and (
+                battery.device_id not in self.calibration.state
+                or self.calibration.state[battery.device_id]["definition"]
+                != calibration_definition(battery)
+            )
+            for battery in self.current.batteries
+        ):
+            self.calibration.issue = "battery_calibration_unreadable"
 
     def save(self, settings):
         """Persist a whole revision without rewriting any previous plan/configuration evidence."""
+        if self.calibration.issue and any(
+            battery.calibration_enabled for battery in settings.batteries
+        ):
+            raise OSError("Disable calibration before resetting unreadable progress")
+        progress = self.calibration.configured(settings, datetime.now(UTC))
         with self.documents.transaction():
             body = document(settings)
             target = f"{settings.version}.json"
@@ -124,5 +143,14 @@ class InstallationStore:
             else:
                 self.documents.write(target, body)
             self.documents.write("current.json", settings.version)
+            if progress != self.calibration.persisted or self.calibration.issue:
+                self.calibration.write(progress)
 
         self.current, self.issue = settings, None
+        self.calibration.install(progress)
+        self.calibration.issue = None
+
+    def observe(self, report):
+        """Persist measured calibration progress without changing immutable settings or old plans."""
+        if self.current is not None:
+            self.calibration.observe(self.current, report)

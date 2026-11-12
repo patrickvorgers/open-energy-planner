@@ -133,6 +133,10 @@ class BusBattery:
         battery, variables = self.unit.battery, binding.variables
         add_constraint = context.native.addConstr
         clipping = context.binding("inv:" + self.unit.inverter_id).variables["clip"]
+        requested_powers = {}
+        for interval_index, step in enumerate(context.intervals):
+            if self.unit.calibration_charge or self.unit.calibration_hold_until is not None:
+                add_constraint(variables["discharge"][interval_index] == 0)
         for interval_index, (step, first) in enumerate(
             zip(context.intervals, controls(context.intervals), strict=True)
         ):
@@ -188,18 +192,29 @@ class BusBattery:
                 type=highspy.HighsVarType.kInteger,
                 name=f"power:{self.unit.device_id}[{interval_index}]",
             )
-            add_constraint(
-                power
-                == (variables["discharge"][interval_index] - variables["charge"][interval_index])
+            requested_powers[interval_index] = power
+            average = (
+                (variables["discharge"][interval_index] - variables["charge"][interval_index])
                 * WATTS_PER_KW
                 / duration_hours
             )
+            if self.unit.calibration_charge:
+                # Full storage can stop accepting a whole-watt charge before the interval ends.
+                add_constraint(power <= average)
+                add_constraint(
+                    average <= power + battery.charge_limit_w * variables["full"][interval_index]
+                )
+            else:
+                add_constraint(power == average)
             if first != interval_index:
-                for name in ("charge", "discharge"):
-                    add_constraint(
-                        variables[name][interval_index] * context.intervals[first].duration_h
-                        == variables[name][first] * duration_hours
-                    )
+                if self.unit.calibration_charge:
+                    add_constraint(power == requested_powers[first])
+                else:
+                    for name in ("charge", "discharge"):
+                        add_constraint(
+                            variables[name][interval_index] * context.intervals[first].duration_h
+                            == variables[name][first] * duration_hours
+                        )
 
 
 @dataclass(frozen=True)

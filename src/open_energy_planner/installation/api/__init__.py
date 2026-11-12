@@ -45,6 +45,9 @@ def catalogue(store, solar, snapshot=None):
             "can_follow_grid": battery.can_follow_grid,
             "energy_entity": battery.energy_entity,
             "configured": True,
+            "calibration": store.calibration.document(battery, datetime.now(UTC))
+            if battery.calibration_enabled
+            else {"status": "disabled"},
             "reserve_status": (
                 "measurement_unavailable"
                 if battery.device_id not in measured

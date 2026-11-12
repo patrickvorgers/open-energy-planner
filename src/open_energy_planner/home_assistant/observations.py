@@ -19,7 +19,8 @@ class SourceSpec:
     Values arrive normalized as W, kWh or percent according to quantity. A power
     multiplier of -1 reverses the selected sensor's sign. Grid import and battery
     discharge use the positive convention. maximum_age_s bounds integration capture age.
-    Original HA report and device sample times remain provenance only.
+    Original HA report and device sample times remain provenance only for snapshot
+    admission. Measured calibration separately requires fresh explicit device samples.
     Required controls whether an unusable source blocks planning readiness.
     """
 

@@ -65,7 +65,20 @@ The optimizer, self-consumption reference, expected period costs and measured co
 
 Enable **Can follow zero grid target** only if your own controller or automation can implement that mode. It is a capability permission, not a promise of physically exact zero grid exchange.
 
+### Periodic battery calibration
+
+Select a battery and **Edit installation**, then optionally enable **Periodic battery calibration**. It is off by default. **Calibration interval (days)** is configurable from 1 to 180 whole elapsed days, with 14 as the default. **Calibration hold (hours)** defaults to 3 hours and accepts fractions. Save the installation explicitly. The planner schedules calibration only when this option is enabled. Leaving it off does not impose a periodic full-charge requirement.
+
+The first deadline is 14 days after enabling with the default interval. Each completed calibration establishes the next deadline. The planner starts charging ahead of the deadline, allowing for configured charging power, shared converter capacity and grid connection, the full hold and a quarter-hour margin. Calibration charging takes priority over price optimization. Electrical limits and local battery protections remain authoritative. Insufficient capacity or energy can leave calibration overdue. A deadline never permits exceeding those limits.
+
+Completion requires a measured **100.0%**, followed by the configured continuous hold without measured active discharge. Natural absorption drift down to **98.0%** is allowed. A lower SoC, positive discharge power, missing SoC/power inputs or more than five minutes between captures restarts the hold after a new measured 100.0%. Where a source explicitly supplies a device sample timestamp, SoC and power samples must each be no more than five minutes old. A fresh communication report cannot make an old device sample count. Ordinary unchanged Home Assistant states remain usable. A natural full-charge hold can also satisfy the requirement. Before the first completion, a natural full charge starts a protected hold immediately, even before scheduled charging becomes due. After completion, remaining at 100.0% does not start repeated holds. Normal planning resumes until the next calibration charging window.
+
+During required charging and the hold, proposed battery commands cannot actively discharge or use zero-grid following. After measured completion, a fresh plan resumes normal operation. Until that confirmation, the displayed future plan conservatively retains the hold. Your existing Home Assistant automation must execute the battery commands. This setting does not configure inverter charging voltage, BMS balancing or manufacturer calibration procedures.
+
+Progress and the last completed time live in the active database and survive restart and database transfer. An unobserved offline period never counts toward completion. A predicted full battery in a plan does not count either. Reload Installation to see retained progress and the next deadline. An overdue calibration that is already holding shows both the missed deadline and when the current hold can finish. Disabling calibration clears its schedule and keeps valid timing choices. Incomplete or invalid timing entries return to saved values or defaults when calibration is turned off. Re-enabling, changing its interval/hold, or replacing its measurement identity or capacity starts a new schedule. Unrelated settings preserve measured progress. Only enable periodic full charging when appropriate for the battery manufacturer's instructions.
+
 ## Choose the planning strategy
+
 
 Select **Planning strategy** in the installation area selector. The saved **Optimization goal** row shows **Minimize cost** or **Minimize consumption**. Open **Compare optimization goals** for the full explanation, then use **Edit installation** to change the choice.
 
