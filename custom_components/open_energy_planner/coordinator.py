@@ -849,7 +849,10 @@ class PlanCoordinator:
                     self.action_required(
                         "savings_unavailable",
                         "The savings comparison needs attention: "
-                        + str(data["savings_status"].get("issue", "Unknown settlement issue"))
+                        + str(
+                            data["savings_status"].get("issue")
+                            or "No detailed settlement explanation is available"
+                        )
                         + ". Open Plan and savings in the app. Physical commands remain governed by their own plan validity.",
                     )
                 else:
