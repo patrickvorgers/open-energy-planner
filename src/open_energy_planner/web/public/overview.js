@@ -88,7 +88,9 @@ function renderPlanDetails(id) {
 for (const id of PLAN_DETAIL_TABLES) $(id).closest("details").addEventListener("toggle", () => renderPlanDetails(id));
 const charts = new Map();
 const syncChartLegends = new WeakMap();
-const DEVICE_ROUNDING_KW = 0.05;
+const DEVICE_ROUNDING_KW = 0.1;
+// Absorb only machine-precision addition error at the display threshold.
+const DEVICE_ROUNDING_TOLERANCE_KW = DEVICE_ROUNDING_KW * Number.EPSILON;
 const hiddenPriceSeries = new Set();
 const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad"];
 const INTERVAL_BAR_FILL = 0.9;
@@ -355,7 +357,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 const key = `${point.start}:${point.end}`;
                 bars.set(key, (bars.get(key) || 0) + Math.abs(point.y));
             }
-            label.hidden = !unknown && ![...bars.values()].some(power => power >= DEVICE_ROUNDING_KW);
+            label.hidden = !unknown && ![...bars.values()].some(power => DEVICE_ROUNDING_KW - power <= DEVICE_ROUNDING_TOLERANCE_KW);
             for (const index of indexes) instance.setDatasetVisibility(index, input.checked && !label.hidden);
         }
         if (deviceKey) deviceKey.hidden = !legendEntries.some(({label, device}) => device && !label.hidden);
