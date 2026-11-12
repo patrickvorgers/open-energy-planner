@@ -857,7 +857,7 @@ def test_converter_gap_is_explained_without_hiding_complete_installation_balance
     body["plan"]["input_snapshot"]["problem"] = problem
     body["plan"]["expected_flows"] = fixture["expected_flows"]
     body["comparison"], body["scenarios"] = None, {}
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=body))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

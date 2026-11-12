@@ -129,7 +129,7 @@ def test_original_plan_price_scale_uses_the_same_zero_reference(app_page, negati
             tariff.update(market_price=market, buy_price=market + 0.10, sell_price=market - 0.02)
         route.fulfill(json=document)
 
-    page.route("**/v1/plans/*/comparison", original_prices)
+    page.route("**/v1/plans/*/comparison?view=plan", original_prices)
     page.goto(url + "/overview?plan=browser-original-plan")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

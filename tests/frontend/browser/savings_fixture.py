@@ -22,9 +22,9 @@ from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 
 
-def seed(directory, *, corrected=False):
+def seed(directory, *, corrected=False, now=None):
     """Store honest simulated expectations and different realized meters, without mocks or real hardware."""
-    now = datetime.now(UTC)
+    now = datetime.now(UTC) if now is None else now
     start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
     steps = tuple(
         Interval(
