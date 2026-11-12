@@ -16,7 +16,7 @@ Implementation update, 23 October 2026: the [settlement and savings increment](.
 
 ## 1. Status and terminology
 
-Confirmed periodic battery calibration: each battery can opt in to reaching a measured 100.0% at least once per configured elapsed-day interval (default 14 days), followed by a continuous non-discharging hold (default 3 hours). Natural absorption drift down to 98.0% is allowed. Missing measurements, active discharge or a larger fall invalidate the hold until full charge is observed again. Persist actual completion separately from plans, retain physical limits and keep hardware execution in user-owned Home Assistant automation. See [battery calibration](../docs/users/installation.md#periodic-battery-calibration).
+Confirmed periodic battery calibration: each battery can opt in to reaching a measured 100.0% at least once per configured elapsed-day interval (default 14 days, configurable from 1 to 180 days), followed by a continuous non-discharging hold (default 3 hours). Calibration is off by default and the planner imposes this requirement only when enabled. Natural absorption drift down to 98.0% is allowed. Missing measurements, active discharge or a larger fall invalidate the hold until full charge is observed again. Persist actual completion separately from plans, retain physical limits and keep hardware execution in user-owned Home Assistant automation. See [battery calibration](../docs/users/installation.md#periodic-battery-calibration).
 
 Confirmed automatic published-price increment: prefer the compatible configured official
 Home Assistant Nord Pool integration, otherwise use direct Nord Pool retrieval. Use

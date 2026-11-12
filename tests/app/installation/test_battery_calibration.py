@@ -118,7 +118,7 @@ def test_defaults_and_disabled_record_preserve_existing_settings():
         {"calibration_interval_days": 0},
         {"calibration_interval_days": 14.5},
         {"calibration_interval_days": True},
-        {"calibration_interval_days": 366},
+        {"calibration_interval_days": 181},
         {"calibration_hold_hours": 0},
         {"calibration_hold_hours": float("nan")},
         {"calibration_hold_hours": 25},
@@ -138,6 +138,42 @@ def test_invalid_calibration_settings_are_rejected(changes):
     }
     with pytest.raises((TypeError, ValueError)):
         InstalledBattery(**{**fields, **changes})
+
+
+@pytest.mark.parametrize("interval_days", [1, 14, 180])
+def test_selected_interval_sets_the_actual_deadline(tracker, interval_days):
+    """The chosen 1, 14 or 180 days survives serialization and determines when charging becomes due."""
+    settings, battery = configured(tracker, calibration_interval_days=interval_days)
+    assert parse(json.loads(json.dumps(settings.record()))) == settings
+    assert tracker.due_at(battery) == NOW + timedelta(days=interval_days)
+    restored = BatteryCalibration(tracker.documents)
+    assert restored.issue is None
+    assert restored.due_at(battery) == NOW + timedelta(days=interval_days)
+    assert tracker.directive(battery, NOW, 4000) == (False, None)
+    assert tracker.directive(battery, NOW + timedelta(days=interval_days), 4000) == (True, None)
+
+
+@pytest.mark.planner_scenario
+@pytest.mark.parametrize("enabled", [False, True])
+def test_calibration_is_only_planned_when_enabled(tracker, enabled):
+    """Past the selected 180-day deadline, only opt-in charges through the expensive first quarter."""
+    _settings, battery = configured(tracker, calibration_interval_days=180)
+    selected = replace(battery, calibration_enabled=enabled)
+    charge, hold_until = tracker.directive(selected, NOW + timedelta(days=181), 4000)
+    original = problem(count=4)
+    inputs = replace(
+        original,
+        batteries=(
+            replace(
+                original.batteries[0], calibration_charge=charge, calibration_hold_until=hold_until
+            ),
+        ),
+    )
+    result = HighsSolver().solve(inputs)
+    assert result.status == Status.OPTIMAL, result
+    validate(inputs, result.plan)
+    assert result.plan.flows[0].batteries[0].charge_kwh == pytest.approx(1 if enabled else 0)
+    assert hold_until is None
 
 
 def test_measured_hold_accepts_absorption_and_advances_deadline(tracker):

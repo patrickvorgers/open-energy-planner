@@ -100,7 +100,7 @@ class InstalledBattery:
             type(self.calibration_interval_days) is not int
             or not 1 <= self.calibration_interval_days <= MAX_CALIBRATION_INTERVAL_DAYS
         ):
-            raise ValueError("Calibration interval must be between 1 and 365 whole days")
+            raise ValueError("Calibration interval must be between 1 and 180 whole days")
         number(self.calibration_hold_hours, MIN_CALIBRATION_HOLD_HOURS, MAX_CALIBRATION_HOLD_HOURS)
         object.__setattr__(self, "calibration_hold_hours", float(self.calibration_hold_hours))
         if self.calibration_enabled and not self.charge_limit_w:

@@ -97,18 +97,25 @@ def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
     toggle.check()
     expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("14")
     expect(editor.get_by_label("Calibration hold (hours)", exact=True)).to_have_value("3")
-    editor.get_by_label("Calibration interval (days)", exact=True).fill("10")
+    interval = editor.get_by_label("Calibration interval (days)", exact=True)
+    interval.fill("181")
+    assert interval.evaluate("element => element.validity.rangeOverflow")
+    interval.fill("180")
     editor.get_by_label("Calibration hold (hours)", exact=True).fill("2.5")
+    toggle.uncheck()
+    toggle.check()
+    expect(interval).to_have_value("180")
+    expect(editor.get_by_label("Calibration hold (hours)", exact=True)).to_have_value("2.5")
     finish(page)
     saved = read_settings(page, url)["installation"]["batteries"][0]
     assert saved["calibration_enabled"] is True
-    assert saved["calibration_interval_days"] == 10
+    assert saved["calibration_interval_days"] == 180
     assert saved["calibration_hold_hours"] == 2.5
     page.reload()
     connect(page)
     installation_area(page, 2, edit=True)
     expect(toggle).to_be_checked()
-    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("10")
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("180")
     screenshots = Path("results/ci/battery-calibration")
     screenshots.mkdir(parents=True, exist_ok=True)
     page.screenshot(
@@ -121,6 +128,49 @@ def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
     page.get_by_role("button", name="Cancel", exact=True).click()
     installation_area(page, 2, edit=True)
     expect(toggle).to_be_checked()
+    toggle.uncheck()
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    disabled = read_settings(page, url)["installation"]["batteries"][0]
+    assert disabled["calibration_enabled"] is False
+    assert disabled["calibration_interval_days"] == 180
+    assert disabled["calibration_hold_hours"] == 2.5
+
+
+@pytest.mark.parametrize(
+    "field,value", [("Calibration interval (days)", ""), ("Calibration hold (hours)", "25")]
+)
+def test_disabled_calibration_can_save_after_invalid_enabled_draft(app_page, field, value):
+    """An invalid calibration draft must not block native Save after opting out, including after reload."""
+    page, url = app_page
+    _discovered_installation_devices(page, url, "battery", 1)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    editor = page.locator("#battery-rows > fieldset").first
+    editor.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
+    editor.get_by_label("Own inverter AC rating (kW)", exact=True).fill("3")
+    editor.get_by_label("Periodic battery calibration", exact=True).check()
+    finish(page)
+    installation_area(page, 2, edit=True)
+    toggle = editor.get_by_label("Periodic battery calibration", exact=True)
+    toggle.check()
+    invalid = editor.get_by_label(field, exact=True)
+    invalid.fill(value)
+    assert not invalid.evaluate("element => element.checkValidity()")
+    toggle.uncheck()
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    saved = read_settings(page, url)["installation"]["batteries"][0]
+    assert saved.get("calibration_enabled", False) is False
+    page.reload()
+    connect(page)
+    installation_area(page, 2, edit=True)
+    expect(toggle).not_to_be_checked()
+    toggle.check()
+    expect(editor.get_by_label("Calibration interval (days)", exact=True)).to_have_value("14")
+    expect(editor.get_by_label("Calibration hold (hours)", exact=True)).to_have_value("3")
 
 
 @pytest.mark.parametrize("kind", ["solar", "battery"])

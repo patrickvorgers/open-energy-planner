@@ -12,6 +12,7 @@ from custom_components.open_energy_planner.protocol import validate_device_confi
         {"configuration": {"recover_reserve": "yes"}},
         {"configuration": {"calibration_enabled": "yes"}},
         {"configuration": {"calibration_interval_days": 0}},
+        {"configuration": {"calibration_interval_days": 181}},
         {"configuration": {"calibration_interval_days": True}},
         {"configuration": {"calibration_hold_hours": float("nan")}},
         {"configuration": {"calibration_hold_hours": 0}},
@@ -30,7 +31,8 @@ def test_configuration_rejects_unbounded_or_unknown_properties(device):
         validate_device_configuration(device)
 
 
-def test_configuration_preserves_units_permissions_and_explicit_optional_bindings():
+@pytest.mark.parametrize("interval_days", [1, 14, 180])
+def test_configuration_preserves_units_permissions_and_explicit_optional_bindings(interval_days):
     """Small typed settings, including absent export and zero wear cost, remain valid without any active command."""
     validate_device_configuration(
         {
@@ -41,7 +43,7 @@ def test_configuration_preserves_units_permissions_and_explicit_optional_binding
                 "capacity_w": 3000,
                 "cycle_fee": 0,
                 "calibration_enabled": True,
-                "calibration_interval_days": 14,
+                "calibration_interval_days": interval_days,
                 "calibration_hold_hours": 3,
                 "grid_export_entity": None,
                 "inverter": {
