@@ -34,7 +34,7 @@ def test_configuration_preserves_units_permissions_and_explicit_optional_binding
             "energy_entity": "sensor.roof",
             "configuration": {
                 "capacity_w": 3000,
-                "cycle_fee": 0,
+                "wear_cost_per_kwh": 0,
                 "grid_export_entity": None,
                 "inverter": {
                     "inverter_id": "hybrid",

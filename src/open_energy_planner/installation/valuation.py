@@ -185,7 +185,7 @@ def derive(problem, future_tariffs=()):
                 * unit.dc_efficiency
                 * inverters[unit.inverter_id].efficiency
             )
-            rate = price * efficiency - battery.cycle_fee / battery.capacity_kwh
+            rate = price * efficiency - battery.wear_cost_per_kwh
             amount = limits[unit.device_id] * share / efficiency
             if rate > MIN_POSITIVE_VALUE_OR_VOLUME and amount > MIN_POSITIVE_VALUE_OR_VOLUME:
                 opportunities[unit.device_id].append((amount, rate))

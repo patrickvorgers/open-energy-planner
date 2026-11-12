@@ -94,7 +94,8 @@ def test_proxy_uses_one_volume_weighted_average_with_a_cap_and_unvalued_reserve(
 @pytest.mark.parametrize(
     "price,fee,expected", [(0.5, 0.02, 0.5 * 0.8 * 0.9 * 0.95 - 0.02), (-0.2, 0, 0), (0.01, 0.1, 0)]
 )
-def test_value_includes_cell_dc_converter_losses_and_future_wear(price, fee, expected):
+@pytest.mark.parametrize("capacity", [1, 8])
+def test_value_includes_cell_dc_converter_losses_and_future_wear(price, fee, expected, capacity):
     """One stored kWh delivers 0.8*0.9*0.95 AC. Nonpositive net future value gives no credit."""
     inputs = problem(prices=(price,), loads=(2,), pv=(0,), efficiency=0.95, initial=1)
     unit = inputs.batteries[0]
@@ -103,7 +104,12 @@ def test_value_includes_cell_dc_converter_losses_and_future_wear(price, fee, exp
         batteries=(
             replace(
                 unit,
-                battery=replace(unit.battery, discharge_efficiency=0.8, cycle_fee=fee),
+                battery=replace(
+                    unit.battery,
+                    capacity_kwh=capacity,
+                    discharge_efficiency=0.8,
+                    wear_cost_per_kwh=fee,
+                ),
                 dc_efficiency=0.9,
             ),
         ),

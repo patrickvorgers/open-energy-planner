@@ -18,7 +18,7 @@ Unless overridden explicitly:
 - Battery energy is internal stored energy. `E_next = E + eta_charge * charge_AC - discharge_AC / eta_discharge`. Every conversion is counted once. Power limits refer to the AC battery connection unless a case explicitly uses DC routes.
 - One-way limits of 4000 W permit at most 1 kWh per interval. Battery minimum energy is 0 kWh. No simultaneous charging/discharging of the same battery. No simultaneous import/export at the same modeled grid connection. This does not prohibit historical meter readings containing both directions within an interval, or all possible transfers between different batteries.
 - No unmodeled energy sink, artificial load, invented production or unbounded circulation is permitted. PV may be curtailed only where explicitly authorized. All demand must be met by allowed routes.
-- Battery wear defaults to zero. When enabled: `wear_cost = cycle_fee * internal_discharged_energy / full_reference_capacity`. Charging is not counted again as another full cycle.
+- Battery wear defaults to zero. When enabled: `wear_cost = wear_cost_per_kwh * internal_discharged_energy`. Charging is not charged again. Capacity and minimum SoC do not scale this rate.
 - Cash cost `C = import_cost - export_income - bonus + wear_cost`. A negative cost is net income. Planning objective `J = C - V(E_end)`. The initial stock value is a constant for a planning run and does not change its optimum.
 - Financial evaluation is different: `C_eval = C + V_start - V_end`, with the separately recorded hardware-stock adjustments where applicable. `J` is not a realized savings figure. Net cash and stock value are always reported separately.
 - Terminal functions supplied by these fixtures isolate planner behavior. They are not a hidden decision about how production derives terminal prices beyond available forecasts. That method remains to be validated separately.
@@ -62,8 +62,8 @@ The self-consumption reference has no household demand or PV, never grid-charges
 | ID | Change | Independently expected result |
 |---|---|---|
 | S01-L | Charge efficiency 0.80. Discharge efficiency 0.90 | Import 1 at t0. Store 0.80. Export 0.72 at t1. Cost `0.12 - 0.72*0.40 = -0.168 EUR`. Discharge command +2880 W. |
-| S01-W | Original efficiencies. Wear fee 0.35 EUR/full cycle | The full cycle would cost `-0.28 + 0.35 = +0.07 EUR`. Optimal throughput and cost are zero. |
-| S01-E | Original efficiencies. Wear fee exactly 0.28 EUR/full cycle | Every feasible cycle quantity from 0 to 1 kWh has cost zero. Assert the optimum and invariants, not a unique schedule. No unagreed tie-break preference. |
+| S01-W | Original efficiencies. Wear rate 0.35 EUR per internal kWh discharged | Discharging the stored 1 kWh would cost `-0.28 + 0.35 = +0.07 EUR`. Optimal throughput and cost are zero. |
+| S01-E | Original efficiencies. Wear rate exactly 0.28 EUR per internal kWh discharged | Every feasible discharge quantity from 0 to 1 kWh has cost zero. Assert the optimum and invariants, not a unique schedule. No unagreed tie-break preference. |
 | S01-P | Original inputs. Battery charge limit 2000 W | Charge/export 0.50 kWh. Cost -0.14 EUR. Capacity alone must not determine throughput. |
 | S01-G | Original inputs. Grid import limit 1000 W | Charge/export 0.25 kWh. Cost -0.07 EUR. |
 | S01-R | Initial energy 0.40. Hard minimum 0.40. Capacity 1.40 kWh | Use the additional 1 kWh as in S01. Finish at 0.40. Cost -0.28 EUR. Never discharge the reserve. |

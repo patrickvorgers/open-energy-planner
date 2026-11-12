@@ -93,7 +93,7 @@ def validate_device_configuration(device):
         "minimum_soc",
         "charge_efficiency",
         "discharge_efficiency",
-        "cycle_fee",
+        "wear_cost_per_kwh",
         "power_inverted",
         "dc_efficiency",
         "can_follow_grid",

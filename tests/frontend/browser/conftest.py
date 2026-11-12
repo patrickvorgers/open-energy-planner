@@ -50,7 +50,7 @@ def documentation_url():
 
 @pytest.fixture
 def savings_now():
-    """Default to None and seed from the wall clock unless a test supplies a fixed time."""
+    """Default to None so savings uses the wall clock unless a test overrides this fixture."""
 
 
 @pytest.fixture

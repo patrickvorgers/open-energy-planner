@@ -27,7 +27,10 @@ MAX_EXPORT_BONUSES = 8
 
 @dataclass(frozen=True)
 class InstalledBattery:
-    """One battery's terminal ratings, sensors and explicit converter connection. Energies are kWh."""
+    """Define terminal ratings, sensors and converter connection for one battery.
+
+    Energies are kWh. Wear is contract currency per internal kWh discharged.
+    """
 
     device_id: str
     inverter_id: str
@@ -39,7 +42,7 @@ class InstalledBattery:
     minimum_soc: float = DEFAULT_MINIMUM_SOC_PERCENT
     charge_efficiency: float = DEFAULT_CELL_EFFICIENCY
     discharge_efficiency: float = DEFAULT_CELL_EFFICIENCY
-    cycle_fee: float = 0
+    wear_cost_per_kwh: float = 0
     power_inverted: bool = False
     dc_efficiency: float = 1
     can_follow_grid: bool = False
@@ -72,7 +75,7 @@ class InstalledBattery:
             ("discharge_limit_w", 0, MAX_DEVICE_POWER_W),
             ("charge_efficiency", MIN_POSITIVE_BATTERY_SETTING, 1),
             ("discharge_efficiency", MIN_POSITIVE_BATTERY_SETTING, 1),
-            ("cycle_fee", 0, MAX_BATTERY_NUMERIC_SETTING),
+            ("wear_cost_per_kwh", 0, MAX_BATTERY_NUMERIC_SETTING),
             ("minimum_soc", 0, FULL_SOC_PERCENT),
             ("dc_efficiency", MIN_POSITIVE_BATTERY_SETTING, 1),
         ):
@@ -97,7 +100,7 @@ class InstalledBattery:
             self.discharge_limit_w,
             self.charge_efficiency,
             self.discharge_efficiency,
-            self.cycle_fee,
+            self.wear_cost_per_kwh,
             self.recover_reserve,
         )
 
