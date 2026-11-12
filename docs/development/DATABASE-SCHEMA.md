@@ -370,6 +370,11 @@ original `forecast_steps`, remaining `steps` and `unseparated_entities` on the
 household remainder. Every step has an aware `start`, positive `duration_h` in
 hours and nonnegative AC `kwh`. Remaining steps integrate to physical interval
 `load_kwh`. Separate appliance/EV/thermal schedules are added once by the solver.
+Configured EV meters retain their original `forecast_steps` as evidence while
+their remaining `steps` contain zero future energy over the full horizon.
+This also applies without an eligible charging session. Only live SOC-based
+`ev_work` adds future EV demand. Unprovable separation blocks live planning
+instead of publishing historical charger demand. Actual meter history is unchanged.
 Component forecast documents also retain `separated_entities`, the exact set
 of ready Energy meters subtracted from residual training. Planning rejects a
 changed or incomplete set. EV evidence additionally retains the charge point's
@@ -719,6 +724,11 @@ active `power_w` for that billing segment. `steps[].devices` has EV commands wit
 kind, finite nonnegative AC power in watts, vehicle and session identity. `ev_schedule` retains
 per-session required/planned useful kWh, departure, predicted SoC and shortfall.
 All are immutable original evidence, transferred with the plan archive.
+
+Sustained execution-power deviation episodes and their acknowledged-replan state
+are process-local. They add no database fields and never restore physical
+charging authority after restart. The EV status API projects `execution_issue`
+as current recovery advice, not as a persisted finding or proof of physical cause.
 
 ## Price forecast selection
 

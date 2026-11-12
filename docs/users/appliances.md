@@ -124,6 +124,42 @@ Set the desired SoC and departure under **Energy > EV charging**. A one-off depa
 
 See [EV charging contracts](../development/EV-CHARGING.md) for supported capability modes, losses, session identity and the automation blueprint.
 
+### EV demand comes from the charging plan
+
+OEP does not repeat historical charging sessions as expected future consumption
+for configured charge points. It calculates the remaining battery energy from
+the measured SoC, usable capacity and effective target SoC. Set the normal target
+and daily departure in the vehicle configuration. The custom integration and
+**Energy > EV charging** can update the target and departure through the existing
+vehicle controls. A target update remains effective until changed again. It is
+not a temporary override that expires after one session.
+
+A fresh connection report, explicit vehicle assignment and available SoC are
+required for a charging request. Without them, no EV charging is planned. OEP
+does not predict the next arrival or invent a charging request from history.
+Physical charging still belongs to your Home Assistant automation. Another
+controller must follow the OEP plan if its timing is to match the forecast.
+Real charging measurements continue to count in actual household consumption.
+
+The household forecast excludes the configured charge-point components over
+the entire horizon, including before charging starts and after departure. If
+OEP cannot separate those components reliably, live planning pauses instead of
+silently retaining historical EV demand. Check the configured Energy meter links
+and consumption forecast readiness when the separation notice appears.
+
+A measured charge-point power difference of at least 500 W lasting one minute
+requests a replacement plan, subject to the normal five-minute limit between
+early planning requests. This detects unexpected charging and charging that
+fails to start even when solar or the home battery masks the grid difference.
+Missing power readings do not mean zero consumption. An unchanged deviation
+requests one early round rather than a repeated retry. Normal quarter-hour
+planning continues, and recovery or a changed session, setpoint or materially
+different measured power allows a new deviation request.
+
+The EV session shows recovery advice for sustained deviations. Check the car's
+charge limit, charge-point status and Home Assistant automation. OEP cannot
+identify the physical cause from power alone and never bypasses device safety.
+
 ## Prepare thermal storage
 
 The supported thermal model is a fixed-power resistive electric water heater.

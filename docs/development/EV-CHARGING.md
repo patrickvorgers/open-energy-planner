@@ -181,6 +181,35 @@ losses are already in AC intake, not added as stationary converter losses. Both
 stationary-battery references retain identical planned EV service/timing. Their
 savings do not claim a separately measured EV scheduling benefit.
 
+## Plan-only demand and execution feedback
+
+Every configured charge-point meter is excluded from the future household
+component forecast over the full horizon, independent of connection, identity,
+SoC availability, target completion and control capability. Only eligible live
+`EVWork` contributes scheduled charging. There is no historical EV fallback or
+inferred future arrival. Original component forecasts and actual meter histories
+remain immutable evidence. The existing separation proof is still required.
+`LiveInputs` blocks publication with `ev_forecast_boundary_unavailable` when
+the EV service cannot establish the forecast boundary. The recovery notice names
+the configured meters. Thermal fallback may retain a boiler forecast but cannot
+silently restore an EV forecast.
+
+`EVService.execution_deviated` compares fresh point power with the active
+published command, including zero when no EV command exists. A difference of at
+least 500 W must persist for 60 seconds. Missing readings reset the episode
+rather than proving a stopped charge. Session or requested-power changes and a
+material measured-power change restart confirmation. The existing five-minute
+early-round throttle remains authoritative. Submission acknowledges mature
+episodes so an unchanged refusal does not repeatedly request early rounds.
+Normal quarter-hour planning is unchanged. The advisory session explanation does
+not claim to distinguish vehicle refusal from EVSE or automation blocking.
+This episode state is process-local and is not restored as live evidence.
+
+The normal target and daily departure already belong to saved vehicle settings.
+Native integration intent updates the effective target durably until another
+update. Only the existing dated departure override expires. This change does not
+introduce a second target override or alter saved request semantics.
+
 ## Default charging losses
 
 No mandatory loss setting or manufacturer catalogue is introduced. Versioned

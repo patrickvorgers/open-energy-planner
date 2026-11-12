@@ -52,9 +52,12 @@ class LiveInputs:
         repository: ObservationState,
         basis_source: BasisSource | None = None,
         clock=None,
+        *,
+        ev=None,
     ):
         """Coordinate current reports with a nonblocking future-input source and optional test clock."""
         self.planner, self.repository, self.basis_source = planner, repository, basis_source
+        self.ev = ev
         self.clock = clock or (lambda: datetime.now(UTC))
         self.assembler = SnapshotAssembler()
         self.configuration = None
@@ -187,7 +190,10 @@ class LiveInputs:
             return captured
         now, basis, snapshot = captured
         try:
-            return now, basis, self.prepare_snapshot(snapshot, now)
+            prepared = self.prepare_snapshot(snapshot, now)
+            if self.ev is not None and self.ev.issue:
+                raise InputsUnavailable("ev_forecast_boundary_unavailable")
+            return now, basis, prepared
         except InputsUnavailable as error:
             return error
 
@@ -217,13 +223,18 @@ class LiveInputs:
         self.current_snapshot = snapshot
         quarter = int(now.timestamp()) // (FINE_INTERVAL_MINUTES * SECONDS_PER_MINUTE)
         elapsed = (now - self.last_submission).total_seconds() if self.last_submission else None
+        published = getattr(self.planner, "published", None)
+        ev_deviation = bool(
+            self.ev is not None
+            and self.ev.execution_deviated(published[1] if published else {}, now)
+        )
         if (
             force
             or self.last_submission is None
             or quarter != self.last_quarter
             or (
                 elapsed >= MIN_DEVIATION_REPLAN_SECONDS
-                and (versions != self.last_basis or self.deviated(snapshot, now))
+                and (versions != self.last_basis or ev_deviation or self.deviated(snapshot, now))
             )
         ):
             changed = (
@@ -273,6 +284,8 @@ class LiveInputs:
             )
             self.last_submission, self.last_basis, self.last_quarter = now, versions, quarter
             self.planner.submit(snapshot)
+            if self.ev is not None:
+                self.ev.accept_execution_deviations(now)
 
     def deviated(self, snapshot, now):
         """Compare measured grid power and battery stock with the published trajectory.

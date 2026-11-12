@@ -262,6 +262,20 @@ def create_app(
 
     def explain_live_problem(reason, _detail=None):
         """Keep source-specific actionable context in both planning notices and transition logs."""
+        if reason == "ev_forecast_boundary_unavailable":
+            from .notifications.model import NoticeText
+
+            meters = ", ".join(point["energy_entity"] for point in ev.state["points"])
+            return NoticeText(
+                "Charge-point consumption cannot be separated",
+                f"Planning is paused because the historical charging component for {meters} "
+                "cannot be removed from the household forecast. Check the charge-point Energy "
+                "meter links and consumption forecast readiness. Planning resumes when complete "
+                "component evidence is available. No historical EV fallback is used.",
+                "Check EV charging",
+                "/ev",
+                "warning",
+            )
         from .home_assistant.notifications import explain_live_problem as explain_measurements
 
         return explain_measurements(
@@ -283,7 +297,7 @@ def create_app(
         # Recovery always needs fresh reports. Retained plans are history, not commands.
         repository.state["plan"] = None
         repository.save()
-        live = LiveInputs(planner, repository, basis_source)
+        live = LiveInputs(planner, repository, basis_source, ev=ev)
         live.prepare_snapshot = lambda snapshot, now: thermal.prepare(
             snapshot,
             demand,

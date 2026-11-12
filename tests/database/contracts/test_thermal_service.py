@@ -189,11 +189,8 @@ def test_real_mixed_preparation_preserves_cycle_ev_thermal_ownership_through_pub
         cycle_entity,
         "sensor.charger_energy",
     }
-    # The .1-kWh cycle and .4-kWh boiler expectations are replaced, leaving .3 kWh of household.
-    # The .2-kWh/h charger stays for 130 s: 120 s solve + 5 s worker overhead + 5 s HA handover.
-    assert sum(interval.load_kwh for interval in prepared.problem.intervals) == pytest.approx(
-        0.3 + 0.2 * 130 / 3600
-    )
+    # All historical charger expectation is removed, including before dispatch readiness.
+    assert sum(interval.load_kwh for interval in prepared.problem.intervals) == pytest.approx(0.3)
     solved = HighsSolver().solve(prepared.problem)
     assert solved.plan is not None, solved.stop_reason
     costs = validate(prepared.problem, solved.plan)
@@ -486,10 +483,8 @@ def test_unavailable_boiler_forecast_preserves_independently_ready_ev(service, b
     assert len(prepared.problem.ev_work) == 1
     assert prepared.problem.ev_work[0].point_id == POINT
     assert prepared.problem.ev_work[0].vehicle_id == CAR
-    ready = prepared.problem.ev_work[0].ready_at
-    # The .2-kWh/h charger expectation remains before its admitted control window.
-    expected = 0.8 + 0.2 * (ready - NOW).total_seconds() / 3600
-    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(expected)
+    # The failed boiler separation retains its history, while all EV history is removed.
+    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(0.8)
     assert prepared.ev_evidence and prepared.appliance_evidence
     assert prepared.thermal_evidence == ()
     assert service.ev.issue is None
@@ -577,7 +572,10 @@ def test_later_control_ownership_conflict_withdraws_thermal_work_without_losing_
     withdrawn = prepare(service)
     assert withdrawn.problem.thermal_work == ()
     assert service.document(NOW)["devices"][0]["issue"]
-    assert sum(step.load_kwh for step in withdrawn.problem.intervals) == pytest.approx(1)
+    # EV ownership removes that meter's historical demand even without eligible charging work.
+    assert sum(step.load_kwh for step in withdrawn.problem.intervals) == pytest.approx(
+        0.6 if owner == "ev" else 1
+    )
     assert service.state == saved
 
 

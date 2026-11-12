@@ -23,6 +23,7 @@ function renderSessions() {
         const car = (current.vehicles || []).find(vehicle => vehicle.id === point.vehicle_id);
         card.append(node("p", car ? `${car.name}: Measured SoC: ${percentage(car.actual?.soc)}: Target: ${percentage(car.target_soc)}: Departure: ${when(car.next_departure)}` : "No identified connected vehicle."));
         if (point.schedule) card.append(node("p", `Predicted departure SoC: ${percentage(point.schedule.predicted_soc)}: Energy shortfall: ${point.schedule.shortfall_kwh.toFixed(2)} kWh: This is a plan, not confirmed physical charging.`));
+        if (point.execution_issue) card.append(node("p", point.execution_issue));
         find("sessions").append(card);
     }
     if (!current.points.length) find("sessions").append(node("p", "No configured charge points."));

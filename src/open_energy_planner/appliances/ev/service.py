@@ -26,6 +26,8 @@ CLOCK_SKEW_SECONDS = 5
 MAX_OVERRIDE_DAYS = 30
 HA_HANDOVER_SECONDS = 5
 EV_DISPATCH_LEAD_SECONDS = DEFAULT_WORKER_TIMEOUT_SECONDS + HA_HANDOVER_SECONDS
+EV_POWER_DEVIATION_W = 500
+EV_POWER_DEVIATION_SECONDS = 60
 
 
 def departure(settings, now, timezone):
@@ -65,6 +67,7 @@ class EVService:
         )
         self.report = None
         self.issue = None
+        self.power_deviations = {}
 
     def commit(self, state):
         """Archive a complete intent revision and update its pointer in one database transaction."""
@@ -97,6 +100,7 @@ class EVService:
                 row["departure_override"] = previous[row["id"]]["departure_override"]
         self.commit(state)
         self.report = None
+        self.power_deviations.clear()
 
     def receive(self, body, now):
         """Accept bounded current HA readings with exact configured provenance and explicit unknowns."""
@@ -321,27 +325,15 @@ class EVService:
         )
 
     def prepare(self, snapshot, demand, now, timezone, *, excluded_entities=()):
-        """Remove only modeled charger baselines and add their joint future AC demand once."""
+        """Remove every configured charger forecast and add only explicit live SOC work."""
         works = self.work(now, timezone)
-        entities = {
-            point["energy_entity"]
-            for point in self.state["points"]
-            if any(work.point_id == point["id"] for work in works)
-        }
+        entities = {point["energy_entity"] for point in self.state["points"]}
         entities.update(excluded_entities)
-        windows = tuple(
-            (point["energy_entity"], work.ready_at, work.deadline)
-            for point in self.state["points"]
-            for work in works
-            if work.point_id == point["id"]
-        )
-        prepared = self.appliances.prepare(
-            snapshot, demand, now, excluded_entities=entities, replacement_windows=windows
-        )
+        prepared = self.appliances.prepare(snapshot, demand, now, excluded_entities=entities)
         if entities and not prepared.appliance_evidence:
             self.issue = (
-                "Charger component forecast unavailable. Retaining measured household boundary"
-                if works
+                "Charger component forecast unavailable. EV history cannot be removed safely"
+                if self.state["points"]
                 else None
             )
             works = ()
@@ -374,6 +366,64 @@ class EVService:
                 for work in works
             ),
         )
+
+    def execution_deviated(self, plan, now):
+        """Latch sustained point-power deviations until one replacement round accepts them.
+
+        Missing readings are not zero power. A new session, setpoint or material
+        measured-power change starts a new episode. Unchanged refusal remains
+        visible without repeatedly requesting the same early calculation.
+        """
+        active = next(
+            (
+                step
+                for step in plan.get("steps", ())
+                if instant(step["start"]) <= now < instant(step["end"])
+            ),
+            None,
+        )
+        if active is None or now >= instant(plan["valid_until"]):
+            self.power_deviations.clear()
+            return False
+        live = {row["id"]: row for row in self.live(now)}
+        retained = {}
+        for point in self.state["points"]:
+            actual = live.get(point["id"], {})
+            power = actual.get("power_w")
+            if power is None:
+                continue
+            command = active["devices"].get(point["id"], {})
+            expected = command.get("power_w", 0)
+            if abs(power - expected) < EV_POWER_DEVIATION_W:
+                continue
+            signature = (actual.get("session_id"), expected)
+            previous = self.power_deviations.get(point["id"])
+            if (
+                previous is None
+                or previous["signature"] != signature
+                or abs(power - previous["power_w"]) >= EV_POWER_DEVIATION_W
+                or (now - previous["last_seen"]).total_seconds() >= REPORT_MAX_AGE_SECONDS
+            ):
+                previous = {
+                    "signature": signature,
+                    "power_w": power,
+                    "since": now,
+                    "acknowledged": False,
+                }
+            previous["last_seen"] = now
+            retained[point["id"]] = previous
+        self.power_deviations = retained
+        return any(
+            not deviation["acknowledged"]
+            and (now - deviation["since"]).total_seconds() >= EV_POWER_DEVIATION_SECONDS
+            for deviation in retained.values()
+        )
+
+    def accept_execution_deviations(self, now):
+        """Coalesce an unchanged deviation after submitting its replacement calculation."""
+        for deviation in self.power_deviations.values():
+            if (now - deviation["since"]).total_seconds() >= EV_POWER_DEVIATION_SECONDS:
+                deviation["acknowledged"] = True
 
     def document(self, now, timezone, catalogue=None, plan=None):
         """Expose authoritative configuration, current session issues and explicit predicted shortfall."""
@@ -423,6 +473,16 @@ class EVService:
                     "actual": actual,
                     "vehicle_id": vehicle_id,
                     "status": status,
+                    "execution_issue": (
+                        "Measured charging differs from the plan. Check the vehicle charge limit, "
+                        "charge-point status and Home Assistant charging automation. "
+                        "OEP replans but cannot determine the physical cause."
+                        if point["id"] in self.power_deviations
+                        and actual
+                        and (now - self.power_deviations[point["id"]]["since"]).total_seconds()
+                        >= EV_POWER_DEVIATION_SECONDS
+                        else None
+                    ),
                     "schedule": schedules.get(point["id"])
                     if schedules.get(point["id"], {}).get("session_id") == actual.get("session_id")
                     else None,
