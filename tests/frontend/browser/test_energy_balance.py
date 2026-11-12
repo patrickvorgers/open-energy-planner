@@ -237,7 +237,18 @@ def test_balance_axis_bounds_change_after_real_legend_and_time_controls(app_page
     response["plan"]["input_snapshot"]["problem"] = fixture["input_snapshot"]["problem"]
     response["plan"]["expected_flows"] = fixture["expected_flows"]
     response["comparison"], response["scenarios"] = None, {}
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=response))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=response))
+    page.route(
+        "**/v1/plans/*/comparison?view=simulations",
+        lambda route: route.fulfill(
+            json={
+                "plan_id": response["plan"]["plan_id"],
+                **{
+                    key: value for key, value in response.items() if key not in ("plan", "evidence")
+                },
+            }
+        ),
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -280,7 +291,16 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     body["scenarios"] = {}
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=body))
+    page.route(
+        "**/v1/plans/*/comparison?view=simulations",
+        lambda route: route.fulfill(
+            json={
+                "plan_id": body["plan"]["plan_id"],
+                **{key: value for key, value in body.items() if key not in ("plan", "evidence")},
+            }
+        ),
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -483,7 +503,16 @@ def test_incomplete_first_flow_keeps_metadata_names_gap_and_later_inspection(app
         body["plan"]["expected_flows"][0].pop("batteries")
     else:
         body["plan"]["expected_flows"][0] = None
-    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=body))
+    page.route(
+        "**/v1/plans/*/comparison?view=simulations",
+        lambda route: route.fulfill(
+            json={
+                "plan_id": body["plan"]["plan_id"],
+                **{key: value for key, value in body.items() if key not in ("plan", "evidence")},
+            }
+        ),
+    )
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

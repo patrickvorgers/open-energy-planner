@@ -6,6 +6,8 @@ Open **Energy > Planning** to inspect one original calculation. Begin with its v
 
 The latest retained plan is the default. **Plan version** lets you inspect history. A historical selection changes the view, not active commands. While the same plan refreshes, the previous complete view can remain visible with an explicit loading status. Choosing a different historical plan clears its predecessor's data until that selection loads.
 
+The selected plan's graph, prices and interval values appear first. The two simulation graphs and their cost comparisons follow without waiting for the detailed evidence. A simulation read failure leaves the selected plan usable and shows a retry message. Choose **Refresh overview** to retry. A plan opened through a direct link stays selected during this retry.
+
 A valid older plan can remain in history after a later calculation fails. Its presence does not mean its commands are still applicable. Read the page's status and any source warning.
 
 For duration and solver-progress questions, use [Planning performance](planning-performance.md). A first solver candidate is not yet an independently checked published plan.
@@ -113,7 +115,7 @@ See [contract and prices](contract.md) for formulas, dates and bonus interpretat
 
 ## Inspect an individual decision
 
-Open **Understand this plan** for whole-plan inputs, assumptions and source evidence. Expand **Selected interval details** and move the time selector to inspect the relevant interval.
+Open **Understand this plan** to load whole-plan inputs, assumptions and source evidence. These details are fetched only when the panel is open. Expand **Selected interval details** and move the time selector to inspect the relevant interval. Clicking a plan chart point also opens the evidence panels. If the evidence read fails, close and reopen **Understand this plan** to retry. The graphs and original interval values remain available.
 
 Check the measured starting stock, forecast inputs, physical limits, proposed command and expected result together. A reached limit is an observation. It is not proof that OEP evaluated every hypothetical alternative or that this limit caused the choice.
 

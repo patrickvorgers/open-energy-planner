@@ -327,6 +327,12 @@ def register(
         comparison_issue through scenarios["self_consumption"]["issue"], never
         invented reference flows.
 
+        With view=plan, return only the original display plan. This read skips
+        evidence, scenario replay and repricing so advice can appear first.
+        With view=simulations, omit the repeated plan and evidence. With view=evidence, return only
+        the plan identity and original evidence, without replay or repricing.
+        Financial period bounds cannot be combined with these projections.
+
         Supplying either query bound requires both start and end as increasing,
         timezone-aware ISO timestamps. This mode returns only window_summary's
         period, scenario amounts/issues and original valuation basis. It omits
@@ -335,10 +341,17 @@ def register(
         Raises:
             web.HTTPBadRequest: A period bound is missing, invalid, naive or
                 non-increasing (400).
+            web.HTTPBadRequest: The view is unsupported, or a view is combined
+                with start or end (400).
             web.HTTPNotFound: The selected original plan does not exist (404).
             web.HTTPServiceUnavailable: Period calculation cannot read usable
                 original evidence (503). Its explanation never exposes raw errors.
         """
+        view = request.query.get("view")
+        if view not in (None, "plan", "simulations", "evidence") or (
+            view is not None and ("start" in request.query or "end" in request.query)
+        ):
+            raise web.HTTPBadRequest(text="Choose a plan view or a financial period")
         window = None
         if "start" in request.query or "end" in request.query:
             try:
@@ -356,11 +369,31 @@ def register(
         if plan is None:
             raise web.HTTPNotFound(text="Original plan not found")
         plan = display_plan(plan, catalogue.value)
+        if view in ("plan", "evidence"):
+            import json
+
+            from ..planning import encode
+
+            projection = (
+                {"plan": plan}
+                if view == "plan"
+                else {
+                    "plan_id": plan["plan_id"],
+                    "evidence": await asyncio.to_thread(evidence, plan),
+                }
+            )
+            return web.Response(
+                text=await asyncio.to_thread(
+                    json.dumps, projection, default=encode, allow_nan=False
+                ),
+                content_type="application/json",
+                headers={"Cache-Control": "no-store"},
+            )
         result = {}
         if not window:
             result = {
-                "plan": plan,
-                "evidence": await asyncio.to_thread(evidence, plan),
+                **({"plan": plan} if view is None else {"plan_id": plan["plan_id"]}),
+                **({"evidence": await asyncio.to_thread(evidence, plan)} if view is None else {}),
                 **(await asyncio.to_thread(valuations.latest, plan["plan_id"])),
                 "current_contract_version": contracts.current.version
                 if contracts.current
@@ -400,8 +433,9 @@ def register(
         from ..planning import encode
 
         return web.Response(
-            text=json.dumps(result, default=encode, allow_nan=False),
+            text=await asyncio.to_thread(json.dumps, result, default=encode, allow_nan=False),
             content_type="application/json",
+            headers={"Cache-Control": "no-store"},
         )
 
     async def worker():

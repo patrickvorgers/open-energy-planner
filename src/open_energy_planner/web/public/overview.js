@@ -15,6 +15,8 @@ let selectedLinkedPlan = false;
 let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, periodRequest = 0;
 let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
 let planReadPending = false;
+let simulationReadPending = false;
+let evidenceRequest = null;
 let priceRefreshPending = false;
 let periodCostPlan = null, periodCostKey = "", periodCostRequest = 0;
 const evaluationVersions = new Map();
@@ -527,12 +529,11 @@ async function showPeriodCosts(start, end) {
 }
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
 function inspect() {
-    if (!planEvidence) return;
     const step = inspectSteps[Number($("inspect-time").value)];
     $("inspect-values").textContent = step ? step.text : "No planned intervals available.";
     const evidence = planEvidence?.intervals?.find((interval) => Date.parse(interval.start) === step?.start);
     $("evidence-time").textContent = evidence ? `From ${when(evidence.start)} to ${when(evidence.end)}: ${number((Date.parse(evidence.end) - Date.parse(evidence.start)) / MILLISECONDS_PER_MINUTE)} minutes: Energy quantities apply to this interval. Prices are rates per kWh.` : "";
-    $("evidence-issue").textContent = evidence?.issue || planEvidence?.issue || (!evidence ? "Original interval evidence is unavailable." : "");
+    $("evidence-issue").textContent = evidence?.issue || planEvidence?.issue || (!planEvidence ? $("plan-evidence-status").textContent : !evidence ? "Original interval evidence is unavailable." : "");
     evidenceCards($("interval-evidence"), evidence?.cards || []);
 }
 /** Switch focused functional pages. Keep forms, selected versions and chart data in memory. */
@@ -591,16 +592,140 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
     }
 }
 
+/** Clear supplementary values as soon as a different original plan is displayed. */
+function clearPlanComparisons() {
+    evidenceRequest = null;
+    simulationReadPending = false;
+    periodCostPlan = null; periodCostKey = ""; periodCostRequest++;
+    for (const chartId of ["reference-chart", "self-consumption-chart"]) {
+        chart(chartId, [], {unit: "kW", balance: true});
+        $(chartId).closest(".chart-wrap").hidden = true;
+    }
+    $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
+    renderPeriodCosts(null, null, "", "Loading simulations and expected costs…");
+    $("expected-cost-rows").replaceChildren();
+    $("expected-benefit").textContent = "Loading simulation comparisons…";
+    planEvidence = null;
+    $("evidence-period").textContent = "";
+    $("plan-evidence-status").textContent = "Open this panel to load original plan evidence.";
+    evidenceCards($("plan-evidence"), []); evidenceCards($("interval-evidence"), []);
+}
+/**
+ * Load evidence for an open disclosure, sharing completion through rendering and recovery.
+ * Callers joining a pending read await the same lifecycle without issuing another fetch.
+ */
+function loadPlanEvidence() {
+    if (evidenceRequest) return evidenceRequest;
+    if (!$("plan-evidence-panel").open || !renderedPlanId || planEvidence) return Promise.resolve();
+    const id = renderedPlanId;
+    $("plan-evidence-status").textContent = "Loading original plan evidence…";
+    $("evidence-issue").textContent = "Loading original plan evidence…";
+    const pending = (async () => {
+        try {
+            const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=evidence`);
+            if (evidenceRequest !== pending || id !== renderedPlanId) return;
+            if (data.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
+            planEvidence = data.evidence;
+            $("evidence-period").textContent = planEvidence?.period ? `From ${when(planEvidence.period.start)} to ${when(planEvidence.period.end)}: ${number(planEvidence.period.duration_h)} hours: All totals below cover this whole period.` : "";
+            $("plan-evidence-status").textContent = planEvidence?.issue || "";
+            evidenceCards($("plan-evidence"), planEvidence?.summary || []);
+            inspect();
+        } catch {
+            if (evidenceRequest !== pending || id !== renderedPlanId) return;
+            planEvidence = null;
+            const message = "Original plan evidence is unavailable. Close and reopen this panel to retry.";
+            $("plan-evidence-status").textContent = $("evidence-issue").textContent = message;
+        } finally {
+            if (evidenceRequest === pending) evidenceRequest = null;
+        }
+    })();
+    evidenceRequest = pending;
+    return pending;
+}
+$("plan-evidence-panel").addEventListener("toggle", loadPlanEvidence);
+$("interval-evidence-panel").addEventListener("toggle", loadPlanEvidence);
+/** Project original grid flows and optional references using the already rendered interval boundaries. */
+function gridExchangeSeries(plan, comparison = null, baseline = null) {
+    const intervals = plan.input_snapshot?.problem?.intervals || [];
+    const ems = [], reference = [], bareReference = [];
+    intervals.forEach((step, index) => {
+        const flow = plan.expected_flows?.[index] || {}, ref = comparison?.reference?.[index], bare = baseline?.reference?.[index];
+        const start = inspectSteps[index].start, end = inspectSteps[index].end;
+        const imported = flow.grid_import ?? (flow.grid_to_load != null && flow.grid_to_battery != null ? flow.grid_to_load + flow.grid_to_battery : null);
+        const exported = flow.grid_export ?? (flow.pv_to_grid != null && flow.battery_to_grid != null ? flow.pv_to_grid + flow.battery_to_grid : null);
+        const power = imported != null && exported != null ? (imported - exported) / step.duration_h * 1000 : null;
+        ems.push([start, power], [end, power]);
+        if (ref) reference.push([start, (ref.import_kwh - ref.export_kwh) / step.duration_h * 1000], [end, (ref.import_kwh - ref.export_kwh) / step.duration_h * 1000]);
+        if (bare) bareReference.push([start, (bare.import_kwh - bare.export_kwh) / step.duration_h * 1000], [end, (bare.import_kwh - bare.export_kwh) / step.duration_h * 1000]);
+    });
+    const series = [{name: $("optimizer-heading").textContent, points: ems}];
+    if (reference.length) series.push({name: $("self-consumption-heading").textContent, points: reference, color: palette[2]});
+    if (bareReference.length) series.push({name: $("reference-heading").textContent, points: bareReference, color: palette[1]});
+    return series;
+}
+/** Add same-plan simulations and server-owned costs without rebuilding the user's plan charts. */
+function renderPlanComparisons(data, plan) {
+    const id = plan.plan_id, currency = plan.currency || "";
+    const comparison = data.comparison, valuation = data.valuation;
+    const confirmedProjection = periodCostPlan?.projection === data;
+    const withoutBattery = data.scenarios?.without_battery;
+    const selfConsumption = data.scenarios?.self_consumption;
+    if (!confirmedProjection) {
+        for (const [chartId, entry, issueId] of [["reference-chart", withoutBattery, "reference-issue"], ["self-consumption-chart", selfConsumption, "self-consumption-issue"]]) {
+            const balance = entry?.chart ? energyBalances(entry.chart, new Map(Object.entries(plan.comparison_names || {})))[0] : null;
+            $(chartId).closest(".chart-wrap").hidden = !balance;
+            chart(chartId, balance?.series || [], {unit: "kW", balance: true});
+            $(issueId).textContent = entry?.issue || (balance?.missing ? `${balance.missing} interval(s) have incomplete physical evidence.` : "");
+        }
+    }
+    const baseline = withoutBattery?.comparison;
+    const self = selfConsumption?.comparison;
+    const period = inspectSteps.length ? {start: new Date(inspectSteps[0].start).toISOString(), end: new Date(inspectSteps.at(-1).end).toISOString(), duration_h: (plan.input_snapshot?.problem?.intervals || []).reduce((total, interval) => total + interval.duration_h, 0)} : null;
+    let message = "Benefits versus no battery include storage and smart planning. Excludes investment costs.";
+    if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. Expected benefits include the difference in remaining battery value. " + message;
+    if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
+    if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
+    if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
+    if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
+    $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
+    const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
+    $("expected-cost-rows").replaceChildren();
+    for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row($("expected-cost-rows"), [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
+    const intervals = plan.input_snapshot?.problem?.intervals || [];
+    let batteryRow = 0;
+    intervals.forEach((step, index) => {
+        const flow = plan.expected_flows?.[index] || {}, ref = comparison?.reference?.[index];
+        const cells = $("plan-rows").rows[index]?.cells;
+        if (cells) {
+            cells[5].textContent = number(ref?.import_kwh);
+            cells[6].textContent = number(ref?.export_kwh);
+            cells[8].textContent = number(ref ? Object.values(ref.stored).reduce((total, value) => total + value, 0) : null);
+        }
+        for (const battery of flow.batteries || []) {
+            const cell = $("plan-battery-rows").rows[batteryRow++]?.cells[5];
+            if (cell) cell.textContent = number(ref?.stored[battery.device_id]);
+        }
+    });
+    if (!confirmedProjection) {
+        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W"});
+        periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
+        periodCostKey = ""; periodCostRequest++;
+    }
+    inspect(); applyRange();
+}
+
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
- * Render both frozen reference balances, original whole-plan costs and factual
- * evidence without optimization. Retain complete evidence during background refresh,
+ * Display the original plan before loading simulations. Evidence loads only on disclosure.
+ * Preserve frozen reference balances and server-owned costs without optimization. Retain complete evidence during background refresh,
  * but clear it when explicitly selecting another plan. Version
  * requests so late responses cannot overwrite newer selections.
  * Retain every declared interval position even without expected flow. Absent values
  * remain unknown rather than zero. Net watts are (import - export) / duration_h *
  * 1000, positive import and negative export. Missing grid evidence leaves null EMS
  * line gaps. Rebuild tables, inspector and charts without changing active commands.
+ * Original-plan success is independent of supplemental availability. Complete the
+ * relevant supplemental reads before releasing the caller's shared loading state.
  */
 async function showPlan(signal, background = false) {
     const request = ++selectionRequest, id = $("plan-version").value;
@@ -618,6 +743,7 @@ async function showPlan(signal, background = false) {
         }
         renderedPlanId = null;
         planReadPending = false;
+        simulationReadPending = false;
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
         $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
         $("planning-window").textContent = "";
@@ -643,46 +769,23 @@ async function showPlan(signal, background = false) {
         }
     }
     try {
-        const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison`, signal);
+        const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=plan`, signal);
         if (request !== selectionRequest) return false;
-        periodCostPlan = null; periodCostRequest++;
         const plan = data.plan;
+        if (plan?.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
+        const samePlan = renderedPlanId === id;
+        if (!samePlan) clearPlanComparisons();
         const selectedOption = [...$("plan-version").options].find(option => option.value === id);
         if (selectedOption) selectedOption.textContent = planName(plan);
-        const comparison = data.comparison, valuation = data.valuation;
-        const withoutBattery = data.scenarios?.without_battery;
-        const selfConsumption = data.scenarios?.self_consumption;
-        for (const [chartId, entry, issueId] of [["reference-chart", withoutBattery, "reference-issue"], ["self-consumption-chart", selfConsumption, "self-consumption-issue"]]) {
-            const balance = entry?.chart ? energyBalances(entry.chart, new Map(Object.entries(plan.comparison_names || {})))[0] : null;
-            $(chartId).closest(".chart-wrap").hidden = !balance;
-            chart(chartId, balance?.series || [], {unit: "kW", balance: true});
-            $(issueId).textContent = entry?.issue || (balance?.missing ? `${balance.missing} interval(s) have incomplete physical evidence.` : "");
-        }
-        planEvidence = data.evidence;
         $("inspect-time").disabled = false;
-        $("evidence-period").textContent = planEvidence?.period ? `From ${when(planEvidence.period.start)} to ${when(planEvidence.period.end)}: ${number(planEvidence.period.duration_h)} hours: All totals below cover this whole period.` : "";
-        $("plan-evidence-status").textContent = planEvidence?.issue || "";
-        evidenceCards($("plan-evidence"), planEvidence?.summary || []);
         const currency = plan.currency || "";
         $("plan-description").textContent = `Generated: ${when(plan.generated_at)}: Strategy: ${planStrategy(plan.strategy)}: Status: ${statuses[plan.solution_status] || "Unknown"}: Advice does not prove execution`;
         if (plan.consumption_objective) {
             const objective = plan.consumption_objective;
             $("plan-description").textContent += `: Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
         }
-        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
-        const baseline = withoutBattery?.comparison;
-        const self = selfConsumption?.comparison;
-        const period = planEvidence?.period;
-        let message = "Benefits versus no battery include storage and smart planning. Excludes investment costs.";
-        if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. Expected benefits include the difference in remaining battery value. " + message;
-        if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
-        if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
-        if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
-        if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
-        $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
-        const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
-        for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row($("expected-cost-rows"), [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
-        const ems = [], reference = [], bareReference = [], buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
+        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows"]) $(name).replaceChildren();
+        const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
         const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
         const batteryLabels = new Map();
         const identities = plan.input_snapshot?.problem?.batteries || plan.expected_flows?.[0]?.batteries || [];
@@ -693,22 +796,19 @@ async function showPlan(signal, background = false) {
             batteryLabels.set(battery.device_id, label);
         });
         inspectSteps = [];
-        const intervals = plan.input_snapshot?.problem?.intervals || comparison?.intervals || [];
+        const intervals = plan.input_snapshot?.problem?.intervals || [];
         intervals.forEach((step, i) => {
             // Keep every declared interval in the inspector. Absent evidence must not shift later values.
             const flow = plan.expected_flows?.[i] || {};
-            const ref = comparison?.reference?.[i];
-            const bare = baseline?.reference?.[i];
             const imported = flow.grid_import ?? (flow.grid_to_load != null && flow.grid_to_battery != null ? flow.grid_to_load + flow.grid_to_battery : null);
             const exported = flow.grid_export ?? (flow.pv_to_grid != null && flow.battery_to_grid != null ? flow.pv_to_grid + flow.battery_to_grid : null);
             const actualStored = flow.batteries ? flow.batteries.reduce((total, battery) => total + battery.end_kwh, 0) : flow.battery_end_kwh;
-            const refStored = ref ? Object.values(ref.stored).reduce((a, b) => a + b, 0) : null;
-            row($("plan-rows"), [when(step.start), number(step.load_kwh), number(step.pv_kwh), number(imported), number(exported), number(ref?.import_kwh), number(ref?.export_kwh), number(actualStored), number(refStored)]);
+            row($("plan-rows"), [when(step.start), number(step.load_kwh), number(step.pv_kwh), number(imported), number(exported), "-", "-", number(actualStored), "-"]);
             const command = plan.steps.find((entry) => new Date(entry.start) <= new Date(step.start) && new Date(entry.end) > new Date(step.start));
             (flow.batteries || []).forEach((battery, index) => {
                 const target = command?.devices?.[battery.device_id];
                 const mode = target?.mode === "follow_grid_target" ? "Zero on the meter" : target?.mode === "fixed_power" ? "Fixed power" : "No command";
-                row($("plan-battery-rows"), [when(step.start), batteryLabels.get(battery.device_id) || `Battery ${index + 1}`, mode, target?.power_w == null ? "-" : Math.round(target.power_w), number(battery.end_kwh), number(ref?.stored[battery.device_id])]);
+                row($("plan-battery-rows"), [when(step.start), batteryLabels.get(battery.device_id) || `Battery ${index + 1}`, mode, target?.power_w == null ? "-" : Math.round(target.power_w), number(battery.end_kwh), "-"]);
             });
             (step.pv_sources || []).forEach(([source, available], index) => {
                 const used = flow.solar?.find((value) => value.source_id === source)?.used_kwh;
@@ -752,22 +852,7 @@ async function showPlan(signal, background = false) {
                 commands.push(`${plan.comparison_names?.[source] || `Solar ${index + 1}`}: ${enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production"}`);
             }
             inspectSteps.push({start: time, end, commands, priceStatus: tariff ? `${tariff.price_kind === "published" ? "Published market rate" : tariff.price_kind === "forecast" ? "Forecast market rate" : "Market rate provenance unclassified"}: Native ${tariff.native_resolution_minutes}-minute resolution` : "Market provenance unavailable", text: `From ${when(step.start)} to ${when(end)}\nGrid: ${number(imported)} kWh import / ${number(exported)} kWh export: Household: ${number(step.load_kwh)} kWh: Available PV DC: ${number(step.pv_kwh)} kWh\nImport: ${money(prices.buy_price)} ${currency}/kWh: Export: ${money(prices.sell_price)} ${currency}/kWh${tariff ? `: Market rate: ${optionLabel(tariff.price_kind || "unknown")}: Native resolution: ${tariff.native_resolution_minutes} minutes` : ""}\n${commands.join("\n")}`});
-            if (imported != null && exported != null) {
-                const power = (imported - exported) / step.duration_h * 1000;
-                ems.push([time, power], [end, power]);
-            } else ems.push([time, null], [end, null]);
-            if (bare) {
-                const power = (bare.import_kwh - bare.export_kwh) / step.duration_h * 1000;
-                bareReference.push([time, power], [end, power]);
-            }
-            if (ref) {
-                const power = (ref.import_kwh - ref.export_kwh) / step.duration_h * 1000;
-                reference.push([time, power], [end, power]);
-            }
         });
-        const series = [{name: $("optimizer-heading").textContent, points: ems}];
-        if (reference.length) series.push({name: $("self-consumption-heading").textContent, points: reference, color: palette[2]});
-        if (bareReference.length) series.push({name: $("reference-heading").textContent, points: bareReference, color: palette[1]});
         const balances = energyBalances(plan, new Map([...Object.entries(plan.comparison_names || {}), ...batteryLabels]));
         inspectSteps.forEach((step, index) => {
             const rows = balances.map((group) => `${group.name}${group.missing ? ` (${group.missing} interval(s) with unavailable physical evidence)` : ""}: ${group.series.map((series) => series.type === "bar" ? `${series.name} ${number(series.intervals[index]?.value)} kW` : `${series.name} ${percentage(series.points[index * 2 + 1]?.[1])}`).join(": ")}`);
@@ -780,7 +865,7 @@ async function showPlan(signal, background = false) {
             warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
             $("plan-chart-legend").append(warning);
         }
-        chart("energy-chart", series, {unit: "W"});
+        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W"});
         chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0});
         const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
         if (tariffEvidence.length) {
@@ -802,15 +887,38 @@ async function showPlan(signal, background = false) {
         $("price-chart").closest(".chart-wrap").hidden = false;
         $("current-price-status").textContent = `Selected plan: ${when(plan.generated_at)}: Original contract rates. ${bonusRules.length ? "Potential export bonus is shown before the volume cap." : "No bonus applies in this plan."}`;
         chart("price-chart", priceSeries, {unit: `${currency}/kWh`});
+        if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan);
         const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
-        periodCostPlan = {id, currency, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
-        periodCostKey = ""; periodCostRequest++;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
-        $("overview-status").textContent = CONNECTED_MESSAGE;
         renderedPlanId = id;
+        if (requestedPlan === id) requestedPlan = null;
         planReadPending = false;
-        return true;
+        $("overview-status").textContent = "Plan loaded. Loading simulations…";
+        const evidenceRead = loadPlanEvidence();
+        let simulationsLoaded = false;
+        try {
+            const supplementary = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=simulations`);
+            if (request !== selectionRequest) return false;
+            if (supplementary.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
+            renderPlanComparisons(supplementary, plan);
+            simulationReadPending = false;
+            simulationsLoaded = true;
+            return true;
+        } catch {
+            if (request !== selectionRequest) return false;
+            simulationReadPending = true;
+            const message = periodCostPlan ? "Simulation update is unavailable. Showing the previously loaded comparisons. Use Refresh overview to retry." : "Simulations are unavailable. Use Refresh overview to retry.";
+            $("overview-status").textContent = `Plan loaded. ${message}`;
+            for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message;
+            return true;
+        } finally {
+            if (request === selectionRequest && simulationsLoaded && evidenceRequest) $("overview-status").textContent = "Plan loaded. Loading original plan evidence…";
+            await evidenceRead;
+            // A disclosure can start its shared read while the simulations are still loading.
+            if (request === selectionRequest) await evidenceRequest;
+            if (request === selectionRequest && simulationsLoaded) $("overview-status").textContent = CONNECTED_MESSAGE;
+        }
     } catch (error) {
         if (request === selectionRequest && retainDisplayedPlan) {
             planReadPending = true;
@@ -832,19 +940,24 @@ async function showPlan(signal, background = false) {
 /** Page original plan identities without activating them. */
 async function plans(older = false, signal) {
     planRefreshEnabled = true;
+    const selectionGeneration = selectionRequest;
+    const linkedPlan = requestedPlan || (selectedLinkedPlan ? $("plan-version").value : null);
     const data = await api(`v1/plans?limit=20${older && cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`, signal);
+    if (selectionGeneration !== selectionRequest) return false;
     if (!older) $("plan-version").replaceChildren();
     for (const plan of data.plans) {
         const option = document.createElement("option"); option.value = plan.plan_id; option.textContent = planName(plan); $("plan-version").append(option);
     }
     cursor = data.next_before; $("older-plans").hidden = !cursor;
-    if (!older && requestedPlan) {
-        const loaded = await selectOriginal(requestedPlan, signal);
+    if (!older && linkedPlan) {
+        const loading = selectOriginal(linkedPlan), request = selectionRequest;
+        const loaded = await loading;
+        if (request !== selectionRequest) return false;
         if (loaded) requestedPlan = null;
         else $("overview-status").textContent = "The linked plan could not be loaded. Check the connection and choose Refresh to retry. No other plan has been selected.";
         return loaded;
     }
-    if (!older) { selectedLinkedPlan = false; return showPlan(signal); }
+    if (!older) { selectedLinkedPlan = false; return showPlan(); }
 }
 /** Follow completed publications while preserving a deliberately selected historical plan. */
 async function refreshLatestPlan() {
@@ -865,7 +978,7 @@ async function refreshLatestPlan() {
             selector.prepend(option);
             selector.value = followingLatest ? latest.plan_id : selected;
         }
-        const needsPlan = renderedPlanId !== latest.plan_id || planReadPending;
+        const needsPlan = renderedPlanId !== latest.plan_id || planReadPending || simulationReadPending;
         if (followingLatest && needsPlan) {
             const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
             await Promise.all([showPlan(signal, true), priceRead ??= currentPrices(signal)]);
@@ -1124,7 +1237,7 @@ window.addEventListener("pageshow", event => {
     startPlanRefresh(); applyRange(); refreshLatestPlan();
 });
 $("overview-connect").addEventListener("submit", (event) => { event.preventDefault(); token = $("overview-token").value; $("overview-token").value = ""; load(); });
-$("plan-version").addEventListener("change", () => { selectedLinkedPlan = false; showPlan(); });
+$("plan-version").addEventListener("change", () => { requestedPlan = null; selectedLinkedPlan = false; showPlan(); });
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
 $("period").addEventListener("submit", (event) => { event.preventDefault(); savings(); });
 $("evaluation-version").addEventListener("change", () => savings());
