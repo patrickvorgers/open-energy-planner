@@ -36,6 +36,10 @@ manual chart visibility choices.
 Manual energy-chart visibility also survives the first supplemental simulation
 response for the displayed plan. Selecting a different original plan resets those
 choices to that plan's defaults.
+Grid-exchange checkbox choices follow stable scenario identities when an
+independent comparison becomes available later. Identity alone does not mark a
+series as a physical device. Device rounding and expected/scheduled bar guidance
+apply only to series carrying that device state.
 Each read has its own deadline. Selection generations reject late plan-list and
 simulation responses. Evidence belongs to its active shared read and displayed
 plan, so a failed refresh retaining that plan can still complete its evidence.

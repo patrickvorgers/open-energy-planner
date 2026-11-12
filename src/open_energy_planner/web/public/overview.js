@@ -468,7 +468,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         input.type = "checkbox"; input.dataset.legendIdentity = String(identity);
         input.checked = previousVisibility.get(String(identity)) ?? indexes.every(index => result.isDatasetVisible(index));
         for (const index of indexes) result.setDatasetVisibility(index, input.checked);
-        if (s.legendId != null) input.setAttribute("aria-describedby", `${id}-device-key`);
+        if (s.deviceState != null) input.setAttribute("aria-describedby", `${id}-device-key`);
         input.addEventListener("change", () => {
             if (id === "price-chart") {
                 if (input.checked) hiddenPriceSeries.delete(s.name); else hiddenPriceSeries.add(s.name);
@@ -478,9 +478,9 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         });
         const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
         label.append(input, swatch, document.createTextNode(s.legendName || s.name)); legend.append(label);
-        legendEntries.push({label, input, indexes, device: s.legendId != null});
+        legendEntries.push({label, input, indexes, device: s.deviceState != null});
     }
-    if (series.some(s => s.legendId != null)) {
+    if (series.some(s => s.deviceState != null)) {
         const key = document.createElement("p"); key.id = `${id}-device-key`; deviceKey = key;
         key.className = "chart-device-key";
         key.textContent = "Striped bars show expected use. Solid bars show scheduled use. Expected use does not authorize a start.";
@@ -707,9 +707,9 @@ function gridExchangeSeries(plan, comparison = null, baseline = null) {
         if (ref) reference.push([start, (ref.import_kwh - ref.export_kwh) / step.duration_h * 1000], [end, (ref.import_kwh - ref.export_kwh) / step.duration_h * 1000]);
         if (bare) bareReference.push([start, (bare.import_kwh - bare.export_kwh) / step.duration_h * 1000], [end, (bare.import_kwh - bare.export_kwh) / step.duration_h * 1000]);
     });
-    const series = [{name: $("optimizer-heading").textContent, points: ems}];
-    if (reference.length) series.push({name: $("self-consumption-heading").textContent, points: reference, color: palette[2]});
-    if (bareReference.length) series.push({name: $("reference-heading").textContent, points: bareReference, color: palette[1]});
+    const series = [{name: $("optimizer-heading").textContent, legendId: "optimizer", points: ems}];
+    if (reference.length) series.push({name: $("self-consumption-heading").textContent, legendId: "self-consumption", points: reference, color: palette[2]});
+    if (bareReference.length) series.push({name: $("reference-heading").textContent, legendId: "without-battery", points: bareReference, color: palette[1]});
     return series;
 }
 /** Add same-plan simulations and server-owned costs without rebuilding the user's plan charts. */
