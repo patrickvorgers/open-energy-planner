@@ -8,9 +8,10 @@ let center, popup, notificationButton, notificationCount, centerItems, centerWar
 let detailFocusRequested = location.hash === "#planning-notifications";
 
 /** Bind the shell's center or the authenticated content document without sharing credentials. */
-export function bindNotifications() {
+export function bindNotifications(connectionToken = "") {
     const main = document.querySelector(".workspace-main");
     if (!main || banner || center) return;
+    token = connectionToken;
     if (document.body.classList.contains("workspace-shell")) {
         bindCenter();
         const frame = document.getElementById("workspace-content");
@@ -24,9 +25,18 @@ export function bindNotifications() {
             source = event.detail.source;
             renderCenter(event.detail.payload, event.detail.warning);
         });
-        frame.addEventListener("load", () => {
-            if (source !== frame.contentDocument) renderCenter({notifications: []}, "Notification status is unavailable. Check the app connection.");
-        });
+        /** Recover a display update delivered before this optional shell module was ready. */
+        function synchronizeContent() {
+            const content = frame.contentDocument, state = content?.oepNotificationState;
+            if (state) {
+                source = content;
+                renderCenter(state.payload, state.warning);
+            } else if (source !== content && !content?.querySelector(".workspace-main")) {
+                renderCenter({notifications: []}, "Notification status is unavailable. Check the app connection.");
+            }
+        }
+        frame.addEventListener("load", synchronizeContent);
+        if (frame.contentDocument?.readyState === "complete" && frame.contentDocument.URL !== "about:blank") synchronizeContent();
         return;
     }
     try {
@@ -143,6 +153,7 @@ function recoveryTarget(notice) {
 
 /** Project only display data to the owning shell. The authenticated token stays in the content page. */
 function presentCenter(payload, warning = "") {
+    document.oepNotificationState = {payload, warning};
     if (hostFrame) hostFrame.dispatchEvent(new CustomEvent("oep-notifications", {detail: {source: document, payload, warning}}));
     else renderCenter(payload, warning);
 }

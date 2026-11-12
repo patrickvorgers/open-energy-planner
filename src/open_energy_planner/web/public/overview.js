@@ -22,7 +22,8 @@ let periodCostPlan = null, periodCostKey = "", periodCostRequest = 0;
 const evaluationVersions = new Map();
 const DAILY_RESULTS_PAGE_SIZE = 25;
 let dailySavingsData = null, dailySavingsPage = 0;
-let overviewSessionReady = false;
+let overviewSessionReady = false, overviewIngress = false;
+let planDetails;
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
 /** Share numeric precision across evidence cards, tooltip columns and chart axes. Units remain separate. */
@@ -50,6 +51,41 @@ function row(parent, values) {
     }
     parent.append(tr);
 }
+const PLAN_DETAIL_TABLES = ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"];
+/** Build only an opened original-plan table from the latest confirmed plan and comparison. */
+function renderPlanDetails(id) {
+    const host = $(id);
+    host.replaceChildren();
+    if (!host.closest("details").open || !planDetails) return;
+    const {plan, batteryLabels, comparison, valuation} = planDetails;
+    if (id === "expected-cost-rows") {
+        const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
+        for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row(host, [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
+        return;
+    }
+    (plan.input_snapshot?.problem?.intervals || []).forEach((step, index) => {
+        const flow = plan.expected_flows?.[index] || {}, reference = comparison?.reference?.[index];
+        if (id === "plan-rows") {
+            const imported = flow.grid_import ?? (flow.grid_to_load != null && flow.grid_to_battery != null ? flow.grid_to_load + flow.grid_to_battery : null);
+            const exported = flow.grid_export ?? (flow.pv_to_grid != null && flow.battery_to_grid != null ? flow.pv_to_grid + flow.battery_to_grid : null);
+            const stored = flow.batteries ? flow.batteries.reduce((total, battery) => total + battery.end_kwh, 0) : flow.battery_end_kwh;
+            row(host, [when(step.start), number(step.load_kwh), number(step.pv_kwh), number(imported), number(exported), number(reference?.import_kwh), number(reference?.export_kwh), number(stored), number(reference ? Object.values(reference.stored).reduce((total, value) => total + value, 0) : null)]);
+            return;
+        }
+        const command = plan.steps.find(entry => new Date(entry.start) <= new Date(step.start) && new Date(entry.end) > new Date(step.start));
+        if (id === "plan-battery-rows") for (const [batteryIndex, battery] of (flow.batteries || []).entries()) {
+            const target = command?.devices?.[battery.device_id];
+            const mode = target?.mode === "follow_grid_target" ? "Zero on the meter" : target?.mode === "fixed_power" ? "Fixed power" : "No command";
+            row(host, [when(step.start), batteryLabels.get(battery.device_id) || `Battery ${batteryIndex + 1}`, mode, target?.power_w == null ? "-" : Math.round(target.power_w), number(battery.end_kwh), number(reference?.stored[battery.device_id])]);
+        }
+        if (id === "plan-solar-rows") for (const [sourceIndex, [source, available]] of (step.pv_sources || []).entries()) {
+            const used = flow.solar?.find(value => value.source_id === source)?.used_kwh;
+            const enabled = command?.devices?.[source]?.enabled;
+            row(host, [when(step.start), plan.comparison_names?.[source] || `Solar ${sourceIndex + 1}`, number(available), number(used), enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production"]);
+        }
+    });
+}
+for (const id of PLAN_DETAIL_TABLES) $(id).closest("details").addEventListener("toggle", () => renderPlanDetails(id));
 const charts = new Map();
 const syncChartLegends = new WeakMap();
 const DEVICE_ROUNDING_KW = 0.05;
@@ -549,6 +585,10 @@ function view() {
     }
     for (const instance of charts.values()) instance.resize();
     for (const tooltip of document.querySelectorAll(".chart-tooltip")) tooltip.hidden = true;
+    if (overviewSessionReady && (overviewIngress || token)) {
+        if (selected === "savings") savings();
+        else if (!planRefreshEnabled && !selectedLinkedPlan) load();
+    }
 }
 window.addEventListener("hashchange", view);
 $("inspect-time").addEventListener("input", inspect);
@@ -688,24 +728,8 @@ function renderPlanComparisons(data, plan) {
     if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
     if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
     $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
-    const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
-    $("expected-cost-rows").replaceChildren();
-    for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row($("expected-cost-rows"), [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
-    const intervals = plan.input_snapshot?.problem?.intervals || [];
-    let batteryRow = 0;
-    intervals.forEach((step, index) => {
-        const flow = plan.expected_flows?.[index] || {}, ref = comparison?.reference?.[index];
-        const cells = $("plan-rows").rows[index]?.cells;
-        if (cells) {
-            cells[5].textContent = number(ref?.import_kwh);
-            cells[6].textContent = number(ref?.export_kwh);
-            cells[8].textContent = number(ref ? Object.values(ref.stored).reduce((total, value) => total + value, 0) : null);
-        }
-        for (const battery of flow.batteries || []) {
-            const cell = $("plan-battery-rows").rows[batteryRow++]?.cells[5];
-            if (cell) cell.textContent = number(ref?.stored[battery.device_id]);
-        }
-    });
+    planDetails = {...planDetails, plan, comparison, valuation};
+    for (const id of PLAN_DETAIL_TABLES) renderPlanDetails(id);
     if (!confirmedProjection) {
         chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W"});
         periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
@@ -742,6 +766,7 @@ async function showPlan(signal, background = false) {
             $("price-chart").closest(".chart-wrap").hidden = true;
         }
         renderedPlanId = null;
+        planDetails = null;
         planReadPending = false;
         simulationReadPending = false;
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
@@ -795,6 +820,8 @@ async function showPlan(signal, background = false) {
             const label = names.filter((name) => name === names[index]).length > 1 ? `${names[index]}: ${index + 1}` : names[index];
             batteryLabels.set(battery.device_id, label);
         });
+        const retainedProjection = samePlan ? periodCostPlan?.projection : null;
+        planDetails = {plan, batteryLabels, comparison: retainedProjection?.comparison, valuation: retainedProjection?.valuation};
         inspectSteps = [];
         const intervals = plan.input_snapshot?.problem?.intervals || [];
         intervals.forEach((step, i) => {
@@ -802,19 +829,7 @@ async function showPlan(signal, background = false) {
             const flow = plan.expected_flows?.[i] || {};
             const imported = flow.grid_import ?? (flow.grid_to_load != null && flow.grid_to_battery != null ? flow.grid_to_load + flow.grid_to_battery : null);
             const exported = flow.grid_export ?? (flow.pv_to_grid != null && flow.battery_to_grid != null ? flow.pv_to_grid + flow.battery_to_grid : null);
-            const actualStored = flow.batteries ? flow.batteries.reduce((total, battery) => total + battery.end_kwh, 0) : flow.battery_end_kwh;
-            row($("plan-rows"), [when(step.start), number(step.load_kwh), number(step.pv_kwh), number(imported), number(exported), "-", "-", number(actualStored), "-"]);
             const command = plan.steps.find((entry) => new Date(entry.start) <= new Date(step.start) && new Date(entry.end) > new Date(step.start));
-            (flow.batteries || []).forEach((battery, index) => {
-                const target = command?.devices?.[battery.device_id];
-                const mode = target?.mode === "follow_grid_target" ? "Zero on the meter" : target?.mode === "fixed_power" ? "Fixed power" : "No command";
-                row($("plan-battery-rows"), [when(step.start), batteryLabels.get(battery.device_id) || `Battery ${index + 1}`, mode, target?.power_w == null ? "-" : Math.round(target.power_w), number(battery.end_kwh), "-"]);
-            });
-            (step.pv_sources || []).forEach(([source, available], index) => {
-                const used = flow.solar?.find((value) => value.source_id === source)?.used_kwh;
-                const enabled = command?.devices?.[source]?.enabled;
-                row($("plan-solar-rows"), [when(step.start), plan.comparison_names?.[source] || `Solar ${index + 1}`, number(available), number(used), enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production"]);
-            });
             const time = new Date(step.start).getTime();
             // Use the recorded boundary. Rebuilding microsecond durations can exceed Date's millisecond endpoint.
             const boundary = intervals[i + 1]?.start ?? command?.end;
@@ -891,6 +906,7 @@ async function showPlan(signal, background = false) {
         const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
+        for (const id of PLAN_DETAIL_TABLES) renderPlanDetails(id);
         renderedPlanId = id;
         if (requestedPlan === id) requestedPlan = null;
         planReadPending = false;
@@ -928,6 +944,7 @@ async function showPlan(signal, background = false) {
         if (request === selectionRequest) {
             for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = "Original plan comparison unavailable.";
             renderedPlanId = null;
+            planDetails = null;
             $("current-price-status").textContent = `Selected plan prices could not be loaded. ${error.message}`;
             $("overview-status").textContent = error.message;
             $("plan-description").textContent = "Selected plan could not be loaded.";
@@ -1206,11 +1223,15 @@ async function load() {
     overviewLoads++;
     try {
         const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
+        if (location.hash === "#savings") {
+            await savings(signal);
+            return;
+        }
         const planRead = plans(false, signal);
         const previewRead = planRead.catch(() => {}).then(
             () => currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS))
         );
-        const results = await Promise.allSettled([planRead, savings(signal), previewRead]);
+        const results = await Promise.allSettled([planRead, previewRead]);
         const failure = results.find(result => result.status === "rejected");
         if (failure) throw failure.reason;
     }
@@ -1263,8 +1284,9 @@ async function initializeOverview() {
         completed.setUTCDate(completed.getUTCDate() - 1);
         if (!$("period-start").value) $("period-start").value = completed.toISOString().slice(0, 10);
         if (!$("period-end").value) $("period-end").value = $("period-start").value;
-        watchSourceNames(() => api("setup/session", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), async () => (await Promise.all([showPlan(), savings()])).every(result => result === true), session.source_names_revision);
-        $("overview-connect").hidden = Boolean(session.ingress);
+        watchSourceNames(() => api("setup/session", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), () => location.hash === "#savings" ? savings() : showPlan(), session.source_names_revision);
+        overviewIngress = Boolean(session.ingress);
+        $("overview-connect").hidden = overviewIngress;
         if (!session.ingress) $("overview-status").textContent = "Connect to view your plans and savings.";
         overviewSessionReady = true;
         return session;

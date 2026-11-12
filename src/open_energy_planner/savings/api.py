@@ -75,6 +75,59 @@ PUBLIC_VALIDATION_MESSAGES = (
     "Unsupported history unit/request",
 )
 
+
+def initial_plan_view(plan):
+    """Project first-chart inputs without changing or retransmitting the full archived evidence."""
+    result = {
+        field: plan[field]
+        for field in (
+            "plan_id",
+            "generated_at",
+            "strategy",
+            "solution_status",
+            "currency",
+            "consumption_objective",
+            "steps",
+            "expected_flows",
+            "independent_costs",
+            "comparison_names",
+            "appliance_schedule",
+        )
+        if field in plan
+    }
+    if "input_snapshot" in plan:
+        snapshot = plan["input_snapshot"]
+        result["input_snapshot"] = {
+            field: snapshot[field]
+            for field in (
+                "problem",
+                "load_components",
+                "tariff_evidence",
+                "ev_evidence",
+                "thermal_evidence",
+            )
+            if field in snapshot
+        }
+        if snapshot.get("tariff_evidence") is not None:
+            result["input_snapshot"]["tariff_evidence"] = [
+                {
+                    field: tariff[field]
+                    for field in (
+                        "start",
+                        "end",
+                        "market_price",
+                        "buy_price",
+                        "sell_price",
+                        "price_kind",
+                        "native_resolution_minutes",
+                    )
+                    if field in tariff
+                }
+                for tariff in snapshot["tariff_evidence"]
+            ]
+    return result
+
+
 SAVINGS_WORKER_SECONDS = 30
 _LOGGER = logging.getLogger(__name__)
 
@@ -375,7 +428,7 @@ def register(
             from ..planning import encode
 
             projection = (
-                {"plan": plan}
+                {"plan": initial_plan_view(plan)}
                 if view == "plan"
                 else {
                     "plan_id": plan["plan_id"],

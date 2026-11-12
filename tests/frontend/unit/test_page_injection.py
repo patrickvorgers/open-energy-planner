@@ -74,7 +74,7 @@ def test_ingress_and_workspace_values_cannot_create_html_elements(
                 if route == "/workspace":
                     frames = [attributes for tag, attributes in page.elements if tag == "iframe"]
                     assert len(frames) == 1
-                    assert frames[0]["data-start-page"] == (
+                    assert frames[0]["src"] == (
                         prefix + "/planning-performance?embedded=1#" + fragment
                     )
             response = await client.get("/v1/setup", headers=headers)

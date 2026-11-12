@@ -26,7 +26,10 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
     expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
+    expect(page.locator("#plan-rows tr")).to_have_count(0)
+    page.get_by_text("Detailed interval energy", exact=True).click()
     expect(page.locator("#plan-rows tr")).to_have_count(120)
+    page.get_by_text("Detailed interval energy", exact=True).click()
     assert evidence == []
     page.evaluate(
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"

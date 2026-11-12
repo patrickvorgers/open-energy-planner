@@ -15,7 +15,7 @@ export function watchSourceNames(readSession, refresh, revision) {
         } catch { /* Keep the last confirmed labels and retry after transient read failures. */ }
         finally { busy = false; }
     };
-    check();
+    if (revision === undefined) check();
     setInterval(check, SOURCE_NAMES_REFRESH_MS);
 }
 /** Name an Energy source without exposing its technical ID as a default label. */

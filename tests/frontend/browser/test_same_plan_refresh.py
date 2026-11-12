@@ -43,6 +43,15 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
         )
     assert len(evidence_reads) == 1
     page.locator("#reference-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
+    for label in (
+        "Original and repriced expected costs",
+        "Detailed interval energy",
+        "Expected state and commands per battery",
+    ):
+        page.get_by_text(label, exact=True).click()
+    expect(page.locator("#expected-cost-rows tr")).to_have_count(6)
+    expect(page.locator("#plan-rows tr")).to_have_count(2)
+    expect(page.locator("#plan-battery-rows tr")).to_have_count(2)
     costs = page.locator("#expected-cost-rows").inner_text()
     rows = page.locator("#plan-rows").inner_text()
     battery_rows = page.locator("#plan-battery-rows").inner_text()

@@ -38,6 +38,8 @@ function loaded() {
 
 /** Attach hash tracking to each new document without reading an inaccessible error document. */
 function contentLoaded() {
+    // Attach after the child view handler so hash navigation reads its updated selection.
+    if (frame.contentDocument?.readyState !== "complete") return;
     loaded();
     if (frame.contentDocument) {
         frame.contentWindow.addEventListener("hashchange", loaded);
@@ -74,7 +76,10 @@ document.addEventListener("click", event => {
     }
 });
 
-// Resolve legacy root fragments before the first content navigation to avoid flashing Planning.
-const initialPage = new URL(frame.dataset.startPage, location.href);
+// The browser starts content immediately. Reconcile legacy root fragments without reloading normal navigation.
+const initialPage = new URL(frame.src, location.href);
 if (initialPage.pathname === base.pathname + "overview" && !initialPage.hash && ["#planning", "#savings"].includes(location.hash)) initialPage.hash = location.hash;
-frame.src = initialPage.href;
+if (frame.src !== initialPage.href) frame.src = initialPage.href;
+else contentLoaded();
+document.querySelector(".sidebar").removeAttribute("inert");
+document.querySelector(".sidebar").removeAttribute("aria-busy");

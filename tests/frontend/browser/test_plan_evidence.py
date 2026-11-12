@@ -212,6 +212,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
         held.fulfill(json=state["comparisons"]["older-plan"])
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        page.get_by_text("Detailed interval energy", exact=True).click()
         expect(page.locator("#plan-rows tr")).to_have_count(2)
 
 
@@ -597,7 +598,7 @@ def test_no_plan_preview_reads_after_the_listing_timeout(automatic_plan_overview
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-@pytest.mark.parametrize("hung_view", ["listing", "savings", "comparison", "prices"])
+@pytest.mark.parametrize("hung_view", ["listing", "simulations", "comparison", "prices"])
 def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_overview, hung_view):
     """A bounded overview load releases polling even when one of its view reads never responds."""
     state = automatic_plan_overview
@@ -606,7 +607,7 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
         state["plans"].clear()
     pattern = {
         "listing": "**/v1/plans?limit=20",
-        "savings": "**/v1/savings?**",
+        "simulations": "**/v1/plans/*/comparison?view=simulations",
         "comparison": "**/v1/plans/*/comparison?view=plan",
         "prices": "**/v1/prices/inputs",
     }[hung_view]
@@ -1334,13 +1335,14 @@ def test_plan_detail_failure_survives_initial_load_and_recovers(app_page):
     page.unroute("**/v1/plans/*/comparison?view=plan")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
+    page.get_by_text("Detailed interval energy", exact=True).click()
     expect(page.locator("#plan-rows tr")).to_have_count(2)
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-@pytest.mark.parametrize("late", ["plan", "savings"])
+@pytest.mark.parametrize("late", ["plan", "simulations"])
 def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page, late):
-    """A late initial plan or financial response must not overwrite a newer failed plan selection."""
+    """A late initial plan or simulation response must not overwrite a newer failed plan selection."""
     page, url = app_page
     headers = {"Authorization": "Bearer " + TOKEN}
     listing = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()
@@ -1349,7 +1351,8 @@ def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page
         url + "/v1/plans/" + original["plan_id"] + "/comparison", headers=headers
     ).json()
     listing["plans"].append({**original, "plan_id": "second-plan"})
-    financial = page.request.get(url + "/v1/savings", headers=headers).json()
+    simulations = {key: value for key, value in details.items() if key not in ("plan", "evidence")}
+    simulations["plan_id"] = original["plan_id"]
     held = []
 
     def comparison_route(route):
@@ -1363,13 +1366,14 @@ def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page
 
     page.route("**/v1/plans?**", lambda route: route.fulfill(json=listing))
     page.route("**/v1/plans/*/comparison?view=plan", comparison_route)
-    if late == "savings":
-        page.route("**/v1/savings?**", lambda route: held.append(route))
+    if late == "simulations":
+        page.route("**/comparison?view=simulations", lambda route: held.append(route))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#plan-version option")).to_have_count(2)
-    if late == "savings":
+    if late == "simulations":
+        page.get_by_text("Detailed interval energy", exact=True).click()
         expect(page.locator("#plan-rows tr")).to_have_count(2)
     page.locator("#plan-version").select_option("second-plan")
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
@@ -1378,10 +1382,10 @@ def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page
         lambda response_item: (
             response_item.url.endswith("/" + original["plan_id"] + "/comparison?view=plan")
             if late == "plan"
-            else "/v1/savings?" in response_item.url
+            else response_item.url.endswith("/comparison?view=simulations")
         )
     ) as completed:
-        held[0].fulfill(json=details if late == "plan" else financial)
+        held[0].fulfill(json=details if late == "plan" else simulations)
     completed.value.finished()
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
 

@@ -4,6 +4,12 @@ OEP proposes when your installation should use, store, import or export electric
 
 ## Follow one planning round
 
+Planning opens before optional notifications and scenario comparisons finish.
+The Optimizer appears as soon as its original plan is available. Collapsed
+interval tables load when opened. Savings loads when you open that page, so its
+financial history does not delay Planning. Public interface files are reused
+from the browser cache and receive new addresses when the software changes.
+
 1. **Measure the starting point.** Home Assistant supplies the configured Energy sources, current battery state and other required measurements.
 2. **Look ahead.** Household demand, solar production and electricity prices describe the expected future. Published prices and predicted prices remain distinguishable.
 3. **Apply your settings.** OEP uses the installation topology, equipment limits, contract dates, conversion losses and enabled planning permissions.
