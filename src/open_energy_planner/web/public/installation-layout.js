@@ -154,7 +154,6 @@ export class InstallationLayout {
         if (this.wizard && this.area < 4) this.editing = this.ready;
         if (!locked) for (const [control, managed] of this.controls) if (control.isConnected) control.disabled = managed || !this.editing;
         if (!locked) find("export").disabled = !this.editing || !find("allow-feed-in").checked;
-        find("feed-in-warning").hidden = find("allow-feed-in").checked;
         const strategyPanel = find("strategy-settings");
         const strategyParent = document.querySelector(`[data-step="${this.wizard && this.area < 4 ? 3 : 4}"]`);
         if (strategyPanel.parentElement !== strategyParent) strategyParent.append(strategyPanel);
@@ -224,6 +223,9 @@ export class InstallationLayout {
 
     /** Render a text-only summary of the selected saved editor. Unknown numeric values stay unknown. */
     summary() {
+        const exportLimit = find("export").value;
+        const feedInDisabled = !find("allow-feed-in").checked || (exportLimit !== "" && Number(exportLimit) === 0);
+        find("feed-in-warning").hidden = !feedInDisabled;
         const panel = find("installation-summary");
         const summary = find("installation-summary-content");
         const visible = this.ready && !this.editing && [0, 1, 2].includes(this.area);
@@ -258,7 +260,8 @@ export class InstallationLayout {
             if (input.type === "hidden" || input.id === "grid-invert" || input.dataset.key === "panel_name" || input.hasAttribute("data-view-control")) continue;
             const title = input.getAttribute("aria-label") || [...(input.labels?.[0]?.childNodes || [])].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join("").trim();
             if (["grid", "export-energy"].includes(input.id) || input.dataset.key === "inverter_id") continue;
-            const value = input.type === "checkbox" ? (input.checked ? "Enabled" : "Off") : input.dataset.key === "minimum_soc" ? (input.value === "" ? "Not configured" : percentage(Number(input.value))) : !input.value ? "Not configured" : input.dataset.key === "wear_cost_per_kwh" ? configuredRate(Number(input.value)) : input.selectedOptions?.[0]?.textContent || input.value;
+            const checked = input.checked && (input.id !== "allow-feed-in" || !feedInDisabled);
+            const value = input.type === "checkbox" ? (checked ? "Enabled" : "Off") : input.dataset.key === "minimum_soc" ? (input.value === "" ? "Not configured" : percentage(Number(input.value))) : !input.value ? "Not configured" : input.dataset.key === "wear_cost_per_kwh" ? configuredRate(Number(input.value)) : input.selectedOptions?.[0]?.textContent || input.value;
             summaryFact(panelLists.get(input.closest(".solar-panel")) || list, title, input.dataset.key === "panel_azimuth" ? azimuthLabel(input.value === "" ? null : Number(input.value)) : value);
         }
         if (this.area === 0) for (const [title, value] of this.gridSources || []) summaryFact(list, title, value);
@@ -266,7 +269,7 @@ export class InstallationLayout {
         summary.append(tag, heading, list, ...panelSections);
         for (const status of root?.querySelectorAll(".calibration-status") || []) summary.append(status.cloneNode(true));
         if (!root) { const empty = document.createElement("p"); empty.textContent = `No ${this.area === 1 ? "solar sources" : "batteries"} configured in Home Assistant Energy.`; summary.append(empty); }
-        if (this.area === 0 && !find("allow-feed-in").checked) {
+        if (this.area === 0 && feedInDisabled) {
             const warning = find("feed-in-warning").cloneNode(true); warning.removeAttribute("id"); summary.append(warning);
         }
     }

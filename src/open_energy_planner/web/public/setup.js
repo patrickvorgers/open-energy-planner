@@ -724,15 +724,16 @@ function showStep(value) {
     saveState.update();
     layout.show(step);
 }
-/** Validate the current wizard area and reveal the source containing an invalid field. */
-function validateVisible() {
+/** Validate an installation area before locking controls and reveal its invalid field. */
+function validateVisible(area = step) {
     for (const input of document
-        .querySelector(`[data-step="${step}"]`)
+        .querySelector(`[data-step="${area}"]`)
         .querySelectorAll("input,select"))
         if (!input.checkValidity()) {
-            const container = step === 1 ? "solar-rows" : step === 2 ? "battery-rows" : null;
+            if (area !== step) showStep(area);
+            const container = area === 1 ? "solar-rows" : area === 2 ? "battery-rows" : null;
             if (container) {
-                const selector = step === 1 ? "installation-solar" : "installation-battery";
+                const selector = area === 1 ? "installation-solar" : "installation-battery";
                 $(selector).value = String([...$(container).children].findIndex(row => row.contains(input)));
                 layout.selectDevice(selector, container);
             }
@@ -1052,7 +1053,7 @@ $("back").onclick = () => {
     if (!busy) showStep(step - 1);
 };
 $("next").onclick = async () => {
-    if (busy || !validateVisible()) return;
+    if (busy || !validateVisible() || (step === 2 && !validateVisible(0))) return;
     try {
         if (step === 2) {
             const summary = await api(
@@ -1071,6 +1072,7 @@ $("next").onclick = async () => {
 $("wizard").onsubmit = (event) => event.preventDefault();
 $("save").onclick = async () => {
     if (busy || !layout.editing || (layout.wizard && ![3, 4, 5].includes(step))) return;
+    if (step !== 4 && step !== 5 && !validateVisible(0)) return;
     ++configurationGeneration;
     busy = true;
     saveState.begin();

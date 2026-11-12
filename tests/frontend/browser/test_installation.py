@@ -132,6 +132,35 @@ def test_grid_feed_in_permission_uses_the_persisted_export_limit(app_page):
     expect(export).to_be_enabled()
     expect(export).to_have_value("")
     assert export.evaluate("element => element.validity.valueMissing")
+    before = read_settings(page, url)
+    writes = []
+
+    def record_configuration_write(request):
+        """Observe real preview and configuration requests without replacing the API."""
+        if request.method in ("POST", "PUT") and urlsplit(request.url).path in (
+            "/v1/setup/preview",
+            "/v1/installation",
+            "/v1/solar",
+            "/v1/demand",
+        ):
+            writes.append(request.url)
+
+    page.on("request", record_configuration_write)
+    save = page.get_by_role("button", name="Save installation", exact=True)
+    expect(save).to_be_enabled()
+    save.click()
+    page.evaluate("() => window.__oepProductReadsIdle()")
+    assert writes == []
+    after = read_settings(page, url)
+    for section in ("installation", "solar", "demand"):
+        assert after[section] == before[section]
+    expect(permission).to_be_checked()
+    expect(export).to_be_enabled()
+    expect(export).to_have_value("")
+    assert export.evaluate("element => element.validity.valueMissing")
+    expect(page.locator("#installation-save-state")).to_contain_text(
+        "Complete the highlighted fields"
+    )
     export.fill("2.5")
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
@@ -146,6 +175,52 @@ def test_grid_feed_in_permission_uses_the_persisted_export_limit(app_page):
     expect(permission).to_be_checked()
     expect(export).to_have_value("2.5")
     capture("enabled", '[data-step="0"]')
+
+
+def test_explicit_zero_export_explains_effective_no_feed_in(app_page):
+    """A manually entered zero warns immediately and in the saved summary, then reloads as feed-in off."""
+    page, url = app_page
+    discover(page, url)
+    connect(page)
+    page.get_by_label("Maximum grid import (kW)", exact=True).fill("5")
+    page.get_by_label("Annual whole-home consumption (kWh)", exact=True).fill("3500")
+    export = page.get_by_label("Maximum grid export (kW)", exact=True)
+    expect(export).to_have_value("")
+    page.get_by_role("button", name="Continue", exact=True).click()
+    expect(page.get_by_role("heading", name="Connection and household", exact=True)).to_be_visible()
+    assert export.evaluate("element => element.validity.valueMissing")
+    export.fill("5")
+    page.get_by_role("button", name="Continue", exact=True).click()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    installation_area(page, 0, edit=True)
+    permission = page.get_by_label("Allow grid feed-in", exact=True)
+    expect(permission).to_be_checked()
+    export.fill("0")
+    expect(permission).to_be_checked()
+    expect(page.locator("#feed-in-warning")).to_be_visible()
+    expect(page.locator("#feed-in-warning")).to_contain_text("no feasible plan")
+    screenshots = Path("results/ci/installation-export")
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=str(screenshots / f"manual-zero-{page.viewport_size['width']}.png"),
+        full_page=True,
+        clip=page.locator('[data-step="0"]').bounding_box(),
+    )
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert read_settings(page, url)["installation"]["export_limit_w"] == 0
+    expect(page.locator("#installation-summary-content")).to_contain_text("Allow grid feed-inOff")
+    expect(page.locator("#installation-summary-content").get_by_role("note")).to_contain_text(
+        "no feasible plan"
+    )
+    page.reload()
+    connect(page)
+    installation_area(page, 0, edit=True)
+    expect(permission).not_to_be_checked()
+    expect(export).to_be_disabled()
+    expect(export).to_have_value("0")
 
 
 def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
