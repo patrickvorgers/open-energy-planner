@@ -5,7 +5,7 @@ import json
 import shutil
 import tarfile
 import zipfile
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -17,7 +17,6 @@ from open_energy_planner.installation.storage import InstallationStore, document
 from open_energy_planner.planning import InputSnapshot
 from script.release import package_ha_app, package_release
 from tests.app.installation.test_installation import problem, solve
-from tests.app.installation.test_installation_app import installation
 from tests.app.solar.support import START
 from tests.database.support.archive import make_store, read_document
 
@@ -157,34 +156,53 @@ def test_release_builder_rejects_linked_inputs_before_writing(tmp_path, monkeypa
 
 
 def test_new_capability_preserves_legacy_configuration_evidence(tmp_path):
-    """Default fixed-only batteries keep their original configuration hash/files. Enabling following creates a new revision."""
-    from open_energy_planner.solar.calculation.model import version
-
-    body = installation(1)
-    body["batteries"][0].pop("can_follow_grid")
-    body["batteries"][0].pop("energy_entity")
-    legacy = asdict(parse(body))
-    legacy.pop("additional_grid_power_entities")
-    legacy.pop("additional_grid_export_entities")
-    for battery in legacy["batteries"]:
-        battery.pop("charge_energy_entity")
-    legacy["batteries"][0].pop("can_follow_grid")
-    legacy["batteries"][0].pop("energy_entity")
-    legacy["batteries"][0].pop("recover_reserve")
-    expected = version(legacy)
-    settings = parse(body)
+    """Independent historical bytes survive default saves and restarts, while following and calibration get distinct revisions."""
+    # Actual InstallationStore document from immutable pre-calibration base c5ed3369.
+    historical = (
+        b'{"batteries":[{"capacity_kwh":2.0,"charge_efficiency":0.95,"charge_limit_w":1000.0,'
+        b'"dc_efficiency":1.0,"device_id":"bat0","discharge_efficiency":0.95,"discharge_limit_w":1000.0,'
+        b'"inverter_id":"inv0","minimum_soc":10.0,"power_entity":"sensor.power0","power_inverted":false,'
+        b'"soc_entity":"sensor.soc0","wear_cost_per_kwh":0.0}],"export_limit_w":5000.0,'
+        b'"grid_export_entity":null,"grid_power_entity":"sensor.grid","grid_power_inverted":false,'
+        b'"import_limit_w":5000.0,"inverters":[{"ac_limit_w":2000.0,"efficiency":0.96,"hybrid":false,'
+        b'"inverter_id":"inv0"}],"version":"7496bc68b121a0bf4858ac21b93c3757c355f7bc59adeb5d7e99e3341f2ea55e"}'
+    )
+    expected = "7496bc68b121a0bf4858ac21b93c3757c355f7bc59adeb5d7e99e3341f2ea55e"
+    assert hashlib.sha256(historical).hexdigest() == (
+        "00fd2ce347f21b38735252973e16924213520d13bca664370bff195a2b7bb85f"
+    )
+    legacy = json.loads(historical)
+    settings = parse(legacy)
     assert settings.version == expected
+    assert not settings.batteries[0].calibration_enabled
+    assert settings.batteries[0].calibration_interval_days == 14
+    assert settings.batteries[0].calibration_hold_hours == 3
     assert "can_follow_grid" not in document(settings)["batteries"][0]
     store = make_store(tmp_path, InstallationStore)
-    store.save(settings)
+    store.documents.write(expected + ".json", legacy)
+    store.documents.write("current.json", expected)
     original = read_document(tmp_path, "installation", expected + ".json")
+    assert original.encode("utf-8") == historical
     restored = make_store(tmp_path, InstallationStore)
     assert restored.issue is None and restored.current == settings
+    restored.save(settings)
+    assert read_document(tmp_path, "installation", expected + ".json").encode("utf-8") == historical
+    assert make_store(tmp_path, InstallationStore).current == settings
     changed = replace(settings, batteries=(replace(settings.batteries[0], can_follow_grid=True),))
     assert changed.version != expected
     store.save(changed)
     assert read_document(tmp_path, "installation", expected + ".json") == original
     assert make_store(tmp_path, InstallationStore).current.batteries[0].can_follow_grid
+    following_original = read_document(tmp_path, "installation", changed.version + ".json")
+    calibrated = replace(
+        settings, batteries=(replace(settings.batteries[0], calibration_enabled=True),)
+    )
+    assert calibrated.version not in {expected, changed.version}
+    store.save(calibrated)
+    assert read_document(tmp_path, "installation", expected + ".json").encode("utf-8") == historical
+    assert read_document(tmp_path, "installation", changed.version + ".json") == following_original
+    reopened = make_store(tmp_path, InstallationStore)
+    assert reopened.current == calibrated and reopened.current.batteries[0].calibration_enabled
     with pytest.raises(TypeError):
         InstalledBattery(
             "battery", "inv", "sensor.soc", "sensor.power", 1, 1000, 1000, can_follow_grid=1
