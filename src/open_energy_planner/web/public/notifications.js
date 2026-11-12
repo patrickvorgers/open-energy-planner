@@ -305,6 +305,8 @@ function render(payload, warning = "") {
 export async function refreshNotifications(session, focus = false) {
     if (!banner) return;
     if (session) metadata = session;
+    // Pending session discovery is not confirmed authentication loss during workspace navigation.
+    if (metadata.ingress === undefined && !token) return;
     if (!focus && focusedReadGeneration && (metadata.ingress || token)) return;
     const requestGeneration = ++generation;
     controller?.abort();

@@ -1,6 +1,8 @@
 """First-screen and Optimizer readiness do not depend on hidden panels or optional notices."""
 
+import json
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -166,3 +168,42 @@ def test_late_shell_notifications_recover_the_content_result(app_page):
     held[0].fulfill(response=held[0].fetch())
     open_primary_navigation(page)
     expect(page.get_by_role("button", name="Notifications: 1 active", exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
+def test_early_connection_loads_notices_after_the_initial_session_read_fails(app_page):
+    """A buffered standalone token immediately reads real authenticated notices after module binding."""
+    page, url = app_page
+    beginning = datetime.now(UTC)
+    page.clock.install(time=beginning)
+    page.clock.pause_at(beginning + timedelta(minutes=1))
+    ready = False
+    held = []
+
+    def session(route):
+        """Fail initial discovery but allow Connect's explicit initialization retry."""
+        if ready:
+            route.continue_()
+        else:
+            route.fulfill(status=503)
+
+    page.route("**/setup/session", session)
+    page.route("**/notifications.js", lambda route: held.append(route))
+    page.goto(url + "/overview")
+    expect(page.locator("#overview-status")).to_contain_text("Cannot initialize this view")
+    ready = True
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
+    assert len(held) == 1
+    assert page.request.get(url + "/v1/notifications").status == 401
+    with page.expect_response("**/v1/notifications", timeout=5000) as notification:
+        held[0].fulfill(response=held[0].fetch())
+    assert notification.value.status == 200
+    assert notification.value.request.headers.get("authorization") == "Bearer " + TOKEN
+    notices = notification.value.json()["notifications"]
+    assert notices
+    expect(
+        page.get_by_role("button", name=f"Notifications: {len(notices)} active", exact=True)
+    ).to_be_visible()
+    assert TOKEN not in json.dumps(page.evaluate("document.oepNotificationState"))

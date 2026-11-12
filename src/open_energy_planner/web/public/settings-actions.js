@@ -66,7 +66,7 @@ export function bindSettingsActions() {
         module.bindNotifications(pendingToken);
         pendingToken = "";
         document.removeEventListener("submit", captureConnection, true);
-        if (lastSession) module.refreshNotifications(lastSession);
+        module.refreshNotifications(lastSession);
     }).catch(() => {
         pendingToken = "";
         document.removeEventListener("submit", captureConnection, true);

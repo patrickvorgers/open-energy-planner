@@ -432,6 +432,8 @@ def test_source_name_watcher_retries_a_superseded_refresh(app_page):
             return window.nameRefreshes > 1 ? true : undefined;
         }, 'old');
     }""")
+    assert page.evaluate("window.nameRefreshes") == 0
+    page.clock.fast_forward(31000)
     page.wait_for_function("window.nameRefreshes === 1")
     page.clock.fast_forward(31000)
     page.wait_for_function("window.nameRefreshes === 2")

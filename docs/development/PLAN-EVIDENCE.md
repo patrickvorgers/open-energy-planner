@@ -23,6 +23,11 @@ only when opened, using the latest confirmed plan and supplemental comparison.
 An already open table follows confirmed refreshes and plan selection.
 Savings reads start only when Savings opens or its period is explicitly refreshed.
 Opening Savings directly does not request a plan list or replay comparisons.
+Source-name changes detected on Savings mark the retained Planning labels stale.
+Reopening Planning refreshes its selected plan without reading hidden Savings.
+Only a successful plan render confirms that name generation. Failed refreshes
+retain the prior plan and retry state, including historical selections and
+manual chart visibility choices.
 Each read has its own deadline. Selection generations reject late plan-list and
 simulation responses. Evidence belongs to its active shared read and displayed
 plan, so a failed refresh retaining that plan can still complete its evidence.

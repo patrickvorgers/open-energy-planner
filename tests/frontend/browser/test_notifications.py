@@ -496,7 +496,8 @@ def test_notification_timezone_does_not_change_saved_ev_departure(
     expect(page.get_by_label("One-off departure", exact=True)).to_have_value("2026-10-25T02:30")
     page.evaluate(
         """async timezone => {
-            const notifications = await import('/setup/notifications.js');
+            const pageModule = document.querySelector('script[type="module"][src]').src;
+            const notifications = await import(new URL('./notifications.js', pageModule).href);
             await notifications.refreshNotifications({ingress: true, timezone}, true);
         }""",
         notification_timezone,

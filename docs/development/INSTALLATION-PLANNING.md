@@ -65,6 +65,10 @@ The shell replays a display-only notification snapshot if it binds after the
 content read. A pending content module preserves the last confirmed notices.
 Early standalone Connect submissions stay in page memory until the optional
 module binds. Credentials never enter the shared display snapshot.
+Module binding also starts an authenticated notification read after failed
+initial session discovery when Connect has already supplied a token. Unknown
+session state without a token preserves pending notices until authentication is
+confirmed, rather than reporting recovery during navigation.
 
 Public scripts, styles and fonts use a content-addressed asset namespace and a
 one-year immutable browser cache. Relative module imports and font URLs share

@@ -23,6 +23,7 @@ const evaluationVersions = new Map();
 const DAILY_RESULTS_PAGE_SIZE = 25;
 let dailySavingsData = null, dailySavingsPage = 0;
 let overviewSessionReady = false, overviewIngress = false;
+let sourceNamesGeneration = 0, planSourceNamesGeneration = 0;
 let planDetails;
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
@@ -298,6 +299,7 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
 /**
  * Render series into canvas id, destroying its previous chart, removing its tooltip
  * and rebuilding its accessible legend. Current-price series retain their visibility.
+ * Same-plan callers retain explicit checkbox choices by immutable legend group identity.
  * Points/segments are timed lines with null
  * gaps. Price points retain their published/forecast kind for interval-specific strokes.
  * Balance intervals are projected onto quarter-hour bars with explicit coverage.
@@ -310,7 +312,7 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
  * sharing a stack and includes zero. Rendering applies the selected planning range
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
-function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false} = {}) {
+function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false} = {}) {
     let balanceTime = null;
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
@@ -339,6 +341,8 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         } else hideTooltip();
     }, {capture: true, signal: tooltipEvents.signal});
     const canvas = $(id), legend = $(`${id}-legend`);
+    // A retained immutable plan has the same legend group identities even after its labels change.
+    const previousVisibility = preserveVisibility ? new Map([...legend.querySelectorAll("input")].map(input => [input.dataset.legendIdentity, input.checked])) : new Map();
     legend.replaceChildren();
     const legendEntries = [];
     const planningLegend = ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id);
@@ -459,9 +463,11 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         if (!legendGroups.has(identity)) legendGroups.set(identity, {series: s, indexes: []});
         legendGroups.get(identity).indexes.push(index);
     });
-    for (const {series: s, indexes} of legendGroups.values()) {
+    for (const [identity, {series: s, indexes}] of legendGroups) {
         const label = document.createElement("label"), input = document.createElement("input");
-        input.type = "checkbox"; input.checked = indexes.every(index => result.isDatasetVisible(index));
+        input.type = "checkbox"; input.dataset.legendIdentity = String(identity);
+        input.checked = previousVisibility.get(String(identity)) ?? indexes.every(index => result.isDatasetVisible(index));
+        for (const index of indexes) result.setDatasetVisibility(index, input.checked);
         if (s.legendId != null) input.setAttribute("aria-describedby", `${id}-device-key`);
         input.addEventListener("change", () => {
             if (id === "price-chart") {
@@ -589,6 +595,7 @@ function view() {
     for (const tooltip of document.querySelectorAll(".chart-tooltip")) tooltip.hidden = true;
     if (overviewSessionReady && (overviewIngress || token)) {
         if (selected === "savings") savings();
+        else if (planRefreshEnabled && planSourceNamesGeneration !== sourceNamesGeneration) showPlan();
         else if (!planRefreshEnabled && !selectedLinkedPlan) load();
     }
 }
@@ -708,6 +715,7 @@ function gridExchangeSeries(plan, comparison = null, baseline = null) {
 /** Add same-plan simulations and server-owned costs without rebuilding the user's plan charts. */
 function renderPlanComparisons(data, plan) {
     const id = plan.plan_id, currency = plan.currency || "";
+    const samePlan = periodCostPlan?.id === id;
     const comparison = data.comparison, valuation = data.valuation;
     const confirmedProjection = periodCostPlan?.projection === data;
     const withoutBattery = data.scenarios?.without_battery;
@@ -716,7 +724,7 @@ function renderPlanComparisons(data, plan) {
         for (const [chartId, entry, issueId] of [["reference-chart", withoutBattery, "reference-issue"], ["self-consumption-chart", selfConsumption, "self-consumption-issue"]]) {
             const balance = entry?.chart ? energyBalances(entry.chart, new Map(Object.entries(plan.comparison_names || {})))[0] : null;
             $(chartId).closest(".chart-wrap").hidden = !balance;
-            chart(chartId, balance?.series || [], {unit: "kW", balance: true});
+            chart(chartId, balance?.series || [], {unit: "kW", balance: true, preserveVisibility: samePlan});
             $(issueId).textContent = entry?.issue || (balance?.missing ? `${balance.missing} interval(s) have incomplete physical evidence.` : "");
         }
     }
@@ -733,7 +741,7 @@ function renderPlanComparisons(data, plan) {
     planDetails = {...planDetails, plan, comparison, valuation};
     for (const id of PLAN_DETAIL_TABLES) renderPlanDetails(id);
     if (!confirmedProjection) {
-        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W"});
+        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W", preserveVisibility: samePlan});
         periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
         periodCostKey = ""; periodCostRequest++;
     }
@@ -755,6 +763,7 @@ function renderPlanComparisons(data, plan) {
  */
 async function showPlan(signal, background = false) {
     const request = ++selectionRequest, id = $("plan-version").value;
+    const sourceNamesAtRequest = sourceNamesGeneration;
     const retainDisplayedPlan = renderedPlanId && (background || renderedPlanId === id);
     if (retainDisplayedPlan) {
         $("overview-status").textContent = "Loading plan update. Showing the previously loaded plan until the update is available.";
@@ -876,14 +885,14 @@ async function showPlan(signal, background = false) {
             step.text += `\n${rows.join("\n")}`;
         });
         const balance = balances[0];
-        chart("plan-chart", balance.series, {unit: "kW", balance: true});
+        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan});
         if (balance.missing) {
             const warning = document.createElement("p"); warning.className = "balance-warning";
             warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
             $("plan-chart-legend").append(warning);
         }
-        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W"});
-        chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0});
+        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan});
+        chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan});
         const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
         if (tariffEvidence.length) {
             buy.length = 0; sell.length = 0;
@@ -910,6 +919,7 @@ async function showPlan(signal, background = false) {
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
         for (const id of PLAN_DETAIL_TABLES) renderPlanDetails(id);
         renderedPlanId = id;
+        planSourceNamesGeneration = sourceNamesAtRequest;
         if (requestedPlan === id) requestedPlan = null;
         planReadPending = false;
         $("overview-status").textContent = "Plan loaded. Loading simulations…";
@@ -1286,7 +1296,10 @@ async function initializeOverview() {
         completed.setUTCDate(completed.getUTCDate() - 1);
         if (!$("period-start").value) $("period-start").value = completed.toISOString().slice(0, 10);
         if (!$("period-end").value) $("period-end").value = $("period-start").value;
-        watchSourceNames(() => api("setup/session", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), () => location.hash === "#savings" ? savings() : showPlan(), session.source_names_revision);
+        watchSourceNames(() => api("setup/session", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), () => {
+            sourceNamesGeneration++;
+            return location.hash === "#savings" ? savings() : showPlan();
+        }, session.source_names_revision);
         overviewIngress = Boolean(session.ingress);
         $("overview-connect").hidden = overviewIngress;
         if (!session.ingress) $("overview-status").textContent = "Connect to view your plans and savings.";
