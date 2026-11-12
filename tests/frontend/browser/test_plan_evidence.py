@@ -1105,6 +1105,50 @@ def test_missing_spot_price_is_a_gap_while_original_effective_prices_remain_visi
     assert {point["y"] for point in state[2]} == {0}
 
 
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("wear_rate", [0.025, 0.004])
+def test_original_wear_coefficient_preserves_precision_without_changing_other_money(
+    app_page, wear_rate
+):
+    """Desktop/mobile retain the exact wear coefficient while totals, other rates, watts and percentages keep their display rules."""
+    from open_energy_planner.savings.evidence import evidence
+
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    identity = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    body = page.request.get(url + f"/v1/plans/{identity}/comparison", headers=headers).json()
+    plan = body["plan"]
+    plan["input_snapshot"]["problem"]["batteries"][0]["battery"]["wear_cost_per_kwh"] = wear_rate
+    plan["input_snapshot"]["problem"]["terminal_valuations"][0]["rate"] = 0.004
+    plan["independent_costs"]["import_cost"] = 0.025
+    body["evidence"] = evidence(plan)
+    page.route("**/v1/plans/*/comparison", lambda route: route.fulfill(json=body))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    page.get_by_text("Understand this plan", exact=True).click()
+    page.get_by_text("Inputs and assumptions for this plan", exact=True).click()
+    panel = page.locator("#plan-evidence")
+    coefficient = panel.locator("dt", has_text="Wear per internal kWh discharged").locator("+ dd")
+    expect(coefficient).to_have_text(f"{wear_rate} EUR/kWh")
+    expect(panel.locator("dt", has_text="Import cost").locator("+ dd")).to_have_text("0.03 EUR")
+    expect(panel.locator("dt", has_text="Net value per internal kWh").locator("+ dd")).to_have_text(
+        "0.00 EUR/kWh"
+    )
+    expect(panel.locator("dt", has_text="Grid import limit").locator("+ dd")).to_have_text(
+        "10,000 W"
+    )
+    expect(panel.get_by_text("Charge efficiency", exact=True).locator("+ dd")).to_have_text(
+        "100.0 %"
+    )
+    panel.locator("article").filter(has_text=": Starting conditions").screenshot(
+        path=f"results/ci/battery-wear-precision/evidence-{wear_rate}-{page.viewport_size['width']}.png"
+    )
+
+
 @pytest.mark.parametrize("app_site", ["savings", "savings_corrected"], indirect=True)
 def test_plan_evidence_is_readable_original_and_follows_selected_interval(app_page):
     """Desktop/mobile inspect original .3 prices, 4000-W discharge and 25→0% SoC even after a contract correction."""

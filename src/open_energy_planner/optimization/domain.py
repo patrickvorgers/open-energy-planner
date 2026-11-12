@@ -68,8 +68,8 @@ class Interval:
 class Battery:
     """Describe internal energy bounds and terminal power limits for one battery.
 
-    Efficiencies convert terminal charge/discharge to internal energy. The cycle fee
-    is the configured cost per full equivalent discharge of capacity.
+    Efficiencies convert terminal charge/discharge to internal energy. Wear is
+    charged per internal kWh discharged, never again on charging.
     """
 
     capacity_kwh: float
@@ -79,7 +79,7 @@ class Battery:
     discharge_limit_w: float = DEFAULT_POWER_LIMIT_W
     charge_efficiency: float = 1
     discharge_efficiency: float = 1
-    cycle_fee: float = 0
+    wear_cost_per_kwh: float = 0
     recover_reserve: bool = False
 
     def __post_init__(self) -> None:
@@ -90,7 +90,7 @@ class Battery:
             "minimum_kwh",
             "charge_limit_w",
             "discharge_limit_w",
-            "cycle_fee",
+            "wear_cost_per_kwh",
         ):
             nonnegative(name, getattr(self, name))
         if self.capacity_kwh <= 0 or not (

@@ -39,11 +39,11 @@ def test_core_known_optimum(case, solver):
 
 @pytest.mark.planner_scenario
 @pytest.mark.parametrize(
-    "charge_efficiency,discharge_efficiency,cycle_fee,cash,energy,exported",
+    "charge_efficiency,discharge_efficiency,wear_cost_per_kwh,cash,energy,exported",
     [(0.8, 0.9, 0, "-0.168", 0.8, 0.72), (1, 1, 0.35, "0", 0, 0)],
 )
 def test_loss_and_wear_companions(
-    solver, charge_efficiency, discharge_efficiency, cycle_fee, cash, energy, exported
+    solver, charge_efficiency, discharge_efficiency, wear_cost_per_kwh, cash, energy, exported
 ):
     """Keep 0.72*0.40-0.12=0.168 profit with losses, and idle when 0.35 wear exceeds 0.28 spread."""
     problem = installation(
@@ -53,7 +53,7 @@ def test_loss_and_wear_companions(
             0,
             charge_efficiency=charge_efficiency,
             discharge_efficiency=discharge_efficiency,
-            cycle_fee=cycle_fee,
+            wear_cost_per_kwh=wear_cost_per_kwh,
         ),
     )
     result = solver.solve(problem)
@@ -66,7 +66,7 @@ def test_loss_and_wear_companions(
 @pytest.mark.planner_scenario
 def test_equal_optima_do_not_require_a_particular_trace(solver):
     """Wear equal to the 0.28 spread makes zero objective optimal without choosing a tied flow trace."""
-    problem = installation(CORE[0].problem.intervals, battery=Battery(1, 0, cycle_fee=0.28))
+    problem = installation(CORE[0].problem.intervals, battery=Battery(1, 0, wear_cost_per_kwh=0.28))
     result = solver.solve(problem)
     assert result.status == Status.OPTIMAL
     assert validate(problem, result.plan).objective == pytest.approx(0)

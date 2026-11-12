@@ -335,8 +335,7 @@ def actual_flows(problem, frame, bindings):
                 * unit.dc_efficiency
                 * inverters[unit.inverter_id].efficiency
             )
-            * unit.battery.cycle_fee
-            / unit.battery.capacity_kwh
+            * unit.battery.wear_cost_per_kwh
         )
     return imported, exported, wear
 

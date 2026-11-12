@@ -98,6 +98,7 @@ def test_documentation_installation_shows_saved_limits_and_real_source_relations
         battery.get_by_label("Maximum charge power (kW)", exact=True).fill("2")
         battery.get_by_label("Maximum discharge power (kW)", exact=True).fill("2")
         battery.get_by_label("Minimum state of charge (%)", exact=True).fill("20")
+        battery.get_by_label("Cost per kWh (optional)", exact=True).fill("0.02")
         if index == 0:
             battery.get_by_label("Converter connection", exact=True).select_option(
                 "example-inverter-0"

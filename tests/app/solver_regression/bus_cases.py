@@ -110,7 +110,7 @@ M04 = replace(
 )
 M05 = network(
     M03.intervals,
-    (storage("A", 1, discharge=2000), storage("B", cycle_fee=1.2)),
+    (storage("A", 1, discharge=2000), storage("B", wear_cost_per_kwh=1.2)),
     rates=(0.1, 0),
     import_limit=0,
     export_limit=8000,

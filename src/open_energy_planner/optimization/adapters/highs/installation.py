@@ -201,8 +201,7 @@ class InstallationModelFactory:
             for interval_index, interval in enumerate(problem.intervals)
         )
         wear = sum(
-            battery_item.battery.cycle_fee
-            / battery_item.battery.capacity_kwh
+            battery_item.battery.wear_cost_per_kwh
             / battery_item.battery.discharge_efficiency
             * batteries[battery_item.device_id]["discharge"][interval_index]
             for battery_item in problem.batteries
