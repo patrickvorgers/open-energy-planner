@@ -188,5 +188,93 @@
         }
       }
     }
+  },
+  "ev_schedule": {
+    "name": "Plan charging request",
+    "description": "Create or atomically edit one charging request. Omitted target and departure use the saved vehicle defaults. Repetition is off unless weekdays are supplied.",
+    "fields": {
+      "device_id": {
+        "name": "Virtual OEP vehicle",
+        "description": "Choose the virtual vehicle, not the physical charge point.",
+        "required": true,
+        "selector": {
+          "device": {
+            "integration": "open_energy_planner"
+          }
+        }
+      },
+      "request_id": {
+        "name": "Charging request ID",
+        "description": "A UUID kept unchanged when retrying the same creation. Use the saved request ID when editing or cancelling.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "target_soc": {
+        "name": "Target state of charge",
+        "selector": {
+          "number": {
+            "min": 0,
+            "max": 100,
+            "unit_of_measurement": "%",
+            "mode": "box"
+          }
+        }
+      },
+      "departure": {
+        "name": "Ready by",
+        "description": "Aware ISO date and time for this request.",
+        "selector": {
+          "text": {}
+        }
+      },
+      "repeat_weekdays": {
+        "name": "Repeat weekdays",
+        "description": "Optional list with Monday=0 through Sunday=6. An empty list does not repeat.",
+        "selector": {
+          "object": {}
+        }
+      },
+      "expected_version": {
+        "name": "Saved request version",
+        "description": "Use the saved charging_request.version when editing or cancelling.",
+        "selector": {
+          "text": {}
+        }
+      }
+    }
+  },
+  "ev_cancel": {
+    "name": "Cancel charging request",
+    "description": "Cancel the exact saved request and its repetition. History is retained.",
+    "fields": {
+      "device_id": {
+        "name": "Virtual OEP vehicle",
+        "description": "Choose the virtual vehicle, not the physical charge point.",
+        "required": true,
+        "selector": {
+          "device": {
+            "integration": "open_energy_planner"
+          }
+        }
+      },
+      "request_id": {
+        "name": "Charging request ID",
+        "description": "A UUID kept unchanged when retrying the same creation. Use the saved request ID when editing or cancelling.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "expected_version": {
+        "name": "Saved request version",
+        "description": "Use the saved charging_request.version when editing or cancelling.",
+        "selector": {
+          "text": {}
+        },
+        "required": true
+      }
+    }
   }
 }

@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.control_layout import assert_field_actions_aligned
 from tests.frontend.browser.helpers import (
     TOKEN,
     assert_floating_save_bar,
@@ -486,13 +485,7 @@ def test_ev_removal_preserves_charge_point_vehicle_dependencies(app_page):
 
 
 def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(app_page):
-    """Keep precise EV settings and daily requests on desktop and mobile.
-
-    Reject stale configuration writes. Daily controls preserve independent drafts,
-    retain rejected input, use HA-local departures and reject nonexistent times.
-    Clearing an override restores the daily departure. Late evidence cannot undo
-    an accepted target request.
-    """
+    """Keep precise defaults, explicit request overrides and stale-read protection on desktop/mobile."""
     page, url = app_page
     discover_charging_sources(page, url)
     page.goto(url + "/appliance-settings/ev")
@@ -532,10 +525,44 @@ def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(ap
     assert [vehicle["maximum_w"] for vehicle in saved["vehicles"]] == [11000, 7400]
     assert saved["points"][0]["minimum_w"] == 1400
     assert saved["points"][0]["maximum_w"] == 22000
+    concurrent = {
+        "vehicles": [
+            {
+                key: vehicle[key]
+                for key in (
+                    "id",
+                    "soc_entity",
+                    "soc_timestamp_attribute",
+                    "capacity_kwh",
+                    "maximum_w",
+                    "target_soc",
+                    "departure_time",
+                )
+            }
+            for vehicle in saved["vehicles"]
+        ],
+        "points": [
+            {
+                key: point[key]
+                for key in (
+                    "id",
+                    "energy_entity",
+                    "power_entity",
+                    "connected_entity",
+                    "minimum_w",
+                    "maximum_w",
+                    "control",
+                    "vehicle_ids",
+                )
+            }
+            for point in saved["points"]
+        ],
+    }
+    concurrent["vehicles"][0]["target_soc"] = 85.25
     assert page.request.post(
-        url + "/v1/ev/intent",
+        url + "/v1/ev/configuration",
         headers=headers,
-        data={"vehicle_id": saved["vehicles"][0]["id"], "field": "target_soc", "value": 85.25},
+        data={"expected_version": saved["configuration_version"], "configuration": concurrent},
     ).ok
     page.locator("#ev-device-select").select_option(saved["vehicles"][0]["id"])
     page.get_by_role("button", name="Edit settings", exact=True).click()
@@ -588,147 +615,50 @@ def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(ap
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#vehicle-controls > article")).to_have_count(2)
     expect(page.get_by_role("button", name="Add vehicle", exact=True)).to_have_count(0)
-    expect(page.locator('[data-field="capacity_kwh"]')).to_have_count(0)
     vehicle = page.locator("#vehicle-controls > article").first
-    page.evaluate("document.fonts.ready")
-    for request_form in vehicle.locator("form").all():
-        assert_field_actions_aligned(request_form, expected_buttons=2)
-        expect(request_form.get_by_role("status")).to_have_count(1)
-        expect(request_form.get_by_role("status")).to_have_text("")
-    for control_column in ("input", "button:first-of-type", "button:last-of-type"):
-        positions = vehicle.locator(f"form {control_column}").evaluate_all(
-            "controls => controls.map(control => control.getBoundingClientRect().x)"
-        )
-        assert max(positions) - min(positions) <= 1
-    page.screenshot(
-        path=f"results/ci/ev-controls-{page.viewport_size['width']}.png", full_page=True
-    )
+    vehicle.get_by_role("button", name="Plan charging request", exact=True).click()
     target = vehicle.get_by_label("Target state of charge (%)", exact=True)
+    target.focus()
+    expect(target).to_have_value("86.125")
     target.fill("87.125")
-    page.get_by_role("button", name="Refresh charging evidence", exact=True).click()
-    target.focus()
-    expect(target).to_have_value("87.125")
-    vehicle.get_by_role("button", name="Apply target state of charge (%)", exact=True).click()
-    expect(page.locator("#status")).to_contain_text("Request saved")
-    updated = page.request.get(url + "/v1/ev", headers=headers).json()
-    assert updated["vehicles"][0]["target_soc"] == 87.125
-    assert updated["points"] == saved["points"]
-    for field in ("id", "soc_entity", "capacity_kwh", "maximum_w"):
-        assert updated["vehicles"][0][field] == saved["vehicles"][0][field]
-    vehicle.get_by_label("Daily departure time", exact=True).fill("08:45")
-    vehicle.get_by_role("button", name="Apply daily departure time", exact=True).click()
-    expect(page.locator("#status")).to_contain_text("Request saved")
-    assert (
-        page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]["departure_time"]
-        == "08:45"
-    )
-
-    target = vehicle.get_by_label("Target state of charge (%)", exact=True)
-    departure = vehicle.get_by_label("Daily departure time", exact=True)
-    target.fill("88.25")
-    departure.fill("09:15")
-    target.locator("xpath=ancestor::form").get_by_role(
-        "button", name="Reset request", exact=True
-    ).click()
-    expect(departure).to_have_value("09:15")
-    target.focus()
-    expect(target).to_have_value("87.125")
-    page.route("**/v1/ev/intent", lambda route: route.fulfill(status=409, body="Request rejected"))
-    target.fill("89.25")
-    vehicle.get_by_role("button", name="Apply target state of charge (%)", exact=True).click()
-    expect(target.locator("xpath=ancestor::form").get_by_role("status")).to_have_text(
-        "Request rejected"
-    )
-    expect(target.locator("xpath=ancestor::form").get_by_role("status")).to_be_visible()
-    target.focus()
-    expect(target).to_have_value("89.25")
-    assert (
-        page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]["target_soc"]
-        == 87.125
-    )
-    page.unroute("**/v1/ev/intent")
-    target.locator("xpath=ancestor::form").get_by_role(
-        "button", name="Reset request", exact=True
-    ).click()
-    departure.locator("xpath=ancestor::form").get_by_role(
-        "button", name="Reset request", exact=True
-    ).click()
-    override = vehicle.get_by_label("One-off departure", exact=True)
-    override.fill("2027-03-28T02:30")
-    vehicle.get_by_role("button", name="Apply one-off departure", exact=True).click()
-    expect(override.locator("xpath=ancestor::form").get_by_role("status")).to_contain_text(
-        "does not exist"
-    )
-    # Browser UTC must not replace the HA installation timezone when submitting a local departure.
+    departure = vehicle.get_by_label("Ready by", exact=True)
+    departure.fill("2027-03-28T02:30")
+    vehicle.get_by_role("button", name="Plan charging request", exact=True).click()
+    expect(vehicle.get_by_role("status")).to_contain_text("does not exist")
     local_departure = (datetime.now(ZoneInfo("Europe/Amsterdam")) + timedelta(days=1)).replace(
         hour=9, minute=30, second=0, microsecond=0
     )
-    override.fill(local_departure.strftime("%Y-%m-%dT%H:%M"))
-    vehicle.get_by_role("button", name="Apply one-off departure", exact=True).click()
-    expect(page.locator("#status")).to_contain_text("Request saved")
-    expect(override.locator("xpath=ancestor::form")).not_to_have_attribute("data-dirty", "true")
-    assert (
-        page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0][
-            "departure_override"
-        ]
-        == local_departure.astimezone(UTC).isoformat()
-    )
-    expect(override).to_be_enabled()
-    expect(override).to_have_value(local_departure.strftime("%Y-%m-%dT%H:%M"))
-    page.reload()
-    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
-    page.get_by_role("button", name="Connect", exact=True).click()
-    expect(override).to_have_value(local_departure.strftime("%Y-%m-%dT%H:%M"))
-    override.fill((local_departure + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M"))
-    override.locator("xpath=ancestor::form").get_by_role(
-        "button", name="Reset request", exact=True
-    ).click()
-    expect(override).to_have_value(local_departure.strftime("%Y-%m-%dT%H:%M"))
-    assert (
-        page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0][
-            "departure_override"
-        ]
-        == local_departure.astimezone(UTC).isoformat()
-    )
-    vehicle.get_by_role("button", name="Use daily departure", exact=True).click()
-    expect(page.locator("#status")).to_contain_text("Request saved")
-    expect(override).to_have_value("")
-    assert (
-        page.request.get(url + "/v1/ev", headers=headers)
-        .json()["vehicles"][0]
-        .get("departure_override")
-        is None
-    )
-
-    expect(vehicle.get_by_role("button", name="Use daily departure", exact=True)).to_be_enabled()
+    departure.fill(local_departure.strftime("%Y-%m-%dT%H:%M"))
     stale = page.request.get(url + "/v1/ev", headers=headers).json()
     delayed = []
 
     def hold_ev_evidence(route):
-        """Delay only the GET started before a successful daily target change."""
+        """Release an old read after the complete request write to prove it cannot undo the write."""
         if not delayed:
             delayed.append(route)
         else:
-            expect(target).to_be_disabled()
             route.fallback()
 
     page.route("**/v1/ev", hold_ev_evidence)
     page.get_by_role("button", name="Refresh charging evidence", exact=True).click()
-    target.fill("88.25")
-    vehicle.get_by_role("button", name="Apply target state of charge (%)", exact=True).click()
-    expect(target.locator("xpath=ancestor::form")).not_to_have_attribute("data-dirty", "true")
-    expect(target).to_be_enabled()
-    target.focus()
-    expect(target).to_have_value("88.25")
-    page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
-    page.screenshot(
-        path=f"results/ci/ev-controls-{page.viewport_size['width']}.png", full_page=True
-    )
+    vehicle.get_by_role("button", name="Plan charging request", exact=True).click()
+    expect(vehicle).to_contain_text("Planned charging request")
     delayed[0].fulfill(json=stale)
     page.evaluate(
         "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
     )
-    expect(target).to_have_value("88.25")
+    expect(vehicle).to_contain_text("Planned charging request")
+    page.unroute("**/v1/ev")
+    updated = page.request.get(url + "/v1/ev", headers=headers).json()
+    assert updated["vehicles"][0]["target_soc"] == 86.125
+    assert updated["vehicles"][0]["charging_request"]["target_soc"] == 87.125
+    assert (
+        updated["vehicles"][0]["charging_request"]["departure"]
+        == local_departure.astimezone(UTC).isoformat()
+    )
+    assert updated["points"] == saved["points"]
+    for field in ("id", "soc_entity", "capacity_kwh", "maximum_w"):
+        assert updated["vehicles"][0][field] == saved["vehicles"][0][field]
 
 
 @pytest.mark.parametrize("secure_uuid", [True, False])
@@ -1279,72 +1209,75 @@ def test_appliance_prototype_cycle_facts_keep_zero_power_phases(app_page):
 
 
 def test_ev_unchanged_fold_departures_keep_exact_latest_saved_instant(app_page):
-    """Keep exact saved EV instants across clock folds on desktop and mobile.
-
-    Controlled HTTP samples test UI conversion without the server's date window.
-    Reapplying a saved second-occurrence instant preserves its offset and seconds.
-    A refresh plus Reset uses the latest HA preference while another draft remains.
-    Only a changed local value is converted through the normal HA timezone rule.
-    """
+    """Preserve exact second-fold instants and whole drafts, converting only changed HA-local times."""
     page, url = app_page
     vehicle_id = "00000000-0000-4000-8000-000000000201"
+    request = {
+        "id": "00000000-0000-4000-8000-000000000301",
+        "version": "first",
+        "target_soc": 80,
+        "departure": "2026-10-25T01:30:42+00:00",
+        "repeat_weekdays": [],
+    }
     vehicle = {
         "id": vehicle_id,
         "name": "Family car",
         "actual": {"soc": 50},
         "target_soc": 80,
-        "departure_time": "07:00",
-        "departure_override": "2026-10-25T01:30:42+00:00",
-        "next_departure": "2026-10-25T01:30:42+00:00",
+        "default_departure": "2026-10-25T06:00:00+00:00",
+        "charging_request": request,
     }
     document = {"timezone": "Europe/Amsterdam", "vehicles": [vehicle], "points": [], "issue": None}
-    intents = []
+    writes = []
     page.route("**/v1/ev", lambda route: route.fulfill(json=document))
+    page.route(
+        "**/v1/ev/requests",
+        lambda route: (
+            accept_request(route)
+            if route.request.method == "POST"
+            else route.fulfill(json={"requests": [], "next_cursor": None})
+        ),
+    )
 
-    def accept_intent(route):
-        """Retain the exact submitted instant without invoking the real server's date-window validator."""
-        intent = route.request.post_data_json
-        assert intent["vehicle_id"] == vehicle_id
-        assert intent["field"] == "departure_override"
-        intents.append(intent)
-        vehicle["departure_override"] = intent["value"]
+    def accept_request(route):
+        """Record submitted precision independently of the server's allowed future date window."""
+        body = route.request.post_data_json
+        writes.append(body)
+        request.update(target_soc=body["target_soc"], departure=body["departure"])
         route.fulfill(json={"accepted": True})
 
-    page.route("**/v1/ev/intent", accept_intent)
     page.goto(url + "/ev")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    override = page.get_by_label("One-off departure", exact=True)
-    apply = page.get_by_role("button", name="Apply one-off departure", exact=True)
-    expect(override).to_have_value("2026-10-25T02:30")
-    apply.click()
-    expect(override).to_be_enabled()
-    assert intents[-1]["value"] == "2026-10-25T01:30:42+00:00"
-
+    edit = page.get_by_role("button", name="Edit charging request", exact=True)
+    edit.click()
+    deadline = page.get_by_label("Ready by", exact=True)
+    expect(deadline).to_have_value("2026-10-25T02:30")
+    page.get_by_role("button", name="Save changes", exact=True).click()
+    expect(edit).to_be_visible()
+    assert writes[-1]["departure"] == "2026-10-25T01:30:42+00:00"
+    edit.click()
     target = page.get_by_label("Target state of charge (%)", exact=True)
     target.fill("83.25")
-    vehicle["departure_override"] = "2026-10-25T01:45:23+00:00"
+    request.update(departure="2026-10-25T01:45:23+00:00", version="second")
     document["issue"] = "Newer vehicle preference available"
-    with page.expect_response(lambda response: response.url == url + "/v1/ev"):
-        page.get_by_role("button", name="Refresh charging evidence", exact=True).click()
+    page.get_by_role("button", name="Refresh charging evidence", exact=True).click()
     expect(page.locator("#status")).to_have_text("Newer vehicle preference available")
-    override.locator("xpath=ancestor::form").get_by_role(
-        "button", name="Reset request", exact=True
-    ).click()
-    expect(override).to_have_value("2026-10-25T02:45")
+    expect(deadline).to_have_value("2026-10-25T02:30")
     target.focus()
     expect(target).to_have_value("83.25")
-    apply.click()
-    expect(override).to_be_enabled()
-    assert intents[-1]["value"] == "2026-10-25T01:45:23+00:00"
-
-    override.fill("2026-10-25T03:15")
-    apply.click()
-    expect(override).to_be_enabled()
-    assert intents[-1]["value"] == "2026-10-25T02:15:00.000Z"
-    assert len(intents) == 3
-    target.focus()
-    expect(target).to_have_value("83.25")
+    page.get_by_role("button", name="Cancel changes", exact=True).click()
+    edit.click()
+    expect(deadline).to_have_value("2026-10-25T02:45")
+    page.get_by_role("button", name="Save changes", exact=True).click()
+    expect(edit).to_be_visible()
+    assert writes[-1]["departure"] == "2026-10-25T01:45:23+00:00"
+    edit.click()
+    deadline.fill("2026-10-25T03:15")
+    page.get_by_role("button", name="Save changes", exact=True).click()
+    expect(edit).to_be_visible()
+    assert writes[-1]["departure"] == "2026-10-25T02:15:00.000Z"
+    assert len(writes) == 3
 
 
 def test_appliance_learning_manual_save_failure_and_retained_evidence(app_page):

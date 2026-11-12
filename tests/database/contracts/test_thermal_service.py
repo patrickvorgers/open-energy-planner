@@ -24,6 +24,7 @@ from open_energy_planner.planning import InputSnapshot
 from open_energy_planner.storage.adapters import documents as document_adapter
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
+from tests.app.ev.support.devices import planned_requests
 from tests.database.support.backends import BACKENDS
 
 NOW = datetime(2026, 10, 26, 12, tzinfo=UTC)
@@ -157,6 +158,7 @@ def test_real_mixed_preparation_preserves_cycle_ev_thermal_ownership_through_pub
     charging_settings = ev_settings()
     charging_settings["vehicles"][0].update(target_soc=51, departure_time="14:00")
     service.ev.configure(charging_settings, discovery)
+    planned_requests(service.ev, NOW)
     service.ev.receive(observations(service.ev), NOW)
     service.ev.assign(POINT, CAR, SESSION, NOW)
     service.consumers.save(
@@ -456,6 +458,7 @@ def test_unavailable_boiler_forecast_preserves_independently_ready_ev(service, b
     discovery["suggestions"]["consumers"].extend(charging["suggestions"]["consumers"])
     service.consumers.sync(discovery)
     service.ev.configure(ev_settings(), discovery)
+    planned_requests(service.ev, NOW)
     service.ev.receive(observations(service.ev), NOW)
     service.ev.assign(POINT, CAR, SESSION, NOW)
     forecasts(service)

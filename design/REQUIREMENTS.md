@@ -680,9 +680,9 @@ The Price rule and Export bonus information buttons provide keyboard-accessible,
 - EV-02: Each vehicle has its own HA SoC source, usable capacity, maximum AC power, target SoC and departure.
 - EV-03: Each point has its own Energy consumer, measured power, connected source, power limits and measuring, on/off or variable-power capability.
 - EV-04: Reuse HA metadata. Never guess the car.
-- EV-05: Connected identified cars are scheduled automatically, jointly with PV, storage and other devices.
-- EV-06: Use a daily departure with an optional one-off date/time, always in the HA timezone.
-- EV-07: Native virtual controls require no extra helpers.
+- EV-05: Schedule connected identified cars only for an explicit active charging request, jointly with PV, storage and other devices. Configuration, history and reconnection must never create requests.
+- EV-06: Create, edit and cancel one complete request per vehicle with a target and departure in the HA timezone. Saved defaults only prefill it. Requests are one-off unless the user explicitly selects repeat weekdays. Retain terminal history. Cancellation stops repetition.
+- EV-07: Native virtual controls and device-targeted automation actions use the same app-owned request lifecycle without extra helpers. Retried creation never revives a terminal request.
 - EV-08: Missing or ambiguous evidence withholds authorization.
 - EV-09: Recalculate remaining need using actual SoC.
 - EV-10: No V2G. Physical actions remain user-owned HA automations.

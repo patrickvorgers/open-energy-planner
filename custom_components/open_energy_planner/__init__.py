@@ -32,6 +32,9 @@ async def async_setup_entry(hass, entry):
     from .appliances import register_services
 
     register_services(hass)
+    from .ev_services import register_services as register_ev_services
+
+    register_ev_services(hass)
     import shutil
     from pathlib import Path
 

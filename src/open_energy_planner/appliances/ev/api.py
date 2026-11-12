@@ -15,6 +15,18 @@ from open_energy_planner.storage.writes import complete_write
 
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
+    "Charging request belongs to a different vehicle",
+    "Invalid charging request fields",
+    "Charging request ID was already used",
+    "Charging departure must be in the next thirty days",
+    "Choose distinct repeat weekdays between zero and six",
+    "Only a planned charging request can be edited",
+    "Charging request changed. Refresh before saving",
+    "Charging request no longer exists",
+    "This vehicle already has a planned charging request",
+    "Charging request changed. Refresh before cancelling",
+    "Plan a charging request before changing its values",
+    "No valid charging departure in the next two weeks",
     SOURCE_ALREADY_ASSIGNED,
     SOURCE_OWNERSHIP_UNAVAILABLE,
     "A charge point cannot also be a shiftable cycle appliance",
@@ -127,10 +139,22 @@ def register(app, service, catalogue, repository, live, lock, thermal):
                         (
                             body["configuration"],
                             catalogue.choices.catalogue("ev", catalogue.value, now),
+                            now,
                         ),
                     )
                 elif operation == "observations":
-                    function, arguments = service.receive, (body, now)
+                    function, arguments = service.receive, (body, now, zone)
+                elif operation == "requests":
+                    function, arguments = service.save_request, (body, now, zone)
+                elif operation == "cancel" and set(body) == {
+                    "request_id",
+                    "expected_version",
+                    "vehicle_id",
+                }:
+                    function, arguments = (
+                        service.cancel_request,
+                        (body["request_id"], body["expected_version"], now, body["vehicle_id"]),
+                    )
                 elif operation == "assign" and set(body) == {
                     "point_id",
                     "vehicle_id",
@@ -167,4 +191,16 @@ def register(app, service, catalogue, repository, live, lock, thermal):
             ) from None
 
     app.router.add_get("/v1/ev", state)
+
+    async def history(request):
+        """Read retained request history without changing lifecycle state or planning."""
+        async with lock:
+            try:
+                return web.json_response(
+                    service.request_history(catalogue.value, request.query.get("cursor"))
+                )
+            except ValueError:
+                raise web.HTTPBadRequest(text="Unknown charging history cursor") from None
+
+    app.router.add_get("/v1/ev/requests", history)
     app.router.add_post("/v1/ev/{operation}", mutate)

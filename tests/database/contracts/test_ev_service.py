@@ -6,12 +6,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
 
 from open_energy_planner.appliances.ev.service import EVService, departure
-from open_energy_planner.appliances.forecasting import ConsumerForecasts
-from open_energy_planner.storage.adapters.documents import SqlDocuments
-from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
 from tests.app.ev.support.devices import (
     CAR,
     NOW,
@@ -23,7 +19,9 @@ from tests.app.ev.support.devices import (
     observations,
     settings,
 )
-from tests.database.support.backends import BACKENDS
+from tests.database.support import ev as ev_support
+
+ev_service = ev_support.ev_service
 
 
 @pytest.mark.parametrize("consumer", ["detection", "acknowledgement", "projection"])
@@ -142,6 +140,9 @@ def test_sustained_charging_deviation_requests_one_round_and_explains_recovery(
         body = observations(service, now)
         body["points"][0]["power_w"] = power
         service.receive(body, now)
+        if seconds == 0:
+            service.assign(POINT, CAR, SESSION, now)
+            plan["ev_context"] = {"revision": service.hard_revision(now, "Europe/Amsterdam")}
         return service.execution_deviated(plan, now)
 
     assert not measured(0, actual_power)
@@ -152,9 +153,9 @@ def test_sustained_charging_deviation_requests_one_round_and_explains_recovery(
     for seconds in (120, 180, 240):
         assert not measured(seconds, actual_power)
     assert not measured(300, actual_power)
-    issue = service.document(NOW + timedelta(seconds=300), "Europe/Amsterdam")["points"][0][
-        "execution_issue"
-    ]
+    issue = service.document(NOW + timedelta(seconds=300), "Europe/Amsterdam", plan=plan)["points"][
+        0
+    ]["execution_issue"]
     assert "Check the vehicle charge limit" in issue
     assert not measured(310, expected_power)
     assert (
@@ -293,22 +294,13 @@ def test_missing_charger_separation_blocks_live_planning_instead_of_using_histor
     assert original.problem.intervals[0].load_kwh == 4
 
 
-@pytest.fixture(params=BACKENDS, ids=[name for name, _ in BACKENDS])
-def service(request, tmp_path):
-    """Use a dedicated backend schema, exercising JSON transactions without depending on local Docker."""
-    backend, url = request.param
-    engine = create_engine("sqlite://" if backend == "sqlite" else url)
-    SCHEMA.drop_all(engine)
-    SCHEMA.create_all(engine)
-    consumers = ConsumerForecasts(SqlDocuments(engine, "demand"))
-    consumers.sync(catalogue())
-    app = EVService(
-        SqlDocuments(engine, "planning"), consumers, SimpleNamespace(state={"devices": {}})
-    )
-    app.configure(settings(), catalogue())
-    yield app
-    SCHEMA.drop_all(engine)
-    engine.dispose()
+@pytest.fixture
+def service(ev_service):
+    """Explicit fixture requests preserve the existing physical EV safety scenarios."""
+    from tests.app.ev.support.devices import planned_requests
+
+    planned_requests(ev_service)
+    return ev_service
 
 
 def test_unidentified_car_is_never_planned_even_if_only_one_is_allowed(service):
@@ -423,15 +415,23 @@ def test_measurement_only_and_expired_reports_never_authorize_charging(service):
 
 
 def test_target_and_one_off_departure_survive_backend_restart(service):
-    """Native dashboard intent is durable. An expired override returns automatically to the daily HA clock."""
+    """A request override survives restart without changing defaults or creating a next-day request."""
     service.intent(CAR, "target_soc", 85, NOW, "Europe/Amsterdam")
     override = NOW + timedelta(hours=2)
     service.intent(CAR, "departure_override", override.isoformat(), NOW, "Europe/Amsterdam")
     restored = EVService(service.documents, service.consumers, service.appliances)
     car = restored.state["vehicles"][0]
-    assert car["target_soc"] == 85
-    assert departure(car, NOW, "Europe/Amsterdam") == override
-    assert departure(car, override, "Europe/Amsterdam") == datetime(2026, 10, 27, 6, tzinfo=UTC)
+    assert car["target_soc"] == 80
+    document = restored.document(NOW, "Europe/Amsterdam")
+    request = document["vehicles"][0]["charging_request"]
+    assert request["target_soc"] == 85
+    assert request["departure"] == override.isoformat()
+    restored.receive(observations(restored, override), override)
+    assert (
+        restored.document(override, "Europe/Amsterdam")["vehicles"][0]["charging_request"] is None
+    )
+    assert restored.state["requests"][request["id"]]["status"] == "expired"
+    assert len(restored.state["requests"]) == 2
 
 
 @pytest.mark.parametrize("change", ["unknown_meter", "duplicate_soc", "overlap", "unbounded_power"])

@@ -11,7 +11,8 @@
           "vehicle_unknown": "Vehicle unknown",
           "measurement_only": "Measurement only",
           "ready": "Ready",
-          "soc_or_limits_unavailable": "SoC or limits unavailable"
+          "soc_or_limits_unavailable": "SoC or limits unavailable",
+          "request_missing": "No planned charging request"
         }
       },
       "ev_control": {

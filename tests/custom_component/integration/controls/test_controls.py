@@ -133,6 +133,15 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             car_select = entity("select", POINT, "vehicle")
             target = entity("number", OTHER_CAR, "target_soc")
             daily = entity("time", OTHER_CAR, "departure_time")
+            assert hass.states.get(target).state == "unavailable"
+            await hass.services.async_call(
+                "button",
+                "press",
+                {"entity_id": entity("button", OTHER_CAR, "schedule_charging")},
+                blocking=True,
+            )
+            vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+            assert vehicle["charging_request"]["repeat_weekdays"] == []
             await hass.services.async_call(
                 "number", "set_value", {"entity_id": target, "value": 85}, blocking=True
             )
@@ -141,6 +150,37 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             )
             assert hass.states.get(target).state == "85.0"
             assert hass.states.get(daily).state == "06:30:00"
+            vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+            assert vehicle["target_soc"] == 80
+            assert vehicle["departure_time"] == "07:00"
+            assert vehicle["charging_request"]["target_soc"] == 85
+            device_id = registry.async_get(target).device_id
+            request = vehicle["charging_request"]
+            await hass.services.async_call(
+                DOMAIN,
+                "ev_cancel",
+                {
+                    "device_id": device_id,
+                    "request_id": request["id"],
+                    "expected_version": request["version"],
+                },
+                blocking=True,
+            )
+            assert hass.states.get(target).state == "unavailable"
+            request_id = str(uuid4())
+            schedule = {
+                "device_id": device_id,
+                "request_id": request_id,
+                "target_soc": 85,
+                "departure": (dt_util.utcnow() + timedelta(hours=12)).isoformat(),
+                "repeat_weekdays": [0, 2, 4],
+            }
+            for _ in range(2):
+                await hass.services.async_call(DOMAIN, "ev_schedule", schedule, blocking=True)
+            vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+            assert vehicle["charging_request"]["id"] == request_id
+            assert vehicle["charging_request"]["repeat_weekdays"] == [0, 2, 4]
+            assert vehicle["target_soc"] == 80
             await hass.services.async_call(
                 "oep_test_fixture",
                 "ev_connect",
@@ -249,6 +289,34 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             assert hass.states.get(power).state == "2000"
             assert fixture["data"]["points"][0]["power_w"] == 2000
             assert fixture["data"]["points"][1]["power_w"] == 0
+            await hass.services.async_call(
+                "button",
+                "press",
+                {"entity_id": entity("button", OTHER_CAR, "cancel_charging")},
+                blocking=True,
+            )
+            await hass.async_block_till_done()
+            assert hass.states.get(permission).state == "off"
+            assert fixture["data"]["points"][0]["power_w"] == 0
+            await hass.services.async_call(
+                DOMAIN,
+                "ev_schedule",
+                {
+                    "device_id": device_id,
+                    "request_id": str(uuid4()),
+                    "target_soc": 85,
+                    "departure": (dt_util.utcnow() + timedelta(hours=12)).isoformat(),
+                },
+                blocking=True,
+            )
+            assert hass.states.get(permission).state == "off"
+            plan["ev_context"]["revision"] = coordinator.ev["revision"]
+            plan["plan_id"] = str(uuid4())
+            plan["generated_at"] = dt_util.utcnow().isoformat()
+            coordinator.schedule.accept(plan, dt_util.utcnow())
+            coordinator.refresh()
+            await hass.async_block_till_done()
+            assert hass.states.get(permission).state == "on"
             await hass.services.async_call(
                 "oep_test_fixture", "ev_soc", {"vehicle": 1, "soc": 85}, blocking=True
             )

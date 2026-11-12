@@ -6,7 +6,15 @@ from pathlib import Path
 from playwright.sync_api import expect
 
 from open_energy_planner.appliances.ev.service import EVService
-from tests.app.ev.support.devices import CAR, POINT, SESSION, catalogue, observations, settings
+from tests.app.ev.support.devices import (
+    CAR,
+    POINT,
+    SESSION,
+    catalogue,
+    observations,
+    planned_requests,
+    settings,
+)
 from tests.frontend.browser.helpers import TOKEN, discover
 
 
@@ -33,7 +41,11 @@ def test_ev_execution_advice_names_the_device_and_preserves_measured_soc(app_pag
             if service.report is None:
                 service.receive(observations(service, before), before)
                 service.assign(POINT, CAR, SESSION, before)
+                planned_requests(service, before)
+                expected["ev_context"] = {"revision": service.hard_revision(now, timezone)}
                 service.execution_deviated(expected, before)
+            expected["ev_context"] = {"revision": service.hard_revision(now, timezone)}
+            plan = expected
             body = observations(service, now)
             body["points"][0]["power_w"] = 2300 if recovered[0] else 0
             service.receive(body, now)

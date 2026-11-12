@@ -31,7 +31,7 @@ TOKEN = "local-test-only-0123456789abcdef"
 def test_ev_forecast_blocker_logs_no_source_identity_but_keeps_authenticated_context(
     tmp_path, monkeypatch, caplog
 ):
-    """Exercise the app explanation through the real coordinator logging boundary."""
+    """Keep meter IDs out of logs while the authenticated EV view retains source context."""
     from open_energy_planner.appliances.ev.service import EVService
     from open_energy_planner.planning import PlanningCoordinator
     from tests.app.ev.support.devices import NOW, settings
@@ -57,7 +57,7 @@ def test_ev_forecast_blocker_logs_no_source_identity_but_keeps_authenticated_con
         """Use normal startup and cleanup while injecting only synthetic private-value sentinels."""
         async with running_app(tmp_path, FutureSource()):
             ev = captured["ev"]
-            ev.state = {**settings(), "assignments": {}}
+            ev.state = {**ev.state, **settings(), "assignments": {}}
             ev.state["points"][0]["energy_entity"] = "sensor.private_ev_meter_sentinel"
             ev.issue = "Charger component forecast unavailable. EV history cannot be removed safely"
             with caplog.at_level(logging.INFO, logger="open_energy_planner.planning"):

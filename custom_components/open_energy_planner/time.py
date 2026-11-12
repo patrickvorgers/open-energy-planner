@@ -14,5 +14,5 @@ async def async_setup_entry(hass, entry, async_add_entities):
         hass,
         entry,
         async_add_entities,
-        tuple(("vehicles", key, EVDepartureTime) for key in ("departure_time", "departure_clock")),
+        (("vehicles", "departure_time", EVDepartureTime),),
     )

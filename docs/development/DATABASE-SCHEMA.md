@@ -692,9 +692,9 @@ four-backend transfer includes all of these documents. See
 
 The existing `planning` namespace stores `ev-state.json` and immutable
 `ev-state-<sha256>.json` archives. Their JSON contains `vehicles`, `points` and
-`assignments`. Vehicle records contain opaque ID, HA percentage-SoC entity,
-usable `capacity_kwh`, AC `maximum_w`, `target_soc`, local `departure_time` and
-optional aware `departure_override`. Point records contain opaque ID, Energy
+`assignments`, `requests` and `active_requests`. Vehicle records contain opaque ID, HA percentage-SoC entity,
+usable `capacity_kwh`, AC `maximum_w`, default `target_soc` and local default
+`departure_time`. Point records contain opaque ID, Energy
 `energy_entity`, AC `power_entity`, binary `connected_entity`, active
 `minimum_w`/`maximum_w`, `control` capability and allowed `vehicle_ids`.
 Configuration acceptance and current scheduling require the point's meter/power
@@ -706,6 +706,16 @@ lower vehicle/point maximum as its fixed active rate, including for slower cars.
 Assignments link point IDs to explicit vehicle IDs and current connection
 `session_id` nonces. They are intent, not fresh measurement evidence. A restart
 requires new HA readings and matching connection identity before use.
+
+`requests` maps stable UUIDs to retained request records. Each contains `id`,
+`vehicle_id`, target percentage `target_soc`, aware `departure`, `ready_at`,
+`created_at` and `updated_at`, `repeat_weekdays` (Monday 0 through Sunday 6),
+HA `timezone`, local `repeat_time`, `creation_digest` for idempotent retries and
+`status` (`planned`, `completed`, `expired` or `cancelled`). Repeated occurrences
+link through `previous_request_id` and `continued_by`. `active_requests` maps a
+vehicle ID to its single planned request ID. Request versions are hashes of the
+saved record and guard edits/cancellation. Terminal history survives vehicle
+removal. Repeated requests are explicit, never inferred from legacy defaults.
 
 Each accepted mutation archives the complete state and updates its pointer in
 one SQLAlchemy transaction. No SQL column/index/table is added. Queries use the

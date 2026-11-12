@@ -120,7 +120,23 @@ to apply it, or **Cancel** in the editor to restore the saved configuration.
 
 A connected plug proves presence, not vehicle identity. Explicitly identify the connected vehicle through the supported Home Assistant control or an automation that genuinely knows it. A previous session's assignment does not authorize a later connection.
 
-Set the desired SoC and departure under **Energy > EV charging**. A one-off departure overrides the daily departure until that instant. Home Assistant's timezone applies. The planner recalculates required energy from the current SoC and reports a shortfall when the target cannot be reached under the admitted limits. V2G is not supported by this charging model.
+Under **Energy > EV charging**, choose **Plan charging request** for the vehicle.
+OEP prefills its saved target SoC and next departure. Change either value for this
+request, then choose **Plan charging request** to save the complete request.
+These overrides never change the vehicle defaults in Appliances settings.
+Choose **Edit charging request** to change it or **Cancel charging request** to
+stop it. Cancelled, completed and expired requests remain in **Request history**.
+
+A request is one-off unless you enable **Repeat on selected weekdays** and select
+its days. Selecting every day means daily repetition. Each occurrence uses the
+same target and HA-local departure time. Completion or expiry creates at most
+one following occurrence. Cancelling the current request also stops its repeating
+schedule. Configuration, refresh, restart and plugging in never create a request.
+
+Home Assistant's timezone applies. Nonexistent spring-forward times are rejected
+for manual departures. Repeating departures skip that occurrence. The autumn
+repeated hour has one scheduled occurrence. The planner recalculates energy from
+current measured SoC and reports any shortfall. V2G is not supported.
 
 See [EV charging contracts](../development/EV-CHARGING.md) for supported capability modes, losses, session identity and the automation blueprint.
 
@@ -128,11 +144,12 @@ See [EV charging contracts](../development/EV-CHARGING.md) for supported capabil
 
 OEP does not repeat historical charging sessions as expected future consumption
 for configured charge points. It calculates the remaining battery energy from
-the measured SoC, usable capacity and effective target SoC. Set the normal target
-and daily departure in the vehicle configuration. The custom integration and
-**Energy > EV charging** can update the target and departure through the existing
-vehicle controls. A target update remains effective until changed again. It is
-not a temporary override that expires after one session.
+the measured SoC, usable capacity and the active request's target SoC. Saved
+vehicle target and departure are only defaults for a newly requested charge.
+Home Assistant's **Plan charging request** button creates a one-off request with
+those defaults. Native target/date/time controls edit that request. The
+`open_energy_planner.ev_schedule` and `ev_cancel` actions support automations,
+including explicit weekday repetition. See the developer contract for fields.
 
 A fresh connection report, explicit vehicle assignment and available SoC are
 required for a charging request. Without them, no EV charging is planned. OEP

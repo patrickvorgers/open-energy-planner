@@ -27,6 +27,8 @@ PEER_ROUTES = {
     ("POST", "/v1/ev/observations"),
     ("POST", "/v1/ev/assign"),
     ("POST", "/v1/ev/intent"),
+    ("POST", "/v1/ev/requests"),
+    ("POST", "/v1/ev/cancel"),
     ("POST", "/v1/thermal/observations"),
     ("POST", "/v1/thermal/intent"),
     ("POST", "/v1/forecast-quality/history"),

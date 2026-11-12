@@ -14,9 +14,16 @@ async def async_setup_entry(hass, entry, async_add_entities):
         factory=make_button,
     )
     from .ev import register_entities as register_ev
-    from .ev_controls import EVClearOverride
+    from .ev_controls import EVRequestAction
 
-    register_ev(hass, entry, async_add_entities, (("vehicles", "clear_override", EVClearOverride),))
+    register_ev(
+        hass,
+        entry,
+        async_add_entities,
+        tuple(
+            ("vehicles", key, EVRequestAction) for key in ("schedule_charging", "cancel_charging")
+        ),
+    )
 
 
 def make_button(coordinator, entity, name, key):

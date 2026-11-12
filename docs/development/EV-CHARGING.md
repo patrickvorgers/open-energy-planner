@@ -22,16 +22,13 @@ the draft. The message identifies dependent charge points. Edit their allowed
 vehicles or remove those points first. Other vehicle removals delete the removed
 vehicle's ID from each charge point's allowed-vehicle list. Charge-point IDs and
 all other settings remain unchanged. Server-side validation remains authoritative.
-**Energy > EV charging** contains sessions and daily target/departure requests.
-Each explicit action uses `/v1/ev/intent` for just that vehicle and field. It never
-replaces the full technical configuration. Original measurements, expected
-departure results and physical execution remain separate. Failed requests retain
-input. Evidence refresh preserves unapplied requests. One-off departures use
-Home Assistant's timezone and reject nonexistent daylight-saving wall times.
-Saved one-off departures remain visible after reload. Reset restores the saved
-local value. Applying an unchanged local value retains the exact saved instant,
-including the second occurrence of a daylight-saving clock fold. Only Use daily
-departure clears the stored override.
+**Energy > EV charging** separates physical sessions, complete charging requests
+and retained request history. `POST /v1/ev/requests` creates or atomically edits
+a request. `POST /v1/ev/cancel` cancels its current identity and recurrence.
+The page prefills saved vehicle defaults but never changes them. Failed writes
+retain the complete draft. Evidence refresh preserves it. An unchanged local
+departure retains its original offset and seconds, including the second autumn
+clock-fold occurrence. Only a changed value is converted through HA's timezone.
 The bounded first implementation supports sixteen vehicle records and four points. Multiple cars
 may use one point. Stable opaque IDs identify records. The HA device name names
 a vehicle. Without a device name, the integration title supplies the name, with
@@ -80,7 +77,7 @@ catalogue is temporary memory. This adds no storage format or migration layer.
 Device, type and account filters remain editor state, never saved source identities.
 Each vehicle links its own percentage SoC sensor, usable capacity
 in kWh and maximum AC power in W. Capacity is usable energy, not gross pack size.
-It also has a desired SoC and daily departure clock.
+It also has default target SoC and departure clock, used only to prefill an explicitly created request.
 
 Each point links its Energy Dashboard consumption meter, measured AC power and
 vehicle-connected binary sensor. Its minimum/maximum active power and capability
@@ -110,18 +107,60 @@ restart creates a new nonce. An old assignment never authorizes another session.
 Missing identity/SoC and ambiguous assignment block EV scheduling. Measurement-only
 points remain ordinary measured household consumption.
 
-Native vehicle controls are **Target state of charge**, **Daily departure time**,
-**One-off departure date**, **One-off departure time** and **Use daily departure**.
-The override expires at its instant, then the daily clock resumes. No readiness
-button or extra helpers are needed. A connected, identified car is eligible
-automatically. Each new plan recalculates useful kWh from current measured SoC:
+Native vehicle buttons are **Plan charging request** and **Cancel charging request**.
+The former creates a one-off request from defaults. Target, departure date and
+time controls edit an existing request and are unavailable without one.
+A connected, identified car still requires an explicit request before planning.
+Each new plan recalculates useful energy in kWh from measured SoC:
 
-`max(0, target_soc - actual_soc) / 100 * usable_capacity_kwh`
+`max(0, request.target_soc - actual_soc) / 100 * usable_capacity_kwh`
+
+### Request lifecycle and automation actions
+
+The app owns one active request per vehicle. A stable caller-supplied UUID
+`request_id` makes creation retries idempotent, even after cancellation or restart.
+Editing uses `expected_version` from the projected `charging_request.version`.
+Cancelling requires that version and `vehicle_id`. Reusing a cancelled creation
+ID never revives it. All outcomes remain in history. Removing a vehicle cancels
+its active request and retains history. No defaults, historical demand, startup,
+refresh or connection event implicitly creates a request.
+
+`repeat_weekdays` is optional and defaults to `[]`, meaning one-off.
+Values are distinct integers, Monday `0` through Sunday `6`. Each completed or
+expired repeating occurrence creates at most one next occurrence on an explicitly
+selected day. The next occurrence cannot start before the previous deadline and
+cannot complete from the earlier occurrence's reading. Missed occurrences are
+not replayed. Cancelling the current request stops this chain.
 
 HA's installation timezone is authoritative. There is no OEP timezone setting.
-Daily departure skips nonexistent spring-forward times. The repeated autumn hour
-has one daily departure, its first occurrence. Explicit nonexistent override wall
-times are rejected. One-off departures are bounded to the next thirty days.
+Manual departures must be aware timestamps in the next thirty days. The browser
+rejects nonexistent wall times. Default and recurring clocks skip nonexistent
+spring-forward occurrences and use the first autumn occurrence once. Stored
+unchanged timestamps preserve their exact offset and seconds.
+
+The integration exposes `open_energy_planner.ev_schedule` and `ev_cancel` actions.
+Both target exactly one virtual OEP vehicle using `device_id`. Schedule accepts
+`request_id`, optional `target_soc`, aware `departure`, `repeat_weekdays` and
+`expected_version`. Cancel requires `request_id` and `expected_version`. These
+forward the same app lifecycle, never physical charging actions. For automation
+retries retain the same UUID. For edits/cancel use the current request version.
+
+```yaml
+action: open_energy_planner.ev_schedule
+data:
+  device_id: YOUR_VIRTUAL_OEP_VEHICLE_DEVICE
+  request_id: "01234567-89ab-4cde-8fab-0123456789ab"
+  target_soc: 80
+  departure: "2026-12-01T07:00:00+01:00"
+  repeat_weekdays: [0, 1, 2, 3, 4]
+```
+
+The admin `GET /v1/ev/requests` returns at most 25 history records and `next_cursor`.
+Continue with `?cursor=<next_cursor>`. History is not exposed through peer reads.
+Peer writes permit schedule/cancel, never vehicle or charge-point configuration.
+Any request edit or cancellation invalidates old plan commands through the EV
+revision. Native command admission also checks the current request window and
+published revision, independently of local SoC/session safety.
 
 ## Joint model and execution
 
@@ -210,10 +249,9 @@ Normal quarter-hour planning is unchanged. The advisory session explanation does
 not claim to distinguish vehicle refusal from EVSE or automation blocking.
 This episode state is process-local and is not restored as live evidence.
 
-The normal target and daily departure already belong to saved vehicle settings.
-Native integration intent updates the effective target durably until another
-update. Only the existing dated departure override expires. This change does not
-introduce a second target override or alter saved request semantics.
+Execution advice is shown only for a still-usable published plan with the current
+EV revision. Missing, expired or invalidated plans cannot retain stale advice.
+Replacing configuration clears obsolete forecast-boundary diagnostics.
 
 ## Default charging losses
 
