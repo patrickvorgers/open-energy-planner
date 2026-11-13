@@ -333,12 +333,14 @@ Maintenance Cancel preserves the selected installation area and the source by
 its meter identity. If that source was removed in Home Assistant, the first
 remaining source is selected.
 A strategy-only save never claims the installation is
-configured. The live status preserves requested, published and accepted strategy.
+configured. Only the saved planning preference and configuration issues are
+loaded here. Published and accepted plans do not participate in this request.
 
 Planning strategy uses the same saved label/value rows as the other installation
 areas. A short explanation follows the selected goal. Compare optimization goals
-reveals the full economic and replacement-energy rules. Home Assistant acceptance
-appears separately below the explanation and never claims physical execution.
+reveals the full economic and replacement-energy rules. The installation settings
+render without waiting for the independent preference request. The preference
+shows a loading state until its saved value is known.
 Editing replaces the saved row with the existing goal selector and retains the
 shared Edit, Save and Cancel workflow.
 The [desktop](images/installation-strategy/desktop.png) and
@@ -371,8 +373,7 @@ name and meter identifier so equal Home Assistant names remain distinguishable.
 The summary heading retains the source's readable name.
 Usable battery capacity is read-only Home Assistant Energy data. An absent value
 blocks wizard advancement and directs the user to the HA Energy settings.
-Strategy status stays compact when requested, published and accepted values match.
-Differences remain visible during activation or when no accepted plan exists.
+The preference status reports configuration failures without comparing plan activation.
 Missing required ratings remain unavailable. A single battery shows its planning
 reserve with one decimal. Multiple batteries retain their individual reserves
 in their summaries rather than acquiring a misleading aggregate percentage.

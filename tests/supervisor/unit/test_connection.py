@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import re
+from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
 from aiohttp import ClientSession, web
@@ -9,6 +12,22 @@ from aiohttp import ClientSession, web
 from open_energy_planner.app import create_app
 from open_energy_planner.pairing import Pairing
 from tests.ha_contract.support.connection import PEER, SECRET, TOKEN, server
+
+
+class StylesheetLinks(HTMLParser):
+    """Read decoded stylesheet links from the actual ingress page response."""
+
+    def __init__(self, html):
+        """Collect only linked stylesheets, independently of HTML attribute order."""
+        super().__init__()
+        self.links = []
+        self.feed(html)
+
+    def handle_starttag(self, tag, attributes):
+        """Retain stylesheet URLs without interpreting scripts or other page content."""
+        values = dict(attributes)
+        if tag == "link" and values.get("rel") == "stylesheet":
+            self.links.append(values["href"])
 
 
 def test_supervisor_proof_reconnects_same_owner_without_consent(tmp_path):
@@ -85,7 +104,33 @@ def test_ingress_trust_requires_socket_peer_and_valid_prefix(tmp_path, trusted, 
             async with client.get(url + "/setup", headers=headers) as response:
                 html = await response.text()
                 assert TOKEN not in html
-                assert ("/api/hassio_ingress/test_123/setup/style.css" in html) == trusted
+                stylesheets = StylesheetLinks(html).links
+                expected_names = {
+                    "style.css",
+                    "workspace.css",
+                    "settings-layout.css",
+                    "installation-layout.css",
+                }
+                assert len(stylesheets) == len(expected_names)
+                assert {link.rsplit("/", 1)[-1] for link in stylesheets} == expected_names
+                prefix = "/api/hassio_ingress/test_123" if trusted else ""
+                for link in stylesheets:
+                    assert link.startswith(prefix + "/setup/static/")
+                    # Home Assistant strips its ingress prefix before proxying the request.
+                    asset_path = link.removeprefix(prefix)
+                    assert re.fullmatch(r"/setup/static/[0-9a-f]{64}/[^/]+\.css", asset_path)
+                    async with client.get(url + asset_path, headers=headers) as asset:
+                        assert asset.status == 200
+                        assert asset.content_type == "text/css"
+                        assert asset.headers["X-Content-Type-Options"] == "nosniff"
+                        assert asset.headers["Referrer-Policy"] == "no-referrer"
+                        assert "script-src 'self'" in asset.headers["Content-Security-Policy"]
+                        expected = (
+                            Path(__file__).resolve().parents[3]
+                            / "src/open_energy_planner/web/public"
+                            / link.rsplit("/", 1)[-1]
+                        )
+                        assert await asset.read() == expected.read_bytes()
             for value in ("https://evil.example", "/api/hassio_ingress/test/../../evil", ""):
                 async with client.get(
                     url + "/v1/snapshot", headers={"X-Ingress-Path": value}

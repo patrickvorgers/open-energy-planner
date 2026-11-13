@@ -46,15 +46,17 @@
 <p>Confirm the physical connection limits. Energy sources and direction come from Home Assistant.</p>
 <div class="settings-fields">
 <label>Maximum grid import (kW)<input id="import" aria-label="Maximum grid import (kW)" aria-describedby="import-help" type="number" min="0" max="10000" step="any" required><small id="import-help">Maximum total connection import in kW, from your installation documentation, not current consumption.</small></label>
-<label>Maximum grid export (kW)<input id="export" aria-label="Maximum grid export (kW)" aria-describedby="export-help" type="number" min="0" max="10000" step="any" required><small id="export-help">Maximum total connection export in kW. Zero forbids planned export. It does not grant permission to switch off solar.</small></label>
+<label><input id="allow-feed-in" aria-label="Allow grid feed-in" aria-describedby="feed-in-help" type="checkbox" checked>Allow grid feed-in<small id="feed-in-help">Turn off to forbid planned export. The battery can then discharge only for consumption within your installation.</small></label>
+<label>Maximum grid export (kW)<input id="export" aria-label="Maximum grid export (kW)" aria-describedby="export-help" type="number" min="0" max="10000" step="any" required><small id="export-help">Maximum total permitted connection export in kW. Zero also disables feed-in. Confirm this limit when enabling feed-in again.</small></label>
 <label id="annual-field">Annual whole-home consumption (kWh)<input id="annual" aria-label="Annual whole-home consumption (kWh)" aria-describedby="annual-help" type="number" min="0" max="1000000" step="any" required><small id="annual-help">Estimated total household electricity use in kWh/year, including self-consumed solar. Required only without sufficient history.</small></label>
 <label id="grid-field"><span>Grid power sensor</span><select id="grid" aria-label="Grid power sensor" aria-describedby="grid-help" required disabled></select><small id="grid-help">Read-only normalized power from Home Assistant Energy. Configure each connection there. Positive means import.</small></label>
 <label><span>Grid export energy sensor (read-only)</span><select id="export-energy" aria-label="Grid export energy sensor (read-only)" aria-describedby="export-energy-help" disabled></select><small id="export-energy-help">Cumulative export for contract bonus history. All Energy export meters are used automatically. Multiple meters remain separate for settlement.</small></label>
 </div>
 <label hidden><input id="grid-invert" aria-label="Invert measured grid power" aria-describedby="grid-invert-help" type="checkbox" disabled>Invert measured grid power</label><small id="grid-invert-help">Power direction is managed in Home Assistant Energy.</small>
 <dl id="installation-grid-sources" class="settings-summary"></dl>
-<input id="timezone" type="hidden"><p id="grid-summary" class="installation-note"></p><p id="household-summary" class="installation-note"></p>
-<details><summary>Energy dashboard sources</summary><p id="energy-summary"></p></details><button type="button" id="edit-detected" hidden>Review detected settings</button>
+<input id="timezone" type="hidden">
+<p id="connection-examples" class="installation-note">At 230 V per phase: Three-phase 25 A is 3 × 230 × 25 ÷ 1000 = 17.25 kW. Single-phase 35 A is 230 × 35 ÷ 1000 = 8.05 kW. Use your actual permitted import and export limits, which may differ.</p>
+<p id="feed-in-warning" class="installation-note" role="note" hidden>Feed-in is disabled. Surplus solar can be switched off only for sources with curtailment permission and working Home Assistant automations. If fixed solar exceeds consumption and available battery charging, there may be no feasible plan. You must arrange suitable physical export control. This setting does not prevent real-world export.</p>
 <p class="installation-note">Import and battery discharge are positive. Confirm the total connection limits. These are planning limits, not physical protection.</p></section>
                 <section class="installation-editor chart-card" data-step="1" hidden>
                     <h2>Solar production</h2>
@@ -100,6 +102,7 @@
                 <dl id="installation-strategy-value" class="settings-summary"></dl>
                 <label for="strategy">Optimization goal</label>
                 <select id="strategy" form="wizard" aria-describedby="strategy-help" disabled>
+                    <option value="" disabled selected>Loading planning preference…</option>
                     <option value="minimize cost">Minimize cost</option>
                     <option value="minimize consumption">Minimize consumption</option>
                 </select>

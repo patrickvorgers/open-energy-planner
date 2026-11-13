@@ -19,8 +19,8 @@ from tests.frontend.browser.helpers import (
 )
 
 
-def test_cancelled_strategy_read_retains_installation_and_allows_source_retry(app_page):
-    """A changed-panel refresh cannot commit configuration or withdraw readiness before its strategy read settles."""
+def test_cancelled_configuration_read_retains_installation_and_allows_source_retry(app_page):
+    """Cancelling an obsolete configuration read safely settles while preserving newer edits and retry readiness."""
     page, url = app_page
 
     def expose_probe(route):
@@ -47,36 +47,49 @@ def test_cancelled_strategy_read_retains_installation_and_allows_source_retry(ap
     changed = deepcopy(read_settings(page, url))
     changed["solar"]["version"] = "b" * 64
     page.route("**/v1/setup", lambda route: route.fulfill(json=changed))
-    page.evaluate("""() => {
+    page.evaluate(
+        """changed => {
         const fetchOriginal=window.fetch;
-        window.setupReads=0; window.strategyHeld=false;
+        window.setupReads=0; window.setupHeld=false; window.setupAborted=false;
         window.fetch=(path,options)=>{
-            if(String(path).endsWith('v1/setup')) ++window.setupReads;
-            if(String(path).endsWith('v1/strategy') && options.signal){
-                window.strategyHeld=true;
-                return new Promise((resolve,reject)=>{
-                    window.completeOldStrategy=()=>resolve(new Response(JSON.stringify({requested:'minimize consumption'})));
-                    options.signal.addEventListener('abort',()=>reject(new DOMException('Synthetic timeout','AbortError')),{once:true});
-                });
+            if(String(path).endsWith('v1/setup')){
+                ++window.setupReads;
+                if(window.setupReads===2 && options.signal){
+                    window.setupHeld=true;
+                    return new Promise((resolve,reject)=>{
+                        window.completeOldSetup=()=>resolve(new Response(JSON.stringify(changed)));
+                        options.signal.addEventListener('abort',()=>{
+                            window.setupAborted=true;
+                            reject(new DOMException('PRIVATE-CANCELLED-SETUP','AbortError'));
+                        },{once:true});
+                    });
+                }
             }
             return fetchOriginal(path,options);
         };
         window.restoreFetch=()=>{window.fetch=fetchOriginal;};
-        window.pendingRefresh=window.__installationProbe.refresh(AbortSignal.timeout(1500)).then(()=>false,()=>true);
-    }""")
-    page.wait_for_function("() => window.strategyHeld")
+        window.pendingRefresh=window.__installationProbe.refresh(AbortSignal.timeout(1500)).then(()=>'fulfilled',()=>'rejected');
+    }""",
+        changed,
+    )
+    page.wait_for_function("() => window.setupHeld")
+    assert page.evaluate("window.__installationProbe.ready()")
+    assert page.evaluate("window.__installationProbe.config()") == before
     page.get_by_role("button", name="Edit installation", exact=True).click()
     maximum = page.get_by_label("Maximum grid import (kW)", exact=True)
     maximum.fill("7.25")
-    assert page.evaluate("window.pendingRefresh")
+    page.wait_for_function("() => window.setupAborted")
+    assert page.evaluate("window.pendingRefresh") == "fulfilled"
     assert page.evaluate("window.__installationProbe.ready()")
     assert page.evaluate("window.__installationProbe.config()") == before
     expect(maximum).to_have_value("7.25")
-    page.evaluate("() => {window.completeOldStrategy(); window.restoreFetch();}")
+    expect(page.locator("body")).not_to_contain_text("PRIVATE-CANCELLED-SETUP")
+    page.evaluate("() => {window.completeOldSetup(); window.restoreFetch();}")
     expect(page.locator("#strategy")).to_have_value(before_strategy)
     page.evaluate("() => window.__installationProbe.refresh(AbortSignal.timeout(5000))")
     assert page.evaluate("window.__installationProbe.ready()")
     expect(maximum).to_have_value("7.25")
+    expect(page.locator("#strategy")).to_have_value(before_strategy)
 
 
 @pytest.mark.parametrize("flow", ["ev-connect", "thermal-connect", "thermal-evidence"])
