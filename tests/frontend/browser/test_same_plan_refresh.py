@@ -87,7 +87,8 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     wait_for_product_reads(page)
-    page.get_by_text("Understand this plan", exact=True).click()
+    with page.expect_request("**/comparison?view=evidence"):
+        page.get_by_text("Understand this plan", exact=True).click()
     if evidence_state == "loaded":
         expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
         wait_for_product_reads(page)
