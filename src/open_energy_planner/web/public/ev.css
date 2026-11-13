@@ -1,0 +1,11 @@
+#vehicle-controls > article { display: block; }
+#vehicle-controls form.ev-request-form { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 1rem; }
+#vehicle-controls .ev-request-form > * { grid-column: 1; }
+#vehicle-controls .ev-request-form > label { display: grid; gap: .4rem; }
+#vehicle-controls .ev-request-form > label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: .6rem; }
+#vehicle-controls .ev-request-form fieldset { min-width: 0; margin: 0; }
+.ev-request-form input[type="datetime-local"], .ev-request-form input[type="number"] { width: 100%; min-width: 0; box-sizing: border-box; }
+#vehicle-controls .ev-request-weekdays:not([hidden]) { display: grid; grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr)); gap: .75rem; }
+#vehicle-controls .ev-request-weekdays label { display: flex; align-items: center; gap: .35rem; }
+.ev-request-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+.ev-request-actions > button { flex: 1; min-width: 10rem; }

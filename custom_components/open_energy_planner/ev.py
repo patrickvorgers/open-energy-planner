@@ -13,11 +13,13 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .measurement_sources import FULL_SOC_PERCENT, HomeAssistantMeasurementSource
 from .measurements import Quantity, SourceBinding
+from .protocol import timestamp
 from .subentries import add_grouped_entities, retire_empty_groups
 from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
 
 MAX_EV_POWER_W = 100000
 MAX_EV_CAPACITY_KWH = 1000
+DAYS_PER_WEEK = 7
 
 
 def power_reading(hass, point, now):
@@ -113,7 +115,7 @@ def capture(coordinator, projection, now):
 
 def receive(value):
     """Validate bounded app projections before dynamic entities or source reads can use them."""
-    from .protocol import identifier, timestamp
+    from .protocol import identifier
 
     validate_projection_size(value, MAX_API_RESPONSE_BYTES)
 
@@ -152,6 +154,34 @@ def receive(value):
                 ):
                     raise ValueError("Invalid EV source entity")
             if kind == "vehicles":
+                request = row.get("charging_request")
+                if request is not None:
+                    if (
+                        not isinstance(request, dict)
+                        or request.get("status") != "planned"
+                        or request.get("vehicle_id") != identity
+                    ):
+                        raise ValueError("Invalid EV charging request")
+                    identifier(request.get("id"))
+                    identifier(request.get("version"))
+                    if timestamp(request.get("ready_at")) >= timestamp(request.get("departure")):
+                        raise ValueError("Invalid EV request window")
+                    target_soc = request.get("target_soc")
+                    if (
+                        type(target_soc) not in (int, float)
+                        or not isfinite(target_soc)
+                        or not 0 <= target_soc <= FULL_SOC_PERCENT
+                    ):
+                        raise ValueError("Invalid EV request target")
+                    weekdays = request.get("repeat_weekdays")
+                    if (
+                        not isinstance(weekdays, list)
+                        or any(
+                            type(day) is not int or not 0 <= day < DAYS_PER_WEEK for day in weekdays
+                        )
+                        or len(set(weekdays)) != len(weekdays)
+                    ):
+                        raise ValueError("Invalid EV repeat weekdays")
                 timestamp(row["next_departure"])
                 clock = time.fromisoformat(row["departure_time"])
                 if clock.tzinfo or clock.second or clock.microsecond:
@@ -225,6 +255,7 @@ def command(coordinator, point):
     state = coordinator.hass.states.get(point["connected_entity"])
     if (
         not projection.command
+        or getattr(coordinator, "ev_writes_pending", 0)
         or state is None
         or state.state != "on"
         or local.get("connected") is not True
@@ -240,6 +271,7 @@ def command(coordinator, point):
     )
     if (
         not target
+        or target.power_w is None
         or target.session_id != local.get("session_id")
         or target.vehicle_id != point.get("vehicle_id")
     ):
@@ -249,8 +281,19 @@ def command(coordinator, point):
     )
     if not vehicle:
         return None
+    request = vehicle.get("charging_request")
+    now = dt_util.utcnow()
+    document = getattr(getattr(coordinator, "schedule", None), "document", None)
+    if (
+        not request
+        or request.get("status") != "planned"
+        or not timestamp(request["ready_at"]) <= now < timestamp(request["departure"])
+        or not document
+        or document.get("ev_context", {}).get("revision") != coordinator.ev.get("revision")
+    ):
+        return None
     measured = soc_reading(coordinator.hass, vehicle, dt_util.utcnow())
-    if measured is None or measured.value >= vehicle["target_soc"]:
+    if measured is None or measured.value >= request["target_soc"]:
         return None
     if point["control"] == "read_only" or target.power_w > min(
         point["maximum_w"], vehicle["maximum_w"]

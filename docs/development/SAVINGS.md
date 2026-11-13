@@ -337,7 +337,7 @@ Independent numeric oracles belong in the maintained savings tests. Simulated ap
 
 ## Interactive workspace
 
-See [EMS visualization](EMS-VISUALIZATION.md) for the Planning/Savings/Installation navigation, interactive locally bundled charts, keyboard inspection and the quarter-hour scheduling policy. Original evidence tables remain available as details.
+See [EMS visualization](EMS-VISUALIZATION.md) for the Planning/Savings/Installation navigation, interactive locally bundled charts, keyboard inspection and the quarter-hour scheduling policy. Original plan evidence remains available through the whole-plan and selected-interval disclosures.
 
 ## Price/publication coordination
 

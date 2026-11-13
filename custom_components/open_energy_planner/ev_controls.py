@@ -1,6 +1,7 @@
 """Helper-free EV dashboard controls and read-only evidence on HA virtual devices."""
 
-from datetime import date, time
+from datetime import date
+from uuid import uuid4
 
 from aiohttp import ClientError
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -19,10 +20,11 @@ from .protocol import timestamp
 
 LABELS = {
     "target_soc": "Target state of charge",
-    "departure_time": "Daily departure time",
-    "departure_date": "One-off departure date",
+    "departure_time": "Charging departure time",
+    "departure_date": "Charging departure date",
     "departure_clock": "One-off departure time",
-    "clear_override": "Use daily departure",
+    "schedule_charging": "Plan charging request",
+    "cancel_charging": "Cancel charging request",
     "vehicle": "Connected vehicle",
     "power": "Requested charging power",
     "charging": "Charging requested",
@@ -46,6 +48,7 @@ EV_STATUSES = (
     "measurement_only",
     "ready",
     "soc_or_limits_unavailable",
+    "request_missing",
 )
 
 
@@ -81,10 +84,11 @@ class EVEntity(PlannerEntity):
     async def write(self, operation, body):
         """Forward intent without optimistic state and resynchronize after durable acceptance."""
         try:
-            await self.coordinator.client.request("POST", "/v1/ev/" + operation, body)
-            await self.coordinator.sync()
-        except (ClientError, ValueError, KeyError) as error:
-            raise HomeAssistantError("The app could not accept this EV request") from error
+            await self.coordinator.write_ev(operation, body)
+        except (ClientError, TimeoutError, ValueError, KeyError) as error:
+            raise HomeAssistantError(
+                "The EV request could not be confirmed. Refresh vehicle status before retrying."
+            ) from error
 
     async def intent(self, field, value):
         """Keep all departure and charging calculations in the application."""
@@ -100,9 +104,15 @@ class EVTarget(EVEntity, NumberEntity):
     _attr_native_unit_of_measurement = "%"
 
     @property
+    def available(self):
+        """Scalar controls edit a complete existing request, never create one implicitly."""
+        return super().available and bool(self.row().get("charging_request"))
+
+    @property
     def native_value(self):
         """Show the persisted target, never an optimistic pending edit."""
-        return self.row().get("target_soc")
+        row = self.row()
+        return (row.get("charging_request") or {}).get("target_soc", row.get("target_soc"))
 
     async def async_set_native_value(self, value):
         """Set the vehicle's next charging target using the existing authenticated app connection."""
@@ -110,14 +120,17 @@ class EVTarget(EVEntity, NumberEntity):
 
 
 class EVDepartureTime(EVEntity, TimeEntity):
-    """Daily departure or the time portion of an explicit one-off departure."""
+    """Time portion of the explicit charging request departure."""
+
+    @property
+    def available(self):
+        """Require a planned charging request before editing its time."""
+        return super().available and bool(self.row().get("charging_request"))
 
     @property
     def native_value(self):
         """Display local HA wall time even when the browser uses another timezone."""
         row = self.row()
-        if self.key == "departure_time":
-            return time.fromisoformat(row["departure_time"]) if row else None
         return dt_util.as_local(timestamp(row["next_departure"])).time() if row else None
 
     async def async_set_value(self, value):
@@ -126,11 +139,16 @@ class EVDepartureTime(EVEntity, TimeEntity):
 
 
 class EVDepartureDate(EVEntity, DateEntity):
-    """One-off date paired with a compact separate native time control."""
+    """Request date paired with its compact native time control."""
+
+    @property
+    def available(self):
+        """Require a planned charging request before editing its date."""
+        return super().available and bool(self.row().get("charging_request"))
 
     @property
     def native_value(self):
-        """Display the explicit override, or the next daily departure before an override is entered."""
+        """Display the planned request departure in the installation timezone."""
         row = self.row()
         return (
             date.fromisoformat(
@@ -145,12 +163,31 @@ class EVDepartureDate(EVEntity, DateEntity):
         await self.intent("departure_date", value.isoformat())
 
 
-class EVClearOverride(EVEntity, ButtonEntity):
-    """Return to the configured daily departure without submitting another readiness request."""
+class EVRequestAction(EVEntity, ButtonEntity):
+    """Create a complete default request or cancel its explicit current identity."""
+
+    @property
+    def available(self):
+        """No request is created by scalar edits or a state refresh."""
+        request = self.row().get("charging_request")
+        return super().available and bool(request) == (self.key == "cancel_charging")
 
     async def async_press(self):
-        """Clear the one-off override in the app, without any physical vehicle action."""
-        await self.intent("departure_override", None)
+        """Use the same atomic request operations as the app and automation services."""
+        if self.key == "schedule_charging":
+            await self.write("requests", {"request_id": str(uuid4()), "vehicle_id": self.identity})
+        else:
+            request = self.row().get("charging_request")
+            if not request:
+                raise HomeAssistantError("No planned charging request to cancel")
+            await self.write(
+                "cancel",
+                {
+                    "request_id": request["id"],
+                    "expected_version": request["version"],
+                    "vehicle_id": self.identity,
+                },
+            )
 
 
 class EVVehicle(EVEntity, SelectEntity):
@@ -262,7 +299,8 @@ class EVSensor(EVEntity, SensorEntity):
                 "shortfall_kwh" if self.key == "shortfall" else "predicted_soc"
             )
         if self.key == "next_departure":
-            return timestamp(row["next_departure"]) if row else None
+            request = row.get("charging_request")
+            return timestamp(request["departure"]) if request else None
         return row.get(self.key)
 
 

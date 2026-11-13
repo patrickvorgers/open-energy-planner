@@ -26,7 +26,11 @@ from tests.custom_component.support.chain import (
 from tests.ha_contract.support.commands import command_plan
 
 
-def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
+@pytest.mark.parametrize("cancel_path", ["button", "service"])
+@pytest.mark.parametrize("lost_reply", [False, True])
+def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
+    monkeypatch, cancel_path, lost_reply
+):
     """Real HA selects car B, persists its target/departure and drives only a simulated wallbox. SoC/identity loss withdraw permission."""
     from homeassistant.components.energy.data import async_get_manager
     from homeassistant.helpers import device_registry as dr
@@ -133,6 +137,15 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             car_select = entity("select", POINT, "vehicle")
             target = entity("number", OTHER_CAR, "target_soc")
             daily = entity("time", OTHER_CAR, "departure_time")
+            assert hass.states.get(target).state == "unavailable"
+            await hass.services.async_call(
+                "button",
+                "press",
+                {"entity_id": entity("button", OTHER_CAR, "schedule_charging")},
+                blocking=True,
+            )
+            vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+            assert vehicle["charging_request"]["repeat_weekdays"] == []
             await hass.services.async_call(
                 "number", "set_value", {"entity_id": target, "value": 85}, blocking=True
             )
@@ -141,6 +154,37 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             )
             assert hass.states.get(target).state == "85.0"
             assert hass.states.get(daily).state == "06:30:00"
+            vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+            assert vehicle["target_soc"] == 80
+            assert vehicle["departure_time"] == "07:00"
+            assert vehicle["charging_request"]["target_soc"] == 85
+            device_id = registry.async_get(target).device_id
+            request = vehicle["charging_request"]
+            await hass.services.async_call(
+                DOMAIN,
+                "ev_cancel",
+                {
+                    "device_id": device_id,
+                    "request_id": request["id"],
+                    "expected_version": request["version"],
+                },
+                blocking=True,
+            )
+            assert hass.states.get(target).state == "unavailable"
+            request_id = str(uuid4())
+            schedule = {
+                "device_id": device_id,
+                "request_id": request_id,
+                "target_soc": 85,
+                "departure": (dt_util.utcnow() + timedelta(hours=12)).isoformat(),
+                "repeat_weekdays": [0, 2, 4],
+            }
+            for _ in range(2):
+                await hass.services.async_call(DOMAIN, "ev_schedule", schedule, blocking=True)
+            vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+            assert vehicle["charging_request"]["id"] == request_id
+            assert vehicle["charging_request"]["repeat_weekdays"] == [0, 2, 4]
+            assert vehicle["target_soc"] == 80
             await hass.services.async_call(
                 "oep_test_fixture",
                 "ev_connect",
@@ -213,7 +257,7 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             )
             await hass.async_block_till_done()
             now = dt_util.utcnow()
-            plan = command_plan(now, powers=(0,))
+            plan = command_plan(now, powers=(0, 0))
             plan["config_revision"] = coordinator.schedule.config_revision
             plan["device_commands"] = True
             plan["schema"] = 2
@@ -242,6 +286,13 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
                         "session_id": nonce,
                     }
                 }
+            for step in plan["steps"]:
+                step["devices"]["battery"] = {
+                    "kind": "battery",
+                    "mode": "fixed_power",
+                    "power_w": -1000,
+                }
+            plan["steps"][1]["devices"]["battery"]["power_w"] = -900
             coordinator.schedule.accept(plan, now)
             coordinator.refresh(now)
             await hass.async_block_till_done()
@@ -249,6 +300,178 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal():
             assert hass.states.get(power).state == "2000"
             assert fixture["data"]["points"][0]["power_w"] == 2000
             assert fixture["data"]["points"][1]["power_w"] == 0
+            retained_battery = next(
+                target
+                for target in coordinator.projection.command.devices
+                if target.kind == "battery"
+            )
+            assert retained_battery.power_w == -1000
+            from copy import deepcopy
+
+            from aiohttp import ClientConnectionError
+
+            original_snapshot, original_request = (
+                coordinator.client.snapshot,
+                coordinator.client.request,
+            )
+            older = await original_snapshot()
+            older.update(
+                plan=deepcopy(plan),
+                ev=deepcopy(coordinator.ev),
+                measurement_config=None,
+                config_revision=coordinator.schedule.config_revision,
+                source="demo",
+                installation={},
+            )
+            snapshot_started, release_snapshot, accepted_cancel = (
+                asyncio.Event(),
+                asyncio.Event(),
+                asyncio.Event(),
+            )
+
+            async def delayed_then_disconnected():
+                """Retain one pre-cancel snapshot and fail the subsequent post-write refresh."""
+                if not snapshot_started.is_set():
+                    snapshot_started.set()
+                    await release_snapshot.wait()
+                    return older
+                raise ClientConnectionError("Synthetic app outage after accepted cancel")
+
+            pending_write_permissions = []
+
+            async def confirmed_request(method, path, body=None):
+                """Record durable cancellation acceptance without changing the authentic response."""
+                if lost_reply and path == "/v1/ev/cancel":
+                    # A poll can expose still-current server state while the write is pending.
+                    coordinator.ev = deepcopy(older["ev"])
+                    coordinator.refresh()
+                    pending_write_permissions.append(hass.states.get(permission).state)
+                result = await original_request(method, path, body)
+                if path == "/v1/ev/cancel":
+                    accepted_cancel.set()
+                    if lost_reply:
+                        raise ClientConnectionError("Synthetic committed cancellation reply loss")
+                return result
+
+            monkeypatch.setattr(coordinator.client, "snapshot", delayed_then_disconnected)
+            monkeypatch.setattr(coordinator.client, "request", confirmed_request)
+            from homeassistant.core import callback
+            from homeassistant.exceptions import HomeAssistantError
+            from homeassistant.helpers.event import async_track_state_change_event
+
+            stopped, boundary_event = asyncio.Event(), asyncio.Event()
+            command_events = []
+
+            @callback
+            def observe_stop(event):
+                """A measured zero-power transition proves the asynchronous simulated stop ran."""
+                state = event.data.get("new_state")
+                if state is not None and float(state.state) == 0:
+                    stopped.set()
+
+            @callback
+            def observe_command(event):
+                """Retain actual command events and identify the independent second battery interval."""
+                command_events.append(event.data)
+                if event.data.get("devices", {}).get("battery", {}).get("power_w") == -900:
+                    boundary_event.set()
+
+            stop_watch = async_track_state_change_event(
+                hass, [fixture["points"][0]["power"]], observe_stop
+            )
+            command_watch = hass.bus.async_listen(DOMAIN + "_command", observe_command)
+            tasks = []
+            try:
+                tasks.append(asyncio.create_task(coordinator.sync()))
+                await asyncio.wait_for(snapshot_started.wait(), timeout=5)
+                vehicle = next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)
+                request = vehicle["charging_request"]
+                if cancel_path == "button":
+                    domain, action, payload = (
+                        "button",
+                        "press",
+                        {"entity_id": entity("button", OTHER_CAR, "cancel_charging")},
+                    )
+                else:
+                    domain, action, payload = (
+                        DOMAIN,
+                        "ev_cancel",
+                        {
+                            "device_id": device_id,
+                            "request_id": request["id"],
+                            "expected_version": request["version"],
+                        },
+                    )
+                tasks.append(
+                    asyncio.create_task(
+                        hass.services.async_call(domain, action, payload, blocking=True)
+                    )
+                )
+                await asyncio.wait_for(accepted_cancel.wait(), timeout=5)
+                assert hass.states.get(permission).state == "off"
+                await asyncio.wait_for(stopped.wait(), timeout=5)
+                assert fixture["data"]["points"][0]["power_w"] == 0
+                assert retained_battery in coordinator.projection.command.devices
+                assert command_events
+                if lost_reply:
+                    assert pending_write_permissions == ["off"]
+                assert all(
+                    event["devices"][POINT]["power_w"] is None
+                    for event in command_events
+                    if POINT in event.get("devices", {})
+                )
+                assert command_events[-1]["devices"][POINT]["power_w"] is None
+                coordinator.refresh(now + timedelta(seconds=31))
+                await asyncio.wait_for(boundary_event.wait(), timeout=5)
+                assert command_events[-1]["devices"][POINT]["power_w"] is None
+                assert command_events[-1]["devices"]["battery"]["power_w"] == -900
+                assert fixture["data"]["points"][0]["power_w"] == 0
+                coordinator.refresh()
+            finally:
+                release_snapshot.set()
+                try:
+                    outcomes = await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True), timeout=5
+                    )
+                finally:
+                    stop_watch()
+                    command_watch()
+            assert outcomes[0] is None
+            if lost_reply:
+                assert isinstance(outcomes[1], HomeAssistantError)
+            else:
+                assert outcomes[1] is None
+            assert hass.states.get(permission).state == "off"
+            assert fixture["data"]["points"][0]["power_w"] == 0
+            assert retained_battery in coordinator.projection.command.devices
+            monkeypatch.setattr(coordinator.client, "snapshot", original_snapshot)
+            monkeypatch.setattr(coordinator.client, "request", original_request)
+            await coordinator.sync()
+            assert (
+                next(car for car in coordinator.ev["vehicles"] if car["id"] == OTHER_CAR)[
+                    "charging_request"
+                ]
+                is None
+            )
+            await hass.services.async_call(
+                DOMAIN,
+                "ev_schedule",
+                {
+                    "device_id": device_id,
+                    "request_id": str(uuid4()),
+                    "target_soc": 85,
+                    "departure": (dt_util.utcnow() + timedelta(hours=12)).isoformat(),
+                },
+                blocking=True,
+            )
+            assert hass.states.get(permission).state == "off"
+            plan["ev_context"]["revision"] = coordinator.ev["revision"]
+            plan["plan_id"] = str(uuid4())
+            plan["generated_at"] = dt_util.utcnow().isoformat()
+            coordinator.schedule.accept(plan, dt_util.utcnow())
+            coordinator.refresh()
+            await hass.async_block_till_done()
+            assert hass.states.get(permission).state == "on"
             await hass.services.async_call(
                 "oep_test_fixture", "ev_soc", {"vehicle": 1, "soc": 85}, blocking=True
             )

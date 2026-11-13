@@ -108,3 +108,18 @@ def observations(service, now=NOW, *, connected=True, session=SESSION, soc=50):
         ],
         "points": [{"id": POINT, "session_id": session, "connected": connected, "power_w": 0}],
     }
+
+
+def planned_requests(service, now=NOW):
+    """Explicitly submit each fixture car's default request, without authorizing physical connection."""
+    from uuid import UUID, uuid5
+
+    for vehicle in service.state["vehicles"]:
+        service.save_request(
+            {
+                "request_id": str(uuid5(UUID(vehicle["id"]), "synthetic-charging-request")),
+                "vehicle_id": vehicle["id"],
+            },
+            now,
+            "Europe/Amsterdam",
+        )

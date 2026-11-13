@@ -13,6 +13,23 @@ HA OS exposes administration through authenticated HA ingress and pairs automati
 - `POST /v1/ack`: receipt of the current plan ID, never physical execution confirmation.
 - `GET /v1/savings?start=...&end=...`: read-only stored daily Savings once daily backfill has begun. `daily: true` identifies the three-scenario `totals`, independent `coverage`, bounded `days` and SQL `chart` contract. Days are complete local calendar periods within aware UTC query bounds. Current-day quarters are not published as a completed day. Internal continuation is omitted. Benefits sum only pairwise matching coverage and unavailable amounts remain null. Legacy `revision` reads retain their interval contract while temporary evidence remains. See [daily settlement](SAVINGS.md).
 
+EV endpoints share the same authenticated boundary:
+
+- `GET /v1/ev`: current vehicle/point configuration, fresh evidence and each vehicle's `charging_request`, separate from saved defaults.
+- `POST /v1/ev/requests`: create with stable UUID `request_id` and `vehicle_id`, plus optional `target_soc`, aware `departure` and `repeat_weekdays`. Edit the same identity with its `expected_version`. Missing repeat days means one-off. Edits never change configuration defaults.
+- `POST /v1/ev/cancel`: cancel the exact `request_id`, `vehicle_id` and `expected_version`. History remains. Explicit recurrence stops.
+- `GET /v1/ev/requests?cursor=...`: admin-only history, at most 25 records and a `next_cursor`. Peer credentials cannot read it.
+- `POST /v1/ev/intent`: native scalar edits of an existing request only. It never implicitly creates a request or changes saved defaults.
+
+Native EV intent withholds EV permission before transport and throughout an
+uncertain write. The HA `open_energy_planner_command` event projects that EV
+`power_w` as null, including boundary refreshes. Null is unavailable, while zero
+is an active idle command. Other device commands retain their own validity.
+An exact creation UUID/fingerprint retry remains idempotent after vehicle removal.
+New requests and edits still require configured vehicles.
+
+See [EV charging](EV-CHARGING.md#request-lifecycle-and-automation-actions) for request lifecycle, HA actions and timezone contracts. Peer credentials allow request writes but cannot replace technical EV configuration.
+
 Battery positive W means discharge, negative W means charge. A non-applicable fixed target is `unknown`. Pause/expiry means `unavailable`. 0 W is a real idle command. An `open_energy_planner_command` event carries the coherent current command after entity writes. Filter by `entry_id`. Do not convert missing numeric states to zero. The active-plan timestamp diagnostic carries the current plan ID. Per-device target attributes contain command interpretation only, so accepting an identical command in a new plan does not retrigger target automations. Separate HA entities are not a general transactional system.
 
 Plan generation may finish after the first covered interval began. The complete input snapshot/hash, version references, independent costs, checked flows and command side/resolution stay with the original plan. A failed round does not overwrite or prolong the last accepted plan. Plans, configuration, rules, source/model archives and evaluations use the shared active SQLAlchemy database. SQLite, PostgreSQL, MariaDB and MySQL share backend contracts and complete transfer tests. See the [database dictionary](DATABASE-SCHEMA.md). Full deployment backup and restore remain separate acceptance gates.
