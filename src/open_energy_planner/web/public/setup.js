@@ -35,6 +35,11 @@ const saveState = new SaveBar({form: "wizard", bar: "installation-save-bar", sav
     ...(priceSettings.dirty ? [["price-sources", priceSettings.values]] : []),
 ]});
 const layout = new InstallationLayout(saveState, value => { if (!busy) showStep(value); });
+$("allow-feed-in").addEventListener("change", () => {
+    const limit = $("export");
+    if ($("allow-feed-in").checked) limit.value = limit.dataset.previousLimit || "";
+    else { limit.dataset.previousLimit = limit.value; limit.value = "0"; }
+});
 $("edit-installation").addEventListener("click", () => { ++configurationGeneration; });
 for (const type of ["input", "change"]) $("wizard").addEventListener(type, event => {
     if (!event.target.hasAttribute("data-view-control")) ++configurationGeneration;
@@ -658,7 +663,7 @@ function definitions() {
             grid_export_entity: $("export-energy").value.trim() || null,
             additional_grid_export_entities: (config.catalogue.data.suggestions.settlement?.exports || []).slice(1),
             import_limit_w: Number($("import").value) * 1000,
-            export_limit_w: Number($("export").value) * 1000,
+            export_limit_w: $("allow-feed-in").checked ? Number($("export").value) * 1000 : 0,
             batteries,
             inverters: [...used.values()],
             expected_version: config.installation?.version ?? null,
@@ -720,15 +725,16 @@ function showStep(value) {
     saveState.update();
     layout.show(step);
 }
-/** Validate the current wizard area and reveal the source containing an invalid field. */
-function validateVisible() {
+/** Validate an installation area before locking controls and reveal its invalid field. */
+function validateVisible(area = step) {
     for (const input of document
-        .querySelector(`[data-step="${step}"]`)
+        .querySelector(`[data-step="${area}"]`)
         .querySelectorAll("input,select"))
         if (!input.checkValidity()) {
-            const container = step === 1 ? "solar-rows" : step === 2 ? "battery-rows" : null;
+            if (area !== step) showStep(area);
+            const container = area === 1 ? "solar-rows" : area === 2 ? "battery-rows" : null;
             if (container) {
-                const selector = step === 1 ? "installation-solar" : "installation-battery";
+                const selector = area === 1 ? "installation-solar" : "installation-battery";
                 $(selector).value = String([...$(container).children].findIndex(row => row.contains(input)));
                 layout.selectDevice(selector, container);
             }
@@ -788,6 +794,7 @@ async function refreshSourceNames(signal) {
     config.catalogue = state.catalogue;
     config.devices = state.devices;
     config.panel_settings = state.panel_settings;
+    config.annual_estimate = state.annual_estimate;
     for (const editor of solarRows) {
         const ownership = state.panel_settings?.[editor.old.entity_id];
         if (ownership) editor.updateOwnership(ownership, panelsChanged);
@@ -868,9 +875,6 @@ async function load(refresh = false, discard = false, signal) {
         showStep(layout.area >= 4 ? layout.area : -1);
         return;
     }
-    $("energy-summary").textContent =
-        `Energy dashboard: ${hints.terms.filter((t) => t.sign === 1 && !hints.solar_sources.includes(t.entity_id) && !hints.batteries.some((b) => b.energy_entity === t.entity_id)).map((t) => t.entity_id).join(", ")} (grid import): ` +
-        `Solar sources: ${hints.solar_sources.length}: Batteries: ${hints.batteries.length}: Configuration is independent of available history. Devices removed from Energy are excluded automatically.`;
     for (const [id, kind, selected] of [
         [
             "grid",
@@ -902,18 +906,12 @@ async function load(refresh = false, discard = false, signal) {
     $("export").value = config.installation
         ? config.installation.export_limit_w / 1000
         : "";
+    $("allow-feed-in").checked = config.installation?.export_limit_w !== 0;
+    delete $("export").dataset.previousLimit;
     const estimate = config.annual_estimate;
     $("annual").value = estimate?.annual_kwh ?? config.demand?.annual_kwh ?? "";
     $("annual-field").hidden = Boolean(estimate || config.demand);
-    $("household-summary").textContent = estimate
-        ? `Whole-home consumption uses the complete Energy dashboard balance. Startup scale: ${estimate.annual_kwh} kWh/year. ${estimate.extrapolated === false
-            ? `Measured over ${estimate.days} complete days.`
-            : `Extrapolated from ${estimate.days} complete days within the last year. This is an estimate, not a measured annual total. Seasonal differences may affect it.`} Historical load forecasting is initialized after saving.`
-        : "Whole-home consumption uses the complete Energy dashboard balance. Fewer than seven complete recent days are available. Confirm an annual estimate for the startup forecast.";
     $("grid-field").hidden = Boolean($("grid").value);
-    $("grid-summary").textContent = $("grid-field").hidden
-        ? `Grid power from Home Assistant: ${(hints.grid_power_entities || [$("grid").value]).join(", ")}. All connections are summed. Import/export energy meters are reused separately for history and costs.`
-        : "Configure net grid power in Settings > Dashboards > Energy in Home Assistant.";
     $("timezone").value = catalogue.data.timezone;
     useHomeAssistantTimezone(catalogue.data.timezone);
     const savedSolar = config.solar?.sources || [];
@@ -932,8 +930,7 @@ async function load(refresh = false, discard = false, signal) {
     });
     for (const battery of detectedBatteries)
         addBattery(battery);
-    if (savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length)
-        $("energy-summary").textContent += " Device membership changed in Home Assistant. Removed devices are excluded automatically. Confirm missing properties and save to resume planning. Historical plans remain unchanged.";
+    const membershipChanged = savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length;
     $("connect").hidden = true;
     $("wizard").hidden = false;
     $("installation-save-bar").hidden = false;
@@ -948,13 +945,9 @@ async function load(refresh = false, discard = false, signal) {
     saveState.update();
     layout.sync();
     status(
-        layout.wizard ? "Home Assistant Energy configuration is ready. Confirm your physical ratings before saving." : pendingSolarSources.length ? `Review and save new Home Assistant solar sources: ${pendingSolarSources.map(solarName).join(", ")}.` : "Saved configuration loaded.",
+        membershipChanged ? "Device membership changed in Home Assistant. Removed devices are excluded automatically. Confirm missing properties and save to resume planning. Historical plans remain unchanged." : layout.wizard ? "Home Assistant Energy configuration is ready. Confirm your physical ratings before saving." : pendingSolarSources.length ? `Review and save new Home Assistant solar sources: ${pendingSolarSources.map(solarName).join(", ")}.` : "Saved configuration loaded.",
     );
 }
-$("edit-detected").onclick = () => {
-    $("grid-field").hidden = false;
-    $("annual-field").hidden = false;
-};
 $("connect").onsubmit = async (event) => {
     event.preventDefault();
     token = $("token").value;
@@ -1055,7 +1048,7 @@ $("back").onclick = () => {
     if (!busy) showStep(step - 1);
 };
 $("next").onclick = async () => {
-    if (busy || !validateVisible()) return;
+    if (busy || !validateVisible() || (step === 2 && !validateVisible(0))) return;
     try {
         if (step === 2) {
             const summary = await api(
@@ -1074,6 +1067,7 @@ $("next").onclick = async () => {
 $("wizard").onsubmit = (event) => event.preventDefault();
 $("save").onclick = async () => {
     if (busy || !layout.editing || (layout.wizard && ![3, 4, 5].includes(step))) return;
+    if (step !== 4 && step !== 5 && !validateVisible(0)) return;
     ++configurationGeneration;
     busy = true;
     saveState.begin();
@@ -1099,6 +1093,7 @@ $("save").onclick = async () => {
             config.solar = solar.configuration;
             const result = await api("/v1/installation", "PUT", body.installation);
             config.installation = result.installation.configuration;
+            if (config.installation.export_limit_w === 0) delete $("export").dataset.previousLimit;
             pendingSolarSources = [];
             installationBaseline = JSON.stringify(installationValues());
             message = `Installation saved. Home Assistant will provision ${(result.installation.devices || []).length} virtual device(s).${result.installation.warnings?.length ? " Fixed PV may exceed the configured export limit. Check the Home Assistant notification." : ""}`;

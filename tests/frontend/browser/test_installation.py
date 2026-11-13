@@ -80,6 +80,211 @@ def _discovered_installation_devices(page, url, kind, count):
     return body
 
 
+def test_grid_feed_in_permission_uses_the_persisted_export_limit(app_page):
+    """Desktop/mobile save zero export, restore it on reload and require a confirmed limit when enabling again."""
+    page, url = app_page
+    discover(page, url)
+    connect(page)
+    permission = page.get_by_label("Allow grid feed-in", exact=True)
+    export = page.get_by_label("Maximum grid export (kW)", exact=True)
+    expect(permission).to_be_checked()
+    expect(export).to_be_enabled()
+    expect(page.locator("#connection-examples")).to_contain_text("17.25 kW")
+    expect(page.locator("#connection-examples")).to_contain_text("8.05 kW")
+    page.get_by_label("Maximum grid import (kW)", exact=True).fill("5")
+    page.get_by_label("Annual whole-home consumption (kWh)", exact=True).fill("3500")
+    export.fill("5")
+    permission.uncheck()
+    expect(export).to_be_disabled()
+    expect(export).to_have_value("0")
+    expect(page.locator("#feed-in-warning")).to_be_visible()
+    expect(page.locator("#feed-in-warning")).to_contain_text("no feasible plan")
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    screenshots = Path("results/ci/installation-export")
+    screenshots.mkdir(parents=True, exist_ok=True)
+
+    def capture(name, selector):
+        """Capture the actual settings card without a scrolled mobile header covering its controls."""
+        page.evaluate("window.scrollTo(0, 0)")
+        page.screenshot(
+            path=str(screenshots / f"{name}-{page.viewport_size['width']}.png"),
+            full_page=True,
+            clip=page.locator(selector).bounding_box(),
+        )
+
+    capture("disabled", '[data-step="0"]')
+    page.get_by_role("button", name="Continue", exact=True).click()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    assert read_settings(page, url)["installation"]["export_limit_w"] == 0
+    expect(page.locator("#installation-capacities")).to_contain_text("0 kW")
+    expect(page.locator("#installation-summary-content")).to_contain_text("Allow grid feed-inOff")
+    expect(page.locator("#installation-summary-content").get_by_role("note")).to_contain_text(
+        "no feasible plan"
+    )
+    capture("saved", "#installation-summary")
+    page.reload()
+    connect(page)
+    installation_area(page, 0, edit=True)
+    expect(permission).not_to_be_checked()
+    expect(export).to_be_disabled()
+    permission.check()
+    expect(export).to_be_enabled()
+    expect(export).to_have_value("")
+    assert export.evaluate("element => element.validity.valueMissing")
+    before = read_settings(page, url)
+    writes = []
+
+    def record_configuration_write(request):
+        """Observe real preview and configuration requests without replacing the API."""
+        if request.method in ("POST", "PUT") and urlsplit(request.url).path in (
+            "/v1/setup/preview",
+            "/v1/installation",
+            "/v1/solar",
+            "/v1/demand",
+        ):
+            writes.append(request.url)
+
+    page.on("request", record_configuration_write)
+    save = page.get_by_role("button", name="Save installation", exact=True)
+    expect(save).to_be_enabled()
+    save.click()
+    page.evaluate("() => window.__oepProductReadsIdle()")
+    assert writes == []
+    after = read_settings(page, url)
+    for section in ("installation", "solar", "demand"):
+        assert after[section] == before[section]
+    expect(permission).to_be_checked()
+    expect(export).to_be_enabled()
+    expect(export).to_have_value("")
+    assert export.evaluate("element => element.validity.valueMissing")
+    expect(page.locator("#installation-save-state")).to_contain_text(
+        "Complete the highlighted fields"
+    )
+    export.fill("2.5")
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert read_settings(page, url)["installation"]["export_limit_w"] == 2500
+    installation_area(page, 0, edit=True)
+    permission.uncheck()
+    permission.check()
+    expect(export).to_have_value("2.5")
+    permission.uncheck()
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    installation_area(page, 0, edit=True)
+    expect(permission).to_be_checked()
+    expect(export).to_have_value("2.5")
+    capture("enabled", '[data-step="0"]')
+
+
+def test_explicit_zero_export_explains_effective_no_feed_in(app_page):
+    """A manually entered zero warns immediately and in the saved summary, then reloads as feed-in off."""
+    page, url = app_page
+    discover(page, url)
+    connect(page)
+    page.get_by_label("Maximum grid import (kW)", exact=True).fill("5")
+    page.get_by_label("Annual whole-home consumption (kWh)", exact=True).fill("3500")
+    export = page.get_by_label("Maximum grid export (kW)", exact=True)
+    expect(export).to_have_value("")
+    page.get_by_role("button", name="Continue", exact=True).click()
+    expect(page.get_by_role("heading", name="Connection and household", exact=True)).to_be_visible()
+    assert export.evaluate("element => element.validity.valueMissing")
+    export.fill("5")
+    page.get_by_role("button", name="Continue", exact=True).click()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    installation_area(page, 0, edit=True)
+    permission = page.get_by_label("Allow grid feed-in", exact=True)
+    expect(permission).to_be_checked()
+    export.fill("0")
+    expect(permission).to_be_checked()
+    expect(page.locator("#feed-in-warning")).to_be_visible()
+    expect(page.locator("#feed-in-warning")).to_contain_text("no feasible plan")
+    screenshots = Path("results/ci/installation-export")
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=str(screenshots / f"manual-zero-{page.viewport_size['width']}.png"),
+        full_page=True,
+        clip=page.locator('[data-step="0"]').bounding_box(),
+    )
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert read_settings(page, url)["installation"]["export_limit_w"] == 0
+    expect(page.locator("#installation-summary-content")).to_contain_text("Allow grid feed-inOff")
+    expect(page.locator("#installation-summary-content").get_by_role("note")).to_contain_text(
+        "no feasible plan"
+    )
+    page.reload()
+    connect(page)
+    installation_area(page, 0, edit=True)
+    expect(permission).not_to_be_checked()
+    expect(export).to_be_disabled()
+    expect(export).to_have_value("0")
+
+
+@pytest.mark.parametrize("outcome", ["success", "rejected", "uncertain", "strategy-failed"])
+def test_saved_zero_export_ends_the_unsaved_limit_cache(app_page, outcome):
+    """Only a confirmed zero Installation write ends draft restoration, even if the later strategy write fails."""
+    page, url = app_page
+    discover(page, url)
+    connect(page)
+    page.get_by_label("Maximum grid import (kW)", exact=True).fill("5")
+    page.get_by_label("Annual whole-home consumption (kWh)", exact=True).fill("3500")
+    export = page.get_by_label("Maximum grid export (kW)", exact=True)
+    permission = page.get_by_label("Allow grid feed-in", exact=True)
+    export.fill("5")
+    permission.uncheck()
+    for _ in range(3):
+        page.get_by_role("button", name="Continue", exact=True).click()
+    if outcome == "strategy-failed":
+        page.locator("#strategy").select_option("minimize consumption")
+        page.route("**/v1/strategy", lambda route: route.fulfill(status=503))
+    elif outcome in ("rejected", "uncertain"):
+
+        def fail_installation_response(route):
+            """Optionally commit the real write before losing its acknowledgement."""
+            if outcome == "uncertain":
+                assert route.fetch().ok
+            route.fulfill(status=503)
+
+        page.route("**/v1/installation", fail_installation_response)
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    confirmed = outcome in ("success", "strategy-failed")
+    if outcome == "success":
+        expect(page.locator("#installation-save-state")).to_contain_text("Installation saved.")
+        installation_area(page, 0, edit=True)
+    else:
+        expect(page.locator("#installation-save-state")).to_contain_text("Your edits are retained")
+        page.get_by_role("button", name="Connection", exact=True).click()
+    saved = read_settings(page, url)
+    if outcome == "rejected":
+        assert saved["installation"] is None
+    else:
+        assert saved["installation"]["export_limit_w"] == 0
+    permission.check()
+    expect(export).to_have_value("" if confirmed else "5")
+    expect(export).to_be_enabled()
+    if confirmed:
+        assert export.evaluate("element => element.validity.valueMissing")
+        if outcome == "success":
+            writes = []
+            page.on(
+                "request",
+                lambda request: (
+                    writes.append(request.url) if request.method in ("POST", "PUT") else None
+                ),
+            )
+            page.get_by_role("button", name="Save installation", exact=True).click()
+            page.evaluate("() => window.__oepProductReadsIdle()")
+            assert writes == []
+            assert read_settings(page, url)["installation"] == saved["installation"]
+            export.fill("2.5")
+            page.get_by_role("button", name="Save installation", exact=True).click()
+            expect(page.locator("#installation-save-state")).to_contain_text("Installation saved.")
+            assert read_settings(page, url)["installation"]["export_limit_w"] == 2500
+
+
 def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
     """Desktop/mobile can enable defaults, save a different interval and discard an unsaved disable."""
     page, url = app_page
@@ -314,7 +519,8 @@ def test_installation_distinguishes_measured_year_from_extrapolation(app_page, a
     connect(page)
     expected_kwh = round(((available_days - 28) * 5 + 28 * 20) / available_days * 365, 1)
     expect(page.locator("#annual")).to_have_js_property("valueAsNumber", expected_kwh)
-    summary = page.locator("#household-summary")
+    page.get_by_role("button", name="Home Assistant", exact=True).click()
+    summary = page.locator("#ha-installation-facts")
     if available_days == 365:
         expect(summary).to_contain_text("Measured over 365 complete days")
         expect(summary).not_to_contain_text("Extrapolated")
@@ -843,7 +1049,8 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     ).ok
     page.reload()
     connect(page)
-    expect(page.locator("#energy-summary")).to_contain_text("excluded automatically")
+    installation_area(page, -1)
+    expect(page.locator("#ha-installation-summary")).to_contain_text("excluded automatically")
     expect(page.get_by_role("button", name="Add solar source", exact=True)).to_have_count(0)
     expect(page.get_by_role("button", name="Add battery", exact=True)).to_have_count(0)
     expect(page.get_by_role("button", name="Remove solar source", exact=True)).to_have_count(0)
@@ -925,7 +1132,7 @@ def test_history_prefills_known_inputs_and_sensor_dropdowns_are_typed(app_page):
     connect(page)
     expect(page.get_by_label("Annual whole-home consumption (kWh)")).to_have_value("3650")
     expect(page.get_by_label("Grid power sensor", exact=True)).to_be_disabled()
-    expect(page.locator("#household-summary")).to_contain_text("3650")
+    expect(page.locator("#annual")).to_have_js_property("valueAsNumber", 3650)
     options = page.locator("#grid option").evaluate_all("items => items.map(i => i.value)")
     assert (
         "sensor.grid" in options
@@ -958,7 +1165,10 @@ def test_configured_grid_and_solar_remain_visible_without_measurements_or_histor
     )
     assert response.ok
     connect(page)
-    expect(page.locator("#energy-summary")).to_contain_text("Solar sources: 1: Batteries: 0")
+    page.get_by_role("button", name="Home Assistant", exact=True).click()
+    expect(page.locator("#ha-installation-facts")).to_contain_text("sensor.roof")
+    expect(page.locator("#ha-installation-facts")).to_contain_text("BatteriesNone configured")
+    page.get_by_role("button", name="Continue", exact=True).click()
     expect(page.get_by_label("Grid power sensor", exact=True)).to_be_disabled()
     expect(page.get_by_label("Annual whole-home consumption (kWh)", exact=True)).to_be_visible()
     grid(page)
