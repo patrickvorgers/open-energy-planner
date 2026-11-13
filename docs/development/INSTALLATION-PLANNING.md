@@ -179,6 +179,27 @@ the excess. This conservative warning does not claim every interval is
 infeasible. Confirm equipment ratings and on/off permissions. Automatic local
 export limitation is not silently assumed, including with a zero export cap.
 
+The Installation **Allow grid feed-in** control is a presentation of the existing
+`export_limit_w` invariant, not a second policy flag. New installations start with
+the control enabled. Disabling it saves zero through the existing authenticated
+setup route. A saved zero reloads as disabled. Re-enabling after reload requires
+confirmation of the allowed limit. Unsaved toggles preserve the draft positive
+value, while Cancel restores persisted settings. Versioned configuration, the
+compiled `grid_export_limit_w`, plan validation, references and historical Savings
+continue to use the same numeric limit. No solver constraint or curtailment
+permission is bypassed. At zero export, battery output can serve local consumption
+but cannot leave the installation. An infeasible fixed-PV surplus remains
+infeasible rather than triggering an export fallback or fabricated clipping.
+The unmanaged self-consumption reference retains its existing independent
+dispatch. It does not acquire optimizer shutdown behavior. It either respects
+the same export cap or reports the counterfactual unavailable.
+
+Connection help shows nominal 230 V examples for three-phase 25 A (17.25 kW)
+and single-phase 35 A (8.05 kW). These assume power factor 1 and do not replace
+per-phase protection or operator limits. HA source identities and the explicit
+measured-versus-extrapolated annual-consumption evidence remain in the Home
+Assistant area instead of repeated connection-summary paragraphs.
+
 Battery power is an integer variable in the solver, not rounded after solving.
 Finer billing segments of one control interval retain equal battery terminal
 power and equal PV enable commands. The independent validator checks every bus,
