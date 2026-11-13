@@ -7,7 +7,7 @@ from itertools import pairwise
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from open_energy_planner.appliances.sources import validate_membership
+from open_energy_planner.appliances.sources import replacement_selection, validate_membership
 from open_energy_planner.appliances.thermal.model import (
     MAX_THERMAL_CLOCK_SKEW_SECONDS,
     MAX_THERMAL_ENTITY_ID_LENGTH,
@@ -196,7 +196,9 @@ class ThermalService:
             )
         self._shape(configuration)
         metadata = {row["entity_id"]: row for row in (catalogue or {}).get("entities", [])}
-        selected = list(self.consumers.selected)
+        selected = replacement_selection(
+            self.consumers.selected, self.state["stores"], configuration["stores"]
+        )
         used = {row["energy_entity"] for row in self.ev.state["points"]}
         used.update(
             entity
@@ -217,18 +219,20 @@ class ThermalService:
                 raise ValueError("Select the heater's electrical power sensor")
             if row["energy_entity"] in used:
                 raise ValueError("A thermal meter cannot also control an EV or appliance cycle")
-            if row["energy_entity"] not in {item["entity_id"] for item in selected}:
-                selected.append({"entity_id": row["energy_entity"], "weather_sensitive": False})
         validate_membership(selected, self.consumers.options)
-        # A retained extra forecast after an interrupted settings write is safe.
-        if tuple(selected) != self.consumers.selected:
-            self.consumers.save(tuple(selected), self.consumers.version)
-        self.commit(configuration)
+        self.commit(configuration, selected)
 
-    def commit(self, configuration):
-        """Archive the replacement before moving its pointer. Failures leave live settings intact."""
+    def commit(self, configuration, selected=None):
+        """Archive settings and optional forecast membership before installing either in memory."""
         checked = deepcopy(configuration)
-        with self.documents.transaction():
+        transaction = (
+            self.documents.transaction()
+            if selected is None
+            else self.consumers.saving_selection(
+                tuple(selected), self.consumers.version, self.documents
+            )
+        )
+        with transaction:
             self.documents.write("thermal-state-" + digest(checked) + ".json", checked)
             self.documents.write(STATE_KEY, checked)
         self.state, self.issue = checked, None

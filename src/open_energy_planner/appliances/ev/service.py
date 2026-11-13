@@ -68,9 +68,11 @@ class EVService:
         self.issue = None
         self.power_deviations = {}
 
-    def commit(self, state):
-        """Atomically archive only changed requests and link bounded global intent revisions."""
+    def commit(self, state, selected=None):
+        """Archive changed requests and optional forecast membership in one database transaction."""
         if state == self.state:
+            if selected is not None and tuple(selected) != self.consumers.selected:
+                self.consumers.save(tuple(selected), self.consumers.version)
             return
         changed = {
             request_id: record
@@ -89,7 +91,14 @@ class EVService:
             "previous_revision": self.archive_revision,
         }
         revision = digest(snapshot)
-        with self.documents.transaction():
+        transaction = (
+            self.documents.transaction()
+            if selected is None
+            else self.consumers.saving_selection(
+                tuple(selected), self.consumers.version, self.documents
+            )
+        )
+        with transaction:
             for request_id, record in changed.items():
                 self.documents.write(
                     REQUEST_VERSION_PREFIX + snapshot["request_changes"][request_id] + ".json",
@@ -117,10 +126,9 @@ class EVService:
 
     def configure(self, body, catalogue, now=None):
         """Reuse Energy ownership and automatically request each charger's component forecast."""
-        checked, selected = configuration(body, catalogue, self.consumers, self.appliances)
-        if tuple(selected) != self.consumers.selected:
-            # Forecast selection is idempotent. A failed EV write leaves only a safe extra forecast.
-            self.consumers.save(tuple(selected), self.consumers.version)
+        checked, selected = configuration(
+            body, catalogue, self.consumers, self.appliances, self.state["points"]
+        )
         state = {**deepcopy(self.state), **checked, "assignments": {}}
         vehicle_ids = {car["id"] for car in checked["vehicles"]}
         for vehicle_id, request_id in tuple(state["active_requests"].items()):
@@ -131,7 +139,13 @@ class EVService:
                     digest(state["requests"][request_id]),
                     now or datetime.now(UTC),
                 )
-        self.commit(state)
+        if (
+            not self.state["points"]
+            and not checked["points"]
+            and selected == self.consumers.selected
+        ):
+            selected = None
+        self.commit(state, selected)
         self.report = None
         self.power_deviations.clear()
         self.issue = None

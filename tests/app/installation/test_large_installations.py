@@ -225,6 +225,7 @@ def test_ev_configuration_accepts_twenty_vehicles_and_eight_disjoint_charge_poin
         {"entities": entities},
         consumers,
         SimpleNamespace(state={"devices": {}}),
+        previous_points=(),
     )
     assert len(result["vehicles"]) == 20 and result["points"] == points
     assert {source["entity_id"] for source in selected} == {

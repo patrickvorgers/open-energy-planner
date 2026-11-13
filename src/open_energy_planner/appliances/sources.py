@@ -9,12 +9,25 @@ SOURCE_OWNERSHIP_UNAVAILABLE = (
 )
 
 
+def replacement_selection(selected, previous, requested):
+    """Release removed typed sources while retaining unrelated choices and requesting new component forecasts."""
+    removed = {row["energy_entity"] for row in previous} - {
+        row["energy_entity"] for row in requested
+    }
+    retained = {row["entity_id"]: row for row in selected if row["entity_id"] not in removed}
+    for row in requested:
+        retained.setdefault(
+            row["energy_entity"], {"entity_id": row["energy_entity"], "weather_sensitive": False}
+        )
+    return [retained[entity] for entity in sorted(retained)]
+
+
 def validate_new_assignments(requested, retained, selected, reserved):
     """Reject meter reuse while permitting edits to the same persisted appliance and meter.
 
     Call under the shared settings lock before any write. Forecast selection and
-    specialized records both reserve a source, including after an interrupted
-    specialized save or a missing forecast. Display names never establish identity.
+    specialized records both reserve a source, including retained untyped
+    memberships or a missing forecast. Display names never establish identity.
     Existing shape and Energy-membership validation remains authoritative.
     """
     occupied = {row["entity_id"] for row in selected}

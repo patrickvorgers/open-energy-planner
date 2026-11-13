@@ -34,6 +34,21 @@ editable. Generic selection retains specialized forecast memberships and cannot
 enable a charge point or boiler as a shiftable cycle appliance. These rules use
 existing identities and archives without adding another device registry.
 
+Replacing EV or thermal configuration reconciles component forecast membership
+with the previous and requested typed sources. A removed source is released only
+by that replacement. Unrelated ordinary and specialized choices remain selected.
+The demand and planning document namespaces share one enrolled SQL transaction.
+Both active pointers and immutable revisions roll back together on failure, and
+neither in-memory configuration is installed before commit succeeds. Single-store
+saves retain their existing nesting behavior. Related namespaces must use the
+same engine and enroll at the outer transaction boundary.
+
+Untyped consumer membership has no appliance-type marker. A source left selected
+by an older removal remains reserved, just like an intentional ordinary appliance.
+The supported explicit recovery is removal under Consumption and cycles before
+adding that source in its intended category. There is no automatic historical
+ownership inference or deletion of measurement, model or request archives.
+
 Unreadable consumer choices mean ownership is unknown. The shared chooser keeps
 every source unavailable, and the consumer selection owner rejects replacement
 writes from every category until the saved database is restored. It never

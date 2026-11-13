@@ -180,6 +180,7 @@ class ProductBoundary:
                 self.choice_results.get("ev", self.catalogue),
                 SimpleNamespace(selected=self.selected, options=self.options),
                 SimpleNamespace(state={"devices": self.devices}),
+                previous_points=self.ev["points"],
             )
             self.selected = list(selected)
         elif path == "/v1/thermal/configuration":
