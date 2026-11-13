@@ -170,7 +170,11 @@ Open **Understand this plan** to load whole-plan inputs, assumptions and source 
 
 Check the measured starting stock, forecast inputs, physical limits, proposed command and expected result together. A reached limit is an observation. It is not proof that OEP evaluated every hypothetical alternative or that this limit caused the choice.
 
-Original prices and expected outcomes remain separate from later contract repricing. The detailed energy and command tables preserve the selected original plan. Viewing them never sends a physical command.
+Within **Selected interval details**, expand **Detailed interval values** for the battery control mode, fixed power target when present, stored energy and solar production permission. The time selector works with the keyboard. These are planned commands, not confirmation that equipment followed them. Viewing them never sends a physical command.
+
+The three scenario cards retain their **Cost breakdown**. Original prices and expected outcomes remain separate from later contract repricing. A **Contract updated** notice identifies a later valuation without turning the original advice into a newly optimized plan. The original archive remains unchanged.
+
+Forecast evidence shows the model and quality that were used. Technical forecast version identifiers are omitted from this user view.
 
 ## Keep units and commands straight
 

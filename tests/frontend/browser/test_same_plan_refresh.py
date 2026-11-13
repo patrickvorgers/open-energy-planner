@@ -97,18 +97,9 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
         )
     assert len(evidence_reads) == 1
     page.locator("#reference-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
-    for label in (
-        "Original and repriced expected costs",
-        "Detailed interval energy",
-        "Expected state and commands per battery",
-    ):
-        page.get_by_text(label, exact=True).click()
-    expect(page.locator("#expected-cost-rows tr")).to_have_count(6)
-    expect(page.locator("#plan-rows tr")).to_have_count(2)
-    expect(page.locator("#plan-battery-rows tr")).to_have_count(2)
-    costs = page.locator("#expected-cost-rows").inner_text()
-    rows = page.locator("#plan-rows").inner_text()
-    battery_rows = page.locator("#plan-battery-rows").inner_text()
+    costs = page.locator("#ems-costs").inner_text()
+    rows = page.locator("#inspect-values").inner_text()
+    battery_rows = page.locator("#plan-chart-legend").inner_text()
     evidence_text = page.locator("#plan-evidence").inner_text()
     page.evaluate("""() => {
         window.confirmedComparisons=['reference-chart','self-consumption-chart'].map(id=>({
@@ -123,9 +114,9 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
     assert len(simulations) == 1
     for chart in ("reference-chart", "self-consumption-chart"):
         expect(page.locator("#" + chart)).to_be_visible()
-    assert page.locator("#expected-cost-rows").inner_text() == costs
-    assert page.locator("#plan-rows").inner_text() == rows
-    assert page.locator("#plan-battery-rows").inner_text() == battery_rows
+    assert page.locator("#ems-costs").inner_text() == costs
+    assert page.locator("#inspect-values").inner_text() == rows
+    assert page.locator("#plan-chart-legend").inner_text() == battery_rows
     assert page.locator("#plan-evidence").inner_text() == evidence_text
     assert len(evidence_reads) == 1
     expect(
@@ -152,8 +143,8 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
     wait_for_product_reads(page)
     assert len(evidence_reads) == 1
     expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
-    expect(page.locator("#expected-cost-rows tr")).to_have_count(6)
-    assert page.locator("#expected-cost-rows").inner_text() == costs
+    expect(page.locator("#ems-costs > dl dd")).to_have_count(2)
+    assert page.locator("#ems-costs").inner_text() == costs
     for chart in ("reference-chart", "self-consumption-chart"):
         expect(page.locator("#" + chart)).to_be_visible()
     assert (

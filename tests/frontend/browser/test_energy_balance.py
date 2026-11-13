@@ -19,10 +19,7 @@ from tests.frontend.browser.helpers import (
         ("savings", ""),
         (
             "savings_corrected",
-            (
-                "Contract updated. Self-consumption costs were repriced without re-optimization. "
-                "See the separate cost table. "
-            ),
+            ("Contract updated. Self-consumption costs were repriced without re-optimization. "),
         ),
     ],
     indirect=["app_site"],

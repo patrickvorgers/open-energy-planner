@@ -546,7 +546,7 @@ Conditional bonuses are separate from base rates. No-battery expected benefit
 includes storage and optimization, excludes investment, and uses the plan's
 recorded bonus budget. It is not continuous historical savings.
 
-The planning page shows all three scenario balances without a comparison selector.
+The planning page shows all three scenario balances without a comparison selector. Costs remain beside each scenario. Planned commands, inputs and selected-interval values belong under Understand this plan, with keyboard access. Avoid duplicate whole-horizon tables and technical forecast-version labels in the user view. Preserve original archival metadata and separate financial valuations.
 Each graph identifies its original expected economic cost, net grid cash, wear and
 inventory change. Self-consumption and OEP also show expected benefit versus the
 same no-battery baseline. Negative benefit remains negative. These are horizon

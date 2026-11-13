@@ -32,10 +32,14 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
     expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
-    expect(page.locator("#plan-rows tr")).to_have_count(0)
-    page.get_by_text("Detailed interval energy", exact=True).click()
-    expect(page.locator("#plan-rows tr")).to_have_count(120)
-    page.get_by_text("Detailed interval energy", exact=True).click()
+    for name in (
+        "Detailed interval energy",
+        "Expected state and commands per battery",
+        "Expected solar production and commands",
+        "Original and repriced expected costs",
+    ):
+        expect(page.get_by_text(name, exact=True)).to_have_count(0)
+    expect(page.locator("#inspect-time")).to_have_attribute("max", "119")
     assert evidence == []
     page.evaluate(
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"
@@ -81,6 +85,7 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     pending = evidence.pop()
     pending.fulfill(response=pending.fetch())
     expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
+    expect(page.locator("#plan-evidence")).not_to_contain_text("Forecast version")
     expect(page.locator("#interval-evidence")).to_contain_text("Forecast and original prices")
     page.get_by_text("Understand this plan", exact=True).click()
     page.get_by_text("Understand this plan", exact=True).click()
@@ -226,3 +231,55 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
     ).to_be_checked()
     assert page.locator("#ems-costs").inner_text() == before
+
+
+@pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
+def test_compact_planning_preserves_commands_costs_and_original_archive(app_page):
+    """Removed technical tables leave keyboard-accessible costs, selected commands and original data intact."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    wait_for_product_reads(page)
+    identity = page.locator("#plan-version").input_value()
+    headers = {"Authorization": "Bearer " + TOKEN}
+    original = page.request.get(url + "/v1/plans/" + identity, headers=headers).json()
+    for label in (
+        "Detailed interval energy",
+        "Expected state and commands per battery",
+        "Expected solar production and commands",
+        "Original and repriced expected costs",
+    ):
+        expect(page.get_by_text(label, exact=True)).to_have_count(0)
+    for host in ("ems-costs", "self-consumption-costs", "reference-costs"):
+        disclosure = page.locator("#" + host).get_by_text("Cost breakdown", exact=True)
+        disclosure.focus()
+        disclosure.press("Enter")
+        expect(page.locator("#" + host)).to_contain_text("Import cost")
+    page.get_by_text("Understand this plan", exact=True).click()
+    expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
+    expect(page.locator("#plan-evidence")).not_to_contain_text("Forecast version")
+    page.get_by_text("Selected interval details", exact=True).click()
+    expect(page.locator("#interval-evidence")).to_contain_text("Forecast and original prices")
+    expect(page.locator("#interval-evidence")).not_to_contain_text("Forecast version")
+    page.get_by_text("Detailed interval values", exact=True).click()
+    page.locator("#inspect-time").press("Home")
+    expect(page.locator("#inspect-values")).to_contain_text("Example home battery")
+    expect(page.locator("#inspect-values")).to_contain_text("Example AC roof")
+    expect(page.locator("#inspect-values")).to_contain_text("Grid:")
+    expect(page.locator("#plan-evidence-panel")).to_contain_text("not measurements")
+    assert page.request.get(url + "/v1/plans/" + identity, headers=headers).json() == original
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    captures = Path("results/ci/compact-planning")
+    captures.mkdir(parents=True, exist_ok=True)
+    page.evaluate("document.fonts.ready")
+    page.screenshot(
+        path=str(captures / f"planning-{page.viewport_size['width']}.png"), full_page=True
+    )
+    if page.viewport_size["width"] < 500:
+        page.set_viewport_size({"width": 390, "height": 1700})
+    panel = page.locator("#plan-evidence-panel")
+    panel.evaluate("element => element.scrollIntoView({block:'center'})")
+    panel.screenshot(path=str(captures / f"commands-{page.viewport_size['width']}.png"))

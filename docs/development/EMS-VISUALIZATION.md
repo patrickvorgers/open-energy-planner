@@ -19,7 +19,7 @@ No product code, artwork or scenario outcomes were copied.
 
 | Primary source | Relevant evidence | OEP decision |
 | --- | --- | --- |
-| [DAO wiki](https://github.com/corneel27/day-ahead/wiki) | Planning graph, detailed calculation view and browsing past optimizations | Keep original plan selection and put detailed interval tables behind disclosure controls. |
+| [DAO wiki](https://github.com/corneel27/day-ahead/wiki) | Planning graph, detailed calculation view and browsing past optimizations | Keep original plan selection and inspect commands and interval evidence through a focused disclosure. |
 | [EMHASS battery example](https://emhass.readthedocs.io/en/latest/study_cases/basic_pv_battery.html) | Optimization results plus a distinct battery state-of-charge plot | Separate power, battery inventory and prices rather than mix units on an unreadable axis. |
 | [Victron Dynamic ESS](https://github.com/victronenergy/dynamic-ess#graphs) and [manual](https://www.victronenergy.com/live/drafts%3Adynamic_ess) | Recorded versus estimated/planned graphs. Prices alongside the energy schedule | Explicit forecast/recorded/reference labels and a separate advice-versus-realization view. |
 | [GBBOptimizer version history](https://gbboptimizer6.gbbsoft.pl/About) | Forecast-versus-actual load graph, battery forecast/energy-price graph, daily/monthly profit reporting | Show expected use and financial results in separate focused views. Keep inventory value distinct from cash. |
@@ -29,7 +29,7 @@ effective prices and net EMS/reference grid exchange. Separate battery-converter
 charts are omitted to keep the planning overview focused. Converter-level flow
 details remain available in the selected-interval inspector. Savings retains
 evaluated benefit and recorded import versus original advice and reference.
-Available solar forecasts remain in the interval inspector and original tables.
+Available solar forecasts remain in the interval inspector and forecast chart.
 Balance charts use actually planned DC production after curtailment/clipping.
 Grid following is a regulation mode, not a fixed battery-power command.
 
@@ -136,6 +136,18 @@ separates AC/DC energy, charging, discharge and percentage state. [EMHASS's batt
 distinguishes optimization results from battery SoC. These are design references.
 No implementation or image is copied.
 
+The Planning overview keeps costs and their breakdown beside each scenario.
+**Understand this plan** owns original assumptions and selected interval commands.
+It does not duplicate them in whole-horizon energy, battery, solar or repricing tables.
+The evidence projection shows forecast model and quality without a technical forecast
+version label. Original snapshot version metadata and financial API evidence remain intact.
+
+The shared value-axis plugin refreshes a peer only when a shared value-axis bound
+has changed. Updating unchanged bounds must not redraw the other scenarios.
+Every chart retains its own datasets, visibility and window. Changed bounds,
+legend toggles and resizing still synchronize the scenario scales. Separate SoC
+and unrelated chart scales retain their existing behavior.
+
 ## Interaction and accessibility
 
 Chart.js 4.5.1 is bundled locally, with its MIT notice, without CDN requests or
@@ -149,7 +161,7 @@ explains commands, solar permission, prices and market-rate provenance at that
 instant. Battery series are keyed by immutable device ID, never by the display name.
 Only duplicate names receive a readable ordinal. Unique HA device names stay
 unchanged. Native source resolution stays explicit. Repeating hourly forecasts
-does not claim quarter-hour prediction detail. Detail tables remain accessible.
+does not claim quarter-hour prediction detail. Selected interval values remain accessible through the keyboard-operated inspector.
 The [price timeline and control grid](PRICE-TIMELINE-AND-CONTROL-GRID.md) keeps
 quarter billing separate from clock-hour controls after at least 24 hours, within
 an exact 48-hour horizon. Internal billing rows do not add control decisions.

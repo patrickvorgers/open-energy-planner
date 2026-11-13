@@ -44,7 +44,7 @@ function visibleRange(chart, axis) {
 }
 /** Keep ten percent of axis height at each unrestricted end, independently of nice ticks.
  * Explicit physical limits stay fixed. Only unrestricted ends receive padding.
- * Grouped comparisons share their visible extrema and refresh peers after updates.
+ * Grouped comparisons share their visible extrema and refresh peers only when bounds change.
  * Constant/empty ranges receive finite fallback spans. Time and SoC axes are untouched.
  */
 Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options) {
@@ -83,7 +83,10 @@ Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options
     synchronizingGroup = true;
     try {
         for (const peer of Object.values(Chart.instances)) {
-            if (peer !== chart && peer.options.plugins.valueAxisHeadroom?.group === options.group) peer.update("none");
+            if (peer === chart || peer.options.plugins.valueAxisHeadroom?.group !== options.group) continue;
+            const changed = Object.values(chart.scales).some(scale => scale.axis === "y" && scale.id !== "soc"
+                && (peer.scales[scale.id]?.min !== scale.min || peer.scales[scale.id]?.max !== scale.max));
+            if (changed) peer.update("none");
         }
     } finally { synchronizingGroup = false; }
 }});

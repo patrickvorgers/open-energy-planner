@@ -194,7 +194,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
     expect(page.locator("#overview-status")).to_have_text("Loading selected plan…")
     expect(page.locator("#plan-description")).to_have_text("Loading selected plan…")
     for rows in ("plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"):
-        expect(page.locator(f"#{rows} tr")).to_have_count(0)
+        expect(page.locator(f"#{rows}")).to_have_count(0)
     assert page.evaluate("""() => ['plan-chart', 'reference-chart', 'self-consumption-chart',
         'energy-chart', 'forecast-chart', 'price-chart'].every(id =>
         Chart.getChart(document.getElementById(id)).data.datasets.length === 0)""")
@@ -204,7 +204,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
     if failed:
         held.fulfill(status=503, body="Temporary archive read failure")
         expect(page.locator("#plan-description")).to_have_text("Selected plan could not be loaded.")
-        expect(page.locator("#plan-rows tr")).to_have_count(0)
+        expect(page.locator("#inspect-time")).to_be_disabled()
         assert page.evaluate(
             "Chart.getChart(document.getElementById('plan-chart')).data.datasets.length === 0"
         )
@@ -212,8 +212,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
         held.fulfill(json=state["comparisons"]["older-plan"])
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
-        page.get_by_text("Detailed interval energy", exact=True).click()
-        expect(page.locator("#plan-rows tr")).to_have_count(2)
+        expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -1335,8 +1334,7 @@ def test_plan_detail_failure_survives_initial_load_and_recovers(app_page):
     page.unroute("**/v1/plans/*/comparison?view=plan")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    page.get_by_text("Detailed interval energy", exact=True).click()
-    expect(page.locator("#plan-rows tr")).to_have_count(2)
+    expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -1373,8 +1371,7 @@ def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#plan-version option")).to_have_count(2)
     if late == "simulations":
-        page.get_by_text("Detailed interval energy", exact=True).click()
-        expect(page.locator("#plan-rows tr")).to_have_count(2)
+        expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
     page.locator("#plan-version").select_option("second-plan")
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
     assert len(held) == 1

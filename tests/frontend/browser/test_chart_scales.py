@@ -242,3 +242,33 @@ def test_comparison_balances_share_scale_after_range_legend_and_resize(browser, 
         assert [charts[0]["min"], charts[0]["max"]] == pytest.approx(bounds)
         assert charts[0]["soc"] == [0, 100]
         assert charts[3]["max"] > 1000
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_unchanged_shared_bounds_do_not_redraw_peers(browser, width):
+    """A stable scale updates once. A changed group extent updates all three charts exactly once."""
+    with browser.new_context(viewport={"width": width, "height": 900}) as context:
+        page = context.new_page()
+        page.set_content(
+            '<canvas id="one"></canvas><canvas id="two"></canvas><canvas id="three"></canvas>'
+        )
+        page.add_script_tag(path=str(WEB / "chart.umd.min.js"))
+        page.add_script_tag(path=str(WEB / "chart_theme.js"), type="module")
+        page.wait_for_function("Chart.registry.plugins.get('valueAxisHeadroom')")
+        result = page.evaluate("""() => {
+            const charts=['one','two','three'].map((id,index)=>new Chart(document.getElementById(id),{
+                type:'bar',data:{datasets:[{data:[{x:0,y:index+1}]}]},options:{responsive:false,animation:false,
+                plugins:{valueAxisHeadroom:{group:'test-shared'}},scales:{x:{type:'linear'},y:{beginAtZero:true}}}}));
+            const counts=[0,0,0];
+            charts.forEach((chart,index)=>{const update=chart.update;chart.update=function(...args){counts[index]++;return update.apply(this,args);};});
+            charts[0].update('none');
+            const unchanged=[...counts];counts.fill(0);
+            charts[0].data.datasets[0].data[0].y=8;
+            charts[0].update('none');
+            const changed=[...counts], bounds=charts.map(chart=>[chart.scales.y.min,chart.scales.y.max]);
+            charts.forEach(chart=>chart.destroy());
+            return {unchanged,changed,bounds};
+        }""")
+    assert result["unchanged"] == [1, 0, 0]
+    assert result["changed"] == [1, 1, 1]
+    assert result["bounds"] == [[0, 8 / 0.9]] * 3

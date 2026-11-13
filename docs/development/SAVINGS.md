@@ -26,8 +26,10 @@ plan starts at the current UTC quarter, while linked or historical plans retain
 their original start. Captions state actual covered boundaries. The full-period
 button states available hours instead of assuming that every retained or expired
 plan has 48 remaining hours. Versioned range reads clear stale totals and cannot
-replace a newer selection. Whole-plan evidence and corrected-contract tables keep
-their explicitly separate original-plan scope.
+replace a newer selection. Whole-plan evidence keeps its explicitly separate original-plan scope.
+Planning exposes scenario cost breakdowns and a contract-update notice. The API
+retains separate original and corrected-contract valuation evidence without a
+duplicate user-facing comparison table.
 
 ## Ownership and flow
 

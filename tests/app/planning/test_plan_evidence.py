@@ -126,7 +126,10 @@ def test_active_household_model_is_visible_per_interval_and_whole_plan(model, la
     )
     for item in (whole, selected):
         assert label in facts([item])["Forecast model"]
-        assert facts([item])["Forecast version"] == "original-load-forecast"
+        assert "Forecast version" not in facts([item])
+    assert (
+        plan["input_snapshot"]["demand_evidence"][0]["forecast_version"] == "original-load-forecast"
+    )
 
 
 def test_solar_forecast_provenance_is_matched_per_source():

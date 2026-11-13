@@ -28,10 +28,14 @@ def test_overview_retains_original_expectations_beside_successful_contract_corre
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#expected-benefit")).to_contain_text("Contract updated")
     expect(page.locator("#expected-benefit")).to_contain_text("without re-optimization")
-    page.get_by_text("Original and repriced expected costs", exact=True).click()
-    expect(page.locator("#expected-cost-rows tr")).to_have_count(6)
-    expect(page.get_by_role("columnheader", name="Original EMS", exact=True)).to_be_visible()
-    expect(page.get_by_role("columnheader", name="Repriced EMS", exact=True)).to_be_visible()
+    expect(page.get_by_text("Original and repriced expected costs", exact=True)).to_have_count(0)
+    selected = page.locator("#plan-version").input_value()
+    comparison = page.request.get(
+        url + "/v1/plans/" + selected + "/comparison",
+        headers={"Authorization": "Bearer " + TOKEN},
+    ).json()
+    assert comparison["comparison"]["ems_costs"] != comparison["valuation"]["ems_costs"]
+    expect(page.locator("#ems-costs > dl dd")).to_have_count(2)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
