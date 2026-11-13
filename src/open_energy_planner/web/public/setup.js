@@ -774,8 +774,7 @@ async function refreshPriceSources() {
         $("price-source-provenance").replaceChildren();
         $("price-market").textContent = "Price source status unavailable. Retrying automatically.";
     }
-    // A delayed price response must not supersede an explicit preference save or reload.
-    if (!saveState.busy) refreshStrategy();
+    refreshStrategy();
     try { await refreshSourceNames(); }
     catch { /* Retain the last confirmed names when metadata is temporarily unavailable. */ }
     priceTimer = setTimeout(refreshPriceSources, PRICE_STATUS_REFRESH_MS);
@@ -818,7 +817,12 @@ async function refreshSourceNames(signal) {
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
 async function load(refresh = false, discard = false, signal) {
     const generation = ++configurationGeneration;
-    const nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
+    let nextConfig;
+    try { nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal); }
+    catch (error) {
+        if (generation !== configurationGeneration) return;
+        throw error;
+    }
     if (generation !== configurationGeneration) return;
     if (nextConfig.mode !== "home_assistant")
         throw new Error("Installation setup requires Home Assistant mode.");
@@ -1141,6 +1145,8 @@ initializeIngress();
 
 /** Load the independent preference without delaying installation rendering or reporting aborted reads. */
 async function refreshStrategy(updateChoice = false, signal) {
+    // Background reads must yield to the active save or reload's preference baseline.
+    if (!updateChoice && saveState.busy) return;
     const pending = loadStrategy(updateChoice, signal);
     const requestVersion = strategyRequestVersion;
     try { await pending; }

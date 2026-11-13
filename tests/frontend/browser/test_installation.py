@@ -18,6 +18,7 @@ from tests.frontend.browser.helpers import (
     installation_area,
     physical_plan,
     read_settings,
+    wait_for_product_reads,
 )
 
 
@@ -1445,6 +1446,8 @@ def test_installation_is_usable_before_strategy_preference_arrives(app_page):
     expect(page.get_by_label("Maximum grid import (kW)", exact=True)).to_be_visible()
     page.get_by_label("Maximum grid import (kW)", exact=True).fill("7")
     assert pending
+    expect(page.locator("#strategy")).to_have_value("")
+    expect(page.locator("#strategy")).to_be_disabled()
     for route in pending:
         route.fulfill(json={"requested": "minimize cost", "issue": None})
     page.unroute("**/v1/strategy")
@@ -1584,4 +1587,66 @@ def test_strategy_reload_owns_baseline_during_inflight_price_poll(app_page, acti
         page.clock.fast_forward(31000)
     expect(page.locator("#strategy")).to_have_value(next_goal)
     expect(page.locator("#strategy-status")).to_be_empty()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+
+
+def test_pending_discovery_cannot_supersede_saved_strategy_baseline(app_page):
+    """An Energy-discovery retry during a real strategy save must preserve its confirmed baseline and next CAS write."""
+    page, url = app_page
+    page.clock.install()
+    page.goto(url + "/setup")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_strategy(page)
+    wait_for_product_reads(page)
+    page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
+    pending = []
+
+    def hold_explicit_preference(route):
+        """Hold the save confirmation read while the real discovery timer issues background reads."""
+        if route.request.method != "GET":
+            route.continue_()
+        elif not pending:
+            pending.append(route)
+            page.evaluate("window.savedPreferenceReadHeld = true")
+        else:
+            route.fulfill(json={"requested": "minimize consumption", "issue": None})
+
+    page.route("**/v1/strategy", hold_explicit_preference)
+    with page.expect_request(
+        lambda request: request.url.endswith("/v1/strategy") and request.method == "GET"
+    ):
+        page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    page.wait_for_function("() => window.savedPreferenceReadHeld === true")
+    expect(page.locator("#installation-save-state")).to_contain_text("Saving changes")
+    page.clock.fast_forward(5100)
+    expect(page.locator("#status")).to_contain_text("Waiting for Home Assistant")
+    expect(page.locator("#strategy")).to_be_disabled()
+    pending[0].fulfill(json={"requested": "minimize consumption", "issue": None})
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    assert page.request.get(url + "/v1/strategy", headers=headers).json() == {
+        "requested": "minimize consumption",
+        "issue": None,
+    }
+    page.unroute("**/v1/strategy")
+    edit_strategy(page)
+    page.get_by_label("Optimization goal", exact=True).select_option("minimize cost")
+    with page.expect_request(
+        lambda request: request.url.endswith("/v1/strategy") and request.method == "PUT"
+    ) as saved_request:
+        page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    assert saved_request.value.post_data_json == {
+        "strategy": "minimize cost",
+        "expected_strategy": "minimize consumption",
+    }
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert (
+        page.request.get(url + "/v1/strategy", headers=headers).json()["requested"]
+        == "minimize cost"
+    )
+    assert read_settings(page, url)["installation"] is None
+    page.clock.fast_forward(5100)
+    expect(page.locator("#strategy")).to_have_value("minimize cost")
     expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")

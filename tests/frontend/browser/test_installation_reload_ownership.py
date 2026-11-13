@@ -94,7 +94,7 @@ def test_export_permission_preserves_captured_field_ownership(app_page, ownershi
 def test_delayed_background_reload_preserves_newer_installation_ownership(
     app_page, action, outcome
 ):
-    """Release the actual source-name reload's held strategy response after Edit or Save and retain its draft/revisions."""
+    """Release the actual source-name reload's held configuration response after Edit or Save and retain its draft/revisions."""
     page, url = app_page
 
     def expose_probe(route):
@@ -120,21 +120,22 @@ def test_delayed_background_reload_preserves_newer_installation_ownership(
     changed["solar"]["version"] = "b" * 64
     page.route("**/v1/setup", lambda route: route.fulfill(json=changed))
     page.evaluate(
-        """outcome => {
+        """({outcome,changed}) => {
         const nativeFetch=window.fetch;
-        window.strategyHeld=false;
+        let configurationReads=0;
+        window.reloadHeld=false;
         window.fetch=(path,options)=>{
-            if(String(path).endsWith('v1/strategy')&&options.signal) {
-                window.strategyHeld=true;
-                return new Promise((resolve,reject)=>{window.completeStrategy=()=>outcome==='failure'?reject(new TypeError('PRIVATE-STAGED-READ')):resolve(new Response(JSON.stringify({requested:'minimize cost'})));});
+            if(String(path).endsWith('v1/setup')&&options.signal&&++configurationReads===2) {
+                window.reloadHeld=true;
+                return new Promise((resolve,reject)=>{window.completeReload=()=>outcome==='failure'?reject(new TypeError('PRIVATE-STAGED-READ')):resolve(new Response(JSON.stringify(changed)));});
             }
             return nativeFetch(path,options);
         };
         window.pendingRefresh=window.__installationProbe.refresh(AbortSignal.timeout(65000));
     }""",
-        outcome,
+        {"outcome": outcome, "changed": changed},
     )
-    page.wait_for_function("() => window.strategyHeld")
+    page.wait_for_function("() => window.reloadHeld")
     page.get_by_role("button", name="Edit installation", exact=True).click()
     maximum = page.get_by_label("Maximum grid import (kW)", exact=True)
     if action != "edit-only":
@@ -149,7 +150,7 @@ def test_delayed_background_reload_preserves_newer_installation_ownership(
         assert (
             read_settings(page, url)["installation"]["version"] == owned["installation"]["version"]
         )
-    page.evaluate("async()=>{window.completeStrategy();await window.pendingRefresh;}")
+    page.evaluate("async()=>{window.completeReload();await window.pendingRefresh;}")
     assert page.evaluate("window.__installationProbe.config()") == owned
     expect(maximum).to_have_value("5" if action == "edit-only" else "7.25")
     expect(page.locator("#installation-save-state")).to_have_text(owned_status)
