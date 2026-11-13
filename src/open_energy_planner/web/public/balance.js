@@ -1,5 +1,5 @@
 // Presentation of immutable, independently validated physical flows. Never optimize or infer energy routes here.
-const FLOW_COLORS = Object.freeze({solar: "#23965e", import: "#2586c4", export: "#56bac7", discharge: "#d45464", charge: "#8560b5", load: "#d29323", losses: "#88949f"});
+const FLOW_COLORS = Object.freeze({solar: "#23965e", solarAC: "#165c3c", import: "#2586c4", export: "#56bac7", discharge: "#d45464", charge: "#8560b5", load: "#d29323", losses: "#88949f"});
 const MILLISECONDS_PER_HOUR = 3600000;
 export const QUARTER_MILLISECONDS = MILLISECONDS_PER_HOUR / 4;
 const TIMESTAMP_ROUNDOFF_MILLISECONDS = 1;
@@ -178,7 +178,8 @@ function socSeries(plan, intervals, units, labels) {
 /**
  * Build signed kWh balances, then convert to mean kW: solar/import/discharge supply
  * positive energy. Load/export/charge/losses consume negative energy. Installation
- * grid/load boundaries are AC. Solar and battery terminals are DC. Converter groups
+ * grid/load boundaries are AC. Separate PV inverters supply AC, hybrid PV and battery
+ * terminals use DC. Converter groups
  * use their own AC input/output and local DC terminals. Losses use declared inverter
  * and battery DC efficiencies, never a residual. Internal storage losses affect SoC.
  * Invalid timing, efficiencies, missing evidence or failed conservation within
@@ -188,6 +189,10 @@ export function energyBalances(plan, labels) {
     const problem = plan.input_snapshot?.problem || {}, intervals = problem.intervals || [];
     const units = problem.batteries || [], sources = problem.pv_sources || [], inverters = problem.inverters || [];
     const consumption = deviceContributions(plan, intervals, labels);
+    const acSolar = new Set(inverters.filter((inverter) => !inverter.hybrid
+        && !units.some((unit) => unit.inverter_id === inverter.inverter_id)
+        && sources.some((source) => source.inverter_id === inverter.inverter_id))
+        .map((inverter) => inverter.inverter_id));
     const groups = [{id: "plant", name: "Installation energy balance", units},
         ...inverters.filter((inverter) => units.some((unit) => unit.inverter_id === inverter.inverter_id))
             .map((inverter, index) => ({id: inverter.inverter_id, inverter, name: `Battery converter ${index + 1}`,
@@ -214,9 +219,10 @@ export function energyBalances(plan, labels) {
             if (!group.inverter && !energy(workEnergy(flow.ev, problem.ev_work || [], "session_id"))) return null;
             if (!devices.every(energy) || !energy(thermal)) return null;
             if (![imported, exported, load].every(energy)) return null;
-            const losses = total(converters.map((inverter, converterIndex) =>
+            const converterLosses = converters.map((inverter, converterIndex) =>
                 conversionFlows[converterIndex].import_kwh * (1 - inverter.efficiency)
-                + conversionFlows[converterIndex].export_kwh * (1 / inverter.efficiency - 1)))
+                + conversionFlows[converterIndex].export_kwh * (1 / inverter.efficiency - 1));
+            const losses = total(converterLosses)
                 + total(group.units.map((unit, batteryIndex) =>
                     batteries[batteryIndex].charge_kwh * (1 / unit.dc_efficiency - 1)
                     + batteries[batteryIndex].discharge_kwh * (1 - unit.dc_efficiency)));
@@ -226,11 +232,20 @@ export function energyBalances(plan, labels) {
                 load: -load, devices: -total(devices), thermal: -thermal, export: -exported,
                 charge: -total(batteries.map((battery) => battery.charge_kwh)), losses: -losses
             };
+            // Validate original DC evidence before moving separate PV losses outside the display boundary.
+            if (!(Math.abs(total(Object.values(row))) <= BALANCE_TOLERANCE_KWH)) return null;
+            if (!group.inverter) {
+                row.solar = total(solar.filter((_, sourceIndex) => !acSolar.has(localSources[sourceIndex].inverter_id)));
+                row.solarAC = total(conversionFlows.filter((_, converterIndex) => acSolar.has(converters[converterIndex].inverter_id))
+                    .map((converter) => converter.export_kwh));
+                row.losses += total(converterLosses.filter((_, converterIndex) => acSolar.has(converters[converterIndex].inverter_id)));
+            }
             return Math.abs(total(Object.values(row))) <= BALANCE_TOLERANCE_KWH ? row : null;
         });
         const converter = Boolean(group.inverter);
         const definitions = [
             ["solar", "Used solar: DC", "Production"],
+            ...(!converter ? [["solarAC", "Used solar: AC", "Production"]] : []),
             ["import", converter ? "AC supply to converter" : "Grid import: AC", "Production"],
             ["discharge", "Battery discharge: DC", "Production"], ["load", plan.input_snapshot?.load_components?.length ? plan.input_snapshot.load_components.find(part => part.entity_id == null)?.unseparated_entities?.length ? "Household remainder: AC" : "Household base: AC" : "Household demand: AC", "Consumption"],
             ["export", converter ? "Converter output to AC" : "Grid export: AC", "Consumption"],

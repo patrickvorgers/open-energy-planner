@@ -329,11 +329,11 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     assert state["socLabels"] and all(label.endswith(".0") for label in state["socLabels"])
     assert state["timeTitle"] is False
     assert state["wattLabels"] == ["0.2", "0.4"]
-    assert len({entry["color"] for entry in state["values"] if entry["axis"] == "y"}) == 7
+    assert len({entry["color"] for entry in state["values"] if entry["axis"] == "y"}) == 8
     expect(page.locator("[id^=converter-balance]")).to_have_count(0)
     expect(page.get_by_role("heading", name="converter balance", exact=False)).to_have_count(0)
     expect(page.get_by_role("heading", name="Battery converter", exact=False)).to_have_count(0)
-    expect(page.locator("#plan-chart-legend .series-swatch")).to_have_count(8)
+    expect(page.locator("#plan-chart-legend .series-swatch")).to_have_count(9)
     canvas = page.locator("#plan-chart")
     canvas.scroll_into_view_if_needed()
     point = page.evaluate(

@@ -190,6 +190,7 @@ def test_corrupt_component_attribution_is_a_gap_instead_of_a_double_count(app_pa
     assert all(values[0] is None for values in bars.values())
     expected = {
         "Used solar: DC": [0, 0],
+        "Used solar: AC": [0, 0],
         "Grid import: AC": [0.56, 3],
         "Battery discharge: DC": [2, 0],
         "Household base: AC": [-1.5, -0.8],

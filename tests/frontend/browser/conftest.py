@@ -112,6 +112,10 @@ def app_site(request, savings_now):
                 )
             finally:
                 repository.close()
+        if getattr(request, "param", None) == "solar_boundaries":
+            from tests.frontend.browser.solar_balance_fixture import seed as seed_solar
+
+            seed_solar(Path(directory))
         if getattr(request, "param", None) == "documentation":
             from tests.frontend.browser.documentation_fixture import seed
 
