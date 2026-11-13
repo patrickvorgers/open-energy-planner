@@ -4,7 +4,6 @@ import asyncio
 import json
 import re
 from html.parser import HTMLParser
-from pathlib import Path
 
 import pytest
 from aiohttp import ClientSession, web
@@ -71,6 +70,7 @@ def test_supervisor_proof_reconnects_same_owner_without_consent(tmp_path):
 def test_ingress_trust_requires_socket_peer_and_valid_prefix(tmp_path, trusted, monkeypatch):
     """HA ingress authenticates from its actual proxy address. A forged forwarded address never grants access."""
     from open_energy_planner.build_info import BUILD_INFO
+    from open_energy_planner.frontend.assets import PUBLIC
 
     monkeypatch.setitem(BUILD_INFO, "revision", "a" * 40)
     monkeypatch.setitem(BUILD_INFO, "release_tag", "v1.2.3")
@@ -102,6 +102,9 @@ def test_ingress_trust_requires_socket_peer_and_valid_prefix(tmp_path, trusted, 
             async with client.get(url + "/v1/snapshot", headers=headers) as response:
                 assert response.status == (200 if trusted else 401)
             async with client.get(url + "/setup", headers=headers) as response:
+                assert response.status == 200
+                assert response.content_type == "text/html"
+                assert response.headers["Cache-Control"] == "no-store"
                 html = await response.text()
                 assert TOKEN not in html
                 stylesheets = StylesheetLinks(html).links
@@ -124,12 +127,13 @@ def test_ingress_trust_requires_socket_peer_and_valid_prefix(tmp_path, trusted, 
                         assert asset.content_type == "text/css"
                         assert asset.headers["X-Content-Type-Options"] == "nosniff"
                         assert asset.headers["Referrer-Policy"] == "no-referrer"
-                        assert "script-src 'self'" in asset.headers["Content-Security-Policy"]
-                        expected = (
-                            Path(__file__).resolve().parents[3]
-                            / "src/open_energy_planner/web/public"
-                            / link.rsplit("/", 1)[-1]
+                        assert (
+                            asset.headers["Cache-Control"] == "public, max-age=31536000, immutable"
                         )
+                        policy = asset.headers["Content-Security-Policy"]
+                        assert "script-src 'self'" in policy and "base-uri 'none'" in policy
+                        assert "object-src 'none'" in policy and "frame-ancestors 'self'" in policy
+                        expected = PUBLIC / link.rsplit("/", 1)[-1]
                         assert await asset.read() == expected.read_bytes()
             for value in ("https://evil.example", "/api/hassio_ingress/test/../../evil", ""):
                 async with client.get(

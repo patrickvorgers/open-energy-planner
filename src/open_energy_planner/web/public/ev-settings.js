@@ -206,8 +206,8 @@ function render() {
         input(card, row, "capacity_kwh", "Usable battery capacity (kWh)", "Usable energy, not the manufacturer's gross pack size.", "number", {min: 0.1, max: 1000, step: 0.1});
         input(card, row, "maximum_w", "Maximum vehicle AC charging power (kW)", "The car's own AC limit. The lower of this and the charge point limit applies.", "number", {min: 0.001, max: 100, step: 0.001});
         card.append(node("h3", "Charging preferences"));
-        input(card, row, "target_soc", "Target state of charge (%)", "The desired battery percentage before departure.", "number", {min: 0, max: 100, step: "any"});
-        input(card, row, "departure_time", "Daily departure time", "Local Home Assistant time. Set a one-off date/time using the native HA vehicle controls.", "time");
+        input(card, row, "target_soc", "Target state of charge (%)", "Default battery percentage for a newly planned charging request. Each request can override it.", "number", {min: 0, max: 100, step: "any"});
+        input(card, row, "departure_time", "Default departure time", "Local Home Assistant time used to prefill a new charging request. This does not create a daily schedule.", "time");
         find("vehicles").append(card);
     }
     for (const row of draft.points) {
@@ -254,7 +254,7 @@ function renderSummary() {
     find("ev-request-title").textContent = vehicle ? "Charging request" : "Charging sessions";
     find("ev-request-description").textContent = vehicle ? "Target state of charge and departure remain available under Energy and through the HA integration." : "Connection, vehicle assignment and charging evidence remain under Energy. Vehicle identity must be reported explicitly per session.";
     const saved = (vehicle ? current.vehicles : current.points).find(item => item.id === row.id);
-    settingsSummary(find("ev-request-summary"), [["Saved request", vehicle ? [["Target SoC", percentage(saved?.target_soc)], ["Daily departure", saved?.departure_time ?? "Unavailable"]] : [["Status", saved?.status ? optionLabel(saved.status) : "Not saved yet"]]]]);
+    settingsSummary(find("ev-request-summary"), [["Saved defaults", vehicle ? [["Target SoC", percentage(saved?.target_soc)], ["Departure time", saved?.departure_time ?? "Unavailable"]] : [["Status", saved?.status ? optionLabel(saved.status) : "Not saved yet"]]]]);
 }
 /** Reload confirmed configuration only through an explicit SaveBar transition. */
 async function load(selection = selectedId) {

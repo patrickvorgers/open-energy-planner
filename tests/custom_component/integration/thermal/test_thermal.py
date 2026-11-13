@@ -22,6 +22,7 @@ from custom_components.open_energy_planner.thermal_controls import (
     ThermalMinimum,
     ThermalSensor,
 )
+from tests.custom_component.support.ev import available_ev
 
 
 def device(now):
@@ -436,7 +437,9 @@ def test_coordinator_outage_and_local_unavailability_emit_guarded_stop_without_r
             row = device(now)
             thermal_target = DeviceCommand("tank", "thermal", power_w=2000)
             battery_target = DeviceCommand("battery", "battery", power_w=-500)
-            vehicle_target = DeviceCommand("wallbox", "ev", power_w=7000)
+            vehicle_target = DeviceCommand(
+                "wallbox", "ev", power_w=7000, vehicle_id="car", session_id="connected-session"
+            )
             accepted = Projection(
                 "active", Command(False, (thermal_target, battery_target, vehicle_target))
             )
@@ -447,6 +450,8 @@ def test_coordinator_outage_and_local_unavailability_emit_guarded_stop_without_r
                 next_boundary=lambda _now: None,
                 plan=SimpleNamespace(plan_id="accepted-plan"),
             )
+            available_ev(peer, now)
+            peer.schedule.document["ev_context"] = {"revision": "ev-revision"}
             peer.thermal = coordinator(hass, row).thermal
             peer.consumer_forecasts = {"options": [{"entity_id": row["energy_entity"]}]}
             peer.refresh(now)
@@ -747,7 +752,7 @@ def test_optional_thermal_projection_fault_keeps_real_mixed_plan_and_guards_only
         peer = PlanCoordinator(
             hass, SimpleNamespace(entry_id="mixed-thermal", data={"url": "http://app"}), client
         )
-        peer.ev = {"points": [{"id": "wallbox", "control": "variable"}]}
+        available_ev(peer, now)
         peer.save = AsyncMock()
         events = []
 

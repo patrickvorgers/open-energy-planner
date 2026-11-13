@@ -125,6 +125,27 @@ def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
 
 def overview_read_probe(page, stalled):
     """Observe full-view reads separately from financial period slices and stall one real response."""
+
+    def expose_source_watcher(route):
+        """Observe the real watcher's private revision and pending state in this test only."""
+        response = route.fetch()
+        source = response.text()
+        header = (
+            "export function watchSourceNames(readSession, refresh, revision) {\n"
+            "    let busy = false;"
+        )
+        assert source.count(header) == 1, "Source watcher probe must attach exactly once"
+        route.fulfill(
+            response=response,
+            body=source.replace(
+                header,
+                header + "\n    window.overviewSourceWatcher = {get revision() {return revision;}, "
+                "get pending() {return busy;}};",
+                1,
+            ),
+        )
+
+    page.route("**/display.js", expose_source_watcher)
     page.add_init_script("window.stalledOverviewKind=" + repr(stalled) + ";")
     page.add_init_script("""(() => {
       const fetchOriginal=window.fetch,budgets=new WeakMap();
@@ -219,6 +240,7 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
         open_primary_navigation(page)
         page.get_by_role("link", name="Planning", exact=True).click()
         expect(page.locator("#planning-view")).to_be_visible()
+    source_revision = page.evaluate("window.overviewSourceWatcher.revision")
     page.evaluate("window.armOverviewReads=true")
     next(entry for entry in metadata["entities"] if entry["entity_id"] == "sensor.incoming")[
         "energy_name"
@@ -253,6 +275,8 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     ).click()
     expect(page.locator("#planning-view" if stalled == "plan" else "#savings-view")).to_be_visible()
     wait_for_product_reads(page)
+    if stalled == "plan":
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
     page.clock.fast_forward(31000)
     page.wait_for_function(
         "() => window.overviewReads.filter(record=>record.armed&&record.completed).length>=3"
@@ -271,6 +295,11 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
         expect(page.locator("#planning-view")).to_be_visible()
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         wait_for_product_reads(page)
+    page.wait_for_function(
+        "previous => !window.overviewSourceWatcher.pending "
+        "&& window.overviewSourceWatcher.revision !== previous",
+        arg=source_revision,
+    )
     count = page.evaluate("window.overviewReads.length")
     page.clock.fast_forward(31000)
     assert page.evaluate("window.overviewReads.length") == count

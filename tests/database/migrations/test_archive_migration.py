@@ -1100,3 +1100,40 @@ def test_nonlinear_solar_archive_migrates_and_replays_without_source_database(ro
     assert copied["summary"]["excluded_counts"]["production_out_of_range"] == 1
     assert copied["summary"]["excluded_counts"].get("statistical_outlier", 0) == 0
     assert copied["summary"]["diagnostic_counts"]["irradiance_yield_anomaly"] >= 1
+
+
+def test_ev_request_versions_and_global_intent_revisions_transfer_without_source(route):
+    """Each backend route retains compact request history, past intent and UUID retry after the source closes."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from open_energy_planner.appliances.ev.service import EVService
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from tests.app.ev.support.devices import CAR, NOW, catalogue, settings
+    from tests.database.support.ev import reconstruct_requests
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    SqlPlanRepository(root / "target", engine=target)
+    consumers = ConsumerForecasts(SqlDocuments(source, "demand"))
+    consumers.sync(catalogue())
+    appliances = SimpleNamespace(state={"devices": {}})
+    service = EVService(SqlDocuments(source, "planning"), consumers, appliances)
+    service.configure(settings(), catalogue(), NOW)
+    body = {"request_id": str(uuid4()), "vehicle_id": CAR, "target_soc": 65}
+    service.save_request(body, NOW, "Europe/Amsterdam")
+    archived = service.documents.read("ev-state.json")
+    request = service.document(NOW, "Europe/Amsterdam")["vehicles"][0]["charging_request"]
+    service.cancel_request(request["id"], request["version"], NOW, CAR)
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored_consumers = ConsumerForecasts(SqlDocuments(target, "demand"))
+    restored_consumers.options = consumers.options
+    restored = EVService(SqlDocuments(target, "planning"), restored_consumers, appliances)
+    restored.save_request(body, NOW + timedelta(days=1), "Europe/Amsterdam")
+    assert restored.state["active_requests"] == {}
+    assert restored.request_history(catalogue())["requests"][0]["status"] == "cancelled"
+    retained = reconstruct_requests(restored.documents, archived)
+    assert retained[body["request_id"]]["status"] == "planned"
+    assert retained[body["request_id"]]["target_soc"] == 65

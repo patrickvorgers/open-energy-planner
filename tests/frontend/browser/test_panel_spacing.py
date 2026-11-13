@@ -67,7 +67,14 @@ def test_ev_panels_keep_the_same_gap_when_evidence_is_empty_or_unavailable(app_p
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#sessions")).to_contain_text("No configured charge points")
     panels = page.locator("main > .panel-stack > .chart-card, main > .chart-card")
-    expect(panels).to_have_count(3)
+    headings = [
+        "Charging sessions",
+        "Charging requests",
+        "Charging request history",
+        "Planning and charging losses",
+    ]
+    expect(panels).to_have_count(4)
+    expect(panels.locator(":scope > h2")).to_have_text(headings)
     page.screenshot(
         path=f"results/ci/panel-spacing-ev-{page.viewport_size['width']}.png", full_page=True
     )
@@ -78,11 +85,15 @@ def test_ev_panels_keep_the_same_gap_when_evidence_is_empty_or_unavailable(app_p
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.route("**/v1/ev", lambda route: route.fulfill(status=503, body="Unavailable"))
     page.get_by_role("button", name="Refresh charging evidence", exact=True).click()
-    expect(page.locator("#status")).to_have_text("Unavailable")
-    expect(panels).to_have_count(3)
+    expect(page.locator("#status")).to_have_text(
+        "Charging evidence could not be read. Check the connection and try Refresh."
+    )
+    expect(panels).to_have_count(4)
+    expect(panels.locator(":scope > h2")).to_have_text(headings)
     bounds = [panel.bounding_box() for panel in panels.all()]
     for previous, following in pairwise(bounds):
         assert following["y"] - previous["y"] - previous["height"] == pytest.approx(expected_gap)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(
         path=f"results/ci/panel-spacing-error-{page.viewport_size['width']}.png", full_page=True
     )

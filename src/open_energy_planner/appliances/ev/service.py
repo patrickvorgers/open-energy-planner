@@ -15,41 +15,33 @@ from open_energy_planner.appliances.ev.model import (
     number,
     refine,
 )
+from open_energy_planner.appliances.ev.notifications import (
+    EXECUTION_DEVIATION_ADVICE,
+    forecast_boundary_issue,
+)
+from open_energy_planner.appliances.ev.requests import (
+    REQUEST_HISTORY_PAGE_SIZE,
+    active_request,
+    advance_requests,
+    cancel_request,
+    departure,
+    request_document,
+    save_request,
+)
 from open_energy_planner.core.units import FULL_SOC_PERCENT
 from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.home_assistant.names import source_names, vehicle_source_names
 from open_energy_planner.optimization.adapters.process.worker import DEFAULT_WORKER_TIMEOUT_SECONDS
 
 STATE_KEY = "ev-state.json"
+REQUEST_CURRENT_PREFIX = "ev-request-current-"
+REQUEST_VERSION_PREFIX = "ev-request-version-"
 REPORT_MAX_AGE_SECONDS = 120
 CLOCK_SKEW_SECONDS = 5
-MAX_OVERRIDE_DAYS = 30
 HA_HANDOVER_SECONDS = 5
 EV_DISPATCH_LEAD_SECONDS = DEFAULT_WORKER_TIMEOUT_SECONDS + HA_HANDOVER_SECONDS
-
-
-def departure(settings, now, timezone):
-    """Resolve one future departure in HA time, skipping nonexistent daily DST clock times.
-
-    One-off departures expire at their instant. Repeated daily clock hours use
-    their first occurrence only, so a fallback day does not create two sessions.
-    """
-    if settings.get("departure_override"):
-        override = instant(settings["departure_override"])
-        if override > now:
-            return override
-    zone = ZoneInfo(timezone)
-    local_day = now.astimezone(zone).date()
-    for offset in range(3):
-        local = datetime.combine(
-            local_day + timedelta(days=offset), time.fromisoformat(settings["departure_time"]), zone
-        )
-        candidate = local.astimezone(UTC)
-        if candidate > now and candidate.astimezone(zone).replace(tzinfo=None) == local.replace(
-            tzinfo=None
-        ):
-            return candidate
-    raise ValueError("No valid daily departure in the next three local days")
+EV_POWER_DEVIATION_W = 500
+EV_POWER_DEVIATION_SECONDS = 60
 
 
 class EVService:
@@ -58,22 +50,56 @@ class EVService:
     def __init__(self, documents, consumers, appliances):
         """Restore intent without promoting retained SoC or old vehicle assignments to live facts."""
         self.documents, self.consumers, self.appliances = documents, consumers, appliances
-        self.state = (
-            documents.read(STATE_KEY)
-            if documents.exists(STATE_KEY)
-            else {"vehicles": [], "points": [], "assignments": {}}
+        persisted = documents.read(STATE_KEY) if documents.exists(STATE_KEY) else None
+        self.archive_revision = digest(persisted) if persisted else None
+        self.state = {
+            "vehicles": [],
+            "points": [],
+            "assignments": {},
+            "requests": {},
+            "active_requests": {},
+        }
+        if persisted:
+            self.state.update({key: persisted[key] for key in self.state if key in persisted})
+        self.state["requests"].update(
+            {record["id"]: record for record in documents.iter_prefix(REQUEST_CURRENT_PREFIX)}
         )
         self.report = None
         self.issue = None
+        self.power_deviations = {}
 
     def commit(self, state):
-        """Archive a complete intent revision and update its pointer in one database transaction."""
+        """Atomically archive only changed requests and link bounded global intent revisions."""
         if state == self.state:
             return
+        changed = {
+            request_id: record
+            for request_id, record in state["requests"].items()
+            if record != self.state["requests"].get(request_id)
+        }
+        snapshot = {
+            **{key: state[key] for key in ("vehicles", "points", "assignments", "active_requests")},
+            "requests": {
+                request_id: state["requests"][request_id]
+                for request_id in state["active_requests"].values()
+            },
+            "request_changes": {
+                request_id: digest(record) for request_id, record in changed.items()
+            },
+            "previous_revision": self.archive_revision,
+        }
+        revision = digest(snapshot)
         with self.documents.transaction():
-            self.documents.write("ev-state-" + digest(state) + ".json", state)
-            self.documents.write(STATE_KEY, state)
+            for request_id, record in changed.items():
+                self.documents.write(
+                    REQUEST_VERSION_PREFIX + snapshot["request_changes"][request_id] + ".json",
+                    record,
+                )
+                self.documents.write(REQUEST_CURRENT_PREFIX + request_id + ".json", record)
+            self.documents.write("ev-state-" + revision + ".json", snapshot)
+            self.documents.write(STATE_KEY, snapshot)
         self.state = state
+        self.archive_revision = revision
 
     @property
     def revision(self):
@@ -82,23 +108,35 @@ class EVService:
             {key: row[key] for key in ("id", "session_id", "connected")}
             for row in (self.report or {}).get("points", [])
         ]
-        return digest([self.state, connections])
+        current = {key: self.state[key] for key in ("vehicles", "points", "assignments")}
+        current["requests"] = {
+            vehicle_id: self.state["requests"][request_id]
+            for vehicle_id, request_id in self.state["active_requests"].items()
+        }
+        return digest([current, connections])
 
-    def configure(self, body, catalogue):
+    def configure(self, body, catalogue, now=None):
         """Reuse Energy ownership and automatically request each charger's component forecast."""
         checked, selected = configuration(body, catalogue, self.consumers, self.appliances)
         if tuple(selected) != self.consumers.selected:
             # Forecast selection is idempotent. A failed EV write leaves only a safe extra forecast.
             self.consumers.save(tuple(selected), self.consumers.version)
-        state = {**checked, "assignments": {}}
-        previous = {row["id"]: row for row in self.state["vehicles"]}
-        for row in state["vehicles"]:
-            if previous.get(row["id"], {}).get("departure_override"):
-                row["departure_override"] = previous[row["id"]]["departure_override"]
+        state = {**deepcopy(self.state), **checked, "assignments": {}}
+        vehicle_ids = {car["id"] for car in checked["vehicles"]}
+        for vehicle_id, request_id in tuple(state["active_requests"].items()):
+            if vehicle_id not in vehicle_ids:
+                state = cancel_request(
+                    state,
+                    request_id,
+                    digest(state["requests"][request_id]),
+                    now or datetime.now(UTC),
+                )
         self.commit(state)
         self.report = None
+        self.power_deviations.clear()
+        self.issue = None
 
-    def receive(self, body, now):
+    def receive(self, body, now, timezone=None):
         """Accept bounded current HA readings with exact configured provenance and explicit unknowns."""
         if not isinstance(body, dict) or set(body) != {
             "configuration_version",
@@ -156,6 +194,7 @@ class EVService:
             if row["power_w"] is not None:
                 number(row["power_w"], 0, MAX_EV_POWER_W)
         self.report = deepcopy(body)
+        self.commit(advance_requests(self.state, self.report, now, timezone))
 
     @property
     def configuration_version(self):
@@ -186,32 +225,35 @@ class EVService:
         self.commit(state)
 
     def intent(self, vehicle_id, field, value, now, timezone):
-        """Apply native target/departure controls using HA's timezone, without helper entities."""
-        state = deepcopy(self.state)
-        vehicle = next((row for row in state["vehicles"] if row["id"] == vehicle_id), None)
+        """Edit the current request through native controls without changing vehicle defaults."""
+        vehicle = next((row for row in self.state["vehicles"] if row["id"] == vehicle_id), None)
         if vehicle is None:
             raise ValueError("Unknown vehicle")
+        request = active_request(self.state, vehicle_id)
+        if request is None:
+            raise ValueError("Plan a charging request before changing its values")
+        body = {
+            "request_id": request["id"],
+            "vehicle_id": vehicle_id,
+            "target_soc": request["target_soc"],
+            "departure": request["departure"],
+            "repeat_weekdays": request["repeat_weekdays"],
+            "expected_version": digest(request),
+        }
         if field == "target_soc":
-            vehicle[field] = number(value, 0, FULL_SOC_PERCENT)
-        elif field == "departure_time":
-            clock = time.fromisoformat(value)
-            if clock.tzinfo or clock.second or clock.microsecond:
-                raise ValueError("Use a daily local departure time with minute precision")
-            vehicle[field] = clock.isoformat(timespec="minutes")
+            body[field] = value
         elif field == "departure_override":
-            if value is None:
-                vehicle.pop(field, None)
-            else:
-                deadline = instant(value)
-                if not now < deadline <= now + timedelta(days=MAX_OVERRIDE_DAYS):
-                    raise ValueError("One-off departure must be in the next thirty days")
-                vehicle[field] = deadline.isoformat()
-        elif field in ("departure_date", "departure_clock"):
+            body["departure"] = (
+                departure(vehicle, now, timezone).isoformat() if value is None else value
+            )
+        elif field in ("departure_date", "departure_clock", "departure_time"):
             zone = ZoneInfo(timezone)
-            previous = departure(vehicle, now, timezone).astimezone(zone)
+            previous = instant(request["departure"]).astimezone(zone)
             local_date = date.fromisoformat(value) if field == "departure_date" else previous.date()
             local_time = (
-                time.fromisoformat(value) if field == "departure_clock" else previous.time()
+                time.fromisoformat(value)
+                if field in ("departure_clock", "departure_time")
+                else previous.time()
             )
             if local_time.tzinfo:
                 raise ValueError("Use a local departure time")
@@ -219,12 +261,48 @@ class EVService:
             deadline = local.astimezone(UTC)
             if deadline.astimezone(zone).replace(tzinfo=None) != local.replace(tzinfo=None):
                 raise ValueError("This local departure time does not exist")
-            if not now < deadline <= now + timedelta(days=MAX_OVERRIDE_DAYS):
-                raise ValueError("One-off departure must be in the next thirty days")
-            vehicle["departure_override"] = deadline.isoformat()
+            body["departure"] = deadline.isoformat()
         else:
             raise ValueError("Unknown EV intent field")
-        self.commit(state)
+        self.save_request(body, now, timezone)
+
+    def save_request(self, body, now, timezone):
+        """Persist a complete charging request atomically with immutable state history."""
+        self.commit(save_request(self.state, body, now, timezone))
+
+    def cancel_request(self, request_id, expected_version, now, vehicle_id):
+        """Cancel the request and repetition without erasing completed or cancelled history."""
+        request = self.state["requests"].get(request_id)
+        if request and request["vehicle_id"] != vehicle_id:
+            raise ValueError("Charging request belongs to a different vehicle")
+        self.commit(cancel_request(self.state, request_id, expected_version, now))
+
+    def request_history(self, catalogue=None, cursor=None):
+        """Page retained requests independently of bounded live HA device projections."""
+        records = self.state["requests"]
+        if cursor is not None and cursor not in records:
+            raise ValueError("Unknown charging history cursor")
+        ordered = sorted(
+            records.values(), key=lambda row: (row["created_at"], row["id"]), reverse=True
+        )
+        if cursor is not None:
+            boundary = (records[cursor]["created_at"], cursor)
+            ordered = [row for row in ordered if (row["created_at"], row["id"]) < boundary]
+        page = ordered[:REQUEST_HISTORY_PAGE_SIZE]
+        names = vehicle_source_names(catalogue)
+        cars = {car["id"]: car for car in self.state["vehicles"]}
+        return {
+            "requests": [
+                {
+                    **request_document(row),
+                    "vehicle_name": names.get(
+                        cars.get(row["vehicle_id"], {}).get("soc_entity"), "Removed vehicle"
+                    ),
+                }
+                for row in page
+            ],
+            "next_cursor": page[-1]["id"] if len(ordered) > len(page) else None,
+        }
 
     def live(self, now):
         """Return fresh connection evidence, never retained readings after a transport outage."""
@@ -277,13 +355,18 @@ class EVService:
             measured = readings.get(assigned.get("vehicle_id"), {})
             if not car or measured.get("soc") is None or point["control"] == "read_only":
                 continue
+            request = active_request(self.state, car["id"])
+            if request is None or instant(request["departure"]) <= now:
+                continue
             maximum = min(point["maximum_w"], car["maximum_w"])
             minimum = maximum if point["control"] == "on_off" else point["minimum_w"]
             if maximum < minimum:
                 continue
-            deadline = departure(car, now, timezone)
+            deadline = instant(request["departure"])
             ready = min(
-                now + timedelta(seconds=EV_DISPATCH_LEAD_SECONDS),
+                max(
+                    now + timedelta(seconds=EV_DISPATCH_LEAD_SECONDS), instant(request["ready_at"])
+                ),
                 deadline - timedelta(microseconds=1),
             )
             selected.append(
@@ -295,7 +378,7 @@ class EVService:
                     deadline,
                     car["capacity_kwh"],
                     measured["soc"],
-                    car["target_soc"],
+                    request["target_soc"],
                     minimum,
                     maximum,
                     point["control"],
@@ -321,27 +404,15 @@ class EVService:
         )
 
     def prepare(self, snapshot, demand, now, timezone, *, excluded_entities=()):
-        """Remove only modeled charger baselines and add their joint future AC demand once."""
+        """Remove every configured charger forecast and add only explicit live SOC work."""
         works = self.work(now, timezone)
-        entities = {
-            point["energy_entity"]
-            for point in self.state["points"]
-            if any(work.point_id == point["id"] for work in works)
-        }
+        entities = {point["energy_entity"] for point in self.state["points"]}
         entities.update(excluded_entities)
-        windows = tuple(
-            (point["energy_entity"], work.ready_at, work.deadline)
-            for point in self.state["points"]
-            for work in works
-            if work.point_id == point["id"]
-        )
-        prepared = self.appliances.prepare(
-            snapshot, demand, now, excluded_entities=entities, replacement_windows=windows
-        )
+        prepared = self.appliances.prepare(snapshot, demand, now, excluded_entities=entities)
         if entities and not prepared.appliance_evidence:
             self.issue = (
-                "Charger component forecast unavailable. Retaining measured household boundary"
-                if works
+                "Charger component forecast unavailable. EV history cannot be removed safely"
+                if self.state["points"]
                 else None
             )
             works = ()
@@ -375,6 +446,79 @@ class EVService:
             ),
         )
 
+    def execution_deviated(self, plan, now):
+        """Latch sustained point-power deviations until one replacement round accepts them.
+
+        Missing readings are not zero power. A new session, setpoint or material
+        measured-power change starts a new episode. Unchanged refusal remains
+        visible without repeatedly requesting the same early calculation.
+        """
+        active = next(
+            (
+                step
+                for step in plan.get("steps", ())
+                if instant(step["start"]) <= now < instant(step["end"])
+            ),
+            None,
+        )
+        if active is None or now >= instant(plan["valid_until"]):
+            self.power_deviations.clear()
+            return False
+        live = {row["id"]: row for row in self.live(now)}
+        captured_at = instant(self.report["at"]) if live else None
+        if captured_at is None or captured_at < instant(active["start"]):
+            self.power_deviations.clear()
+            return False
+        retained = {}
+        for point in self.state["points"]:
+            actual = live.get(point["id"], {})
+            power = actual.get("power_w")
+            if power is None:
+                continue
+            command = active["devices"].get(point["id"], {})
+            expected = command.get("power_w", 0)
+            if abs(power - expected) < EV_POWER_DEVIATION_W:
+                continue
+            signature = (actual.get("session_id"), expected)
+            previous = self.power_deviations.get(point["id"])
+            if (
+                previous is None
+                or previous["signature"] != signature
+                or abs(power - previous["power_w"]) >= EV_POWER_DEVIATION_W
+                or (captured_at - previous["last_seen"]).total_seconds() >= REPORT_MAX_AGE_SECONDS
+            ):
+                previous = {
+                    "signature": signature,
+                    "power_w": power,
+                    "since": captured_at,
+                    "acknowledged": False,
+                }
+            previous["last_seen"] = captured_at
+            retained[point["id"]] = previous
+        self.power_deviations = retained
+        return any(
+            not deviation["acknowledged"]
+            for deviation in self.confirmed_power_deviations(now).values()
+        )
+
+    def confirmed_power_deviations(self, now):
+        """Require advancing accepted power captures, not elapsed wall time or SoC sample age."""
+        if not self.live(now):
+            return {}
+        captured_at = instant(self.report["at"])
+        return {
+            point_id: deviation
+            for point_id, deviation in self.power_deviations.items()
+            if deviation["last_seen"] == captured_at
+            and (deviation["last_seen"] - deviation["since"]).total_seconds()
+            >= EV_POWER_DEVIATION_SECONDS
+        }
+
+    def accept_execution_deviations(self, now):
+        """Coalesce an unchanged deviation after submitting its replacement calculation."""
+        for deviation in self.confirmed_power_deviations(now).values():
+            deviation["acknowledged"] = True
+
     def document(self, now, timezone, catalogue=None, plan=None):
         """Expose authoritative configuration, current session issues and explicit predicted shortfall."""
         names = source_names(catalogue)
@@ -382,6 +526,7 @@ class EVService:
         live = {row["id"]: row for row in self.live(now)}
         readings = self.vehicle_readings(now)
         works = {work.point_id: work for work in self.work(now, timezone)}
+        confirmed = self.confirmed_power_deviations(now)
         current_revision = self.hard_revision(now, timezone)
         usable = bool(
             plan
@@ -412,6 +557,8 @@ class EVService:
                 if not vehicle_id
                 else "measurement_only"
                 if point["control"] == "read_only"
+                else "request_missing"
+                if active_request(self.state, vehicle_id) is None
                 else "ready"
                 if point["id"] in works
                 else "soc_or_limits_unavailable"
@@ -423,6 +570,9 @@ class EVService:
                     "actual": actual,
                     "vehicle_id": vehicle_id,
                     "status": status,
+                    "execution_issue": (
+                        EXECUTION_DEVIATION_ADVICE if usable and point["id"] in confirmed else None
+                    ),
                     "schedule": schedules.get(point["id"])
                     if schedules.get(point["id"], {}).get("session_id") == actual.get("session_id")
                     else None,
@@ -432,14 +582,18 @@ class EVService:
             "configuration_version": self.configuration_version,
             "revision": current_revision,
             "observed_at": self.report["at"] if self.report and self.live(now) else None,
-            "issue": self.issue,
+            "issue": forecast_boundary_issue(self.state["points"], names) if self.issue else None,
             "timezone": timezone,
             "vehicles": [
                 {
                     **car,
                     "name": vehicle_names.get(car["soc_entity"], "Vehicle"),
                     "actual": readings.get(car["id"]),
-                    "next_departure": departure(car, now, timezone).isoformat(),
+                    "next_departure": (active_request(self.state, car["id"]) or {}).get(
+                        "departure", departure(car, now, timezone).isoformat()
+                    ),
+                    "default_departure": departure(car, now, timezone).isoformat(),
+                    "charging_request": request_document(active_request(self.state, car["id"])),
                 }
                 for car in self.state["vehicles"]
             ],

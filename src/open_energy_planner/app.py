@@ -262,11 +262,14 @@ def create_app(
 
     def explain_live_problem(reason, _detail=None):
         """Keep source-specific actionable context in both planning notices and transition logs."""
+        from .appliances.ev.notifications import explain_problem as explain_ev_problem
         from .home_assistant.notifications import explain_live_problem as explain_measurements
 
-        return explain_measurements(
-            live, reason, setup_catalogue.value
-        ) or explain_planning_problem(reason)
+        return (
+            explain_ev_problem(reason)
+            or explain_measurements(live, reason, setup_catalogue.value)
+            or explain_planning_problem(reason)
+        )
 
     from .optimization.performance import register as register_performance
 
@@ -283,7 +286,7 @@ def create_app(
         # Recovery always needs fresh reports. Retained plans are history, not commands.
         repository.state["plan"] = None
         repository.save()
-        live = LiveInputs(planner, repository, basis_source)
+        live = LiveInputs(planner, repository, basis_source, ev=ev)
         live.prepare_snapshot = lambda snapshot, now: thermal.prepare(
             snapshot,
             demand,

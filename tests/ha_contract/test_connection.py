@@ -189,7 +189,7 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                         assert response.status == 400, (
                             "Confirmed peer reaches validated appliance operation"
                         )
-                for operation in ("observations", "assign", "intent"):
+                for operation in ("observations", "assign", "intent", "requests", "cancel"):
                     async with client.post(
                         url + "/v1/ev/" + operation,
                         json=[],
@@ -236,6 +236,12 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                     headers={"Authorization": "Bearer " + token},
                 ) as response:
                     assert response.status == 403, "Quality archive reads remain app-owned"
+                async with client.get(
+                    url + "/v1/ev/requests",
+                    ssl=fingerprint,
+                    headers={"Authorization": "Bearer " + token},
+                ) as response:
+                    assert response.status == 403, "Charging history remains admin-only"
                 async with client.post(
                     url + "/v1/ev/configuration",
                     json={},

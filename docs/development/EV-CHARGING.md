@@ -22,16 +22,13 @@ the draft. The message identifies dependent charge points. Edit their allowed
 vehicles or remove those points first. Other vehicle removals delete the removed
 vehicle's ID from each charge point's allowed-vehicle list. Charge-point IDs and
 all other settings remain unchanged. Server-side validation remains authoritative.
-**Energy > EV charging** contains sessions and daily target/departure requests.
-Each explicit action uses `/v1/ev/intent` for just that vehicle and field. It never
-replaces the full technical configuration. Original measurements, expected
-departure results and physical execution remain separate. Failed requests retain
-input. Evidence refresh preserves unapplied requests. One-off departures use
-Home Assistant's timezone and reject nonexistent daylight-saving wall times.
-Saved one-off departures remain visible after reload. Reset restores the saved
-local value. Applying an unchanged local value retains the exact saved instant,
-including the second occurrence of a daylight-saving clock fold. Only Use daily
-departure clears the stored override.
+**Energy > EV charging** separates physical sessions, complete charging requests
+and retained request history. `POST /v1/ev/requests` creates or atomically edits
+a request. `POST /v1/ev/cancel` cancels its current identity and recurrence.
+The page prefills saved vehicle defaults but never changes them. Failed writes
+retain the complete draft. Evidence refresh preserves it. An unchanged local
+departure retains its original offset and seconds, including the second autumn
+clock-fold occurrence. Only a changed value is converted through HA's timezone.
 The bounded first implementation supports sixteen vehicle records and four points. Multiple cars
 may use one point. Stable opaque IDs identify records. The HA device name names
 a vehicle. Without a device name, the integration title supplies the name, with
@@ -80,7 +77,7 @@ catalogue is temporary memory. This adds no storage format or migration layer.
 Device, type and account filters remain editor state, never saved source identities.
 Each vehicle links its own percentage SoC sensor, usable capacity
 in kWh and maximum AC power in W. Capacity is usable energy, not gross pack size.
-It also has a desired SoC and daily departure clock.
+It also has default target SoC and departure clock, used only to prefill an explicitly created request.
 
 Each point links its Energy Dashboard consumption meter, measured AC power and
 vehicle-connected binary sensor. Its minimum/maximum active power and capability
@@ -110,18 +107,101 @@ restart creates a new nonce. An old assignment never authorizes another session.
 Missing identity/SoC and ambiguous assignment block EV scheduling. Measurement-only
 points remain ordinary measured household consumption.
 
-Native vehicle controls are **Target state of charge**, **Daily departure time**,
-**One-off departure date**, **One-off departure time** and **Use daily departure**.
-The override expires at its instant, then the daily clock resumes. No readiness
-button or extra helpers are needed. A connected, identified car is eligible
-automatically. Each new plan recalculates useful kWh from current measured SoC:
+Native vehicle buttons are **Plan charging request** and **Cancel charging request**.
+The former creates a one-off request from defaults. Target, departure date and
+time controls edit an existing request and are unavailable without one.
+A connected, identified car still requires an explicit request before planning.
+Each new plan recalculates useful energy in kWh from measured SoC:
 
-`max(0, target_soc - actual_soc) / 100 * usable_capacity_kwh`
+`max(0, request.target_soc - actual_soc) / 100 * usable_capacity_kwh`
+
+### Request lifecycle and automation actions
+
+The app owns one active request per vehicle. A stable caller-supplied UUID
+`request_id` makes creation retries idempotent, even after cancellation or restart.
+Editing uses `expected_version` from the projected `charging_request.version`,
+even when all submitted values equal the saved values.
+Cancelling requires that version and `vehicle_id`. Reusing a cancelled creation
+ID never revives it. An exact UUID and creation-fingerprint retry also remains
+unchanged after vehicle removal. New requests and edits still require a configured
+vehicle. All outcomes remain in history. Removing a vehicle cancels
+its active request and retains history. No defaults, historical demand, startup,
+refresh or connection event implicitly creates a request.
+
+`repeat_weekdays` is optional and defaults to `[]`, meaning one-off.
+Values are distinct integers, Monday `0` through Sunday `6`. Each completed or
+expired repeating occurrence creates at most one next occurrence on an explicitly
+selected day. The next occurrence cannot start before the previous deadline and
+cannot complete from the earlier occurrence's reading. Missed occurrences are
+not replayed. Editing an occurrence retains its existing readiness lower bound.
+A new departure cannot precede that readiness. Cancelling the current request
+stops this chain.
 
 HA's installation timezone is authoritative. There is no OEP timezone setting.
-Daily departure skips nonexistent spring-forward times. The repeated autumn hour
-has one daily departure, its first occurrence. Explicit nonexistent override wall
-times are rejected. One-off departures are bounded to the next thirty days.
+Manual departures must be aware timestamps in the next thirty days. The browser
+rejects nonexistent wall times. Default and recurring clocks skip nonexistent
+spring-forward occurrences and use the first autumn occurrence once. Stored
+unchanged timestamps preserve their exact offset and seconds.
+
+The integration exposes `open_energy_planner.ev_schedule` and `ev_cancel` actions.
+Both target exactly one virtual OEP vehicle using `device_id`. Schedule accepts
+`request_id`, optional `target_soc`, aware `departure`, `repeat_weekdays` and
+`expected_version`. Cancel requires `request_id` and `expected_version`. These
+forward the same app lifecycle, never physical charging actions. For automation
+retries retain the same UUID. For edits/cancel use the current request version.
+
+```yaml
+action: open_energy_planner.ev_schedule
+data:
+  device_id: YOUR_VIRTUAL_OEP_VEHICLE_DEVICE
+  request_id: "01234567-89ab-4cde-8fab-0123456789ab"
+  target_soc: 80
+  departure: "2026-12-01T07:00:00+01:00"
+  repeat_weekdays: [0, 1, 2, 3, 4]
+```
+
+The admin `GET /v1/ev/requests` returns at most 25 history records and `next_cursor`.
+Continue with `?cursor=<next_cursor>`. History is not exposed through peer reads.
+Peer writes permit schedule/cancel, never vehicle or charge-point configuration.
+Any request edit or cancellation invalidates old plan commands through the EV
+revision. Native command admission also checks the current request window and
+published revision, independently of local SoC/session safety.
+
+Before forwarding native or automation EV intent, the integration withdraws
+only EV permission. It remains withheld while any EV write is pending, including
+when concurrent synchronization reports a still-planned request. Both write
+boundaries advance the intent generation and revoke the cached revision. A lost
+reply or delayed snapshot cannot retain or reinstall older permission. Only a
+fresh authoritative reconciliation after the write settles can restore it.
+Other devices retain their ordinary validity and scheduled boundary changes.
+The shared command-event projection also withdraws invalid EV targets with
+`power_w: null`, including later boundary refreshes. Null means unavailable.
+Zero remains a real active idle target. This projection does not modify the
+immutable original plan. Automation actions return the accepted write's request,
+rather than stale pre-refresh state. Unconfirmed native actions report uncertainty
+and require checking current vehicle status before retrying.
+
+The browser distinguishes durable write acceptance from subsequent state/history
+reads. Cancellation is confirmed as cancellation. If a follow-up read fails,
+the accepted result remains visible and the page asks for an evidence refresh.
+A rejected or unconfirmed write retains its editable draft and retry identity.
+History replies must match the current state generation. Load more admits each
+cursor once and cannot append duplicate pages after repeated activation.
+A confirmed write marks the prior displayed history as refreshing. If its
+follow-up state/history read fails, the history panel is explicitly unavailable
+until refreshed. It cannot retain an old Planned row beside confirmed cancellation.
+Stored historical records remain intact.
+
+Each EV read has a thirty-second deadline covering response-body consumption.
+Manual refresh shares the active state/history load until it settles. A replacing
+load or confirmed intent cancels superseded reads and waits for the preceding
+load to settle before starting its new evidence cohort. A timeout releases the
+controls for an independent manual retry and never discards a request draft.
+Writes have no automatic read deadline or automatic retry. A lost write reply
+does not prove failure. Refresh and inspect the saved request before explicitly
+retrying. A create retry keeps its original UUID. An edit still requires the
+current saved version. Only fixed owned advice and exact canonical validation
+messages enter diagnostics, never arbitrary response or exception text.
 
 ## Joint model and execution
 
@@ -181,6 +261,39 @@ losses are already in AC intake, not added as stationary converter losses. Both
 stationary-battery references retain identical planned EV service/timing. Their
 savings do not claim a separately measured EV scheduling benefit.
 
+## Plan-only demand and execution feedback
+
+Every configured charge-point meter is excluded from the future household
+component forecast over the full horizon, independent of connection, identity,
+SoC availability, target completion and control capability. Only eligible live
+`EVWork` contributes scheduled charging. There is no historical EV fallback or
+inferred future arrival. Original component forecasts and actual meter histories
+remain immutable evidence. The existing separation proof is still required.
+`LiveInputs` blocks publication with `ev_forecast_boundary_unavailable` when
+the EV service cannot establish the forecast boundary. The fixed log-safe recovery
+notice links to the authenticated EV page, which names the configured meters.
+The EV domain owns both projections. Thermal fallback may retain a boiler forecast but cannot
+silently restore an EV forecast.
+
+`EVService.execution_deviated` compares fresh point power with the active
+published command, including zero when no EV command exists. A difference of at
+least 500 W must span at least 60 seconds of advancing, chronologically accepted
+EV report capture timestamps. Re-reading one retained report as wall time passes
+does not confirm a deviation, acknowledge it or display execution advice. The
+confirmation uses power report capture time, never the SoC sensor's last change.
+Missing readings reset the episode
+rather than proving a stopped charge. Session or requested-power changes and a
+material measured-power change restart confirmation. The existing five-minute
+early-round throttle remains authoritative. Submission acknowledges mature
+episodes so an unchanged refusal does not repeatedly request early rounds.
+Normal quarter-hour planning is unchanged. The advisory session explanation does
+not claim to distinguish vehicle refusal from EVSE or automation blocking.
+This episode state is process-local and is not restored as live evidence.
+
+Execution advice is shown only for a still-usable published plan with the current
+EV revision. Missing, expired or invalidated plans cannot retain stale advice.
+Replacing configuration clears obsolete forecast-boundary diagnostics.
+
 ## Default charging losses
 
 No mandatory loss setting or manufacturer catalogue is introduced. Versioned
@@ -198,7 +311,12 @@ rounded. Automatic efficiency learning and paid vehicle APIs are outside this st
 
 EV settings/intent use the shared SQLAlchemy `planning` document namespace. State
 versions and current pointer commit atomically and join full cross-backend
-transfer. No separate database/configuration file is created. Fresh HA telemetry
+transfer. Global revisions retain active intent and link changed immutable request
+versions through their preceding revision. Terminal history is stored per request
+rather than copied into each later global archive. Request versions, current
+records and global revision/pointer commit atomically. See the
+[EV database dictionary](DATABASE-SCHEMA.md#ev-document-extension) for replay.
+No separate database/configuration file is created. Fresh HA telemetry
 is mandatory after app restart. Credentials remain outside these documents.
 
 SoC reports retain separate sample/report timestamps and timestamp provenance.

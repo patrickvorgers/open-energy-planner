@@ -6,12 +6,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
 
 from open_energy_planner.appliances.ev.service import EVService, departure
-from open_energy_planner.appliances.forecasting import ConsumerForecasts
-from open_energy_planner.storage.adapters.documents import SqlDocuments
-from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
 from tests.app.ev.support.devices import (
     CAR,
     NOW,
@@ -23,25 +19,288 @@ from tests.app.ev.support.devices import (
     observations,
     settings,
 )
-from tests.database.support.backends import BACKENDS
+from tests.database.support import ev as ev_support
+
+ev_service = ev_support.ev_service
 
 
-@pytest.fixture(params=BACKENDS, ids=[name for name, _ in BACKENDS])
-def service(request, tmp_path):
-    """Use a dedicated backend schema, exercising JSON transactions without depending on local Docker."""
-    backend, url = request.param
-    engine = create_engine("sqlite://" if backend == "sqlite" else url)
-    SCHEMA.drop_all(engine)
-    SCHEMA.create_all(engine)
-    consumers = ConsumerForecasts(SqlDocuments(engine, "demand"))
-    consumers.sync(catalogue())
-    app = EVService(
-        SqlDocuments(engine, "planning"), consumers, SimpleNamespace(state={"devices": {}})
+@pytest.mark.parametrize("consumer", ["detection", "acknowledgement", "projection"])
+def test_retained_power_report_cannot_confirm_a_deviation_by_wall_clock(service, consumer):
+    """One capture at t=0 is still one observation when read at t=60 and t=119."""
+    plan = {
+        "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+        "steps": [
+            {
+                "start": NOW.isoformat(),
+                "end": (NOW + timedelta(hours=1)).isoformat(),
+                "devices": {POINT: {"power_w": 2300}},
+            }
+        ],
+    }
+    service.receive(observations(service), NOW)
+    assert not service.execution_deviated(plan, NOW)
+    for seconds in (60, 119):
+        now = NOW + timedelta(seconds=seconds)
+        if consumer == "detection":
+            assert not service.execution_deviated(plan, now)
+        elif consumer == "acknowledgement":
+            service.accept_execution_deviations(now)
+            assert not service.power_deviations[POINT]["acknowledged"]
+        else:
+            assert service.document(now, "Europe/Amsterdam")["points"][0]["execution_issue"] is None
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "disconnected",
+        "unknown_identity",
+        "missing_soc",
+        "at_target",
+        "measurement_only",
+        "scheduled",
+    ],
+)
+def test_charger_history_is_never_a_future_ev_request(service, mode):
+    """An independent 3-kWh charger expectation disappears for every eligibility state."""
+    from open_energy_planner.appliances.cycles.service import ApplianceService
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+
+    service.appliances = ApplianceService(service.documents, service.consumers)
+    if mode == "measurement_only":
+        configuration = settings()
+        configuration["points"][0]["control"] = "read_only"
+        service.configure(configuration, catalogue())
+    service.receive(
+        observations(
+            service,
+            connected=mode != "disconnected",
+            soc=None if mode == "missing_soc" else 80 if mode == "at_target" else 50,
+        ),
+        NOW,
     )
-    app.configure(settings(), catalogue())
-    yield app
-    SCHEMA.drop_all(engine)
-    engine.dispose()
+    if mode not in ("unknown_identity", "disconnected"):
+        service.assign(POINT, CAR, SESSION, NOW)
+
+    def forecast(kwh):
+        """Use independent residual and historical charger energy over a two-hour horizon."""
+        return {
+            "issued_at": NOW.isoformat(),
+            "steps": [{"start": NOW.isoformat(), "duration_h": 2, "kwh": kwh}],
+        }
+
+    service.consumers.result = {
+        "residual_baseline": forecast(1),
+        "devices": [
+            {
+                "entity_id": "sensor.charger_energy",
+                "forecast": forecast(3),
+                "baseline_forecast": forecast(3),
+            }
+        ],
+    }
+    inputs = InstallationProblem((Interval(NOW, 2, 0.3, 0, load_kwh=4),), (), (), (), 20000, 20000)
+    original = InputSnapshot("snapshot", "config", NOW, "measurement", "forecast", "prices", inputs)
+    prepared = service.prepare(original, None, NOW, "Europe/Amsterdam")
+    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(1)
+    charger = next(
+        row for row in prepared.load_components if row.entity_id == "sensor.charger_energy"
+    )
+    assert sum(step.kwh for step in charger.forecast_steps) == 3
+    assert sum(step.kwh for step in charger.steps) == 0
+    assert original.problem.intervals[0].load_kwh == 4
+    assert service.issue is None
+    if mode == "scheduled":
+        assert prepared.problem.ev_work[0].required_kwh == 18
+    else:
+        assert sum(work.required_kwh for work in prepared.problem.ev_work) == 0
+
+
+@pytest.mark.parametrize("expected_power, actual_power", [(0, 2300), (2300, 0), (2300, 1500)])
+def test_sustained_charging_deviation_requests_one_round_and_explains_recovery(
+    service, expected_power, actual_power
+):
+    """A masked grid deviation still requests one replan after 60 seconds, without retry loops."""
+    plan = {
+        "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+        "steps": [
+            {
+                "start": NOW.isoformat(),
+                "end": (NOW + timedelta(hours=1)).isoformat(),
+                "devices": {POINT: {"power_w": expected_power}},
+            }
+        ],
+    }
+
+    def measured(seconds, power):
+        """Keep captures current even when SOC stays unchanged."""
+        now = NOW + timedelta(seconds=seconds)
+        body = observations(service, now)
+        body["points"][0]["power_w"] = power
+        service.receive(body, now)
+        if seconds == 0:
+            service.assign(POINT, CAR, SESSION, now)
+            plan["ev_context"] = {"revision": service.hard_revision(now, "Europe/Amsterdam")}
+        return service.execution_deviated(plan, now)
+
+    assert not measured(0, actual_power)
+    service.accept_execution_deviations(NOW)
+    assert not measured(59, actual_power)
+    assert measured(60, actual_power)
+    service.accept_execution_deviations(NOW + timedelta(seconds=60))
+    for seconds in (120, 180, 240):
+        assert not measured(seconds, actual_power)
+    assert not measured(300, actual_power)
+    issue = service.document(NOW + timedelta(seconds=300), "Europe/Amsterdam", plan=plan)["points"][
+        0
+    ]["execution_issue"]
+    assert "Check the vehicle charge limit" in issue
+    assert not measured(310, expected_power)
+    assert (
+        service.document(NOW + timedelta(seconds=310), "Europe/Amsterdam")["points"][0][
+            "execution_issue"
+        ]
+        is None
+    )
+    assert not measured(320, actual_power)
+    assert measured(380, actual_power)
+
+
+@pytest.mark.parametrize("power", [None, 0, 499])
+def test_missing_power_and_small_noise_do_not_create_unplanned_charging(service, power):
+    """No command means zero planned charging, while missing measurements remain unknown."""
+    plan = {
+        "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+        "steps": [
+            {"start": NOW.isoformat(), "end": (NOW + timedelta(hours=1)).isoformat(), "devices": {}}
+        ],
+    }
+    for seconds in (0, 60, 300):
+        now = NOW + timedelta(seconds=seconds)
+        body = observations(service, now)
+        body["points"][0]["power_w"] = power
+        service.receive(body, now)
+        assert not service.execution_deviated(plan, now)
+
+
+@pytest.mark.parametrize("retained_capture", [False, True])
+def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(
+    service, retained_capture
+):
+    """A 2.3-kW unexpected charge hidden at the grid causes one early round, then normal quarters."""
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.live_inputs import LiveInputs
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+
+    inputs = InstallationProblem((Interval(NOW, 1, 0.3, 0, load_kwh=0),), (), (), (), 20000, 20000)
+    snapshot = InputSnapshot("snapshot", "config", NOW, "measurement", "forecast", "prices", inputs)
+    document = {
+        "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+        "steps": [
+            {"start": NOW.isoformat(), "end": (NOW + timedelta(hours=1)).isoformat(), "devices": {}}
+        ],
+        "expected_flows": [{"batteries": [], "grid_import": 0, "grid_export": 0}],
+    }
+    submitted = []
+    clock = [NOW]
+    planner = SimpleNamespace(published=(snapshot, document), submit=submitted.append)
+    live = LiveInputs(planner, None, clock=lambda: clock[0], ev=service)
+    live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
+    live.report = SimpleNamespace(readings=())
+    future = SimpleNamespace(
+        config_revision="config",
+        forecast_version="forecast",
+        price_version="prices",
+        valid_until=NOW + timedelta(hours=1),
+    )
+    for seconds in sorted({*range(0, 901, 30), 59, 299, 899}):
+        clock[0] = NOW + timedelta(seconds=seconds)
+        body = observations(service, clock[0])
+        body["points"][0]["power_w"] = 2300
+        if not retained_capture or seconds == 0:
+            service.receive(body, clock[0])
+        live._install((clock[0], future, snapshot), force=False)
+        if retained_capture:
+            assert len(submitted) == (1 if seconds < 900 else 2)
+            if seconds == 0:
+                # Allow an early round immediately. Only new power evidence may request it.
+                live.last_submission = NOW - timedelta(minutes=5)
+        else:
+            assert len(submitted) == (1 if seconds < 300 else 2 if seconds < 900 else 3)
+
+
+@pytest.mark.parametrize(
+    "reset", ["missing_power", "capture_gap", "session", "setpoint", "expired_plan"]
+)
+def test_power_confirmation_never_spans_unknown_data_or_a_different_command(service, reset):
+    """A fresh 60-second episode is required after loss of evidence or a changed physical context."""
+    plan = {
+        "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+        "steps": [
+            {
+                "start": NOW.isoformat(),
+                "end": (NOW + timedelta(hours=1)).isoformat(),
+                "devices": {POINT: {"power_w": 2300}},
+            }
+        ],
+    }
+    service.receive(observations(service), NOW)
+    assert not service.execution_deviated(plan, NOW)
+    if reset == "missing_power":
+        midway = NOW + timedelta(seconds=30)
+        body = observations(service, midway)
+        body["points"][0]["power_w"] = None
+        service.receive(body, midway)
+        assert not service.execution_deviated(plan, midway)
+    later = NOW + timedelta(seconds=120 if reset == "capture_gap" else 60)
+    body = observations(service, later)
+    if reset == "session":
+        body["points"][0]["session_id"] = str(uuid4())
+    elif reset == "setpoint":
+        plan["steps"][0]["devices"][POINT]["power_w"] = 3000
+    elif reset == "expired_plan":
+        plan["valid_until"] = later.isoformat()
+    service.receive(body, later)
+    assert not service.execution_deviated(plan, later)
+    if reset != "expired_plan":
+        latest = later + timedelta(seconds=60)
+        body["at"] = latest.isoformat()
+        service.receive(body, latest)
+        assert service.execution_deviated(plan, latest)
+
+
+def test_missing_charger_separation_blocks_live_planning_instead_of_using_history(service):
+    """The original household estimate stays archived but cannot publish as a plan-only forecast."""
+    from open_energy_planner.appliances.cycles.service import ApplianceService
+    from open_energy_planner.home_assistant.observations import InputsUnavailable
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.live_inputs import LiveInputs
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+
+    service.appliances = ApplianceService(service.documents, service.consumers)
+    inputs = InstallationProblem((Interval(NOW, 1, 0.3, 0, load_kwh=4),), (), (), (), 20000, 20000)
+    original = InputSnapshot("snapshot", "config", NOW, "measurement", "forecast", "prices", inputs)
+    live = LiveInputs(None, None, ev=service)
+    live.prepare_snapshot = lambda snapshot, now: service.prepare(
+        snapshot, None, now, "Europe/Amsterdam"
+    )
+    unavailable = live._prepare((NOW, None, original))
+    assert isinstance(unavailable, InputsUnavailable)
+    assert str(unavailable) == "ev_forecast_boundary_unavailable"
+    assert original.problem.intervals[0].load_kwh == 4
+
+
+@pytest.fixture
+def service(ev_service):
+    """Explicit fixture requests preserve the existing physical EV safety scenarios."""
+    from tests.app.ev.support.devices import planned_requests
+
+    planned_requests(ev_service)
+    return ev_service
 
 
 def test_unidentified_car_is_never_planned_even_if_only_one_is_allowed(service):
@@ -156,15 +415,23 @@ def test_measurement_only_and_expired_reports_never_authorize_charging(service):
 
 
 def test_target_and_one_off_departure_survive_backend_restart(service):
-    """Native dashboard intent is durable. An expired override returns automatically to the daily HA clock."""
+    """A request override survives restart without changing defaults or creating a next-day request."""
     service.intent(CAR, "target_soc", 85, NOW, "Europe/Amsterdam")
     override = NOW + timedelta(hours=2)
     service.intent(CAR, "departure_override", override.isoformat(), NOW, "Europe/Amsterdam")
     restored = EVService(service.documents, service.consumers, service.appliances)
     car = restored.state["vehicles"][0]
-    assert car["target_soc"] == 85
-    assert departure(car, NOW, "Europe/Amsterdam") == override
-    assert departure(car, override, "Europe/Amsterdam") == datetime(2026, 10, 27, 6, tzinfo=UTC)
+    assert car["target_soc"] == 80
+    document = restored.document(NOW, "Europe/Amsterdam")
+    request = document["vehicles"][0]["charging_request"]
+    assert request["target_soc"] == 85
+    assert request["departure"] == override.isoformat()
+    restored.receive(observations(restored, override), override)
+    assert (
+        restored.document(override, "Europe/Amsterdam")["vehicles"][0]["charging_request"] is None
+    )
+    assert restored.state["requests"][request["id"]]["status"] == "expired"
+    assert len(restored.state["requests"]) == 2
 
 
 @pytest.mark.parametrize("change", ["unknown_meter", "duplicate_soc", "overlap", "unbounded_power"])

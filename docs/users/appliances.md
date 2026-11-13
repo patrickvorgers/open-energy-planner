@@ -120,9 +120,75 @@ to apply it, or **Cancel** in the editor to restore the saved configuration.
 
 A connected plug proves presence, not vehicle identity. Explicitly identify the connected vehicle through the supported Home Assistant control or an automation that genuinely knows it. A previous session's assignment does not authorize a later connection.
 
-Set the desired SoC and departure under **Energy > EV charging**. A one-off departure overrides the daily departure until that instant. Home Assistant's timezone applies. The planner recalculates required energy from the current SoC and reports a shortfall when the target cannot be reached under the admitted limits. V2G is not supported by this charging model.
+Under **Energy > EV charging**, choose **Plan charging request** for the vehicle.
+OEP prefills its saved target SoC and next departure. Change either value for this
+request, then choose **Plan charging request** to save the complete request.
+These overrides never change the vehicle defaults in Appliances settings.
+Choose **Edit charging request** to change it or **Cancel charging request** to
+stop it. Cancelled, completed and expired requests remain in **Request history**.
+If OEP confirms a saved or cancelled request but cannot reload its latest status,
+that confirmation remains valid. Use **Refresh charging evidence** to retry the
+read. An actual rejected write keeps your edits. The history panel is marked
+unavailable if it cannot reload after a saved change. Saved history is retained.
+Native Home Assistant requests withhold EV permission while being sent. If a
+reply is lost, permission remains withdrawn until current app state is reloaded.
+Refresh vehicle status to check the saved request before retrying.
+A read that does not finish within thirty seconds stops with recovery advice.
+Refresh again when the connection is available. Your pending edits are retained.
+If the reply to a write is lost, OEP cannot confirm its outcome. Check the saved
+request before explicitly retrying. OEP never automatically repeats that write.
+
+A request is one-off unless you enable **Repeat on selected weekdays** and select
+its days. Selecting every day means daily repetition. Each occurrence uses the
+same target and HA-local departure time. Completion or expiry creates at most
+one following occurrence. Cancelling the current request also stops its repeating
+schedule. Configuration, refresh, restart and plugging in never create a request.
+
+Home Assistant's timezone applies. Nonexistent spring-forward times are rejected
+for manual departures. Repeating departures skip that occurrence. The autumn
+repeated hour has one scheduled occurrence. The planner recalculates energy from
+current measured SoC and reports any shortfall. V2G is not supported.
 
 See [EV charging contracts](../development/EV-CHARGING.md) for supported capability modes, losses, session identity and the automation blueprint.
+
+### EV demand comes from the charging plan
+
+OEP does not repeat historical charging sessions as expected future consumption
+for configured charge points. It calculates the remaining battery energy from
+the measured SoC, usable capacity and the active request's target SoC. Saved
+vehicle target and departure are only defaults for a newly requested charge.
+Home Assistant's **Plan charging request** button creates a one-off request with
+those defaults. Native target/date/time controls edit that request. The
+`open_energy_planner.ev_schedule` and `ev_cancel` actions support automations,
+including explicit weekday repetition. See the developer contract for fields.
+
+A fresh connection report, explicit vehicle assignment and available SoC are
+required for a charging request. Without them, no EV charging is planned. OEP
+does not predict the next arrival or invent a charging request from history.
+Physical charging still belongs to your Home Assistant automation. Another
+controller must follow the OEP plan if its timing is to match the forecast.
+Real charging measurements continue to count in actual household consumption.
+
+The household forecast excludes the configured charge-point components over
+the entire horizon, including before charging starts and after departure. If
+OEP cannot separate those components reliably, live planning pauses instead of
+silently retaining historical EV demand. Check the configured Energy meter links
+and consumption forecast readiness when the separation notice appears.
+
+A measured charge-point power difference of at least 500 W lasting one minute
+requests a replacement plan, subject to the normal five-minute limit between
+early planning requests. OEP requires new measurement reports spanning that
+minute. Re-reading an unchanged retained report does not prove that the
+deviation continued. This detects unexpected charging and charging that
+fails to start even when solar or the home battery masks the grid difference.
+Missing power readings do not mean zero consumption. An unchanged deviation
+requests one early round rather than a repeated retry. Normal quarter-hour
+planning continues, and recovery or a changed session, setpoint or materially
+different measured power allows a new deviation request.
+
+The EV session shows recovery advice for sustained deviations. Check the car's
+charge limit, charge-point status and Home Assistant automation. OEP cannot
+identify the physical cause from power alone and never bypasses device safety.
 
 ## Prepare thermal storage
 
