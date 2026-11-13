@@ -110,9 +110,14 @@ def test_contract_valuation_failure_and_late_period_response_keep_correct_basis(
     page, url = app_page
 
     def failed_correction(route):
-        """Use real original amounts and optionally retain the actual successful valuation after a later failure."""
+        """Supply the canonical API failure projection while retaining real amounts and optional successful valuation."""
         response = route.fetch().json()
-        response["valuation_status"] = {"issue": "Synthetic later correction failed"}
+        response["valuation_status"] = {
+            "issue": (
+                "Plan repricing evidence is unavailable. Check archived inputs and contract coverage. "
+                "The last successful valuation is retained."
+            )
+        }
         if not retained_success:
             response["valuation"] = None
         route.fulfill(json=response)
@@ -121,7 +126,10 @@ def test_contract_valuation_failure_and_late_period_response_keep_correct_basis(
     page.goto(url + "/overview?plan=browser-original-plan")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#expected-benefit")).to_contain_text("Synthetic later correction failed")
+    expect(page.locator("#expected-benefit")).to_contain_text(
+        "Repricing unavailable: Plan repricing evidence is unavailable. "
+        "Check archived inputs and contract coverage. The last successful valuation is retained."
+    )
     expected = "0.80 EUR" if retained_success else "0.40 EUR"
     expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
     if not retained_success:
