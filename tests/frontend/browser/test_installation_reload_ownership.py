@@ -167,3 +167,79 @@ def test_delayed_background_reload_preserves_newer_installation_ownership(
         assert (
             read_settings(page, url)["installation"]["version"] != owned["installation"]["version"]
         )
+
+
+@pytest.mark.parametrize("missing", ["null", "absent"])
+def test_annual_evidence_refresh_preserves_manual_draft_and_revision_guards(app_page, missing):
+    """Real background polling replaces measured, extrapolated and missing facts without touching manual inputs or CAS guards."""
+    page, url = app_page
+
+    def expose_read_only_probe(route):
+        """Observe existing draft ownership without adding a production hook or invoking the refresh directly."""
+        response = route.fetch()
+        route.fulfill(
+            response=response,
+            body=response.text()
+            + "\nwindow.__annualDraft=()=>({baseline:installationBaseline,values:installationValues(),installation:config.installation,solar:config.solar,demand:config.demand});",
+        )
+
+    page.route("**/setup.js", expose_read_only_probe)
+    page.clock.install()
+    page.goto(url + "/setup")
+    discover(page, url)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    installation_area(page, 0, edit=True)
+    page.locator("#annual").fill("4300")
+    page.locator("#import").fill("7.25")
+    wait_for_product_reads(page)
+    owned = page.evaluate("window.__annualDraft()")
+    before = read_settings(page, url)
+    response = deepcopy(before)
+    writes = []
+    page.on(
+        "request",
+        lambda request: writes.append(request.post_data_json) if request.method == "PUT" else None,
+    )
+    page.route("**/v1/setup", lambda route: route.fulfill(json=response))
+    facts = page.locator("#ha-installation-facts")
+    for estimate, expected in [
+        (
+            {"annual_kwh": 3650, "days": 365, "extrapolated": False},
+            "3650 kWh/year. Measured over 365 complete days.",
+        ),
+        (
+            {"annual_kwh": 5000, "days": 180, "extrapolated": True},
+            "5000 kWh/year. Extrapolated from 180 complete days",
+        ),
+        (None, None),
+    ]:
+        if estimate is None and missing == "absent":
+            response.pop("annual_estimate", None)
+        else:
+            response["annual_estimate"] = estimate
+        page.clock.fast_forward(31000)
+        wait_for_product_reads(page)
+        if expected is None:
+            expect(facts).not_to_contain_text("Annual household consumption")
+        else:
+            expect(facts).to_contain_text(expected)
+        assert page.evaluate("window.__annualDraft()") == owned
+        expect(page.locator("#annual")).to_have_value("4300")
+        expect(page.locator("#import")).to_have_value("7.25")
+        expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
+        assert writes == []
+        current = read_settings(page, url)
+        for section in ("installation", "solar", "demand"):
+            assert current[section] == before[section]
+    page.unroute("**/v1/setup")
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("Installation saved.")
+    assert [write["expected_version"] for write in writes] == [
+        before[section]["version"] for section in ("demand", "solar", "installation")
+    ]
+    saved = read_settings(page, url)
+    assert saved["demand"]["annual_kwh"] == 4300
+    assert saved["installation"]["import_limit_w"] == 7250

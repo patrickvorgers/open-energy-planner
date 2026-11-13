@@ -31,7 +31,7 @@ With feed-in off, the battery can discharge only to meet consumption within the 
 
 The Planning comparisons also respect the export limit. The unmanaged self-consumption reference does not execute the planner's solar shutdowns. If that counterfactual would exceed the limit, its comparison is unavailable rather than showing invented zero-export results. This can happen even when the optimizer has a feasible plan using permitted solar shutdowns.
 
-To permit feed-in again, choose **Edit installation**, enable the option and confirm a permitted export limit before saving. The previous positive limit is retained only while toggling an unsaved draft. After saving zero and reloading, it must be entered again. **Cancel** restores the saved configuration.
+To permit feed-in again, choose **Edit installation**, enable the option and confirm a permitted export limit before saving. The previous positive limit is retained only while toggling an unsaved draft. After saving zero, it must be entered again, even without reloading the page. **Cancel** restores the saved configuration.
 
 Grid source identities and annual-consumption evidence are available under **Home Assistant**. Connection and household keeps the physical limits and the inputs you need to confirm, without repeating the source diagnostic paragraphs.
 

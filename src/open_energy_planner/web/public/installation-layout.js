@@ -81,7 +81,7 @@ export class InstallationLayout {
     refreshNames(config) {
         if (!this.config) return;
         this.captureControls();
-        this.config = {...this.config, catalogue: config.catalogue, devices: config.devices};
+        this.config = {...this.config, catalogue: config.catalogue, devices: config.devices, annual_estimate: config.annual_estimate};
         for (const [selector, container, kind] of [["installation-solar", "solar-rows", "solar"], ["installation-battery", "battery-rows", "battery"]]) {
             const selectedEntity = find(selector).selectedOptions[0]?.dataset.entity;
             const choices = [...find(container).children].map((row, index) => {

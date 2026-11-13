@@ -793,6 +793,7 @@ async function refreshSourceNames(signal) {
     config.catalogue = state.catalogue;
     config.devices = state.devices;
     config.panel_settings = state.panel_settings;
+    config.annual_estimate = state.annual_estimate;
     for (const editor of solarRows) {
         const ownership = state.panel_settings?.[editor.old.entity_id];
         if (ownership) editor.updateOwnership(ownership, panelsChanged);
@@ -1098,6 +1099,7 @@ $("save").onclick = async () => {
             config.solar = solar.configuration;
             const result = await api("/v1/installation", "PUT", body.installation);
             config.installation = result.installation.configuration;
+            if (config.installation.export_limit_w === 0) delete $("export").dataset.previousLimit;
             pendingSolarSources = [];
             installationBaseline = JSON.stringify(installationValues());
             message = `Installation saved. Home Assistant will provision ${(result.installation.devices || []).length} virtual device(s).${result.installation.warnings?.length ? " Fixed PV may exceed the configured export limit. Check the Home Assistant notification." : ""}`;

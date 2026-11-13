@@ -223,6 +223,68 @@ def test_explicit_zero_export_explains_effective_no_feed_in(app_page):
     expect(export).to_have_value("0")
 
 
+@pytest.mark.parametrize("outcome", ["success", "rejected", "uncertain", "strategy-failed"])
+def test_saved_zero_export_ends_the_unsaved_limit_cache(app_page, outcome):
+    """Only a confirmed zero Installation write ends draft restoration, even if the later strategy write fails."""
+    page, url = app_page
+    discover(page, url)
+    connect(page)
+    page.get_by_label("Maximum grid import (kW)", exact=True).fill("5")
+    page.get_by_label("Annual whole-home consumption (kWh)", exact=True).fill("3500")
+    export = page.get_by_label("Maximum grid export (kW)", exact=True)
+    permission = page.get_by_label("Allow grid feed-in", exact=True)
+    export.fill("5")
+    permission.uncheck()
+    for _ in range(3):
+        page.get_by_role("button", name="Continue", exact=True).click()
+    if outcome == "strategy-failed":
+        page.locator("#strategy").select_option("minimize consumption")
+        page.route("**/v1/strategy", lambda route: route.fulfill(status=503))
+    elif outcome in ("rejected", "uncertain"):
+
+        def fail_installation_response(route):
+            """Optionally commit the real write before losing its acknowledgement."""
+            if outcome == "uncertain":
+                assert route.fetch().ok
+            route.fulfill(status=503)
+
+        page.route("**/v1/installation", fail_installation_response)
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    confirmed = outcome in ("success", "strategy-failed")
+    if outcome == "success":
+        expect(page.locator("#installation-save-state")).to_contain_text("Installation saved.")
+        installation_area(page, 0, edit=True)
+    else:
+        expect(page.locator("#installation-save-state")).to_contain_text("Your edits are retained")
+        page.get_by_role("button", name="Connection", exact=True).click()
+    saved = read_settings(page, url)
+    if outcome == "rejected":
+        assert saved["installation"] is None
+    else:
+        assert saved["installation"]["export_limit_w"] == 0
+    permission.check()
+    expect(export).to_have_value("" if confirmed else "5")
+    expect(export).to_be_enabled()
+    if confirmed:
+        assert export.evaluate("element => element.validity.valueMissing")
+        if outcome == "success":
+            writes = []
+            page.on(
+                "request",
+                lambda request: (
+                    writes.append(request.url) if request.method in ("POST", "PUT") else None
+                ),
+            )
+            page.get_by_role("button", name="Save installation", exact=True).click()
+            page.evaluate("() => window.__oepProductReadsIdle()")
+            assert writes == []
+            assert read_settings(page, url)["installation"] == saved["installation"]
+            export.fill("2.5")
+            page.get_by_role("button", name="Save installation", exact=True).click()
+            expect(page.locator("#installation-save-state")).to_contain_text("Installation saved.")
+            assert read_settings(page, url)["installation"]["export_limit_w"] == 2500
+
+
 def test_battery_calibration_is_opt_in_and_survives_explicit_save(app_page):
     """Desktop/mobile can enable defaults, save a different interval and discard an unsaved disable."""
     page, url = app_page
