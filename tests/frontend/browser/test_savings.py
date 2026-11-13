@@ -48,8 +48,7 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
-    page.get_by_text("Expected state and commands per battery", exact=True).click()
-    expect(page.locator("#plan-battery-rows")).to_contain_text("Garage battery")
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Garage battery")
     selected = page.locator("#plan-version").input_value()
     before = page.evaluate(
         "Chart.getChart(document.getElementById('energy-chart')).data.datasets.map(row => row.data)"
@@ -60,7 +59,7 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=metadata).ok
     page.evaluate("window.forceHidden = false")
     page.clock.fast_forward(31000)
-    expect(page.locator("#plan-battery-rows")).to_contain_text("Yixiang MB56 32kWh")
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Yixiang MB56 32kWh")
     expect(page.locator("#plan-version")).to_have_value(selected)
     assert (
         page.evaluate(
@@ -77,7 +76,7 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
     ]
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=metadata).ok
     page.clock.fast_forward(31000)
-    expect(page.locator("#plan-battery-rows")).to_contain_text("Original battery")
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Original battery")
     assert page.request.get(path, headers=headers).json() == original
 
 
@@ -123,8 +122,7 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
     page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
     page.get_by_role("button", name="View original plan").first.click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    page.get_by_text("Expected state and commands per battery", exact=True).click()
-    expect(page.locator("#plan-battery-rows")).to_contain_text("Garage battery")
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Garage battery")
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
     page.locator("#plan-chart-legend").get_by_label("Garage battery: SoC", exact=True).uncheck()
     for chart in ("reference-chart", "self-consumption-chart"):
@@ -147,7 +145,7 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
     page.get_by_role("link", name="Planning", exact=True).click()
     if failed_refresh:
         expect(page.locator("#overview-status")).to_contain_text("503")
-        expect(page.locator("#plan-battery-rows")).to_contain_text("Garage battery")
+        expect(page.locator("#plan-chart-legend")).to_contain_text("Garage battery")
         assert len(reads) == before_return
         page.unroute("**/comparison?view=plan")
         open_primary_navigation(page)
@@ -158,7 +156,7 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
         before_return = len(reads)
         open_primary_navigation(page)
         page.get_by_role("link", name="Planning", exact=True).click()
-    expect(page.locator("#plan-battery-rows")).to_contain_text("Renamed archive battery")
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Renamed archive battery")
     wait_for_product_reads(page)
     expect(page.locator("#plan-version")).to_have_value("browser-original-plan")
     expect(
@@ -208,8 +206,7 @@ def test_savings_overview_compares_realized_costs_and_original_plan(app_page):
     page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
     page.get_by_role("button", name="View original plan").first.click()
     expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
-    page.get_by_text("Detailed interval energy", exact=True).click()
-    expect(page.locator("#plan-rows tr")).to_have_count(2)
+    expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 

@@ -32,10 +32,14 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
     expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
-    expect(page.locator("#plan-rows tr")).to_have_count(0)
-    page.get_by_text("Detailed interval energy", exact=True).click()
-    expect(page.locator("#plan-rows tr")).to_have_count(120)
-    page.get_by_text("Detailed interval energy", exact=True).click()
+    for name in (
+        "Detailed interval energy",
+        "Expected state and commands per battery",
+        "Expected solar production and commands",
+        "Original and repriced expected costs",
+    ):
+        expect(page.get_by_text(name, exact=True)).to_have_count(0)
+    expect(page.locator("#inspect-time")).to_have_attribute("max", "119")
     assert evidence == []
     page.evaluate(
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"
@@ -81,6 +85,7 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     pending = evidence.pop()
     pending.fulfill(response=pending.fetch())
     expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
+    expect(page.locator("#plan-evidence")).not_to_contain_text("Forecast version")
     expect(page.locator("#interval-evidence")).to_contain_text("Forecast and original prices")
     page.get_by_text("Understand this plan", exact=True).click()
     page.get_by_text("Understand this plan", exact=True).click()
@@ -226,3 +231,146 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
     ).to_be_checked()
     assert page.locator("#ems-costs").inner_text() == before
+
+
+@pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
+def test_compact_planning_preserves_commands_costs_and_original_archive(app_page):
+    """Removed technical tables leave keyboard-accessible costs, selected commands and original data intact."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    wait_for_product_reads(page)
+    identity = page.locator("#plan-version").input_value()
+    headers = {"Authorization": "Bearer " + TOKEN}
+    original = page.request.get(url + "/v1/plans/" + identity, headers=headers).json()
+    for label in (
+        "Detailed interval energy",
+        "Expected state and commands per battery",
+        "Expected solar production and commands",
+        "Original and repriced expected costs",
+    ):
+        expect(page.get_by_text(label, exact=True)).to_have_count(0)
+    for host in ("ems-costs", "self-consumption-costs", "reference-costs"):
+        disclosure = page.locator("#" + host).get_by_text("Cost breakdown", exact=True)
+        import_cost = page.locator("#" + host).get_by_text("Import cost", exact=True).first
+        expect(import_cost).not_to_be_visible()
+        disclosure.focus()
+        disclosure.press("Enter")
+        expect(import_cost).to_be_visible()
+    page.get_by_text("Understand this plan", exact=True).click()
+    expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
+    expect(page.locator("#plan-evidence")).not_to_contain_text("Forecast version")
+    page.get_by_text("Selected interval details", exact=True).click()
+    expect(page.locator("#interval-evidence")).to_contain_text("Forecast and original prices")
+    expect(page.locator("#interval-evidence")).not_to_contain_text("Forecast version")
+    page.get_by_text("Detailed interval values", exact=True).click()
+    page.locator("#inspect-time").press("Home")
+    expect(page.locator("#inspect-values")).to_contain_text("Example home battery")
+    expect(page.locator("#inspect-values")).to_contain_text("Example AC roof")
+    expect(page.locator("#inspect-values")).to_contain_text("Grid:")
+    expect(page.locator("#plan-evidence-panel")).to_contain_text("not measurements")
+    assert page.request.get(url + "/v1/plans/" + identity, headers=headers).json() == original
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    captures = Path("results/ci/compact-planning")
+    captures.mkdir(parents=True, exist_ok=True)
+    page.evaluate("document.fonts.ready")
+    page.screenshot(
+        path=str(captures / f"planning-{page.viewport_size['width']}.png"), full_page=True
+    )
+    if page.viewport_size["width"] < 500:
+        page.set_viewport_size({"width": 390, "height": 1700})
+    panel = page.locator("#plan-evidence-panel")
+    panel.evaluate("element => element.scrollIntoView({block:'center'})")
+    panel.screenshot(path=str(captures / f"commands-{page.viewport_size['width']}.png"))
+
+
+@pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
+def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app_page):
+    """The optimizer appears first. Simulations redraw changed charts and unchanged range requests draw nothing."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    held = []
+    page.route("**/comparison?view=simulations", lambda route: held.append(route))
+    page.add_init_script("""(() => {
+        window.balanceDraws=[];window.chartDraws=[];window.chartAssignments=0;
+        let implementation;
+        Object.defineProperty(window,'Chart',{configurable:true,get:()=>implementation,set:value=>{
+            window.chartAssignments++;
+            if (implementation === value) return;
+            implementation=value;
+            const update=value.prototype.update;
+            value.prototype.update=function(...args) {
+                if (args[0] !== 'resize') window.chartDraws.push(this.canvas?.id);
+                if (args[0] !== 'resize' && ['plan-chart','reference-chart','self-consumption-chart'].includes(this.canvas?.id)
+                    && this.data.datasets.some(dataset=>dataset.data.length)) window.balanceDraws.push(this.canvas.id);
+                return update.apply(this,args);
+            };
+        }});
+    })();""")
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
+    page.evaluate("document.fonts.ready")
+    initial = page.locator("#plan-chart").evaluate("""canvas => {
+        const chart=Chart.getChart(canvas);
+        return {data:JSON.stringify(chart.data.datasets),bounds:[chart.scales.y.min,chart.scales.y.max]};
+    }""")
+    assert initial["bounds"][0] < 0 < initial["bounds"][1]
+    assert (
+        page.locator("#reference-chart").evaluate(
+            "canvas => Chart.getChart(canvas).data.datasets.length"
+        )
+        == 0
+    )
+    assert len(held) == 1
+    page.evaluate("window.balanceDraws=[];window.chartDraws=[]")
+    held[0].fulfill(response=held[0].fetch())
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert (
+        page.evaluate("window.chartDraws.filter(id=>['forecast-chart','price-chart'].includes(id))")
+        == []
+    )
+    identities = ["plan-chart", "reference-chart", "self-consumption-chart"]
+    for action in (None, "Full period:", "Next 6 hours"):
+        if action is not None:
+            page.evaluate("window.balanceDraws=[]")
+            page.get_by_role("button", name=action, exact=False).click()
+        result = page.evaluate(
+            """ids => ({
+            counts:ids.map(id=>window.balanceDraws.filter(value=>value===id).length),
+            bounds:ids.map(id=>{const chart=Chart.getChart(document.getElementById(id));return [chart.scales.y.min,chart.scales.y.max];})
+        })""",
+            identities,
+        )
+        expected_counts = {None: [0, 1, 1], "Full period:": [0, 0, 0], "Next 6 hours": [1, 1, 1]}
+        assert result["counts"] == expected_counts[action], {
+            **result,
+            "chart_assignments": page.evaluate("window.chartAssignments"),
+        }
+        assert result["bounds"][0] == result["bounds"][1] == result["bounds"][2]
+    page.evaluate("window.chartDraws=[]")
+    page.get_by_role("button", name="Next 6 hours", exact=False).click()
+    assert page.evaluate("window.chartDraws") == []
+    assert (
+        page.locator("#plan-chart").evaluate(
+            "canvas => JSON.stringify(Chart.getChart(canvas).data.datasets)"
+        )
+        == initial["data"]
+    )
+    page.evaluate("window.balanceDraws=[]")
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
+    assert page.evaluate(
+        "ids => ids.map(id=>window.balanceDraws.filter(value=>value===id).length)", identities
+    ) == [1, 0, 0]
+    assert len(held) == 2
+    page.evaluate("window.balanceDraws=[]")
+    held[1].fulfill(response=held[1].fetch())
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert page.evaluate(
+        "ids => ids.map(id=>window.balanceDraws.filter(value=>value===id).length)", identities
+    ) == [0, 1, 1]

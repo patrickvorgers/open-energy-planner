@@ -1175,10 +1175,17 @@ Rounding eligibility stays separate from manual checkbox selection, including
 after range changes. Synchronize all charts' eligibility before computing their shared axes.
 Each scenario legend's bulk button toggles eligible entries only in that chart.
 
-The planning page shows all three scenario balances without a comparison selector. Solar production is split at explicit measurement boundaries: hybrid DC input and separate PV-only inverter AC output. The display excludes the latter inverter's upstream conversion losses and retains hybrid and battery converter losses. Original DC evidence and the projected mixed balance must both conserve energy. Converter inspector groups, optimization and archived financial evidence retain their existing boundaries. See [visualization rules](../docs/development/EMS-VISUALIZATION.md) and the [worked user example](../docs/users/read-your-plan.md#worked-balance-one-hour).
-Each graph identifies its original expected economic cost, net grid cash, wear and
-inventory change. Self-consumption and OEP also show expected benefit versus the
-same no-battery baseline. Negative benefit remains negative. These are horizon
+The planning page shows all three scenario balances without a comparison selector. Whole-horizon detail tables are omitted. Original commands and interval values remain keyboard accessible under Understand this plan. Scenario cards retain their cost breakdowns. Forecast model and quality are shown without technical forecast-version labels, while the original snapshot and financial API retain their evidence. Planning first draws the optimizer using available data, then batches one shared value-axis calculation when simulations arrive. Each stage checks the complete scenario group and redraws changed charts, preserving independent series, windows and SoC axes. Ordinary peer updates outside a batch occur only when shared bounds change. Solar production is split at explicit measurement boundaries: hybrid DC input and separate PV-only inverter AC output. The display excludes the latter inverter's upstream conversion losses and retains hybrid and battery converter losses. Original DC evidence and the projected mixed balance must both conserve energy. Converter inspector groups, optimization and archived financial evidence retain their existing boundaries. See [visualization rules](../docs/development/EMS-VISUALIZATION.md) and the [worked user example](../docs/users/read-your-plan.md#worked-balance-one-hour).
+Chart batches skip unchanged rendered inputs and bounds. The redraw decision and renderer share the same padded-axis calculation. Native resize updates also record rendered inputs.
+
+Each graph identifies its expected economic cost, net grid cash, wear and
+inventory change. The latest successful full-original-horizon optimizer and
+self-consumption valuation remains visible by default with its own period and
+calculation time, independently of selected-period loading or failures. Original
+components remain in the cost disclosure. Period slices and without-battery
+costs retain their original basis. Never compare corrected costs with an original
+baseline. Self-consumption and OEP show benefit only for a comparable basis.
+Negative benefit remains negative. These are horizon
 expectations, not summed overlapping savings. All planning graphs share the
 6-hour, 24-hour and full-horizon selection.
 

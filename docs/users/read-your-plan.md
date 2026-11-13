@@ -6,9 +6,11 @@ Open **Energy > Planning** to inspect one original calculation. Begin with its v
 
 The latest retained plan is the default. **Plan version** lets you inspect history. A historical selection changes the view, not active commands. While the same plan refreshes, the previous complete view can remain visible with an explicit loading status. Choosing a different historical plan clears its predecessor's data until that selection loads.
 
-The selected plan's graph, prices and interval values appear first. The two simulation graphs and their cost comparisons follow without waiting for the detailed evidence. A simulation read failure leaves the selected plan usable and shows a retry message. Choose **Refresh overview** to retry. A plan opened through a direct link stays selected during this retry.
+The selected plan's graph, prices and interval values appear first. Its power scale initially follows the original plan. When the two simulations arrive, their visible flows join one shared scale update. The two simulation graphs and their cost comparisons follow without waiting for the detailed evidence. A simulation read failure leaves the selected plan usable and shows a retry message. Choose **Refresh overview** to retry. A plan opened through a direct link stays selected during this retry.
 
 A valid older plan can remain in history after a later calculation fails. Its presence does not mean its commands are still applicable. Read the page's status and any source warning.
+
+Charts redraw when their data, visibility, scale or dimensions change. Loading simulations does not redraw unchanged price and forecast charts.
 
 For duration and solver-progress questions, use [Planning performance](planning-performance.md). A first solver candidate is not yet an independently checked published plan.
 
@@ -142,13 +144,13 @@ authorize starting a device. Readiness and execution permission remain necessary
 
 ## Read cost before benefit
 
-Every scenario starts with **Expected economic cost**. Both battery scenarios then show **Expected benefit versus without battery** against the same baseline. A negative benefit means the scenario costs more than the baseline. An unavailable comparison stays unavailable.
+Optimizer and self-consumption start with the latest successful contract valuation for the **Full original plan**, when available. Its own period and calculation time identify that amount. Original-contract amounts for a shorter or remaining selected period appear separately. Without battery retains its original contract basis. Benefits compare original selected-period costs against the matching without-battery baseline. A negative benefit means the scenario costs more than that baseline. A comparison between corrected full-plan costs and the original baseline stays unavailable.
 
 Open **Cost breakdown** to see **Import cost**, **Export income** and **Bonus income** separately for each scenario. Net electricity cost is import cost minus export income minus bonus income. A negative income increases net costs. Missing amounts remain unavailable rather than becoming zero. The same breakdown shows battery wear and stored-energy value change. Economic cost includes wear and subtracts the value change. Stored-energy value is not cash received.
 
-These amounts and their cost breakdown follow the selected chart period. The latest plan starts at the current quarter. Historical plans start at their original beginning. **Full period** shows the available duration, normally 48 hours for a new plan and less when part has elapsed or coverage is shorter. The caption gives the exact covered period. Empty or unavailable periods do not show a zero cost.
+Selected-period amounts and their labelled component group follow the selected chart period. A successful full-plan valuation keeps its separate original horizon. The latest plan's chart starts at the current quarter. Historical plans start at their original beginning. **Full period** shows the available duration, normally 48 hours for a new plan and less when part has elapsed or coverage is shorter. The caption gives the exact covered period. Empty or unavailable periods do not show a zero cost.
 
-Battery value change uses the stored energy at both ends of that period and the original plan's fixed valuation basis. It retains reserves, conversion losses, future wear and the useful-energy cap. Changing the view does not fetch new prices or optimize another plan. Earlier export still consumes bonus room even when it is outside the selected period. These are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
+For original-cost periods, battery value change uses the stored energy at both ends and the original plan's fixed valuation basis. A successful full-plan contract correction instead supplies its own separately calculated inventory value. It retains the original physical flows. Changing the view does not fetch new prices or optimize another plan. Earlier export still consumes bonus room even when it is outside the selected period. These are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
 
 ## Understand the forecast and price charts
 
@@ -170,7 +172,13 @@ Open **Understand this plan** to load whole-plan inputs, assumptions and source 
 
 Check the measured starting stock, forecast inputs, physical limits, proposed command and expected result together. A reached limit is an observation. It is not proof that OEP evaluated every hypothetical alternative or that this limit caused the choice.
 
-Original prices and expected outcomes remain separate from later contract repricing. The detailed energy and command tables preserve the selected original plan. Viewing them never sends a physical command.
+Within **Selected interval details**, expand **Detailed interval values** for the battery control mode, fixed power target when present, stored energy and solar production permission. The time selector works with the keyboard. These are planned commands, not confirmation that equipment followed them. Viewing them never sends a physical command.
+
+The three scenario cards retain their **Cost breakdown**. Optimizer and self-consumption show the latest successful contract valuation by default when available, even when the chart shows only a shorter or remaining period. The valuation has its own **Full original plan** period and **Contract updated** calculation time. Original economic costs and components remain inside **Cost breakdown**. Repricing does not optimize the plan again. Without battery retains its original contract basis, so a benefit comparing that baseline with corrected costs is unavailable.
+
+Shorter or remaining periods retain the original contract rates and battery-value basis. Their separately labelled amounts and captions identify that basis alongside the whole-plan valuation. **Cost breakdown** keeps selected-period, corrected whole-plan and original whole-plan components separate. The successful whole-plan valuation remains visible while selected-period costs load or are unavailable. **Open full original plan** returns the charts to the complete horizon, but is not required to see that valuation. No corrected amounts are inferred for part of a plan. A later repricing failure retains the previous successful valuation and shows the failure separately. The original archive remains unchanged.
+
+Forecast evidence shows the model and quality that were used. Technical forecast version identifiers are omitted from this user view.
 
 ## Keep units and commands straight
 

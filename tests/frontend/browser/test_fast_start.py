@@ -43,10 +43,8 @@ def test_home_assistant_frame_loads_before_notices_and_simulations(app_page):
     captures = Path("results/ci/fast-start")
     captures.mkdir(parents=True, exist_ok=True)
     for table in ("plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"):
-        expect(content.locator("#" + table + " tr")).to_have_count(0)
-    content.get_by_text("Detailed interval energy", exact=True).click()
-    expect(content.locator("#plan-rows tr")).to_have_count(120)
-    content.get_by_text("Detailed interval energy", exact=True).click()
+        expect(content.locator("#" + table)).to_have_count(0)
+    expect(content.locator("#inspect-time")).to_have_attribute("max", "119")
     for route in simulations:
         route.fulfill(response=route.fetch())
     expect(content.locator("#overview-status")).to_contain_text("Connected")

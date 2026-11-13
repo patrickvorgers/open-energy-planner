@@ -26,8 +26,10 @@ plan starts at the current UTC quarter, while linked or historical plans retain
 their original start. Captions state actual covered boundaries. The full-period
 button states available hours instead of assuming that every retained or expired
 plan has 48 remaining hours. Versioned range reads clear stale totals and cannot
-replace a newer selection. Whole-plan evidence and corrected-contract tables keep
-their explicitly separate original-plan scope.
+replace a newer selection. Whole-plan evidence keeps its explicitly separate original-plan scope.
+Planning exposes scenario cost breakdowns and a contract-update notice. The API
+retains separate original and corrected-contract valuation evidence without a
+duplicate user-facing comparison table.
 
 ## Ownership and flow
 
@@ -203,6 +205,15 @@ corrected effective tariffs. These are new expected valuations, not actuals or
 new optimal plans. Publish a separate success-only valuation pointer and retain
 the previous result on failure. The UI shows the original, the latest successful
 correction and any pending/failed correction independently.
+The existing scenario cards show the successful full-original-horizon valuation's
+optimizer and self-consumption costs by default, with its own period and
+calculation time. Shorter or remaining periods display their original-basis amounts
+alongside this whole-plan valuation. A selected-period read failure or pending
+request cannot hide the independent successful valuation. Original amounts and
+separate component groups remain in the cards' disclosures. No corrected
+without-battery valuation is supplied, so corrected costs are not compared with
+that original baseline. Period slices retain original contract and inventory
+values and link to the full original plan. No repriced slice is inferred in the UI.
 
 Publication, explicit pause/resume and plan revocation are recorded separately
 from solver generation time, atomically with app state. Advice history integrates
@@ -335,7 +346,7 @@ Independent numeric oracles belong in the maintained savings tests. Simulated ap
 
 ## Interactive workspace
 
-See [EMS visualization](EMS-VISUALIZATION.md) for the Planning/Savings/Installation navigation, interactive locally bundled charts, keyboard inspection and the quarter-hour scheduling policy. Original evidence tables remain available as details.
+See [EMS visualization](EMS-VISUALIZATION.md) for the Planning/Savings/Installation navigation, interactive locally bundled charts, keyboard inspection and the quarter-hour scheduling policy. Original plan evidence remains available through the whole-plan and selected-interval disclosures.
 
 ## Price/publication coordination
 

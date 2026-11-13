@@ -68,12 +68,6 @@ def forecast_facts(plan, kind, source_id=None):
                 )
             ),
         ),
-        fact(
-            "Forecast version",
-            ": ".join(
-                dict.fromkeys(entry.get("forecast_version", "Not recorded") for entry in entries)
-            ),
-        ),
     ]
 
 

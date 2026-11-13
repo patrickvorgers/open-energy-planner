@@ -242,3 +242,107 @@ def test_comparison_balances_share_scale_after_range_legend_and_resize(browser, 
         assert [charts[0]["min"], charts[0]["max"]] == pytest.approx(bounds)
         assert charts[0]["soc"] == [0, 100]
         assert charts[3]["max"] > 1000
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_unchanged_shared_bounds_do_not_redraw_peers(browser, width):
+    """A stable scale updates once. A changed group extent updates all three charts exactly once."""
+    with browser.new_context(viewport={"width": width, "height": 900}) as context:
+        page = context.new_page()
+        page.set_content(
+            '<canvas id="one"></canvas><canvas id="two"></canvas><canvas id="three"></canvas>'
+        )
+        page.add_script_tag(path=str(WEB / "chart.umd.min.js"))
+        page.add_script_tag(path=str(WEB / "chart_theme.js"), type="module")
+        page.wait_for_function("Chart.registry.plugins.get('valueAxisHeadroom')")
+        result = page.evaluate("""() => {
+            const charts=['one','two','three'].map((id,index)=>new Chart(document.getElementById(id),{
+                type:'bar',data:{datasets:[{data:[{x:0,y:index+1}]}]},options:{responsive:false,animation:false,
+                plugins:{valueAxisHeadroom:{group:'test-shared'}},scales:{x:{type:'linear'},y:{beginAtZero:true}}}}));
+            const counts=[0,0,0];
+            charts.forEach((chart,index)=>{const update=chart.update;chart.update=function(...args){counts[index]++;return update.apply(this,args);};});
+            charts[0].update('none');
+            const unchanged=[...counts];counts.fill(0);
+            charts[0].data.datasets[0].data[0].y=8;
+            charts[0].update('none');
+            const changed=[...counts], bounds=charts.map(chart=>[chart.scales.y.min,chart.scales.y.max]);
+            charts.forEach(chart=>chart.destroy());
+            return {unchanged,changed,bounds};
+        }""")
+    assert result["unchanged"] == [1, 0, 0]
+    assert result["changed"] == [1, 1, 1]
+    assert result["bounds"] == [[0, 8 / 0.9]] * 3
+
+
+def test_complete_chart_batch_expands_shrinks_and_recovers_after_failure(app_page):
+    """One update per chart uses the complete group, supports smaller/empty ranges and clears failed batches."""
+    page, url = app_page
+    page.goto(url + "/overview")
+    result = page.evaluate("""async () => {
+        const resource=performance.getEntriesByType('resource').find(entry=>new URL(entry.name).pathname.endsWith('/chart_theme.js'));
+        const {updateCharts}=await import(resource.name);
+        const charts=[2,4,8].map((value,index)=>{
+            const canvas=document.createElement('canvas');document.body.append(canvas);
+            return new Chart(canvas,{type:'bar',data:{datasets:[{data:[{x:0,y:value}]},{type:'line',yAxisID:'soc',data:[{x:0,y:100}]}]},
+                options:{responsive:false,animation:false,plugins:{valueAxisHeadroom:{group:'batch-test'}},
+                    scales:{x:{type:'linear'},y:{beginAtZero:true},soc:{position:'right',min:0,max:100}}}});
+        });
+        const counts=[0,0,0];
+        charts.forEach((chart,index)=>{const original=chart.update;chart.update=function(...args){counts[index]++;return original.apply(this,args);};});
+        const snapshot=()=>({counts:[...counts],bounds:charts.map(chart=>[chart.scales.y.min,chart.scales.y.max]),soc:charts.map(chart=>[chart.scales.soc.min,chart.scales.soc.max])});
+        charts.forEach((chart,index)=>chart.data.datasets[0].data[0].y=[8,16,32][index]);
+        updateCharts(charts);const expanded=snapshot();counts.fill(0);
+        updateCharts(charts);const unchanged=snapshot();counts.fill(0);
+        charts[1].data.datasets[0].data[0].y=12;
+        updateCharts(charts);const changedData=snapshot();counts.fill(0);
+        charts[1].options.scales.x.max=1;
+        updateCharts(charts);const changedWindow=snapshot();counts.fill(0);
+        charts[1].setDatasetVisibility(0,false);
+        updateCharts(charts);const changedVisibility=snapshot();counts.fill(0);
+        charts[1].resize(450,250);const resized=snapshot();counts.fill(0);
+        updateCharts(charts);const afterResize=snapshot();counts.fill(0);
+        charts[1].setDatasetVisibility(0,true);
+        charts.forEach((chart,index)=>chart.data.datasets[0].data[0].y=[1,2,3][index]);
+        updateCharts(charts);const shrunk=snapshot();counts.fill(0);
+        charts.forEach(chart=>chart.setDatasetVisibility(0,false));
+        updateCharts(charts);const empty=snapshot();
+        charts.forEach(chart=>chart.setDatasetVisibility(0,true));
+        const original=charts[0].update;charts[0].update=()=>{throw new Error('Synthetic chart failure');};
+        let failed=false;try{updateCharts(charts);}catch{failed=true;}finally{charts[0].update=original;}
+        charts[2].data.datasets[0].data[0].y=9;charts[2].update('none');const recovered=snapshot();
+        charts[0].data.datasets[0].data[0].y=7;
+        const draw=charts[0].draw;charts[0].draw=()=>{throw new Error('Synthetic draw failure');};
+        let drawFailed=false;try{updateCharts(charts);}catch{drawFailed=true;}finally{charts[0].draw=draw;}
+        counts.fill(0);updateCharts(charts);const retried=snapshot();
+        charts[2].data.datasets[0].data[0].y=10;
+        charts[0].draw=()=>{throw new Error('Synthetic bounds-only draw failure');};
+        let boundsFailed=false;try{updateCharts(charts);}catch{boundsFailed=true;}finally{charts[0].draw=draw;}
+        counts.fill(0);updateCharts(charts);const boundsRetried=snapshot();
+        charts.forEach(chart=>chart.destroy());
+        return {expanded,unchanged,changedData,changedWindow,changedVisibility,resized,afterResize,shrunk,empty,failed,recovered,drawFailed,retried,boundsFailed,boundsRetried};
+    }""")
+    for phase, maximum in (("expanded", 32 / 0.9), ("shrunk", 3 / 0.9)):
+        assert result[phase]["counts"] == [1, 1, 1]
+        for bounds in result[phase]["bounds"]:
+            assert bounds == pytest.approx([0, maximum])
+    assert result["empty"]["counts"] == [1, 1, 1]
+    assert result["unchanged"]["counts"] == [0, 0, 0]
+    assert result["resized"]["counts"] == [0, 1, 0]
+    assert result["afterResize"]["counts"] == [0, 0, 0]
+    for phase in ("changedData", "changedWindow", "changedVisibility"):
+        assert result[phase]["counts"] == [0, 1, 0]
+    assert (
+        result["empty"]["bounds"][0] == result["empty"]["bounds"][1] == result["empty"]["bounds"][2]
+    )
+    assert all(math.isfinite(value) for value in result["empty"]["bounds"][0])
+    assert result["failed"]
+    assert result["drawFailed"]
+    assert result["retried"]["counts"] == [1, 0, 0]
+    assert result["boundsFailed"]
+    assert result["boundsRetried"]["counts"] == [1, 1, 1]
+    for bounds in result["boundsRetried"]["bounds"]:
+        assert bounds == pytest.approx([0, 10 / 0.9])
+    for phase in ("expanded", "shrunk", "empty", "recovered"):
+        assert result[phase]["soc"] == [[0, 100]] * 3
+    for bounds in result["recovered"]["bounds"]:
+        assert bounds == pytest.approx([0, 9 / 0.9])

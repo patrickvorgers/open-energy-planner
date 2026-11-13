@@ -16,6 +16,7 @@ from tests.frontend.browser.helpers import (
     assert_floating_save_bar,
     discover,
     edit_price_rule,
+    wait_for_product_reads,
 )
 
 
@@ -23,16 +24,215 @@ from tests.frontend.browser.helpers import (
 def test_overview_retains_original_expectations_beside_successful_contract_correction(app_page):
     """Desktop/mobile identify corrected expected costs separately from original advice and measured evaluation."""
     page, url = app_page
-    page.goto(url + "/overview")
+    page.goto(url + "/overview?plan=browser-original-plan")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#expected-benefit")).to_contain_text("Contract updated")
     expect(page.locator("#expected-benefit")).to_contain_text("without re-optimization")
-    page.get_by_text("Original and repriced expected costs", exact=True).click()
-    expect(page.locator("#expected-cost-rows tr")).to_have_count(6)
-    expect(page.get_by_role("columnheader", name="Original EMS", exact=True)).to_be_visible()
-    expect(page.get_by_role("columnheader", name="Repriced EMS", exact=True)).to_be_visible()
+    expect(page.get_by_text("Original and repriced expected costs", exact=True)).to_have_count(0)
+    selected = page.locator("#plan-version").input_value()
+    original = page.request.get(
+        url + "/v1/plans/" + selected, headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
+    comparison = page.request.get(
+        url + "/v1/plans/" + selected + "/comparison",
+        headers={"Authorization": "Bearer " + TOKEN},
+    ).json()
+    assert comparison["comparison"]["ems_costs"] != comparison["valuation"]["ems_costs"]
+    # Two kWh consumed from storage cost 0.40 originally and 0.80 at the corrected 0.40/kWh.
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text("0.80 EUR")
+    expect(page.locator("#self-consumption-costs > dl dd").first).to_have_text("0.80 EUR")
+    for host in ("ems-costs", "self-consumption-costs"):
+        card = page.locator("#" + host)
+        expect(card).to_contain_text("Contract updated")
+        expect(card).to_contain_text("Calculated")
+        expect(card.locator("time")).to_be_visible()
+        expect(card.locator("time")).to_have_attribute(
+            "datetime", comparison["valuation"]["evaluated_at"]
+        )
+        expect(card.locator("[data-benefit-state]")).to_have_attribute(
+            "data-benefit-state", "unavailable"
+        )
+        card.get_by_text("Cost breakdown", exact=True).click()
+        expect(card.locator(".original-costs")).to_be_visible()
+        expect(card.locator(".original-costs")).to_contain_text("0.40 EUR")
+        expect(
+            card.get_by_text("Battery value change (not cash)", exact=True).first.locator("..")
+        ).to_contain_text("-0.80 EUR")
+        expect(
+            card.get_by_text("Net electricity cost", exact=True).first.locator("..")
+        ).to_contain_text("0.00 EUR")
+    expect(page.locator("#reference-costs")).to_contain_text("Original contract")
+    expect(page.locator("#reference-costs > dl dd").first).to_have_text("0.60 EUR")
+    expect(page.locator("#ems-costs > dl dd")).to_have_count(2)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    captures = Path("results/ci/compact-planning")
+    captures.mkdir(parents=True, exist_ok=True)
+    page.evaluate("document.fonts.ready")
+    card = page.locator("#ems-costs").locator("..")
+    card.screenshot(path=str(captures / f"repriced-costs-{page.viewport_size['width']}.png"))
+    first = datetime.fromisoformat(
+        comparison["plan"]["input_snapshot"]["problem"]["intervals"][0]["start"]
+    )
+    page.clock.set_fixed_time(first + timedelta(minutes=15))
+    with page.expect_response(
+        lambda response: "/comparison?start=" in response.url
+    ) as period_response:
+        page.locator("#plan-version").dispatch_event("change")
+    period = period_response.value.json()
+    assert datetime.fromisoformat(period["period"]["start"]) == first + timedelta(minutes=15)
+    assert datetime.fromisoformat(period["period"]["end"]) == first + timedelta(minutes=30)
+    assert period["period"]["duration_h"] == 0.25
+    expect(page.locator("#ems-costs .selected-period-costs dd").first).to_have_text("0.20 EUR")
+    expect(page.locator("#ems-costs .selected-period-costs dd").nth(1)).to_have_text("0.10 EUR")
+    expect(page.locator("#ems-costs .selected-period-costs")).not_to_contain_text(
+        "Contract updated"
+    )
+    expect(page.locator("#ems-costs .contract-valuation dd")).to_have_text("0.80 EUR")
+    expect(card).to_contain_text("Original contract rates for this selected period")
+    card.get_by_role("link", name="Open full original plan", exact=True).click()
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text("0.80 EUR")
+    assert (
+        page.request.get(
+            url + "/v1/plans/" + selected,
+            headers={"Authorization": "Bearer " + TOKEN},
+        ).json()
+        == original
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings_corrected"], indirect=True)
+@pytest.mark.parametrize("retained_success", [False, True])
+def test_contract_valuation_failure_and_late_period_response_keep_correct_basis(
+    app_page, retained_success
+):
+    """A failed correction retains its last success. A late original-period result cannot overwrite the full valuation."""
+    page, url = app_page
+
+    def failed_correction(route):
+        """Supply the canonical API failure projection while retaining real amounts and optional successful valuation."""
+        response = route.fetch().json()
+        response["valuation_status"] = {
+            "issue": (
+                "Plan repricing evidence is unavailable. Check archived inputs and contract coverage. "
+                "The last successful valuation is retained."
+            )
+        }
+        if not retained_success:
+            response["valuation"] = None
+        route.fulfill(json=response)
+
+    page.route("**/comparison?view=simulations", failed_correction)
+    page.goto(url + "/overview?plan=browser-original-plan")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#expected-benefit")).to_contain_text(
+        "Repricing unavailable: Plan repricing evidence is unavailable. "
+        "Check archived inputs and contract coverage. The last successful valuation is retained."
+    )
+    expected = "0.80 EUR" if retained_success else "0.40 EUR"
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
+    if not retained_success:
+        expect(page.locator("#ems-costs")).not_to_contain_text("Contract updated")
+    original = page.request.get(
+        url + "/v1/plans/browser-original-plan", headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
+    first = datetime.fromisoformat(original["input_snapshot"]["problem"]["intervals"][0]["start"])
+    held = []
+
+    def hold_period(route):
+        """Signal actual route interception rather than assuming the loading label implies a queued request."""
+        held.append(route)
+        page.evaluate("window.periodReadHeld = true")
+
+    page.route("**/comparison?start=**", hold_period)
+    page.clock.set_fixed_time(first + timedelta(minutes=15))
+    page.locator("#plan-version").dispatch_event("change")
+    expect(page.locator(".scenario-period").first).to_contain_text("Loading expected costs")
+    page.wait_for_function("window.periodReadHeld === true")
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert held
+    if retained_success:
+        expect(page.locator("#ems-costs .contract-valuation")).to_be_visible()
+        expect(page.locator("#ems-costs .contract-valuation dd")).to_have_text("0.80 EUR")
+    page.clock.set_fixed_time(first)
+    page.get_by_role("button", name="Full period:", exact=False).click()
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
+    for route in held:
+        route.fulfill(response=route.fetch())
+    wait_for_product_reads(page)
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
+    if retained_success:
+        expect(page.locator("#ems-costs")).to_contain_text("Contract updated")
+
+
+@pytest.mark.parametrize("app_site", ["savings_corrected"], indirect=True)
+@pytest.mark.parametrize("savings_now", [datetime(2026, 11, 13, 12, tzinfo=UTC)])
+@pytest.mark.parametrize("slice_state", ["available", "loading", "failure"])
+def test_latest_plan_shows_full_contract_valuation_by_default_after_first_quarter(
+    app_page, savings_now, slice_state
+):
+    """Default ongoing advice shows the 0.80 whole-plan correction beside original remaining-quarter cost 0.20."""
+    page, url = app_page
+    # The teaching plan starts at yesterday's midnight and consumes two kWh at 0.20 originally or 0.40 corrected.
+    first = savings_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    page.clock.set_fixed_time(first + timedelta(minutes=15))
+    held = []
+    if slice_state == "loading":
+
+        def hold_slice(route):
+            """Confirm interception before releasing every pending original-period response."""
+            held.append(route)
+            page.evaluate("window.defaultPeriodHeld = true")
+
+        page.route("**/comparison?start=**", hold_slice)
+    elif slice_state == "failure":
+        page.route(
+            "**/comparison?start=**",
+            lambda route: route.fulfill(status=503, body="Synthetic period unavailable"),
+        )
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    if slice_state != "loading":
+        wait_for_product_reads(page)
+    assert "plan=" not in page.url
+    for host in ("ems-costs", "self-consumption-costs"):
+        card = page.locator("#" + host)
+        expect(card.locator(".contract-valuation")).to_be_visible()
+        expect(card.locator(".contract-valuation dd")).to_have_text("0.80 EUR")
+        expect(card.locator(".valuation-period")).to_be_visible()
+        expect(card.locator(".valuation-period")).to_contain_text("Full original plan")
+        expect(card.locator(".valuation-period")).to_contain_text("11/12/2026, 12:00 AM")
+        expect(card.locator(".valuation-period")).to_contain_text("11/12/2026, 12:30 AM")
+        expect(card.locator(".valuation-calculated")).to_have_attribute(
+            "datetime", savings_now.isoformat()
+        )
+        expect(card.locator(".selected-period-costs dd").first).to_have_text(
+            "0.20 EUR" if slice_state == "available" else "- EUR"
+        )
+        expect(card.locator(".selected-period-costs dd").nth(1)).to_have_text(
+            "0.10 EUR" if slice_state == "available" else "- EUR"
+        )
+        expect(card.locator(".selected-period-costs")).to_contain_text("Original contract")
+        expect(card.get_by_text("Import cost", exact=True).first).not_to_be_visible()
+    caption = page.locator("#ems-costs").locator("..").locator(".scenario-period")
+    if slice_state == "available":
+        expect(caption).to_contain_text("11/12/2026, 12:15 AM")
+        expect(caption).to_contain_text("11/12/2026, 12:30 AM")
+        expect(caption).to_contain_text("0.25 hours")
+        expect(caption).to_contain_text("Original contract")
+        expect(page.locator("#reference-costs > dl dd").first).to_have_text("0.30 EUR")
+    elif slice_state == "loading":
+        expect(caption).to_contain_text("Loading expected costs")
+        page.wait_for_function("window.defaultPeriodHeld === true")
+        for route in held:
+            route.fulfill(response=route.fetch())
+        wait_for_product_reads(page)
+    else:
+        expect(caption).to_contain_text("Expected costs for the selected period are unavailable")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)

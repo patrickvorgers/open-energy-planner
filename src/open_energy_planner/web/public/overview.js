@@ -1,5 +1,5 @@
 // Read-only views never activate an archived plan or reset the reference scenario.
-import "./chart_theme.js";
+import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
@@ -24,7 +24,6 @@ const DAILY_RESULTS_PAGE_SIZE = 25;
 let dailySavingsData = null, dailySavingsPage = 0;
 let overviewSessionReady = false, overviewIngress = false;
 let sourceNamesGeneration = 0, planSourceNamesGeneration = 0;
-let planDetails;
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
 /** Share numeric precision across evidence cards, tooltip columns and chart axes. Units remain separate. */
@@ -52,41 +51,6 @@ function row(parent, values) {
     }
     parent.append(tr);
 }
-const PLAN_DETAIL_TABLES = ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"];
-/** Build only an opened original-plan table from the latest confirmed plan and comparison. */
-function renderPlanDetails(id) {
-    const host = $(id);
-    host.replaceChildren();
-    if (!host.closest("details").open || !planDetails) return;
-    const {plan, batteryLabels, comparison, valuation} = planDetails;
-    if (id === "expected-cost-rows") {
-        const original = comparison?.ems_costs || {purchase: plan.independent_costs?.import_cost, sale: plan.independent_costs?.export_income, bonus: plan.independent_costs?.bonus_income, wear: plan.independent_costs?.wear_cost};
-        for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["wear", "Wear"], ["inventory_change", "Battery value change"], ["economic_cost", "Economic cost"]]) row(host, [label, money(original[key]), money(comparison?.reference_costs?.[key]), money(valuation?.ems_costs?.[key]), money(valuation?.reference_costs?.[key])]);
-        return;
-    }
-    (plan.input_snapshot?.problem?.intervals || []).forEach((step, index) => {
-        const flow = plan.expected_flows?.[index] || {}, reference = comparison?.reference?.[index];
-        if (id === "plan-rows") {
-            const imported = flow.grid_import ?? (flow.grid_to_load != null && flow.grid_to_battery != null ? flow.grid_to_load + flow.grid_to_battery : null);
-            const exported = flow.grid_export ?? (flow.pv_to_grid != null && flow.battery_to_grid != null ? flow.pv_to_grid + flow.battery_to_grid : null);
-            const stored = flow.batteries ? flow.batteries.reduce((total, battery) => total + battery.end_kwh, 0) : flow.battery_end_kwh;
-            row(host, [when(step.start), number(step.load_kwh), number(step.pv_kwh), number(imported), number(exported), number(reference?.import_kwh), number(reference?.export_kwh), number(stored), number(reference ? Object.values(reference.stored).reduce((total, value) => total + value, 0) : null)]);
-            return;
-        }
-        const command = plan.steps.find(entry => new Date(entry.start) <= new Date(step.start) && new Date(entry.end) > new Date(step.start));
-        if (id === "plan-battery-rows") for (const [batteryIndex, battery] of (flow.batteries || []).entries()) {
-            const target = command?.devices?.[battery.device_id];
-            const mode = target?.mode === "follow_grid_target" ? "Zero on the meter" : target?.mode === "fixed_power" ? "Fixed power" : "No command";
-            row(host, [when(step.start), batteryLabels.get(battery.device_id) || `Battery ${batteryIndex + 1}`, mode, target?.power_w == null ? "-" : Math.round(target.power_w), number(battery.end_kwh), number(reference?.stored[battery.device_id])]);
-        }
-        if (id === "plan-solar-rows") for (const [sourceIndex, [source, available]] of (step.pv_sources || []).entries()) {
-            const used = flow.solar?.find(value => value.source_id === source)?.used_kwh;
-            const enabled = command?.devices?.[source]?.enabled;
-            row(host, [when(step.start), plan.comparison_names?.[source] || `Solar ${sourceIndex + 1}`, number(available), number(used), enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production"]);
-        }
-    });
-}
-for (const id of PLAN_DETAIL_TABLES) $(id).closest("details").addEventListener("toggle", () => renderPlanDetails(id));
 const charts = new Map();
 const syncChartLegends = new WeakMap();
 const DEVICE_ROUNDING_KW = 0.1;
@@ -312,7 +276,7 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
  * sharing a stack and includes zero. Rendering applies the selected planning range
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
-function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false} = {}) {
+function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false} = {}) {
     let balanceTime = null;
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
@@ -383,7 +347,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {
+        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {
             id: "deviceLegend",
             beforeUpdate: syncLegend
         }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
@@ -396,7 +360,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                         ? null : instance.scales.x.getValueForPixel(event.x);
                 }
             },
-            plugins: {calendarDays: {utc: utcDays, onHeading: balance ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id) ? "planning-comparison" : null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+            plugins: {calendarDays: {utc: utcDays, onHeading: balance ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
                 hideTooltip();
                 const time = balanceTime; balanceTime = null;
                 renderTooltip(context, tooltip, balance, time);
@@ -440,6 +404,11 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             }
         }
     });
+    // Complete scenario data before the owner applies one shared range for this batch.
+    if (planningLegend) {
+        result.data.datasets = datasets;
+        result.options.plugins.valueAxisHeadroom.group = "planning-comparison";
+    }
     charts.set(id, result);
     syncChartLegends.set(result, syncLegend);
     if (planningLegend) {
@@ -493,7 +462,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         const points = series.flatMap((item) => item.points);
         $("savings-chart-range").textContent = points.length ? `From ${axisTime(Math.min(...points.map((p) => p[0])))} to ${axisTime(Math.max(...points.map((p) => p[0])))}` : "";
     }
-    applyRange();
+    if (!deferRange) applyRange();
 }
 /**
  * Set shared axes without changing frozen data: the latest plan starts at the
@@ -515,7 +484,7 @@ function applyRange() {
             const priceEnd = currentPriceWindow ? Math.max(currentPriceWindow.end, priceStart + QUARTER_MILLISECONDS) : undefined;
             instance.options.scales.x.min = priceStart;
             instance.options.scales.x.max = planningHours && priceStart != null ? priceStart + planningHours * MILLISECONDS_PER_HOUR : priceEnd;
-            instance.update(); continue;
+            continue;
         }
         const bars = instance.data.datasets.find((dataset) => dataset.type === "bar")?.data;
         const fullEnd = end == null ? bars?.at(-1)?.end : Math.max(Math.ceil(end / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS, start + QUARTER_MILLISECONDS);
@@ -524,19 +493,38 @@ function applyRange() {
     }
     // Set all windows and rounding visibility before computing the shared comparison axes.
     for (const instance of charts.values()) syncChartLegends.get(instance)?.(instance);
-    for (const instance of charts.values()) instance.update();
+    updateCharts(charts.values());
     if (first != null && end != null && start != null) {
         document.querySelector('[data-hours="0"]').textContent = `Full period: ${number(Math.max(0, end - Math.max(first, start)) / MILLISECONDS_PER_HOUR)} hours`;
         showPeriodCosts(start, planningHours ? start + planningHours * MILLISECONDS_PER_HOUR : Math.max(end, start + QUARTER_MILLISECONDS));
     }
 }
-/** Render server-owned period amounts, clearing old totals while another period is pending. */
-function renderPeriodCosts(period, scenarios, currency, message) {
+/** Read original full-horizon scenario amounts without revaluing any flow. */
+function originalScenarioCosts(plan) {
+    const baseline = plan.scenarios?.without_battery?.comparison, self = plan.scenarios?.self_consumption?.comparison;
+    return {
+        optimizer: {costs: baseline?.ems_costs || self?.ems_costs, benefit_vs_without_battery: baseline?.expected_savings},
+        self_consumption: {costs: self?.reference_costs, benefit_vs_without_battery: plan.scenarios?.self_consumption?.expected_savings_vs_without_battery},
+        without_battery: {costs: baseline?.reference_costs}
+    };
+}
+/** Keep successful full-plan valuations visible independently of selected-period loading or failure. */
+function renderPeriodCosts(period, scenarios, currency, message, plan = null) {
+    const valuation = plan?.projection.valuation, original = plan ? originalScenarioCosts(plan) : null;
+    const fullPeriod = period && plan && Date.parse(period.start) === plan.start && Date.parse(period.end) === plan.end;
     for (const [name, host] of [["optimizer", "ems-costs"], ["self_consumption", "self-consumption-costs"], ["without_battery", "reference-costs"]]) {
         const entry = scenarios?.[name];
-        renderScenarioCosts(host, entry?.costs, currency, entry?.benefit_vs_without_battery, name !== "without_battery");
+        const corrected = valuation && name !== "without_battery";
+        const correctedCosts = corrected ? valuation[name === "optimizer" ? "ems_costs" : "reference_costs"] : null;
+        const costs = corrected && fullPeriod ? correctedCosts : entry?.costs;
+        renderScenarioCosts(host, costs, currency, corrected && fullPeriod ? null : entry?.benefit_vs_without_battery, name !== "without_battery", {
+            valuation: corrected ? {costs: correctedCosts, evaluated_at: valuation.evaluated_at, period: plan.period, separate: !fullPeriod} : null,
+            originalCosts: corrected ? original[name]?.costs : null,
+            basis: valuation && !corrected ? "Original contract: A corrected no-battery valuation is unavailable." : ""
+        });
     }
-    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}: ${number(period.duration_h)} hours: Expected, not measured. Battery value uses the original plan's valuation basis.` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
+    const basis = !valuation ? "Battery value uses the original plan's valuation basis." : fullPeriod ? "Optimizer and self-consumption use the latest successful contract valuation. Without battery retains original contract rates." : "Original contract rates for this selected period. The full original plan valuation is shown separately.";
+    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}: ${number(period.duration_h)} hours: Expected, not measured. ${basis}` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
 }
 /** Request financial slices from their owning module. Late responses cannot replace another plan or range. */
 async function showPeriodCosts(start, end) {
@@ -547,20 +535,26 @@ async function showPeriodCosts(start, end) {
     periodCostKey = key;
     const request = ++periodCostRequest;
     if (start <= plan.start && end >= plan.end) {
-        const baseline = plan.scenarios?.without_battery?.comparison, self = plan.scenarios?.self_consumption?.comparison;
-        renderPeriodCosts(plan.period, {
-            optimizer: {costs: baseline?.ems_costs || self?.ems_costs, benefit_vs_without_battery: baseline?.expected_savings},
-            self_consumption: {costs: self?.reference_costs, benefit_vs_without_battery: plan.scenarios?.self_consumption?.expected_savings_vs_without_battery},
-            without_battery: {costs: baseline?.reference_costs}
-        }, plan.currency);
+        renderPeriodCosts(plan.period, originalScenarioCosts(plan), plan.currency, undefined, plan);
         return;
     }
-    renderPeriodCosts(null, null, plan.currency, "Loading expected costs for the selected period…");
+    renderPeriodCosts(null, null, plan.currency, "Loading expected costs for the selected period…", plan);
     try {
         const query = new URLSearchParams({start: new Date(start).toISOString(), end: new Date(end).toISOString()});
         const data = await api(`v1/plans/${encodeURIComponent(plan.id)}/comparison?${query}`, AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
         if (request !== periodCostRequest || periodCostPlan !== plan) return;
-        renderPeriodCosts(data.period, data.scenarios, plan.currency);
+        renderPeriodCosts(data.period, data.scenarios, plan.currency, undefined, plan);
+        if (plan.projection.valuation) for (const caption of document.querySelectorAll(".scenario-period")) {
+            caption.append(" ");
+            const link = document.createElement("a"), target = new URL(location.href);
+            target.searchParams.set("plan", plan.id); link.href = target.href;
+            link.textContent = "Open full original plan";
+            link.addEventListener("click", event => {
+                if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                event.preventDefault(); selectPlanningRange(0); selectOriginal(plan.id);
+            });
+            caption.append(link);
+        }
         for (const [name, host] of [["optimizer", "ems-costs"], ["self_consumption", "self-consumption-costs"], ["without_battery", "reference-costs"]]) {
             const issue = data.scenarios?.[name]?.issue;
             if (issue) document.getElementById(host).closest("figcaption").querySelector(".scenario-period").textContent += ` ${issue}`;
@@ -568,7 +562,7 @@ async function showPeriodCosts(start, end) {
     } catch (error) {
         if (request !== periodCostRequest || periodCostPlan !== plan) return;
         periodCostKey = "";
-        renderPeriodCosts(null, null, plan.currency, `Expected costs for the selected period are unavailable. ${error.message} Use Refresh overview to retry.`);
+        renderPeriodCosts(null, null, plan.currency, `Expected costs for the selected period are unavailable. ${error.message} Use Refresh overview to retry.`, plan);
     }
 }
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
@@ -601,14 +595,18 @@ function view() {
 }
 window.addEventListener("hashchange", view);
 $("inspect-time").addEventListener("input", inspect);
+/** Keep the selected range and its controls aligned before rendering or opening original advice. */
+function selectPlanningRange(hours) {
+    planningHours = hours;
+    for (const button of document.querySelectorAll("[data-hours]")) button.setAttribute("aria-pressed", String(Number(button.dataset.hours) === hours));
+}
 for (const button of document.querySelectorAll("[data-hours]")) button.addEventListener("click", () => {
-    planningHours = Number(button.dataset.hours);
-    for (const other of document.querySelectorAll("[data-hours]")) other.setAttribute("aria-pressed", String(other === button));
+    selectPlanningRange(Number(button.dataset.hours));
     applyRange();
 });
 view();
-/** Keep the original cost and optional benefit readable, with non-cash components in native disclosure. */
-function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
+/** Display server-valued costs without mixing contract bases, retaining original amounts in the disclosure. */
+function renderScenarioCosts(id, costs, currency, benefit, showBenefit, {valuation = null, originalCosts = null, basis = ""} = {}) {
     const host = $(id), expanded = host.querySelector("details")?.open || false;
     const totals = document.createElement("dl");
     const metric = (parent, label, value) => {
@@ -616,26 +614,64 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit) {
         name.textContent = label; amount.textContent = `${money(value)} ${currency}`;
         field.append(name, amount); parent.append(field);
     };
-    metric(totals, costs?.economic_cost == null ? "Expected costs unavailable" : "Expected economic cost", costs?.economic_cost);
+    if (valuation?.separate) totals.className = "selected-period-costs";
+    metric(totals, valuation?.separate ? "Selected period economic cost: Original contract" : costs?.economic_cost == null ? "Expected costs unavailable" : "Expected economic cost", costs?.economic_cost);
     if (showBenefit) {
         const known = typeof benefit === "number" && Number.isFinite(benefit);
         const zero = known && money(Math.abs(benefit)) === money(0);
-        metric(totals, "Expected benefit versus without battery", zero ? 0 : benefit);
+        metric(totals, valuation?.separate ? "Selected period benefit versus without battery: Original contract" : "Expected benefit versus without battery", zero ? 0 : benefit);
         totals.lastElementChild.dataset.benefitState = !known ? "unavailable" : zero ? "zero" : benefit > 0 ? "positive" : "negative";
     }
     const details = document.createElement("details"), summary = document.createElement("summary"), breakdown = document.createElement("dl");
     summary.textContent = "Cost breakdown"; details.open = expanded;
-    metric(breakdown, "Import cost", costs?.purchase);
-    metric(breakdown, "Export income", costs?.sale);
-    metric(breakdown, "Bonus income", costs?.bonus);
-    metric(breakdown, "Net electricity cost", costs?.electricity_cost);
-    metric(breakdown, "Wear", costs?.wear);
-    metric(breakdown, "Battery value change (not cash)", costs?.inventory_change);
+    /** Use the financial API's own component values for either valuation basis. */
+    const components = (target, values) => {
+        metric(target, "Import cost", values?.purchase);
+        metric(target, "Export income", values?.sale);
+        metric(target, "Bonus income", values?.bonus);
+        metric(target, "Net electricity cost", values?.electricity_cost ?? values?.grid_cash);
+        metric(target, "Wear", values?.wear);
+        metric(target, "Battery value change (not cash)", values?.inventory_change);
+    };
+    components(breakdown, costs);
     const cashExplanation = document.createElement("p"), explanation = document.createElement("p");
     cashExplanation.textContent = "Net electricity cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.";
     explanation.textContent = "Economic cost = net electricity cost + wear - battery value change. A positive value change reduces economic cost. Battery value change is not cash.";
-    details.append(summary, breakdown, cashExplanation, explanation);
+    details.append(summary);
+    if (valuation?.separate) {
+        const title = document.createElement("h4"); title.textContent = "Selected period: Original contract"; details.append(title);
+    }
+    details.append(breakdown, cashExplanation, explanation);
+    if (valuation?.separate) {
+        const updated = document.createElement("section"), title = document.createElement("h4"), amounts = document.createElement("dl");
+        updated.className = "valuation-costs"; title.textContent = "Latest valuation: Full original plan";
+        components(amounts, valuation.costs); updated.append(title, amounts); details.append(updated);
+    }
+    if (valuation) {
+        const original = document.createElement("section"), title = document.createElement("h4"), amounts = document.createElement("dl");
+        original.className = "original-costs"; title.textContent = "Original expected costs";
+        metric(amounts, "Original expected economic cost", originalCosts?.economic_cost);
+        components(amounts, originalCosts);
+        original.append(title, amounts); details.append(original);
+    }
     host.replaceChildren(totals, details);
+    if (valuation?.separate) {
+        const updated = document.createElement("dl"); updated.className = "contract-valuation";
+        metric(updated, "Latest expected economic cost: Full original plan", valuation.costs?.economic_cost);
+        host.prepend(updated);
+    }
+    if (basis || valuation) {
+        const note = document.createElement("p"); note.textContent = basis;
+        if (valuation) {
+            note.className = "valuation-period";
+            const calculated = document.createElement("time"); calculated.dateTime = valuation.evaluated_at;
+            calculated.className = "valuation-calculated";
+            calculated.textContent = when(valuation.evaluated_at);
+            const period = valuation.period ? `From ${when(valuation.period.start)} to ${when(valuation.period.end)}: ${number(valuation.period.duration_h)} hours.` : "Period unavailable.";
+            note.replaceChildren("Contract updated: Calculated ", calculated, `: Full original plan: ${period} Repricing does not re-optimize the plan. Full-plan benefit versus without battery is unavailable because a corrected no-battery valuation is unavailable.`);
+        }
+        host.insertBefore(note, valuation?.separate ? totals : details);
+    }
     if (!showBenefit) {
         const note = document.createElement("p"); note.textContent = "Baseline without storage"; host.append(note);
     }
@@ -647,12 +683,11 @@ function clearPlanComparisons() {
     simulationReadPending = false;
     periodCostPlan = null; periodCostKey = ""; periodCostRequest++;
     for (const chartId of ["reference-chart", "self-consumption-chart"]) {
-        chart(chartId, [], {unit: "kW", balance: true});
+        chart(chartId, [], {unit: "kW", balance: true, deferRange: true});
         $(chartId).closest(".chart-wrap").hidden = true;
     }
     $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
     renderPeriodCosts(null, null, "", "Loading simulations and expected costs…");
-    $("expected-cost-rows").replaceChildren();
     $("expected-benefit").textContent = "Loading simulation comparisons…";
     planEvidence = null;
     $("evidence-period").textContent = "";
@@ -713,10 +748,10 @@ function gridExchangeSeries(plan, comparison = null, baseline = null) {
     return series;
 }
 /** Add same-plan simulations and server-owned costs without rebuilding the user's plan charts. */
-function renderPlanComparisons(data, plan) {
+function renderPlanComparisons(data, plan, {deferRange = false} = {}) {
     const id = plan.plan_id, currency = plan.currency || "";
     const samePlan = renderedPlanId === id;
-    const comparison = data.comparison, valuation = data.valuation;
+    const comparison = data.comparison;
     const confirmedProjection = periodCostPlan?.projection === data;
     const withoutBattery = data.scenarios?.without_battery;
     const selfConsumption = data.scenarios?.self_consumption;
@@ -724,7 +759,7 @@ function renderPlanComparisons(data, plan) {
         for (const [chartId, entry, issueId] of [["reference-chart", withoutBattery, "reference-issue"], ["self-consumption-chart", selfConsumption, "self-consumption-issue"]]) {
             const balance = entry?.chart ? energyBalances(entry.chart, new Map(Object.entries(plan.comparison_names || {})))[0] : null;
             $(chartId).closest(".chart-wrap").hidden = !balance;
-            chart(chartId, balance?.series || [], {unit: "kW", balance: true, preserveVisibility: samePlan});
+            chart(chartId, balance?.series || [], {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true});
             $(issueId).textContent = entry?.issue || (balance?.missing ? `${balance.missing} interval(s) have incomplete physical evidence.` : "");
         }
     }
@@ -733,19 +768,17 @@ function renderPlanComparisons(data, plan) {
     const period = inspectSteps.length ? {start: new Date(inspectSteps[0].start).toISOString(), end: new Date(inspectSteps.at(-1).end).toISOString(), duration_h: (plan.input_snapshot?.problem?.intervals || []).reduce((total, interval) => total + interval.duration_h, 0)} : null;
     let message = "Benefits versus no battery include storage and smart planning. Excludes investment costs.";
     if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. Expected benefits include the difference in remaining battery value. " + message;
-    if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization. See the separate cost table.";
+    if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization.";
     if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
     if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
     if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
     $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
-    planDetails = {...planDetails, plan, comparison, valuation};
-    for (const id of PLAN_DETAIL_TABLES) renderPlanDetails(id);
     if (!confirmedProjection) {
-        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W", preserveVisibility: samePlan});
+        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W", preserveVisibility: samePlan, deferRange: true});
         periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
         periodCostKey = ""; periodCostRequest++;
     }
-    inspect(); applyRange();
+    inspect(); if (!deferRange) applyRange();
 }
 
 /**
@@ -777,17 +810,15 @@ async function showPlan(signal, background = false) {
             $("price-chart").closest(".chart-wrap").hidden = true;
         }
         renderedPlanId = null;
-        planDetails = null;
         planReadPending = false;
         simulationReadPending = false;
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
         $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
         $("planning-window").textContent = "";
-        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"]) $(name).replaceChildren();
         inspectSteps = [];
         for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
             if (chartId === "price-chart" && !clearPrices) continue;
-            if (charts.has(chartId)) chart(chartId, []);
+            if (charts.has(chartId)) chart(chartId, [], {deferRange: true});
         }
         $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
         for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = id ? "Loading original plan comparison…" : "No plan selected.";
@@ -820,7 +851,6 @@ async function showPlan(signal, background = false) {
             const objective = plan.consumption_objective;
             $("plan-description").textContent += `: Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
         }
-        for (const name of ["plan-rows", "plan-battery-rows", "plan-solar-rows"]) $(name).replaceChildren();
         const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
         const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
         const batteryLabels = new Map();
@@ -831,8 +861,6 @@ async function showPlan(signal, background = false) {
             const label = names.filter((name) => name === names[index]).length > 1 ? `${names[index]}: ${index + 1}` : names[index];
             batteryLabels.set(battery.device_id, label);
         });
-        const retainedProjection = samePlan ? periodCostPlan?.projection : null;
-        planDetails = {plan, batteryLabels, comparison: retainedProjection?.comparison, valuation: retainedProjection?.valuation};
         inspectSteps = [];
         const intervals = plan.input_snapshot?.problem?.intervals || [];
         intervals.forEach((step, i) => {
@@ -885,14 +913,14 @@ async function showPlan(signal, background = false) {
             step.text += `\n${rows.join("\n")}`;
         });
         const balance = balances[0];
-        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan});
+        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true});
         if (balance.missing) {
             const warning = document.createElement("p"); warning.className = "balance-warning";
             warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
             $("plan-chart-legend").append(warning);
         }
-        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan});
-        chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan});
+        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
+        chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan, deferRange: true});
         const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
         if (tariffEvidence.length) {
             buy.length = 0; sell.length = 0;
@@ -912,12 +940,11 @@ async function showPlan(signal, background = false) {
         currentPriceWindow = null;
         $("price-chart").closest(".chart-wrap").hidden = false;
         $("current-price-status").textContent = `Selected plan: ${when(plan.generated_at)}: Original contract rates. ${bonusRules.length ? "Potential export bonus is shown before the volume cap." : "No bonus applies in this plan."}`;
-        chart("price-chart", priceSeries, {unit: `${currency}/kWh`});
-        if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan);
+        chart("price-chart", priceSeries, {unit: `${currency}/kWh`, deferRange: true});
+        if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan, {deferRange: true});
         const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
-        for (const id of PLAN_DETAIL_TABLES) renderPlanDetails(id);
         renderedPlanId = id;
         planSourceNamesGeneration = sourceNamesAtRequest;
         if (requestedPlan === id) requestedPlan = null;
@@ -956,7 +983,6 @@ async function showPlan(signal, background = false) {
         if (request === selectionRequest) {
             for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = "Original plan comparison unavailable.";
             renderedPlanId = null;
-            planDetails = null;
             $("current-price-status").textContent = `Selected plan prices could not be loaded. ${error.message}`;
             $("overview-status").textContent = error.message;
             $("plan-description").textContent = "Selected plan could not be loaded.";
