@@ -67,11 +67,23 @@ def test_energy_power_link_is_required_and_cannot_be_overridden(linked_power):
         consumer["power_entity"] = linked_power
     consumers = SimpleNamespace(options=[consumer], selected=[])
     with pytest.raises(ValueError, match="Home Assistant Energy"):
-        configuration(settings(), catalogue(), consumers, SimpleNamespace(state={"devices": {}}))
+        configuration(
+            settings(),
+            catalogue(),
+            consumers,
+            SimpleNamespace(state={"devices": {}}),
+            previous_points=(),
+        )
 
 
 def test_missing_energy_meter_is_rejected_by_membership_validation():
     """Valid sensor metadata cannot admit a charge point whose meter is absent from Energy."""
     consumers = SimpleNamespace(options=[], selected=[])
     with pytest.raises(ValueError, match="^Select consumers configured in Home Assistant Energy$"):
-        configuration(settings(), catalogue(), consumers, SimpleNamespace(state={"devices": {}}))
+        configuration(
+            settings(),
+            catalogue(),
+            consumers,
+            SimpleNamespace(state={"devices": {}}),
+            previous_points=(),
+        )
