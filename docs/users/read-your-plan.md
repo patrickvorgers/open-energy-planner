@@ -10,6 +10,8 @@ The selected plan's graph, prices and interval values appear first. Its power sc
 
 A valid older plan can remain in history after a later calculation fails. Its presence does not mean its commands are still applicable. Read the page's status and any source warning.
 
+Charts redraw when their data, visibility, scale or dimensions change. Loading simulations does not redraw unchanged price and forecast charts.
+
 For duration and solver-progress questions, use [Planning performance](planning-performance.md). A first solver candidate is not yet an independently checked published plan.
 
 ## Start with the three scenarios

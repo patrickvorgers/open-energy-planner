@@ -147,6 +147,11 @@ bounds. Each synchronous rendering stage then applies the selected windows and
 legend visibility before computing the shared scenario extrema once. When the
 simulations arrive, the complete group receives one batch update. Same-plan
 refreshes join the initial stage instead of starting a nested range update.
+The batch skips charts whose rendered data, dataset visibility, scale configuration,
+dimensions and resulting shared bounds are unchanged. In-place data changes are
+detected too. Each completed update records its rendered inputs against that chart
+instance, including native resize updates. This state is discarded with the chart.
+Redraw decisions and rendering use the same axis-bound calculation.
 Batch extrema are temporary and are cleared even when a chart update fails.
 Time-window, data and legend changes can expand or shrink the shared scale.
 The separate SoC percentage axes do not enter that calculation.

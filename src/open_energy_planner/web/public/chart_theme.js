@@ -5,6 +5,11 @@ const AXIS_SIGNIFICANT_DIGITS = 14;
 const NICE_INTERVALS = [1, 2, 2.5, 5, 10];
 let synchronizingGroup = false;
 let batchRanges = null;
+const renderedStates = new WeakMap();
+/** Remember rendered inputs rather than treating an unchanged range request as new data. */
+function chartState(chart) {
+    return JSON.stringify([chart.data, chart.data.datasets.map((_, index) => chart.isDatasetVisible(index)), chart.config.options.scales, chart.width, chart.height]);
+}
 /** Collect visible extrema, with signed stack totals and interpolated line edges.
  * Interval bars contribute whenever any part overlaps the selected window.
  * Missing values break lines. Hidden datasets and the separate SoC axis contribute nothing.
@@ -43,7 +48,20 @@ function visibleRange(chart, axis) {
     if (Number.isFinite(maximum) && Number.isFinite(suggested.suggestedMax)) include(suggested.suggestedMax);
     return {minimum, maximum};
 }
-/** Update complete chart groups once after their windows and visibility have been applied.
+/** Calculate padded physical bounds for both redraw decisions and scale rendering. */
+function axisBounds({minimum, maximum}, options) {
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) { minimum = 0; maximum = 1; }
+    if (options.beginAtZero) { minimum = Math.min(minimum, 0); maximum = Math.max(maximum, 0); }
+    const fixedMinimum = Number.isFinite(options.min) || options.beginAtZero && minimum === 0;
+    const fixedMaximum = Number.isFinite(options.max) || options.beginAtZero && maximum === 0 && minimum < 0;
+    if (fixedMinimum) minimum = Number.isFinite(options.min) ? options.min : 0;
+    if (fixedMaximum) maximum = Number.isFinite(options.max) ? options.max : 0;
+    if (minimum === maximum) { const span = Math.abs(minimum) || 1; if (!fixedMinimum) minimum -= span / 2; if (!fixedMaximum) maximum += span / 2; }
+    const freeEnds = Number(!fixedMinimum) + Number(!fixedMaximum);
+    const padding = (maximum - minimum) * AXIS_MARGIN_FRACTION / (1 - freeEnds * AXIS_MARGIN_FRACTION);
+    return {min: fixedMinimum ? minimum : minimum - padding, max: fixedMaximum ? maximum : maximum + padding};
+}
+/** Update changed charts after complete groups' windows and visibility have been applied.
  * Visible group extrema exist only for this synchronous batch. Native resize or
  * standalone updates retain the ordinary plugin path. Failures cannot retain bounds.
  */
@@ -62,7 +80,18 @@ export function updateCharts(instances) {
         }
     }
     batchRanges = ranges;
-    try { for (const chart of charts) chart.update("none"); }
+    try {
+        for (const chart of charts) {
+            const group = chart.options.plugins.valueAxisHeadroom?.group;
+            const changedBounds = Object.values(chart.scales).some(scale => {
+                if (scale.axis !== "y" || scale.id === "soc") return false;
+                const range = ranges.get(JSON.stringify([group, scale.id])) || visibleRange(chart, scale.id);
+                const bounds = axisBounds(range, scale.options);
+                return bounds.min !== scale.min || bounds.max !== scale.max;
+            });
+            if (changedBounds || renderedStates.get(chart) !== chartState(chart)) chart.update("none");
+        }
+    }
     finally { batchRanges = previous; }
 }
 /** Keep ten percent of axis height at each unrestricted end, independently of nice ticks.
@@ -79,16 +108,8 @@ Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options
         const range = visibleRange(peer, scale.id);
         minimum = Math.min(minimum, range.minimum); maximum = Math.max(maximum, range.maximum);
     }
-    if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) { minimum = 0; maximum = 1; }
-    if (scale.options.beginAtZero) { minimum = Math.min(minimum, 0); maximum = Math.max(maximum, 0); }
-    const fixedMinimum = Number.isFinite(scale.options.min) || scale.options.beginAtZero && minimum === 0;
-    const fixedMaximum = Number.isFinite(scale.options.max) || scale.options.beginAtZero && maximum === 0 && minimum < 0;
-    if (fixedMinimum) minimum = Number.isFinite(scale.options.min) ? scale.options.min : 0;
-    if (fixedMaximum) maximum = Number.isFinite(scale.options.max) ? scale.options.max : 0;
-    if (minimum === maximum) { const span = Math.abs(minimum) || 1; if (!fixedMinimum) minimum -= span / 2; if (!fixedMaximum) maximum += span / 2; }
-    const freeEnds = Number(!fixedMinimum) + Number(!fixedMaximum);
-    const padding = (maximum - minimum) * AXIS_MARGIN_FRACTION / (1 - freeEnds * AXIS_MARGIN_FRACTION);
-    scale.min = fixedMinimum ? minimum : minimum - padding; scale.max = fixedMaximum ? maximum : maximum + padding;
+    const bounds = axisBounds({minimum, maximum}, scale.options);
+    scale.min = bounds.min; scale.max = bounds.max;
     const ideal = (scale.max - scale.min) / VALUE_AXIS_INTERVALS, magnitude = 10 ** Math.floor(Math.log10(ideal));
     const step = NICE_INTERVALS.find(value => value * magnitude >= ideal) * magnitude;
     scale.options.bounds = "data";
@@ -102,6 +123,8 @@ Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options
     const step = scale.options.ticks.stepSize;
     scale.ticks = [];
     for (let index = Math.ceil(scale.min / step); index <= Math.floor(scale.max / step); index++) scale.ticks.push({value: Number((index * step).toPrecision(AXIS_SIGNIFICANT_DIGITS))});
+}, afterRender(chart) {
+    renderedStates.set(chart, chartState(chart));
 }, afterUpdate(chart, _arguments, options) {
     if (batchRanges || !options.group || synchronizingGroup) return;
     synchronizingGroup = true;

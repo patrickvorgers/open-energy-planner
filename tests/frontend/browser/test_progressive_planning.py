@@ -287,13 +287,13 @@ def test_compact_planning_preserves_commands_costs_and_original_archive(app_page
 
 @pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
 def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app_page):
-    """The optimizer appears alone first. Completed simulations redraw each populated balance once per batch."""
+    """The optimizer appears first. Simulations redraw changed charts and unchanged range requests draw nothing."""
     page, url = app_page
     page.clock.set_fixed_time(START)
     held = []
     page.route("**/comparison?view=simulations", lambda route: held.append(route))
     page.add_init_script("""(() => {
-        window.balanceDraws=[];window.chartAssignments=0;
+        window.balanceDraws=[];window.chartDraws=[];window.chartAssignments=0;
         let implementation;
         Object.defineProperty(window,'Chart',{configurable:true,get:()=>implementation,set:value=>{
             window.chartAssignments++;
@@ -301,6 +301,7 @@ def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app
             implementation=value;
             const update=value.prototype.update;
             value.prototype.update=function(...args) {
+                if (args[0] !== 'resize') window.chartDraws.push(this.canvas?.id);
                 if (args[0] !== 'resize' && ['plan-chart','reference-chart','self-consumption-chart'].includes(this.canvas?.id)
                     && this.data.datasets.some(dataset=>dataset.data.length)) window.balanceDraws.push(this.canvas.id);
                 return update.apply(this,args);
@@ -324,9 +325,13 @@ def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app
         == 0
     )
     assert len(held) == 1
-    page.evaluate("window.balanceDraws=[]")
+    page.evaluate("window.balanceDraws=[];window.chartDraws=[]")
     held[0].fulfill(response=held[0].fetch())
     expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert (
+        page.evaluate("window.chartDraws.filter(id=>['forecast-chart','price-chart'].includes(id))")
+        == []
+    )
     identities = ["plan-chart", "reference-chart", "self-consumption-chart"]
     for action in (None, "Full period:", "Next 6 hours"):
         if action is not None:
@@ -339,11 +344,15 @@ def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app
         })""",
             identities,
         )
-        assert result["counts"] == [1, 1, 1], {
+        expected_counts = {None: [0, 1, 1], "Full period:": [0, 0, 0], "Next 6 hours": [1, 1, 1]}
+        assert result["counts"] == expected_counts[action], {
             **result,
             "chart_assignments": page.evaluate("window.chartAssignments"),
         }
         assert result["bounds"][0] == result["bounds"][1] == result["bounds"][2]
+    page.evaluate("window.chartDraws=[]")
+    page.get_by_role("button", name="Next 6 hours", exact=False).click()
+    assert page.evaluate("window.chartDraws") == []
     assert (
         page.locator("#plan-chart").evaluate(
             "canvas => JSON.stringify(Chart.getChart(canvas).data.datasets)"
@@ -355,11 +364,11 @@ def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app
     expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
     assert page.evaluate(
         "ids => ids.map(id=>window.balanceDraws.filter(value=>value===id).length)", identities
-    ) == [1, 1, 1]
+    ) == [1, 0, 0]
     assert len(held) == 2
     page.evaluate("window.balanceDraws=[]")
     held[1].fulfill(response=held[1].fetch())
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     assert page.evaluate(
         "ids => ids.map(id=>window.balanceDraws.filter(value=>value===id).length)", identities
-    ) == [1, 1, 1]
+    ) == [0, 1, 1]

@@ -292,6 +292,16 @@ def test_complete_chart_batch_expands_shrinks_and_recovers_after_failure(app_pag
         const snapshot=()=>({counts:[...counts],bounds:charts.map(chart=>[chart.scales.y.min,chart.scales.y.max]),soc:charts.map(chart=>[chart.scales.soc.min,chart.scales.soc.max])});
         charts.forEach((chart,index)=>chart.data.datasets[0].data[0].y=[8,16,32][index]);
         updateCharts(charts);const expanded=snapshot();counts.fill(0);
+        updateCharts(charts);const unchanged=snapshot();counts.fill(0);
+        charts[1].data.datasets[0].data[0].y=12;
+        updateCharts(charts);const changedData=snapshot();counts.fill(0);
+        charts[1].options.scales.x.max=1;
+        updateCharts(charts);const changedWindow=snapshot();counts.fill(0);
+        charts[1].setDatasetVisibility(0,false);
+        updateCharts(charts);const changedVisibility=snapshot();counts.fill(0);
+        charts[1].resize(450,250);const resized=snapshot();counts.fill(0);
+        updateCharts(charts);const afterResize=snapshot();counts.fill(0);
+        charts[1].setDatasetVisibility(0,true);
         charts.forEach((chart,index)=>chart.data.datasets[0].data[0].y=[1,2,3][index]);
         updateCharts(charts);const shrunk=snapshot();counts.fill(0);
         charts.forEach(chart=>chart.setDatasetVisibility(0,false));
@@ -300,19 +310,30 @@ def test_complete_chart_batch_expands_shrinks_and_recovers_after_failure(app_pag
         const original=charts[0].update;charts[0].update=()=>{throw new Error('Synthetic chart failure');};
         let failed=false;try{updateCharts(charts);}catch{failed=true;}finally{charts[0].update=original;}
         charts[2].data.datasets[0].data[0].y=9;charts[2].update('none');const recovered=snapshot();
+        charts[0].data.datasets[0].data[0].y=7;
+        const draw=charts[0].draw;charts[0].draw=()=>{throw new Error('Synthetic draw failure');};
+        let drawFailed=false;try{updateCharts(charts);}catch{drawFailed=true;}finally{charts[0].draw=draw;}
+        counts.fill(0);updateCharts(charts);const retried=snapshot();
         charts.forEach(chart=>chart.destroy());
-        return {expanded,shrunk,empty,failed,recovered};
+        return {expanded,unchanged,changedData,changedWindow,changedVisibility,resized,afterResize,shrunk,empty,failed,recovered,drawFailed,retried};
     }""")
     for phase, maximum in (("expanded", 32 / 0.9), ("shrunk", 3 / 0.9)):
         assert result[phase]["counts"] == [1, 1, 1]
         for bounds in result[phase]["bounds"]:
             assert bounds == pytest.approx([0, maximum])
     assert result["empty"]["counts"] == [1, 1, 1]
+    assert result["unchanged"]["counts"] == [0, 0, 0]
+    assert result["resized"]["counts"] == [0, 1, 0]
+    assert result["afterResize"]["counts"] == [0, 0, 0]
+    for phase in ("changedData", "changedWindow", "changedVisibility"):
+        assert result[phase]["counts"] == [0, 1, 0]
     assert (
         result["empty"]["bounds"][0] == result["empty"]["bounds"][1] == result["empty"]["bounds"][2]
     )
     assert all(math.isfinite(value) for value in result["empty"]["bounds"][0])
     assert result["failed"]
+    assert result["drawFailed"]
+    assert result["retried"]["counts"] == [1, 0, 0]
     for phase in ("expanded", "shrunk", "empty", "recovered"):
         assert result[phase]["soc"] == [[0, 100]] * 3
     for bounds in result["recovered"]["bounds"]:
