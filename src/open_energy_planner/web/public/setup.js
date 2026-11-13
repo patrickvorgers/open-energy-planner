@@ -15,6 +15,8 @@ let token = "", ingressSession = false,
     busy = false,
     discoveryTimer;
 let requestedStrategy = null, installationBaseline = null, installationReady = false;
+let strategyRequestVersion = 0;
+let strategyPendingRequest = null;
 let configurationGeneration = 0;
 let pendingSolarSources = [];
 /** Include precise drafts and import provenance even when their visible controls are unchanged. */
@@ -34,6 +36,11 @@ const saveState = new SaveBar({form: "wizard", bar: "installation-save-bar", sav
     ...(priceSettings.dirty ? [["price-sources", priceSettings.values]] : []),
 ]});
 const layout = new InstallationLayout(saveState, value => { if (!busy) showStep(value); });
+$("allow-feed-in").addEventListener("change", () => {
+    const limit = $("export");
+    if ($("allow-feed-in").checked) limit.value = limit.dataset.previousLimit || "";
+    else { limit.dataset.previousLimit = limit.value; limit.value = "0"; }
+});
 $("edit-installation").addEventListener("click", () => { ++configurationGeneration; });
 for (const type of ["input", "change"]) $("wizard").addEventListener(type, event => {
     if (!event.target.hasAttribute("data-view-control")) ++configurationGeneration;
@@ -657,7 +664,7 @@ function definitions() {
             grid_export_entity: $("export-energy").value.trim() || null,
             additional_grid_export_entities: (config.catalogue.data.suggestions.settlement?.exports || []).slice(1),
             import_limit_w: Number($("import").value) * 1000,
-            export_limit_w: Number($("export").value) * 1000,
+            export_limit_w: $("allow-feed-in").checked ? Number($("export").value) * 1000 : 0,
             batteries,
             inverters: [...used.values()],
             expected_version: config.installation?.version ?? null,
@@ -719,15 +726,16 @@ function showStep(value) {
     saveState.update();
     layout.show(step);
 }
-/** Validate the current wizard area and reveal the source containing an invalid field. */
-function validateVisible() {
+/** Validate an installation area before locking controls and reveal its invalid field. */
+function validateVisible(area = step) {
     for (const input of document
-        .querySelector(`[data-step="${step}"]`)
+        .querySelector(`[data-step="${area}"]`)
         .querySelectorAll("input,select"))
         if (!input.checkValidity()) {
-            const container = step === 1 ? "solar-rows" : step === 2 ? "battery-rows" : null;
+            if (area !== step) showStep(area);
+            const container = area === 1 ? "solar-rows" : area === 2 ? "battery-rows" : null;
             if (container) {
-                const selector = step === 1 ? "installation-solar" : "installation-battery";
+                const selector = area === 1 ? "installation-solar" : "installation-battery";
                 $(selector).value = String([...$(container).children].findIndex(row => row.contains(input)));
                 layout.selectDevice(selector, container);
             }
@@ -767,8 +775,7 @@ async function refreshPriceSources() {
         $("price-source-provenance").replaceChildren();
         $("price-market").textContent = "Price source status unavailable. Retrying automatically.";
     }
-    try { await loadStrategy(false); }
-    catch { $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically."; }
+    refreshStrategy();
     try { await refreshSourceNames(); }
     catch { /* Retain the last confirmed names when metadata is temporarily unavailable. */ }
     priceTimer = setTimeout(refreshPriceSources, PRICE_STATUS_REFRESH_MS);
@@ -787,6 +794,7 @@ async function refreshSourceNames(signal) {
     config.catalogue = state.catalogue;
     config.devices = state.devices;
     config.panel_settings = state.panel_settings;
+    config.annual_estimate = state.annual_estimate;
     for (const editor of solarRows) {
         const ownership = state.panel_settings?.[editor.old.entity_id];
         if (ownership) editor.updateOwnership(ownership, panelsChanged);
@@ -810,22 +818,20 @@ async function refreshSourceNames(signal) {
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
 async function load(refresh = false, discard = false, signal) {
     const generation = ++configurationGeneration;
-    const nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
+    let nextConfig;
+    try { nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal); }
+    catch (error) {
+        if (generation !== configurationGeneration) return;
+        throw error;
+    }
     if (generation !== configurationGeneration) return;
     if (nextConfig.mode !== "home_assistant")
         throw new Error("Installation setup requires Home Assistant mode.");
-    try { await loadStrategy(requestedStrategy === null || refresh || discard, signal, generation); }
-    catch {
-        signal?.throwIfAborted();
-        if (generation !== configurationGeneration) return;
-        $("strategy-settings").hidden = false;
-        $("installation-save-bar").hidden = false;
-        $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically.";
-        saveState.update("Strategy status unavailable. Retrying automatically.");
-    }
-    if (generation !== configurationGeneration) return;
     config = nextConfig;
     installationReady = false;
+    // Explicit reloads settle both baselines before SaveBar unlocks or confirms a discard.
+    if (refresh || discard) await refreshStrategy(true, signal);
+    else refreshStrategy(false, signal);
     refreshPriceSources();
     const catalogue = config.catalogue;
     if (
@@ -874,9 +880,6 @@ async function load(refresh = false, discard = false, signal) {
         showStep(layout.area >= 4 ? layout.area : -1);
         return;
     }
-    $("energy-summary").textContent =
-        `Energy dashboard: ${hints.terms.filter((t) => t.sign === 1 && !hints.solar_sources.includes(t.entity_id) && !hints.batteries.some((b) => b.energy_entity === t.entity_id)).map((t) => t.entity_id).join(", ")} (grid import): ` +
-        `Solar sources: ${hints.solar_sources.length}: Batteries: ${hints.batteries.length}: Configuration is independent of available history. Devices removed from Energy are excluded automatically.`;
     for (const [id, kind, selected] of [
         [
             "grid",
@@ -908,18 +911,12 @@ async function load(refresh = false, discard = false, signal) {
     $("export").value = config.installation
         ? config.installation.export_limit_w / 1000
         : "";
+    $("allow-feed-in").checked = config.installation?.export_limit_w !== 0;
+    delete $("export").dataset.previousLimit;
     const estimate = config.annual_estimate;
     $("annual").value = estimate?.annual_kwh ?? config.demand?.annual_kwh ?? "";
     $("annual-field").hidden = Boolean(estimate || config.demand);
-    $("household-summary").textContent = estimate
-        ? `Whole-home consumption uses the complete Energy dashboard balance. Startup scale: ${estimate.annual_kwh} kWh/year. ${estimate.extrapolated === false
-            ? `Measured over ${estimate.days} complete days.`
-            : `Extrapolated from ${estimate.days} complete days within the last year. This is an estimate, not a measured annual total. Seasonal differences may affect it.`} Historical load forecasting is initialized after saving.`
-        : "Whole-home consumption uses the complete Energy dashboard balance. Fewer than seven complete recent days are available. Confirm an annual estimate for the startup forecast.";
     $("grid-field").hidden = Boolean($("grid").value);
-    $("grid-summary").textContent = $("grid-field").hidden
-        ? `Grid power from Home Assistant: ${(hints.grid_power_entities || [$("grid").value]).join(", ")}. All connections are summed. Import/export energy meters are reused separately for history and costs.`
-        : "Configure net grid power in Settings > Dashboards > Energy in Home Assistant.";
     $("timezone").value = catalogue.data.timezone;
     useHomeAssistantTimezone(catalogue.data.timezone);
     const savedSolar = config.solar?.sources || [];
@@ -938,8 +935,7 @@ async function load(refresh = false, discard = false, signal) {
     });
     for (const battery of detectedBatteries)
         addBattery(battery);
-    if (savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length)
-        $("energy-summary").textContent += " Device membership changed in Home Assistant. Removed devices are excluded automatically. Confirm missing properties and save to resume planning. Historical plans remain unchanged.";
+    const membershipChanged = savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length;
     $("connect").hidden = true;
     $("wizard").hidden = false;
     $("installation-save-bar").hidden = false;
@@ -954,13 +950,9 @@ async function load(refresh = false, discard = false, signal) {
     saveState.update();
     layout.sync();
     status(
-        layout.wizard ? "Home Assistant Energy configuration is ready. Confirm your physical ratings before saving." : pendingSolarSources.length ? `Review and save new Home Assistant solar sources: ${pendingSolarSources.map(solarName).join(", ")}.` : "Saved configuration loaded.",
+        membershipChanged ? "Device membership changed in Home Assistant. Removed devices are excluded automatically. Confirm missing properties and save to resume planning. Historical plans remain unchanged." : layout.wizard ? "Home Assistant Energy configuration is ready. Confirm your physical ratings before saving." : pendingSolarSources.length ? `Review and save new Home Assistant solar sources: ${pendingSolarSources.map(solarName).join(", ")}.` : "Saved configuration loaded.",
     );
 }
-$("edit-detected").onclick = () => {
-    $("grid-field").hidden = false;
-    $("annual-field").hidden = false;
-};
 $("connect").onsubmit = async (event) => {
     event.preventDefault();
     token = $("token").value;
@@ -1061,7 +1053,7 @@ $("back").onclick = () => {
     if (!busy) showStep(step - 1);
 };
 $("next").onclick = async () => {
-    if (busy || !validateVisible()) return;
+    if (busy || !validateVisible() || (step === 2 && !validateVisible(0))) return;
     try {
         if (step === 2) {
             const summary = await api(
@@ -1080,6 +1072,7 @@ $("next").onclick = async () => {
 $("wizard").onsubmit = (event) => event.preventDefault();
 $("save").onclick = async () => {
     if (busy || !layout.editing || (layout.wizard && ![3, 4, 5].includes(step))) return;
+    if (step !== 4 && step !== 5 && !validateVisible(0)) return;
     ++configurationGeneration;
     busy = true;
     saveState.begin();
@@ -1105,6 +1098,7 @@ $("save").onclick = async () => {
             config.solar = solar.configuration;
             const result = await api("/v1/installation", "PUT", body.installation);
             config.installation = result.installation.configuration;
+            if (config.installation.export_limit_w === 0) delete $("export").dataset.previousLimit;
             pendingSolarSources = [];
             installationBaseline = JSON.stringify(installationValues());
             message = `Installation saved. Home Assistant will provision ${(result.installation.devices || []).length} virtual device(s).${result.installation.warnings?.length ? " Fixed PV may exceed the configured export limit. Check the Home Assistant notification." : ""}`;
@@ -1150,11 +1144,42 @@ async function initializeIngress() {
 }
 initializeIngress();
 
-/** Refresh acceptance status. Synchronize editable intent only on initial load, explicit reload or successful save. */
-async function loadStrategy(updateChoice = true, signal, generation) {
-    const state = await api("/v1/strategy", "GET", undefined, signal);
-    if (generation !== undefined && generation !== configurationGeneration) return;
-    if (updateChoice || requestedStrategy === null) {
+/** Load the independent preference without delaying installation rendering or reporting aborted reads. */
+async function refreshStrategy(updateChoice = false, signal) {
+    // Background reads must yield to the active save or reload's preference baseline.
+    if (!updateChoice && (saveState.busy || strategyPendingRequest)) return;
+    const pending = loadStrategy(updateChoice, signal);
+    const requestVersion = strategyRequestVersion;
+    try { await pending; }
+    catch {
+        if (signal?.aborted || requestVersion !== strategyRequestVersion) return;
+        if (updateChoice) {
+            // A failed explicit reload cannot certify the old compare-and-set baseline.
+            requestedStrategy = null;
+            $("strategy").value = "";
+            layout.controls.set($("strategy"), true);
+            $("strategy").disabled = true;
+            layout.sync();
+        }
+        $("strategy-settings").hidden = false;
+        $("installation-save-bar").hidden = false;
+        $("strategy-status").textContent = "Strategy settings unavailable. Retrying automatically.";
+    }
+}
+/** Synchronize saved intent only on initial load, explicit reload or successful save. */
+async function loadStrategy(updateChoice = true, signal) {
+    const requestVersion = ++strategyRequestVersion;
+    const selected = $("strategy").value, baseline = requestedStrategy;
+    const pending = api("/v1/strategy", "GET", undefined, signal);
+    strategyPendingRequest = pending;
+    let state;
+    try { state = await pending; }
+    finally {
+        // An older passive read must not release a newer explicit request's ownership.
+        if (strategyPendingRequest === pending) strategyPendingRequest = null;
+    }
+    if (requestVersion !== strategyRequestVersion) return;
+    if (requestedStrategy === null || (updateChoice && selected === $("strategy").value && baseline === requestedStrategy)) {
         requestedStrategy = state.requested;
         $("strategy").value = state.requested;
     }
@@ -1164,11 +1189,8 @@ async function loadStrategy(updateChoice = true, signal, generation) {
     if (!saveState.busy) $("strategy").disabled = false;
     if (!saveState.ready) saveState.loaded();
     saveState.update();
-    const label = (value) => ({"minimize cost": "Minimize cost", "minimize consumption": "Minimize consumption"}[value] || "No accepted plan");
     layout.sync();
-    const aligned = state.requested === state.published && state.requested === state.active;
     $("strategy-status").textContent = state.issue
         ? "Strategy settings could not be read. Save a supported choice to restore planning."
-        : aligned ? "Current goal is published and accepted by Home Assistant. Acceptance does not prove physical execution."
-        : `Requested: ${label(state.requested)}: Published plan: ${label(state.published)}: Active in Home Assistant: ${label(state.active)}. A change takes effect with a validated replacement. Existing commands retain their normal validity. Acceptance does not prove physical execution.`;
+        : "";
 }

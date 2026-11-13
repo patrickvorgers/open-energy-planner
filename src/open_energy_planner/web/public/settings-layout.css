@@ -91,9 +91,12 @@
 .settings-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .settings-workspace .settings-fields > label { min-width:0; margin:0; }
 .settings-workspace .settings-fields input:not([type=checkbox]),.settings-workspace .settings-fields select { width:100%; box-sizing:border-box; }
-.settings-workspace .bonus-editor { border:0!important; padding:0; margin:24px 0!important; }
+.settings-workspace .bonus-settings { margin-top:24px; padding:20px; border:1px solid var(--oep-line); border-radius:10px; background:#f8fafb; }
+.settings-workspace .bonus-settings > label { margin:0; font-weight:600; }
+#contract-editor .bonus-settings .bonus-editor { border:0; padding:0; margin:20px 0 0; background:transparent; }
 .settings-workspace .bonus-editor > legend { font-size:18px; margin-bottom:16px; }
 .settings-workspace .bonus-editor > .settings-fields { margin:16px 0; }
+@media(max-width:640px) { .settings-workspace .bonus-settings { padding:14px; } }
 #contract-editor .bonus-editor fieldset.settings-fields { padding:16px; }
 #contract-editor .bonus-editor fieldset.settings-fields > label,#contract-editor .bonus-editor fieldset.settings-fields > p { margin:0; }
 .settings-workspace .settings-fields > p,.settings-workspace .settings-fields > legend { grid-column:1/-1; }

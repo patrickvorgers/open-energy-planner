@@ -64,6 +64,8 @@
 <dd><code class="example-value">Calendar year (1 January)</code><p>A new supplier contract&#x27;s first period starts at its own Contract starts date.</p></dd>
 <dt>Paid window</dt>
 <dd><code class="example-value">Daylight</code><p>Sunrise and sunset come from the Home Assistant location and timezone.</p></dd>
+<dt>Prevent battery export during paid window</dt>
+<dd><code class="example-value">Check signed terms</code><p>Enable this setting if your terms prohibit using battery export to earn the bonus. During the paid window, it prevents planned battery discharge together with grid export while allowance remains at the start of the planning interval. Battery self-consumption remains possible. This setting does not control your equipment. Enforce the restriction through your inverter or Home Assistant automation.</p></dd>
 </dl>
 <p>For one exported kWh at a market price of €0.18/kWh, base income is €0.20 and the bonus is €0.02: total income €0.22. At night or after the cap, only the €0.20 base remains. With 0.50 kWh of quota left, that export earns €0.01 bonus and €0.21 total.</p>
 <p>This app counts all grid export towards the cap, including unpaid hours and battery export. Source exclusions are unsupported. This example cannot reproduce contract terms that exclude particular energy sources. Changing terms within the same contract does not reset used volume.</p>
@@ -92,6 +94,8 @@
 <dd><code class="example-value">06:00</code><p>The start is included.</p></dd>
 <dt>Window end</dt>
 <dd><code class="example-value">22:00</code><p>The end instant is excluded.</p></dd>
+<dt>Prevent battery export during paid window</dt>
+<dd><code class="example-value">Enabled</code><p>The described bonus excludes stored battery energy. During the paid window, this setting prevents planned battery discharge together with grid export while allowance remains at the start of the planning interval. Battery self-consumption remains possible. It does not identify the source of actual export or control your equipment. Enforce the restriction through your inverter or Home Assistant automation.</p></dd>
 </dl>
 <p>With a simplified base export rate equal to the market price, one exported kWh at €0.06/kWh earns €0.06 base plus €0.03 bonus: €0.09 total. Outside the window or after the cap, it earns €0.06. If two kWh are exported with only one kWh of quota left, the base is €0.12 and the bonus €0.03: €0.15 total. Use the same price/VAT basis throughout.</p>
 <p>NextEnergy excludes stored battery energy from the bonus. This app counts all grid export towards the cap. Source exclusions cannot be applied. This example is not an exact supplier preset when those exclusions affect settlement. A changed price rule within the same contract retains used volume.</p>

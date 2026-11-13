@@ -14,15 +14,16 @@ from tests.ha_contract.support.connection import PEER, SECRET, TOKEN, server
 
 
 class StylesheetLinks(HTMLParser):
-    """Collect stylesheet addresses from the actual rendered document."""
+    """Read decoded stylesheet links from the actual ingress page response."""
 
-    def __init__(self):
-        """Keep each response's stylesheet destinations separate."""
+    def __init__(self, html):
+        """Collect only linked stylesheets, independently of HTML attribute order."""
         super().__init__()
         self.links = []
+        self.feed(html)
 
     def handle_starttag(self, tag, attributes):
-        """Retain actual stylesheet links with decoded HTML attributes."""
+        """Retain stylesheet URLs without interpreting scripts or other page content."""
         values = dict(attributes)
         if tag == "link" and values.get("rel") == "stylesheet":
             self.links.append(values["href"])
@@ -106,24 +107,34 @@ def test_ingress_trust_requires_socket_peer_and_valid_prefix(tmp_path, trusted, 
                 assert response.headers["Cache-Control"] == "no-store"
                 html = await response.text()
                 assert TOKEN not in html
-                page = StylesheetLinks()
-                page.feed(html)
-                stylesheets = [link for link in page.links if link.endswith("/style.css")]
-                assert len(stylesheets) == 1
+                stylesheets = StylesheetLinks(html).links
+                expected_names = {
+                    "style.css",
+                    "workspace.css",
+                    "settings-layout.css",
+                    "installation-layout.css",
+                }
+                assert len(stylesheets) == len(expected_names)
+                assert {link.rsplit("/", 1)[-1] for link in stylesheets} == expected_names
                 prefix = "/api/hassio_ingress/test_123" if trusted else ""
-                stylesheet = stylesheets[0]
-                assert re.fullmatch(prefix + r"/setup/static/[0-9a-f]{64}/style\.css", stylesheet)
-            # HA's trusted proxy strips its ingress prefix before forwarding the asset request.
-            async with client.get(url + stylesheet[len(prefix) :], headers=headers) as response:
-                assert response.status == 200
-                assert response.content_type == "text/css"
-                assert await response.read() == (PUBLIC / "style.css").read_bytes()
-                assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
-                assert response.headers["X-Content-Type-Options"] == "nosniff"
-                assert response.headers["Referrer-Policy"] == "no-referrer"
-                policy = response.headers["Content-Security-Policy"]
-                assert "script-src 'self'" in policy and "base-uri 'none'" in policy
-                assert "object-src 'none'" in policy and "frame-ancestors 'self'" in policy
+                for link in stylesheets:
+                    assert link.startswith(prefix + "/setup/static/")
+                    # Home Assistant strips its ingress prefix before proxying the request.
+                    asset_path = link.removeprefix(prefix)
+                    assert re.fullmatch(r"/setup/static/[0-9a-f]{64}/[^/]+\.css", asset_path)
+                    async with client.get(url + asset_path, headers=headers) as asset:
+                        assert asset.status == 200
+                        assert asset.content_type == "text/css"
+                        assert asset.headers["X-Content-Type-Options"] == "nosniff"
+                        assert asset.headers["Referrer-Policy"] == "no-referrer"
+                        assert (
+                            asset.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+                        )
+                        policy = asset.headers["Content-Security-Policy"]
+                        assert "script-src 'self'" in policy and "base-uri 'none'" in policy
+                        assert "object-src 'none'" in policy and "frame-ancestors 'self'" in policy
+                        expected = PUBLIC / link.rsplit("/", 1)[-1]
+                        assert await asset.read() == expected.read_bytes()
             for value in ("https://evil.example", "/api/hassio_ingress/test/../../evil", ""):
                 async with client.get(
                     url + "/v1/snapshot", headers={"X-Ingress-Path": value}
