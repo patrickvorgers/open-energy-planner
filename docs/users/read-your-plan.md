@@ -150,7 +150,7 @@ Open **Cost breakdown** to see **Import cost**, **Export income** and **Bonus in
 
 These amounts and their cost breakdown follow the selected chart period. The latest plan starts at the current quarter. Historical plans start at their original beginning. **Full period** shows the available duration, normally 48 hours for a new plan and less when part has elapsed or coverage is shorter. The caption gives the exact covered period. Empty or unavailable periods do not show a zero cost.
 
-Battery value change uses the stored energy at both ends of that period and the original plan's fixed valuation basis. It retains reserves, conversion losses, future wear and the useful-energy cap. Changing the view does not fetch new prices or optimize another plan. Earlier export still consumes bonus room even when it is outside the selected period. These are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
+For original-cost periods, battery value change uses the stored energy at both ends and the original plan's fixed valuation basis. A successful full-plan contract correction instead supplies its own separately calculated inventory value. It retains the original physical flows. Changing the view does not fetch new prices or optimize another plan. Earlier export still consumes bonus room even when it is outside the selected period. These are alternative scenario expectations, not values to add together. The [Savings guide](savings.md) gives a worked comparison and explains the separate retrospective reference.
 
 ## Understand the forecast and price charts
 
@@ -174,7 +174,9 @@ Check the measured starting stock, forecast inputs, physical limits, proposed co
 
 Within **Selected interval details**, expand **Detailed interval values** for the battery control mode, fixed power target when present, stored energy and solar production permission. The time selector works with the keyboard. These are planned commands, not confirmation that equipment followed them. Viewing them never sends a physical command.
 
-The three scenario cards retain their **Cost breakdown**. Original prices and expected outcomes remain separate from later contract repricing. A **Contract updated** notice identifies a later valuation without turning the original advice into a newly optimized plan. The original archive remains unchanged.
+The three scenario cards retain their **Cost breakdown**. For the full original plan, Optimizer and self-consumption default to the latest successful contract valuation when available. **Contract updated** shows its calculation time. Original economic costs and components remain inside **Cost breakdown**. Repricing does not optimize the plan again. Without battery retains its original contract basis, so a benefit comparing that baseline with corrected costs is unavailable.
+
+Shorter or remaining periods retain the original contract rates and battery-value basis. Their captions identify that basis. **Open full original plan** returns to the complete horizon and its latest successful valuation. No corrected amounts are inferred for part of a plan. A later repricing failure retains the previous successful valuation and shows the failure separately. The original archive remains unchanged.
 
 Forecast evidence shows the model and quality that were used. Technical forecast version identifiers are omitted from this user view.
 

@@ -314,8 +314,12 @@ def test_complete_chart_batch_expands_shrinks_and_recovers_after_failure(app_pag
         const draw=charts[0].draw;charts[0].draw=()=>{throw new Error('Synthetic draw failure');};
         let drawFailed=false;try{updateCharts(charts);}catch{drawFailed=true;}finally{charts[0].draw=draw;}
         counts.fill(0);updateCharts(charts);const retried=snapshot();
+        charts[2].data.datasets[0].data[0].y=10;
+        charts[0].draw=()=>{throw new Error('Synthetic bounds-only draw failure');};
+        let boundsFailed=false;try{updateCharts(charts);}catch{boundsFailed=true;}finally{charts[0].draw=draw;}
+        counts.fill(0);updateCharts(charts);const boundsRetried=snapshot();
         charts.forEach(chart=>chart.destroy());
-        return {expanded,unchanged,changedData,changedWindow,changedVisibility,resized,afterResize,shrunk,empty,failed,recovered,drawFailed,retried};
+        return {expanded,unchanged,changedData,changedWindow,changedVisibility,resized,afterResize,shrunk,empty,failed,recovered,drawFailed,retried,boundsFailed,boundsRetried};
     }""")
     for phase, maximum in (("expanded", 32 / 0.9), ("shrunk", 3 / 0.9)):
         assert result[phase]["counts"] == [1, 1, 1]
@@ -334,6 +338,10 @@ def test_complete_chart_batch_expands_shrinks_and_recovers_after_failure(app_pag
     assert result["failed"]
     assert result["drawFailed"]
     assert result["retried"]["counts"] == [1, 0, 0]
+    assert result["boundsFailed"]
+    assert result["boundsRetried"]["counts"] == [1, 1, 1]
+    for bounds in result["boundsRetried"]["bounds"]:
+        assert bounds == pytest.approx([0, 10 / 0.9])
     for phase in ("expanded", "shrunk", "empty", "recovered"):
         assert result[phase]["soc"] == [[0, 100]] * 3
     for bounds in result["recovered"]["bounds"]:

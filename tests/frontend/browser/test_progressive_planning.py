@@ -255,9 +255,11 @@ def test_compact_planning_preserves_commands_costs_and_original_archive(app_page
         expect(page.get_by_text(label, exact=True)).to_have_count(0)
     for host in ("ems-costs", "self-consumption-costs", "reference-costs"):
         disclosure = page.locator("#" + host).get_by_text("Cost breakdown", exact=True)
+        import_cost = page.locator("#" + host).get_by_text("Import cost", exact=True).first
+        expect(import_cost).not_to_be_visible()
         disclosure.focus()
         disclosure.press("Enter")
-        expect(page.locator("#" + host)).to_contain_text("Import cost")
+        expect(import_cost).to_be_visible()
     page.get_by_text("Understand this plan", exact=True).click()
     expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
     expect(page.locator("#plan-evidence")).not_to_contain_text("Forecast version")

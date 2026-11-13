@@ -153,6 +153,9 @@ detected too. Each completed update records its rendered inputs against that cha
 instance, including native resize updates. This state is discarded with the chart.
 Redraw decisions and rendering use the same axis-bound calculation.
 Batch extrema are temporary and are cleared even when a chart update fails.
+Invalidate a chart's rendered-input record before attempting an update. A failed
+draw can already have applied new shared bounds without changing that chart's own
+inputs. Only successful rendering records those inputs again, ensuring a retry.
 Time-window, data and legend changes can expand or shrink the shared scale.
 The separate SoC percentage axes do not enter that calculation.
 

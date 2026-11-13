@@ -89,7 +89,10 @@ export function updateCharts(instances) {
                 const bounds = axisBounds(range, scale.options);
                 return bounds.min !== scale.min || bounds.max !== scale.max;
             });
-            if (changedBounds || renderedStates.get(chart) !== chartState(chart)) chart.update("none");
+            if (changedBounds || renderedStates.get(chart) !== chartState(chart)) {
+                renderedStates.delete(chart);
+                chart.update("none");
+            }
         }
     }
     finally { batchRanges = previous; }

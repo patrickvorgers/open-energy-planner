@@ -16,6 +16,7 @@ from tests.frontend.browser.helpers import (
     assert_floating_save_bar,
     discover,
     edit_price_rule,
+    wait_for_product_reads,
 )
 
 
@@ -23,20 +24,132 @@ from tests.frontend.browser.helpers import (
 def test_overview_retains_original_expectations_beside_successful_contract_correction(app_page):
     """Desktop/mobile identify corrected expected costs separately from original advice and measured evaluation."""
     page, url = app_page
-    page.goto(url + "/overview")
+    page.goto(url + "/overview?plan=browser-original-plan")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#expected-benefit")).to_contain_text("Contract updated")
     expect(page.locator("#expected-benefit")).to_contain_text("without re-optimization")
     expect(page.get_by_text("Original and repriced expected costs", exact=True)).to_have_count(0)
     selected = page.locator("#plan-version").input_value()
+    original = page.request.get(
+        url + "/v1/plans/" + selected, headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
     comparison = page.request.get(
         url + "/v1/plans/" + selected + "/comparison",
         headers={"Authorization": "Bearer " + TOKEN},
     ).json()
     assert comparison["comparison"]["ems_costs"] != comparison["valuation"]["ems_costs"]
+    # Two kWh consumed from storage cost 0.40 originally and 0.80 at the corrected 0.40/kWh.
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text("0.80 EUR")
+    expect(page.locator("#self-consumption-costs > dl dd").first).to_have_text("0.80 EUR")
+    for host in ("ems-costs", "self-consumption-costs"):
+        card = page.locator("#" + host)
+        expect(card).to_contain_text("Contract updated")
+        expect(card).to_contain_text("Calculated")
+        expect(card.locator("time")).to_be_visible()
+        expect(card.locator("time")).to_have_attribute(
+            "datetime", comparison["valuation"]["evaluated_at"]
+        )
+        expect(card.locator("[data-benefit-state]")).to_have_attribute(
+            "data-benefit-state", "unavailable"
+        )
+        card.get_by_text("Cost breakdown", exact=True).click()
+        expect(card.locator(".original-costs")).to_be_visible()
+        expect(card.locator(".original-costs")).to_contain_text("0.40 EUR")
+        expect(
+            card.get_by_text("Battery value change (not cash)", exact=True).first.locator("..")
+        ).to_contain_text("-0.80 EUR")
+        expect(
+            card.get_by_text("Net electricity cost", exact=True).first.locator("..")
+        ).to_contain_text("0.00 EUR")
+    expect(page.locator("#reference-costs")).to_contain_text("Original contract")
+    expect(page.locator("#reference-costs > dl dd").first).to_have_text("0.60 EUR")
     expect(page.locator("#ems-costs > dl dd")).to_have_count(2)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    captures = Path("results/ci/compact-planning")
+    captures.mkdir(parents=True, exist_ok=True)
+    page.evaluate("document.fonts.ready")
+    card = page.locator("#ems-costs").locator("..")
+    card.screenshot(path=str(captures / f"repriced-costs-{page.viewport_size['width']}.png"))
+    first = datetime.fromisoformat(
+        comparison["plan"]["input_snapshot"]["problem"]["intervals"][0]["start"]
+    )
+    page.clock.set_fixed_time(first + timedelta(minutes=15))
+    with page.expect_response(
+        lambda response: "/comparison?start=" in response.url
+    ) as period_response:
+        page.locator("#plan-version").dispatch_event("change")
+    period = period_response.value.json()
+    assert datetime.fromisoformat(period["period"]["start"]) == first + timedelta(minutes=15)
+    assert datetime.fromisoformat(period["period"]["end"]) == first + timedelta(minutes=30)
+    assert period["period"]["duration_h"] == 0.25
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text("0.20 EUR")
+    expect(page.locator("#ems-costs > dl dd").nth(1)).to_have_text("0.10 EUR")
+    expect(page.locator("#ems-costs")).not_to_contain_text("Contract updated")
+    expect(card).to_contain_text("Original contract rates for this selected period")
+    card.get_by_role("link", name="Open full original plan", exact=True).click()
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text("0.80 EUR")
+    assert (
+        page.request.get(
+            url + "/v1/plans/" + selected,
+            headers={"Authorization": "Bearer " + TOKEN},
+        ).json()
+        == original
+    )
+
+
+@pytest.mark.parametrize("app_site", ["savings_corrected"], indirect=True)
+@pytest.mark.parametrize("retained_success", [False, True])
+def test_contract_valuation_failure_and_late_period_response_keep_correct_basis(
+    app_page, retained_success
+):
+    """A failed correction retains its last success. A late original-period result cannot overwrite the full valuation."""
+    page, url = app_page
+
+    def failed_correction(route):
+        """Use real original amounts and optionally retain the actual successful valuation after a later failure."""
+        response = route.fetch().json()
+        response["valuation_status"] = {"issue": "Synthetic later correction failed"}
+        if not retained_success:
+            response["valuation"] = None
+        route.fulfill(json=response)
+
+    page.route("**/comparison?view=simulations", failed_correction)
+    page.goto(url + "/overview?plan=browser-original-plan")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#expected-benefit")).to_contain_text("Synthetic later correction failed")
+    expected = "0.80 EUR" if retained_success else "0.40 EUR"
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
+    if not retained_success:
+        expect(page.locator("#ems-costs")).not_to_contain_text("Contract updated")
+    original = page.request.get(
+        url + "/v1/plans/browser-original-plan", headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
+    first = datetime.fromisoformat(original["input_snapshot"]["problem"]["intervals"][0]["start"])
+    held = []
+
+    def hold_period(route):
+        """Signal actual route interception rather than assuming the loading label implies a queued request."""
+        held.append(route)
+        page.evaluate("window.periodReadHeld = true")
+
+    page.route("**/comparison?start=**", hold_period)
+    page.clock.set_fixed_time(first + timedelta(minutes=15))
+    page.locator("#plan-version").dispatch_event("change")
+    expect(page.locator(".scenario-period").first).to_contain_text("Loading expected costs")
+    page.wait_for_function("window.periodReadHeld === true")
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert held
+    page.clock.set_fixed_time(first)
+    page.get_by_role("button", name="Full period:", exact=False).click()
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
+    for route in held:
+        route.fulfill(response=route.fetch())
+    wait_for_product_reads(page)
+    expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
+    if retained_success:
+        expect(page.locator("#ems-costs")).to_contain_text("Contract updated")
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
