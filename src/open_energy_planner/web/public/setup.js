@@ -768,7 +768,8 @@ async function refreshPriceSources() {
         $("price-source-provenance").replaceChildren();
         $("price-market").textContent = "Price source status unavailable. Retrying automatically.";
     }
-    refreshStrategy();
+    // A delayed price response must not supersede an explicit preference save or reload.
+    if (!saveState.busy) refreshStrategy();
     try { await refreshSourceNames(); }
     catch { /* Retain the last confirmed names when metadata is temporarily unavailable. */ }
     priceTimer = setTimeout(refreshPriceSources, PRICE_STATUS_REFRESH_MS);

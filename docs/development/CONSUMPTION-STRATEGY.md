@@ -104,7 +104,8 @@ additional HA command entity is necessary.
 Installation loads its saved preference independently of the physical settings.
 A slow or unavailable preference request does not delay rendering the connection,
 solar or battery settings. The preference refresh preserves unsaved selections
-and their compare-and-set baseline. Configuration read failures remain visible
+and their compare-and-set baseline. Background preference reads yield to explicit
+saves, reloads and discards. Configuration read failures remain visible
 beside the preference and retry automatically. Installation does not compare
 requested, published and accepted strategies or reconstruct archived plans.
 

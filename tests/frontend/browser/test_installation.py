@@ -1282,3 +1282,96 @@ def test_installation_duplicate_solar_names_keep_distinct_hybrid_choices(app_pag
     connection.select_option(label="Solar (sensor.shed)")
     expect(connection).to_have_value(inverter)
     assert read_settings(page, url)["installation"] is None
+
+
+@pytest.mark.parametrize("action", ["cancel", "reload"])
+def test_strategy_reload_owns_baseline_during_inflight_price_poll(app_page, action):
+    """A delayed price poll cannot supersede explicit reload/discard or confirm a stale strategy baseline."""
+    page, url = app_page
+    page.clock.install()
+    discover(page, url)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    physical_before = read_settings(page, url)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    saved_goal = "minimize consumption"
+    if action == "cancel":
+        installation_area(page, 0, edit=True)
+        page.get_by_label("Maximum grid import (kW)", exact=True).fill("7")
+        expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
+    else:
+        installation_area(page, -1)
+    assert page.request.put(
+        url + "/v1/strategy",
+        headers=headers,
+        data={"strategy": saved_goal, "expected_strategy": "minimize cost"},
+    ).ok
+    prices = page.request.get(url + "/v1/prices", headers=headers).json()
+    prices["market_area"] = "overlap-test"
+    price_pending = []
+
+    def hold_price(route):
+        """Expose completion of the browser route callback without a timing-based sleep."""
+        price_pending.append(route)
+        page.evaluate("window.heldPriceRequest = true")
+
+    page.route("**/v1/prices", hold_price)
+    page.clock.fast_forward(31000)
+    page.wait_for_function("() => window.heldPriceRequest === true")
+    assert len(price_pending) == 1
+    strategy_pending = []
+
+    def preference_response(route):
+        """Hold the explicit read while allowing the older price poll's later read to finish."""
+        if not strategy_pending:
+            strategy_pending.append(route)
+            page.evaluate("window.explicitPreferenceHeld = true")
+        else:
+            route.fulfill(json={"requested": saved_goal, "issue": None})
+
+    page.route("**/v1/strategy", preference_response)
+    page.route("**/v1/setup?refresh=1", lambda route: route.fulfill(json=physical_before))
+    with page.expect_request("**/v1/strategy"):
+        page.get_by_role(
+            "button",
+            name="Cancel" if action == "cancel" else "Refresh Home Assistant data",
+            exact=True,
+        ).click()
+    page.wait_for_function("() => window.explicitPreferenceHeld === true")
+    expect(page.locator("#installation-save-state")).to_contain_text(
+        "Discarding changes" if action == "cancel" else "Refreshing settings"
+    )
+    expect(page.locator("#strategy")).to_be_disabled()
+    price_pending[0].fulfill(json=prices)
+    expect(page.locator("#price-market")).to_contain_text("overlap-test")
+    expect(page.locator("#strategy")).to_be_disabled()
+    strategy_pending[0].fulfill(json={"requested": saved_goal, "issue": None})
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    expect(page.locator("#strategy")).to_have_value(saved_goal)
+    assert read_settings(page, url)["installation"] == physical_before["installation"]
+    assert page.request.get(url + "/v1/strategy", headers=headers).json()["requested"] == saved_goal
+    page.unroute("**/v1/strategy")
+    page.unroute("**/v1/prices")
+    page.unroute("**/v1/setup?refresh=1")
+    edit_strategy(page)
+    next_goal = "minimize consumption" if saved_goal == "minimize cost" else "minimize cost"
+    page.get_by_label("Optimization goal", exact=True).select_option(next_goal)
+    with page.expect_request(
+        lambda request: request.url.endswith("/v1/strategy") and request.method == "PUT"
+    ) as saved_request:
+        page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    assert saved_request.value.post_data_json == {
+        "strategy": next_goal,
+        "expected_strategy": saved_goal,
+    }
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert page.request.get(url + "/v1/strategy", headers=headers).json()["requested"] == next_goal
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        page.clock.fast_forward(31000)
+    expect(page.locator("#strategy")).to_have_value(next_goal)
+    expect(page.locator("#strategy-status")).to_be_empty()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
