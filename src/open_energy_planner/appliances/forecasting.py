@@ -135,13 +135,20 @@ class ConsumerForecasts:
             raise ValueError("Consumer settings changed. Refresh this page")
         if not self.catalogue_known:
             raise ValueError("Select consumers configured in Home Assistant Energy")
+        selected = parse_selection(list(selected))
         validate_membership(selected, self.options)
+        changed = selected != self.selected
         with self.documents.transaction(*related_documents) as owns_commit:
             if related_documents and not owns_commit:
                 raise ValueError("Related appliance settings must own their commit boundary")
-            self.documents.write("consumer-settings-" + digest(selected) + ".json", list(selected))
-            self.documents.write(CONSUMER_SETTINGS_POINTER, list(selected))
+            if changed:
+                self.documents.write(
+                    "consumer-settings-" + digest(selected) + ".json", list(selected)
+                )
+                self.documents.write(CONSUMER_SETTINGS_POINTER, list(selected))
             yield
+        if not changed:
+            return
         self.selected, self.issue, self.result = selected, None, None
         self.history_import.restore(item["entity_id"] for item in selected)
         self.failures = {

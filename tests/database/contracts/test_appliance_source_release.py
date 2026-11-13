@@ -1,21 +1,30 @@
 """Typed appliance removal and component-forecast membership commit or roll back together."""
 
 from copy import deepcopy
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, event, select
 
 from open_energy_planner.appliances.ev.service import EVService
-from open_energy_planner.appliances.forecasting import ConsumerForecasts, parse_selection
+from open_energy_planner.appliances.forecasting import (
+    ConsumerForecasts,
+    build_components,
+    parse_selection,
+)
 from open_energy_planner.appliances.thermal.service import ThermalService
+from open_energy_planner.demand.calculation.model import DemandConfiguration, EnergyTerm
+from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint, parse_report
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENTS, SCHEMA
+from tests.app.demand.history_support import history_report
+from tests.app.ev.support.devices import CAR, NOW, planned_requests
 from tests.app.ev.support.devices import catalogue as ev_catalogue
 from tests.app.ev.support.devices import settings as ev_settings
-from tests.database.contracts.test_thermal_service import catalogue as thermal_catalogue
-from tests.database.contracts.test_thermal_service import settings as thermal_settings
 from tests.database.support.backends import BACKENDS
+from tests.database.support.thermal import catalogue as thermal_catalogue
+from tests.database.support.thermal import settings as thermal_settings
 
 
 @pytest.fixture(params=BACKENDS, ids=[name for name, _url in BACKENDS])
@@ -195,14 +204,20 @@ def test_related_document_transactions_reject_late_join_and_foreign_engines(sour
 
 
 @pytest.mark.parametrize("category", ["ev", "thermal"])
+@pytest.mark.parametrize("remove", [False, True], ids=["unchanged-selection", "removed-selection"])
 def test_related_settings_cannot_install_memory_before_an_external_commit(
-    source_settings, category
+    source_settings, category, remove
 ):
     """Typed settings reject an already-enrolled caller transaction before writing or installing either configuration."""
     engine, catalogue, consumers, ev, thermal = source_settings
     service = ev if category == "ev" else thermal
     settings = ev_settings() if category == "ev" else thermal_settings()
-    settings["points" if category == "ev" else "stores"] = []
+    if remove:
+        settings["points" if category == "ev" else "stores"] = []
+    else:
+        settings["points" if category == "ev" else "stores"][0][
+            "maximum_w" if category == "ev" else "heater_w"
+        ] = 21000 if category == "ev" else 2200
     before_rows = document_rows(engine)
     before_state = deepcopy(service.state)
     before_selection = consumers.selected
@@ -214,3 +229,109 @@ def test_related_settings_cannot_install_memory_before_an_external_commit(
     assert document_rows(engine) == before_rows
     assert service.state == before_state
     assert consumers.selected == before_selection
+
+
+def cache_consumer_history(consumers):
+    """Import actual archived chunks and produce a real composition result before observing cache reuse."""
+    anchor = (NOW - timedelta(days=1)).replace(hour=18)
+    for selected in consumers.selected:
+        history = CumulativeHistory(
+            selected["entity_id"],
+            tuple(
+                EnergyEndpoint(anchor + timedelta(hours=index), 100 + index * 0.2)
+                for index in range(5)
+            ),
+        )
+        pending = consumers.history_import.request(history.entity_id, consumers.version, NOW)
+        while pending is not None:
+            consumers.receive(pending, parse_report(history_report(pending, history)), now=NOW)
+            pending = consumers.history_import.request(history.entity_id, consumers.version, NOW)
+    assert len(consumers.histories) == 3 and consumers.history_import._chunks
+    household = CumulativeHistory(
+        "sensor.house",
+        tuple(
+            EnergyEndpoint(anchor + timedelta(hours=index), 200 + index * 1.1) for index in range(5)
+        ),
+    )
+    configuration = DemandConfiguration("Europe/Amsterdam", 3650, (EnergyTerm("sensor.house", 1),))
+    _, consumers.result = build_components(configuration, (household,), (), NOW, consumers.inputs())
+    assert consumers.result is not None
+    return consumers.histories, consumers.history_import._chunks, consumers.result
+
+
+@pytest.mark.parametrize("category", ["ev", "thermal"])
+@pytest.mark.parametrize("operation", ["same-settings", "changed-settings", "intent"])
+def test_unchanged_membership_keeps_real_history_and_forecast_caches(
+    source_settings, monkeypatch, category, operation
+):
+    """Saving settings or intent with the same source choices performs no history reads and retains real cached evidence."""
+    _engine, catalogue, consumers, ev, thermal = source_settings
+    service = ev if category == "ev" else thermal
+    if category == "ev" and operation == "intent":
+        planned_requests(ev, NOW)
+    histories, chunks, result = cache_consumer_history(consumers)
+    consumers.failures = {"sensor.ordinary": "temporary_history_error"}
+    consumers.retry_after = {"sensor.ordinary": NOW + timedelta(minutes=5)}
+    failures, retry_after = consumers.failures, consumers.retry_after
+    reads = []
+    original_read = consumers.documents.read
+
+    def observe_read(name):
+        """Count real demand-document reads without replacing their returned evidence."""
+        reads.append(name)
+        return original_read(name)
+
+    monkeypatch.setattr(consumers.documents, "read", observe_read)
+    selected = consumers.selected
+    version = consumers.version
+    if category == "ev" and operation == "intent":
+        ev.intent(CAR, "target_soc", 81, NOW, "Europe/Amsterdam")
+        assert ev.state["requests"][ev.state["active_requests"][CAR]]["target_soc"] == 81
+    else:
+        settings = ev_settings() if category == "ev" else thermal_settings()
+        if operation == "changed-settings":
+            settings["points" if category == "ev" else "stores"][0][
+                "maximum_w" if category == "ev" else "heater_w"
+            ] = 21000 if category == "ev" else 2200
+        elif operation == "intent":
+            settings["stores"][0]["enabled"] = False
+        service.configure(settings, catalogue)
+        if operation == "changed-settings":
+            assert service.state["points" if category == "ev" else "stores"][0][
+                "maximum_w" if category == "ev" else "heater_w"
+            ] == (21000 if category == "ev" else 2200)
+        elif operation == "intent":
+            assert service.state["stores"][0]["enabled"] is False
+    assert reads == []
+    assert consumers.selected == selected and consumers.version == version
+    assert consumers.histories is histories
+    assert consumers.history_import._chunks is chunks
+    assert consumers.result is result
+    assert consumers.failures is failures and consumers.retry_after is retry_after
+
+
+def test_equivalent_selection_order_keeps_history_caches(source_settings):
+    """A different sequence of the same canonical source choices does not reimport history or invalidate the result."""
+    _engine, _catalogue, consumers, _ev, _thermal = source_settings
+    histories, chunks, result = cache_consumer_history(consumers)
+    selected = consumers.selected
+    consumers.save(tuple(reversed(selected)), consumers.version)
+    assert consumers.selected == selected
+    assert consumers.histories is histories
+    assert consumers.history_import._chunks is chunks
+    assert consumers.result is result
+
+
+def test_changed_weather_choice_reloads_history_and_invalidates_result(source_settings):
+    """Changing a weather flag is a genuine configuration change even when all meter identities are retained."""
+    _engine, _catalogue, consumers, _ev, _thermal = source_settings
+    histories, chunks, _result = cache_consumer_history(consumers)
+    selected = [dict(row) for row in consumers.selected]
+    next(row for row in selected if row["entity_id"] == "sensor.ordinary")["weather_sensitive"] = (
+        False
+    )
+    consumers.save(parse_selection(selected), consumers.version)
+    assert consumers.histories is not histories
+    assert consumers.history_import._chunks is not chunks
+    assert consumers.result is None
+    assert set(consumers.histories) == {row["entity_id"] for row in selected}
