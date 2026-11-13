@@ -90,6 +90,209 @@ def open_sources(page, category):
     return page.get_by_role("dialog", name=title, exact=True)
 
 
+@pytest.mark.parametrize("reload_page", [False, True])
+def test_removed_charge_point_becomes_available_and_can_be_added_again(app_page, reload_page):
+    """Confirmed removal releases its source across reloads, while Cancel and unrelated appliance assignments stay intact."""
+    page, url = app_page
+    headers = assigned_devices(page, url)
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    point = settings()["points"][0]
+    page.locator("#ev-device-select").select_option(point["id"])
+    before = page.request.get(url + "/v1/consumers", headers=headers).json()
+    for save_removal in (False, True):
+        page.locator("#ev-more summary").click()
+        page.get_by_role("button", name="Remove appliance…", exact=True).click()
+        page.get_by_role("alertdialog", name="Remove charge point?", exact=True).get_by_role(
+            "button", name="Remove charge point", exact=True
+        ).click()
+        assert page.request.get(url + "/v1/ev", headers=headers).json()["points"]
+        assert (
+            page.request.get(url + "/v1/consumers", headers=headers).json()["selected"]
+            == before["selected"]
+        )
+        page.get_by_role(
+            "button", name="Save settings" if save_removal else "Cancel", exact=True
+        ).click()
+        expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    assert page.request.get(url + "/v1/ev", headers=headers).json()["points"] == []
+    if reload_page:
+        page.reload()
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    picker = open_sources(page, "point")
+    picker.get_by_label("Show", exact=True).select_option("all")
+    meter = picker.locator('button[title="sensor.charger_energy"]')
+    expect(meter).to_be_enabled()
+    expect(meter).to_contain_text("Available")
+    for entity in ("sensor.second_meter", "sensor.already_appliance"):
+        expect(picker.locator(f'button[title="{entity}"]')).to_be_disabled()
+    consumers = page.request.get(url + "/v1/consumers", headers=headers).json()
+    assert consumers["selected"] == [
+        row for row in before["selected"] if row["entity_id"] != "sensor.charger_energy"
+    ]
+    assert consumers["charging_meters"] == []
+    if not reload_page:
+        Path("results/ci/ev-delete-readd").mkdir(parents=True, exist_ok=True)
+        page.screenshot(
+            path=f"results/ci/ev-delete-readd/available-{page.viewport_size['width']}.png"
+        )
+    meter.click()
+    page.get_by_label("Vehicle connected", exact=True).select_option(
+        "binary_sensor.charger_connected"
+    )
+    page.get_by_label("Maximum charging power (kW)", exact=True).fill("11")
+    page.get_by_role("checkbox", name="Car A", exact=True).check()
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["points"]
+    assert len(saved) == 1 and saved[0]["id"] != point["id"]
+    assert saved[0]["energy_entity"] == "sensor.charger_energy"
+    assert saved[0]["power_entity"] == "sensor.charger_power"
+    consumers = page.request.get(url + "/v1/consumers", headers=headers).json()
+    assert sum(row["entity_id"] == "sensor.charger_energy" for row in consumers["selected"]) == 1
+    assert consumers["charging_meters"] == ["sensor.charger_energy"]
+
+
+@pytest.mark.parametrize("reload_page", [False, True])
+def test_removed_boiler_becomes_available_and_can_be_added_again(app_page, reload_page):
+    """Boiler removal releases only its own forecast after Save and permits a fresh typed addition after reload."""
+    page, url = app_page
+    headers = assigned_devices(page, url)
+    page.goto(url + "/appliance-settings/thermal")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    before = page.request.get(url + "/v1/consumers", headers=headers).json()
+    original = page.request.get(url + "/v1/thermal", headers=headers).json()["configuration"][
+        "stores"
+    ][0]
+    for save_removal in (False, True):
+        page.locator("#thermal-more summary").click()
+        page.locator("#remove-thermal").click()
+        page.get_by_role("alertdialog", name="Remove electric boiler?", exact=True).get_by_role(
+            "button", name="Remove boiler", exact=True
+        ).click()
+        assert page.request.get(url + "/v1/thermal", headers=headers).json()["configuration"][
+            "stores"
+        ]
+        assert (
+            page.request.get(url + "/v1/consumers", headers=headers).json()["selected"]
+            == before["selected"]
+        )
+        page.locator("#save-thermal" if save_removal else "#cancel-thermal").click()
+        expect(page.locator("#thermal-save-state")).to_have_text("All changes saved.")
+    assert (
+        page.request.get(url + "/v1/thermal", headers=headers).json()["configuration"]["stores"]
+        == []
+    )
+    if reload_page:
+        page.reload()
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    picker = open_sources(page, "boiler")
+    picker.get_by_label("Show", exact=True).select_option("all")
+    meter = picker.locator('button[title="sensor.second_meter"]')
+    expect(meter).to_be_enabled()
+    expect(meter).to_contain_text("Available")
+    for entity in ("sensor.charger_energy", "sensor.already_appliance"):
+        expect(picker.locator(f'button[title="{entity}"]')).to_be_disabled()
+    consumers = page.request.get(url + "/v1/consumers", headers=headers).json()
+    assert consumers["selected"] == [
+        row for row in before["selected"] if row["entity_id"] != "sensor.second_meter"
+    ]
+    assert consumers["thermal_meters"] == []
+    if not reload_page:
+        Path("results/ci/ev-delete-readd").mkdir(parents=True, exist_ok=True)
+        page.screenshot(
+            path=f"results/ci/ev-delete-readd/boiler-available-{page.viewport_size['width']}.png"
+        )
+    meter.click()
+    page.locator('[data-field="temperature_entity"]').select_option("sensor.temperature")
+    page.locator('[data-field="power_entity"]').select_option("sensor.grid")
+    for field, value in {
+        "volume_litres": "120",
+        "minimum_c": "45",
+        "maximum_c": "65",
+        "ambient_c": "20",
+        "loss_w_per_c": "1.2",
+        "heater_w": "2",
+    }.items():
+        page.locator(f'[data-field="{field}"]').fill(value)
+    page.locator("#save-thermal").click()
+    expect(page.locator("#thermal-save-state")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/thermal", headers=headers).json()["configuration"]["stores"]
+    assert len(saved) == 1 and saved[0]["id"] != original["id"]
+    assert saved[0]["energy_entity"] == "sensor.second_meter"
+    consumers = page.request.get(url + "/v1/consumers", headers=headers).json()
+    assert sum(row["entity_id"] == "sensor.second_meter" for row in consumers["selected"]) == 1
+    assert consumers["thermal_meters"] == ["sensor.second_meter"]
+
+
+@pytest.mark.parametrize("category", ["consumption", "ev", "thermal"])
+def test_explicit_generic_removal_releases_ordinary_and_legacy_orphan_sources(app_page, category):
+    """An untyped selection stays reserved until explicit ordinary-appliance removal, including the shape left by old typed deletions."""
+    page, url = app_page
+    headers = assigned_devices(page, url)
+    before = page.request.get(url + "/v1/consumers", headers=headers).json()
+    source = {
+        "consumption": "sensor.already_appliance",
+        "ev": "sensor.charger_energy",
+        "thermal": "sensor.second_meter",
+    }[category]
+    if category != "consumption":
+        current = page.request.get(url + "/v1/" + category, headers=headers).json()
+        configuration = settings() if category == "ev" else current["configuration"]
+        configuration["points" if category == "ev" else "stores"] = []
+        assert page.request.post(
+            url + "/v1/" + category + "/configuration",
+            headers=headers,
+            data={
+                "configuration": configuration,
+                "expected_version": current["configuration_version"],
+            },
+        ).ok
+        # This untyped membership is deliberately indistinguishable from an old orphan or an ordinary user selection.
+        consumers = page.request.get(url + "/v1/consumers", headers=headers).json()
+        assert page.request.put(
+            url + "/v1/consumers",
+            headers=headers,
+            data={"selected": before["selected"], "expected_version": consumers["version"]},
+        ).ok
+    page.goto(url + "/appliance-settings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    picker = open_sources(page, "consumption")
+    picker.get_by_label("Show", exact=True).select_option("added")
+    expect(picker.locator(f'button[title="{source}"]')).to_be_disabled()
+    picker.get_by_role("button", name="Cancel", exact=True).click()
+    page.locator("#appliance-select").select_option(source)
+    page.locator("#appliance-more summary").click()
+    page.get_by_role("button", name="Remove appliance…", exact=True).click()
+    with page.expect_response(
+        lambda response: response.request.method == "PUT" and response.url.endswith("/v1/consumers")
+    ) as removal:
+        page.get_by_role("alertdialog", name="Remove appliance?", exact=True).get_by_role(
+            "button", name="Remove appliance", exact=True
+        ).click()
+    assert removal.value.ok
+    removal.value.finished()
+    expect(page.locator("#save-state")).to_contain_text("All changes saved")
+    consumers = page.request.get(url + "/v1/consumers", headers=headers).json()
+    assert consumers["selected"] == [
+        row for row in before["selected"] if row["entity_id"] != source
+    ]
+    assert source in {row["entity_id"] for row in consumers["options"]}
+    if category != "consumption":
+        page.goto(url + "/appliance-settings/" + category)
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    picker = open_sources(
+        page, {"consumption": "consumption", "ev": "point", "thermal": "boiler"}[category]
+    )
+    expect(picker.locator(f'button[title="{source}"]')).to_be_enabled()
+
+
 @pytest.mark.parametrize("category", ["consumption", "point", "boiler"])
 def test_shared_picker_excludes_every_assigned_category_and_preserves_cancel(app_page, category):
     """All categories share search, disabled assigned sources and Cancel before staging the correct details."""

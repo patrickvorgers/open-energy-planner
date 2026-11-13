@@ -1,6 +1,7 @@
 """Forecast Energy-owned consumers separately, retaining the total-household safety baseline."""
 
 import json
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from datetime import timedelta
 
@@ -121,7 +122,13 @@ class ConsumerForecasts:
             self.result = None
 
     def save(self, selected, expected_version):
-        """Preserve unreadable ownership, otherwise archive checked choices before changing the pointer."""
+        """Save checked choices through the same atomic selection boundary as typed appliances."""
+        with self.saving_selection(selected, expected_version):
+            pass
+
+    @contextmanager
+    def saving_selection(self, selected, expected_version, *related_documents):
+        """Persist related appliance settings atomically and install selection only after successful commit."""
         if self.issue == "consumer_configuration_unreadable":
             raise ValueError(SOURCE_OWNERSHIP_UNAVAILABLE)
         if expected_version != self.version:
@@ -129,9 +136,12 @@ class ConsumerForecasts:
         if not self.catalogue_known:
             raise ValueError("Select consumers configured in Home Assistant Energy")
         validate_membership(selected, self.options)
-        with self.documents.transaction():
+        with self.documents.transaction(*related_documents) as owns_commit:
+            if related_documents and not owns_commit:
+                raise ValueError("Related appliance settings must own their commit boundary")
             self.documents.write("consumer-settings-" + digest(selected) + ".json", list(selected))
             self.documents.write(CONSUMER_SETTINGS_POINTER, list(selected))
+            yield
         self.selected, self.issue, self.result = selected, None, None
         self.history_import.restore(item["entity_id"] for item in selected)
         self.failures = {

@@ -81,6 +81,20 @@ Finish or cancel this choice before editing type-specific details. Cancelling
 does not add a device or save settings. To change an assigned device, use its
 existing editor. Names never determine whether two sources are the same device.
 
+Removing a charge point or electric boiler takes effect when you choose **Save
+settings**. Its source then becomes **Available**, immediately and after reloading.
+The settings and its individual forecast membership are saved together. **Cancel**
+or a failed save retains both. Other configured appliances, Home Assistant sources
+and retained measurement, model and request history are preserved.
+
+If a source remains **Already added** after a removal made with an older version,
+open **Settings > Appliances > Consumption and cycles**, select that source and
+choose **Remove appliance…**. Confirm the removal, then add the charge point or
+boiler again. This releases the leftover ordinary membership without deleting
+Home Assistant sources or history. Only remove it if it is not deliberately used
+as an ordinary appliance. The app cannot distinguish that deliberate selection
+from an old leftover membership, so it does not silently reclaim either one.
+
 The selected Energy device owns both the consumption meter and power sensor.
 These fields are read-only. Correct **device power consumption** in Home Assistant
 Energy, then refresh sources here. A missing power link must be configured there

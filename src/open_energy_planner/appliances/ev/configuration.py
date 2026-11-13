@@ -31,7 +31,7 @@ def entity(value, domain):
     return value
 
 
-def configuration(body, catalogue, consumers, appliances):
+def configuration(body, catalogue, consumers, appliances, previous_points):
     """Validate one complete replacement against current HA metadata and Energy ownership.
 
     Labels are supplied by HA, not trusted user text. A charge point must own a
@@ -145,14 +145,8 @@ def configuration(body, catalogue, consumers, appliances):
     ):
         raise ValueError("Each charge point requires its own power and connected source")
     from open_energy_planner.appliances.forecasting import parse_selection
-    from open_energy_planner.appliances.sources import validate_membership
+    from open_energy_planner.appliances.sources import replacement_selection, validate_membership
 
-    selected = {row["entity_id"]: row for row in consumers.selected}
-    for point in points:
-        selected.setdefault(
-            point["energy_entity"],
-            {"entity_id": point["energy_entity"], "weather_sensitive": False},
-        )
-    selected = parse_selection(list(selected.values()))
+    selected = parse_selection(replacement_selection(consumers.selected, previous_points, points))
     validate_membership(selected, consumers.options)
     return {"vehicles": vehicles, "points": points}, selected

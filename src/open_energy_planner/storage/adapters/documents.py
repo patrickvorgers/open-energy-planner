@@ -52,18 +52,28 @@ class SqlDocuments:
         return (DOCUMENTS.c.namespace == self.namespace) & (DOCUMENTS.c.name == name)
 
     @contextmanager
-    def transaction(self):
-        """Commit a complete store operation, rolling back all versions/pointers on failure."""
-        if getattr(self.pending, "connection", None) is not None:
-            yield
+    def transaction(self, *related_documents):
+        """Commit enrolled namespaces together and yield whether this scope owns the commit."""
+        documents = tuple(dict.fromkeys((self, *related_documents)))
+        if any(document.engine is not self.engine for document in documents):
+            raise ValueError("Document archives must share one database engine")
+        connections = [getattr(document.pending, "connection", None) for document in documents]
+        if any(connection is not None for connection in connections):
+            if connections[0] is None or any(
+                connection is not connections[0] for connection in connections
+            ):
+                raise ValueError("Join document archives at the outer transaction boundary")
+            yield False
             return
         try:
             with lifecycle_transaction(self.engine) as connection:
-                self.pending.connection = connection
+                for document in documents:
+                    document.pending.connection = connection
                 try:
-                    yield
+                    yield True
                 finally:
-                    self.pending.connection = None
+                    for document in documents:
+                        document.pending.connection = None
         except SQLAlchemyError:
             raise OSError("Document archive transaction failed") from None
 

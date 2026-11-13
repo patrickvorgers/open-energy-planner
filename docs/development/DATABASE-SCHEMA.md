@@ -19,6 +19,19 @@ See [the plan archive guide](PLAN-ARCHIVE.md) for deployment, backup and cross-b
 
 ## Storage conventions
 
+`SqlDocuments.transaction` can enroll related document adapters from the same
+engine at its outer boundary. Every enrolled namespace uses the same connection
+until commit or rollback, then releases its pending connection. Existing nested
+single-adapter writes reuse that connection. Late enrollment and mixed engines
+are rejected. The context yields whether it owns the commit. Coupled appliance
+saves must own that boundary so an external transaction cannot defer commit
+until after in-memory configuration is installed. EV and thermal saves update
+their `planning` pointers and `demand/consumer-settings.json` atomically. A removed
+typed source also leaves the active consumer selection, while independent sources
+and immutable measurement, model, request and settings archives remain retained.
+Neither configuration is installed in memory before the shared commit succeeds.
+No table, column, index or stored JSON shape is added by this coordination.
+
 - `PK` identifies every component of a primary key. `FK` identifies an enforced
   SQL foreign key. All columns are non-null unless explicitly marked **nullable**.
 - Hashes are SHA-256 hexadecimal strings, up to 64 characters. Content-addressed
