@@ -179,6 +179,8 @@ export class InstallationLayout {
         find("installation-return").disabled = locked;
         find("installation-steps").hidden = !wizardArea;
         find("installation-after-setup").hidden = !this.wizard;
+        find("installation-strategy-shortcut").hidden = !this.wizard;
+        find("installation-sources-shortcut").hidden = !this.wizard;
         find("installation-wizard-actions").hidden = !wizardArea;
         find("installation-area").disabled = locked || this.editing;
         find("edit-installation").hidden = wizardArea || this.editing || !canEdit;
