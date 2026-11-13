@@ -19,7 +19,13 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     page.clock.set_fixed_time(START)
     simulations, evidence = [], []
     page.route("**/comparison?view=simulations", lambda route: simulations.append(route))
-    page.route("**/comparison?view=evidence", lambda route: evidence.append(route))
+
+    def hold_evidence(route):
+        """Expose arrival after the route is held, independently of the earlier loading text."""
+        evidence.append(route)
+        page.evaluate("window.evidenceReadHeld = true")
+
+    page.route("**/comparison?view=evidence", hold_evidence)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -62,6 +68,7 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     )
     page.get_by_text("Understand this plan", exact=True).click()
     expect(page.locator("#plan-evidence-status")).to_have_text("Loading original plan evidence…")
+    page.wait_for_function("() => window.evidenceReadHeld === true")
     assert len(evidence) == 1
     page.get_by_text("Selected interval details", exact=True).click()
     page.locator("#inspect-time").press("ArrowRight")

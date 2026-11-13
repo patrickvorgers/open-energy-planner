@@ -1594,9 +1594,9 @@ def test_slow_initial_preference_survives_repeated_discovery(app_page):
     for _ in range(3):
         with page.expect_response(lambda response: response.url.endswith("/v1/setup")):
             page.clock.fast_forward(5100)
+    assert len(pending) == 1
     pending[0].fulfill(json=saved)
     expect(page.locator("#strategy")).to_have_value("minimize consumption")
-    assert len(pending) == 1
     expect(page.locator("#strategy-status")).to_be_empty()
     edit_strategy(page)
     expect(page.locator("#strategy")).to_be_enabled()
