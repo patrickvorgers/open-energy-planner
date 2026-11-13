@@ -83,7 +83,8 @@ The signed balance palette below remains unchanged.
 
 | Flow | Sign | Color / boundary |
 | --- | --- | --- |
-| Used solar | Positive | Green, DC production |
+| Used solar: DC | Positive | Green, hybrid DC input |
+| Used solar: AC | Positive | Dark green, separate PV inverter AC output |
 | Grid import / converter AC supply | Positive | Blue, AC boundary |
 | Battery discharge | Positive | Red, DC terminals |
 | Household demand | Negative | Amber, AC consumption |
@@ -92,7 +93,7 @@ The signed balance palette below remains unchanged.
 | Conversion losses | Negative | Gray, converter and battery DC converter |
 | Battery SoC | Separate axis | Dark colored lines, percent of nominal capacity |
 
-At the installation boundary, used solar + grid import + terminal discharge
+At the installation boundary, used solar DC + used solar AC + grid import + terminal discharge
 equals household demand + grid export + terminal charge + conversion losses.
 The selected-interval inspector uses the same conservation equation for each
 battery converter's local solar, AC input/output and connected batteries. Thus it reveals direct DC
@@ -100,6 +101,14 @@ charging versus AC-fed charging. AC supply may originate from the grid or
 another inverter. The graph never invents a unique solar/grid attribution on a
 shared AC bus. These details cover each battery-connected inverter,
 including standalone battery converters and shared hybrids.
+
+Separate nonhybrid PV inverters with no attached battery contribute their archived
+AC export once per inverter, even when several PV sources share it. Their losses
+fall outside the displayed boundary. Hybrid identity is retained in the no-battery
+reference. Older battery-linked converters retain their DC interpretation.
+Validate the original all-DC evidence before projection, then validate the mixed
+balance. Converter inspector groups retain their original local DC boundary.
+See the [worked balance](../users/read-your-plan.md#worked-balance-one-hour).
 
 Losses are calculated from archived physical evidence and efficiencies, never
 from a residual chosen to force visual balance. For inverter efficiency `eta`,

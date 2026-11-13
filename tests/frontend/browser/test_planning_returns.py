@@ -199,7 +199,7 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
     page.keyboard.press("Enter")
     expect(page.locator(".scenario-chart-help")).to_have_attribute("open", "")
     expect(page.locator(".scenario-chart-help")).to_contain_text(
-        "All series together balance to zero"
+        "The complete balance sums to zero before visual rounding or hiding series."
     )
     disclosure = page.locator("#ems-costs summary")
     disclosure.focus()

@@ -34,7 +34,58 @@ All three lines are solid. Positive power is import and negative power is export
 
 Above zero is supply to the modeled balance: used solar, grid import and battery discharge. Below zero is use: household demand, grid export, battery charge and conversion losses. These signs describe this chart's balance. They are not interchangeable with every device's command sign.
 
-The series together should balance around zero. Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
+### Solar AC, Solar DC and conversion losses
+
+The three scenario charts use the same measurement boundaries. Each solar series
+has its own green color and legend switch.
+
+| Series | Measurement point |
+|---|---|
+| **Used solar: DC** | Used PV energy at the hybrid inverter's DC input, before conversion |
+| **Used solar: AC** | Used production at the AC output of separate solar-only inverters |
+| **Battery charge / discharge: DC** | Battery terminals, after or before its DC converter |
+| **Household demand / grid import / export: AC** | The shared AC bus and grid connection |
+| **Conversion losses** | Hybrid or battery-inverter losses and battery DC/DC conversion inside these boundaries |
+
+A separate solar inverter's DC-to-AC loss has already occurred before **Used solar: AC**.
+It is excluded from the loss bar to avoid counting it twice. Hybrid inverter losses
+remain included, as do any DC/DC losses on the direct route into the battery.
+Actual losses follow the declared efficiencies. Internal battery storage losses
+affect SoC rather than being deducted twice from terminal charge/discharge.
+
+The complete displayed energy balance is:
+
+**Solar DC + Solar AC + grid import + battery discharge = household base or remainder +
+appliance demand + grid export + battery charge + conversion losses.**
+
+#### Worked balance: One hour
+
+This example assumes 90.0% hybrid DC-to-AC efficiency, lossless direct battery DC
+conversion and no other appliance demand. Powers are constant, so 1 kW for this
+hour equals 1 kWh.
+
+| Route | Mean power | Where it appears |
+|---|---:|---|
+| Hybrid PV input | 2.0 kW | Solar DC supply |
+| Direct DC charging from that input | 1.0 kW | Battery charge |
+| Remaining hybrid PV converted to AC | 0.9 kW | Supplies the AC bus, not another solar bar |
+| Hybrid conversion loss | 0.1 kW | Conversion losses |
+| Separate solar inverter AC output | 1.8 kW | Solar AC supply |
+| Household demand from the AC bus | 2.0 kW | Household demand |
+| Remaining AC exported to the grid | 0.7 kW | Grid export |
+
+The AC bus receives **0.9 + 1.8 = 2.7 kW**, supplying **2.0 + 0.7 = 2.7 kW**.
+The chart receives **2.0 + 1.8 = 3.8 kW**, supplying
+**1.0 + 2.0 + 0.7 + 0.1 = 3.8 kW**. The separate solar inverter's earlier
+conversion loss sits outside this balance.
+
+AC-fed battery charging can use the shared bus. The graph cannot uniquely assign
+that energy to solar or the grid. The selected-interval converter details retain
+their local DC solar and AC input/output boundaries. Available solar forecasts
+remain DC inputs. Solver decisions, costs and original archived plans are unchanged.
+
+The series together should balance around zero before hidden series and the
+0.1-kW appliance display rounding. Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
 Use **Next 6 hours**, **Next 24 hours** or **Full period** (with its available duration). Day bands and date labels identify calendar boundaries in the installation timezone. The legend sits below the full-width chart, with aligned columns on wider screens and compact wrapping on phones. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
 
