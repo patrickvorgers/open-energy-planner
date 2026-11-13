@@ -84,10 +84,15 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("failed_refresh", [False, True])
 @pytest.mark.parametrize("entry_view", ["planning", "savings"])
+@pytest.mark.parametrize(
+    "savings_now",
+    [datetime(2026, 11, 12, 12, 30, tzinfo=UTC), datetime(2026, 11, 12, 23, 30, tzinfo=UTC)],
+    ids=["normal-utc", "late-utc"],
+)
 def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
-    app_page, failed_refresh, entry_view
+    app_page, failed_refresh, entry_view, savings_now
 ):
-    """A hidden pinned plan catches up on source names, retries failures and retains chart choices."""
+    """An explicit seeded day preserves pinned-plan names and chart choices across the HA midnight boundary."""
     page, url = app_page
     metadata = named_archive_battery(page, url)
     headers = {"Authorization": "Bearer " + TOKEN}
@@ -98,7 +103,7 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
         "request",
         lambda request: reads.append(request.url) if "/v1/savings?" in request.url else None,
     )
-    page.clock.install()
+    page.clock.install(time=savings_now)
     page.goto(url + "/overview#" + entry_view)
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -106,6 +111,14 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         open_primary_navigation(page)
         page.get_by_role("link", name="Savings", exact=True).click()
+    seeded_day = (
+        datetime.fromisoformat(original["input_snapshot"]["problem"]["intervals"][0]["start"])
+        .date()
+        .isoformat()
+    )
+    page.locator("#period-start").fill(seeded_day)
+    page.locator("#period-end").fill(seeded_day)
+    page.get_by_role("button", name="Show period").click()
     expect(page.locator("#evaluation-rows tr")).to_have_count(2)
     page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
     page.get_by_role("button", name="View original plan").first.click()
