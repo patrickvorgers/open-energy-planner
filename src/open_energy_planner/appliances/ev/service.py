@@ -139,6 +139,12 @@ class EVService:
                     digest(state["requests"][request_id]),
                     now or datetime.now(UTC),
                 )
+        if (
+            not self.state["points"]
+            and not checked["points"]
+            and selected == self.consumers.selected
+        ):
+            selected = None
         self.commit(state, selected)
         self.report = None
         self.power_deviations.clear()

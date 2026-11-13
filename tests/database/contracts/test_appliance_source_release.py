@@ -335,3 +335,102 @@ def test_changed_weather_choice_reloads_history_and_invalidates_result(source_se
     assert consumers.history_import._chunks is not chunks
     assert consumers.result is None
     assert set(consumers.histories) == {row["entity_id"] for row in selected}
+
+
+@pytest.mark.parametrize("operation", ["add", "edit", "remove"])
+@pytest.mark.parametrize("fail_commit", [False, True], ids=["persist", "rollback"])
+def test_vehicle_only_changes_preserve_unreadable_consumer_ownership(
+    source_settings, operation, fail_commit
+):
+    """Independent vehicle settings persist or roll back without touching corrupt source ownership."""
+    engine, catalogue, consumers, ev, _thermal = source_settings
+    previous = ev_settings()
+    previous["points"] = []
+    if operation == "add":
+        previous["vehicles"] = []
+    ev.configure(previous, catalogue)
+    consumers.documents.write("consumer-settings.json", ["invalid"])
+    consumers = ConsumerForecasts(consumers.documents)
+    consumers.sync(catalogue)
+    ev = EVService(ev.documents, consumers, ev.appliances)
+    before_rows = document_rows(engine)
+    before_state = deepcopy(ev.state)
+    before_consumer = consumers.document()
+    before_version = consumers.version
+    requested = ev_settings()
+    requested["points"] = []
+    if operation == "edit":
+        requested["vehicles"][0]["capacity_kwh"] = 61
+    elif operation == "remove":
+        requested["vehicles"] = []
+
+    def interrupted_commit(_connection):
+        """Reject the independent EV commit before it can become durable."""
+        raise OSError("Synthetic vehicle-only commit failure")
+
+    if fail_commit:
+        event.listen(engine, "commit", interrupted_commit)
+    try:
+        if fail_commit:
+            with pytest.raises(OSError, match="vehicle-only"):
+                ev.configure(requested, catalogue)
+        else:
+            ev.configure(requested, catalogue)
+    finally:
+        if fail_commit:
+            event.remove(engine, "commit", interrupted_commit)
+    assert consumers.document() == before_consumer
+    assert consumers.version == before_version
+    assert consumers.issue == "consumer_configuration_unreadable"
+    assert consumers.documents.read("consumer-settings.json") == ["invalid"]
+    after_rows = document_rows(engine)
+    assert [row for row in after_rows if row.namespace == "demand"] == [
+        row for row in before_rows if row.namespace == "demand"
+    ]
+    restored = EVService(ev.documents, consumers, ev.appliances)
+    assert restored.state == ev.state
+    if fail_commit:
+        assert after_rows == before_rows and ev.state == before_state
+    else:
+        assert ev.state != before_state
+        assert not ev.state["points"]
+        assert [row["id"] for row in ev.state["vehicles"]] == [
+            row["id"] for row in requested["vehicles"]
+        ]
+        if operation == "edit":
+            assert ev.state["vehicles"][0]["capacity_kwh"] == 61
+
+
+@pytest.mark.parametrize("category", ["ev", "thermal"])
+@pytest.mark.parametrize("operation", ["edit", "replace", "remove"])
+def test_unreadable_ownership_still_blocks_involved_typed_sources(
+    source_settings, category, operation
+):
+    """Unknown source ownership cannot be bypassed by keeping, replacing or removing a typed source."""
+    engine, catalogue, consumers, ev, thermal = source_settings
+    consumers.documents.write("consumer-settings.json", ["invalid"])
+    consumers = ConsumerForecasts(consumers.documents)
+    consumers.sync(catalogue)
+    service = ev if category == "ev" else thermal
+    service.consumers = consumers
+    requested = ev_settings() if category == "ev" else thermal_settings()
+    field = "points" if category == "ev" else "stores"
+    if operation == "remove":
+        requested[field] = []
+    elif operation == "replace":
+        requested[field][0]["id"] = "00000000-0000-4000-8000-000000000099"
+    else:
+        requested[field][0]["maximum_w" if category == "ev" else "heater_w"] = (
+            21000 if category == "ev" else 2200
+        )
+    before_rows = document_rows(engine)
+    before_state = deepcopy(service.state)
+    before_consumer = consumers.document()
+    with pytest.raises(ValueError, match="Restore the saved database"):
+        service.configure(requested, catalogue)
+    assert document_rows(engine) == before_rows
+    assert service.state == before_state
+    assert consumers.document() == before_consumer
+    with pytest.raises(ValueError, match="Restore the saved database"):
+        consumers.save(consumers.selected, consumers.version)
+    assert document_rows(engine) == before_rows
