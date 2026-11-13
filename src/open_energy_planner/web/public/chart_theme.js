@@ -4,6 +4,7 @@ const VALUE_AXIS_INTERVALS = 6;
 const AXIS_SIGNIFICANT_DIGITS = 14;
 const NICE_INTERVALS = [1, 2, 2.5, 5, 10];
 let synchronizingGroup = false;
+let batchRanges = null;
 /** Collect visible extrema, with signed stack totals and interpolated line edges.
  * Interval bars contribute whenever any part overlaps the selected window.
  * Missing values break lines. Hidden datasets and the separate SoC axis contribute nothing.
@@ -42,6 +43,28 @@ function visibleRange(chart, axis) {
     if (Number.isFinite(maximum) && Number.isFinite(suggested.suggestedMax)) include(suggested.suggestedMax);
     return {minimum, maximum};
 }
+/** Update complete chart groups once after their windows and visibility have been applied.
+ * Visible group extrema exist only for this synchronous batch. Native resize or
+ * standalone updates retain the ordinary plugin path. Failures cannot retain bounds.
+ */
+export function updateCharts(instances) {
+    const charts = [...instances], previous = batchRanges, ranges = new Map();
+    for (const chart of charts) {
+        const group = chart.options.plugins.valueAxisHeadroom?.group;
+        if (!group) continue;
+        for (const scale of Object.values(chart.scales)) {
+            if (scale.axis !== "y" || scale.id === "soc") continue;
+            const key = JSON.stringify([group, scale.id]), range = visibleRange(chart, scale.id);
+            const shared = ranges.get(key) || {minimum: Infinity, maximum: -Infinity};
+            shared.minimum = Math.min(shared.minimum, range.minimum);
+            shared.maximum = Math.max(shared.maximum, range.maximum);
+            ranges.set(key, shared);
+        }
+    }
+    batchRanges = ranges;
+    try { for (const chart of charts) chart.update("none"); }
+    finally { batchRanges = previous; }
+}
 /** Keep ten percent of axis height at each unrestricted end, independently of nice ticks.
  * Explicit physical limits stay fixed. Only unrestricted ends receive padding.
  * Grouped comparisons share their visible extrema and refresh peers only when bounds change.
@@ -49,8 +72,9 @@ function visibleRange(chart, axis) {
  */
 Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options) {
     if (scale.axis !== "y" || scale.id === "soc") return;
-    let {minimum, maximum} = visibleRange(chart, scale.id);
-    if (options.group) for (const peer of Object.values(Chart.instances)) {
+    const prepared = batchRanges?.get(JSON.stringify([options.group, scale.id]));
+    let {minimum, maximum} = prepared || visibleRange(chart, scale.id);
+    if (!prepared && options.group) for (const peer of Object.values(Chart.instances)) {
         if (peer === chart || peer.options.plugins.valueAxisHeadroom?.group !== options.group) continue;
         const range = visibleRange(peer, scale.id);
         minimum = Math.min(minimum, range.minimum); maximum = Math.max(maximum, range.maximum);
@@ -79,7 +103,7 @@ Chart.register({id: "valueAxisHeadroom", afterDataLimits(chart, {scale}, options
     scale.ticks = [];
     for (let index = Math.ceil(scale.min / step); index <= Math.floor(scale.max / step); index++) scale.ticks.push({value: Number((index * step).toPrecision(AXIS_SIGNIFICANT_DIGITS))});
 }, afterUpdate(chart, _arguments, options) {
-    if (!options.group || synchronizingGroup) return;
+    if (batchRanges || !options.group || synchronizingGroup) return;
     synchronizingGroup = true;
     try {
         for (const peer of Object.values(Chart.instances)) {

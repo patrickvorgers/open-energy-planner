@@ -142,6 +142,15 @@ It does not duplicate them in whole-horizon energy, battery, solar or repricing 
 The evidence projection shows forecast model and quality without a technical forecast
 version label. Original snapshot version metadata and financial API evidence remain intact.
 
+Planning renders the original optimizer chart immediately with its available
+bounds. Each synchronous rendering stage then applies the selected windows and
+legend visibility before computing the shared scenario extrema once. When the
+simulations arrive, the complete group receives one batch update. Same-plan
+refreshes join the initial stage instead of starting a nested range update.
+Batch extrema are temporary and are cleared even when a chart update fails.
+Time-window, data and legend changes can expand or shrink the shared scale.
+The separate SoC percentage axes do not enter that calculation.
+
 The shared value-axis plugin refreshes a peer only when a shared value-axis bound
 has changed. Updating unchanged bounds must not redraw the other scenarios.
 Every chart retains its own datasets, visibility and window. Changed bounds,

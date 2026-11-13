@@ -283,3 +283,83 @@ def test_compact_planning_preserves_commands_costs_and_original_archive(app_page
     panel = page.locator("#plan-evidence-panel")
     panel.evaluate("element => element.scrollIntoView({block:'center'})")
     panel.screenshot(path=str(captures / f"commands-{page.viewport_size['width']}.png"))
+
+
+@pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
+def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app_page):
+    """The optimizer appears alone first. Completed simulations redraw each populated balance once per batch."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    held = []
+    page.route("**/comparison?view=simulations", lambda route: held.append(route))
+    page.add_init_script("""(() => {
+        window.balanceDraws=[];window.chartAssignments=0;
+        let implementation;
+        Object.defineProperty(window,'Chart',{configurable:true,get:()=>implementation,set:value=>{
+            window.chartAssignments++;
+            if (implementation === value) return;
+            implementation=value;
+            const update=value.prototype.update;
+            value.prototype.update=function(...args) {
+                if (args[0] !== 'resize' && ['plan-chart','reference-chart','self-consumption-chart'].includes(this.canvas?.id)
+                    && this.data.datasets.some(dataset=>dataset.data.length)) window.balanceDraws.push(this.canvas.id);
+                return update.apply(this,args);
+            };
+        }});
+    })();""")
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
+    page.evaluate("document.fonts.ready")
+    initial = page.locator("#plan-chart").evaluate("""canvas => {
+        const chart=Chart.getChart(canvas);
+        return {data:JSON.stringify(chart.data.datasets),bounds:[chart.scales.y.min,chart.scales.y.max]};
+    }""")
+    assert initial["bounds"][0] < 0 < initial["bounds"][1]
+    assert (
+        page.locator("#reference-chart").evaluate(
+            "canvas => Chart.getChart(canvas).data.datasets.length"
+        )
+        == 0
+    )
+    assert len(held) == 1
+    page.evaluate("window.balanceDraws=[]")
+    held[0].fulfill(response=held[0].fetch())
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    identities = ["plan-chart", "reference-chart", "self-consumption-chart"]
+    for action in (None, "Full period:", "Next 6 hours"):
+        if action is not None:
+            page.evaluate("window.balanceDraws=[]")
+            page.get_by_role("button", name=action, exact=False).click()
+        result = page.evaluate(
+            """ids => ({
+            counts:ids.map(id=>window.balanceDraws.filter(value=>value===id).length),
+            bounds:ids.map(id=>{const chart=Chart.getChart(document.getElementById(id));return [chart.scales.y.min,chart.scales.y.max];})
+        })""",
+            identities,
+        )
+        assert result["counts"] == [1, 1, 1], {
+            **result,
+            "chart_assignments": page.evaluate("window.chartAssignments"),
+        }
+        assert result["bounds"][0] == result["bounds"][1] == result["bounds"][2]
+    assert (
+        page.locator("#plan-chart").evaluate(
+            "canvas => JSON.stringify(Chart.getChart(canvas).data.datasets)"
+        )
+        == initial["data"]
+    )
+    page.evaluate("window.balanceDraws=[]")
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
+    assert page.evaluate(
+        "ids => ids.map(id=>window.balanceDraws.filter(value=>value===id).length)", identities
+    ) == [1, 1, 1]
+    assert len(held) == 2
+    page.evaluate("window.balanceDraws=[]")
+    held[1].fulfill(response=held[1].fetch())
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    assert page.evaluate(
+        "ids => ids.map(id=>window.balanceDraws.filter(value=>value===id).length)", identities
+    ) == [1, 1, 1]

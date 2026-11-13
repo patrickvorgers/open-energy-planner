@@ -1,5 +1,5 @@
 // Read-only views never activate an archived plan or reset the reference scenario.
-import "./chart_theme.js";
+import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
@@ -276,7 +276,7 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
  * sharing a stack and includes zero. Rendering applies the selected planning range
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
-function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false} = {}) {
+function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false} = {}) {
     let balanceTime = null;
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
@@ -347,7 +347,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {
+        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {
             id: "deviceLegend",
             beforeUpdate: syncLegend
         }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
@@ -360,7 +360,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                         ? null : instance.scales.x.getValueForPixel(event.x);
                 }
             },
-            plugins: {calendarDays: {utc: utcDays, onHeading: balance ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id) ? "planning-comparison" : null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+            plugins: {calendarDays: {utc: utcDays, onHeading: balance ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
                 hideTooltip();
                 const time = balanceTime; balanceTime = null;
                 renderTooltip(context, tooltip, balance, time);
@@ -404,6 +404,11 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             }
         }
     });
+    // Complete scenario data before the owner applies one shared range for this batch.
+    if (planningLegend) {
+        result.data.datasets = datasets;
+        result.options.plugins.valueAxisHeadroom.group = "planning-comparison";
+    }
     charts.set(id, result);
     syncChartLegends.set(result, syncLegend);
     if (planningLegend) {
@@ -457,7 +462,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         const points = series.flatMap((item) => item.points);
         $("savings-chart-range").textContent = points.length ? `From ${axisTime(Math.min(...points.map((p) => p[0])))} to ${axisTime(Math.max(...points.map((p) => p[0])))}` : "";
     }
-    applyRange();
+    if (!deferRange) applyRange();
 }
 /**
  * Set shared axes without changing frozen data: the latest plan starts at the
@@ -479,7 +484,7 @@ function applyRange() {
             const priceEnd = currentPriceWindow ? Math.max(currentPriceWindow.end, priceStart + QUARTER_MILLISECONDS) : undefined;
             instance.options.scales.x.min = priceStart;
             instance.options.scales.x.max = planningHours && priceStart != null ? priceStart + planningHours * MILLISECONDS_PER_HOUR : priceEnd;
-            instance.update(); continue;
+            continue;
         }
         const bars = instance.data.datasets.find((dataset) => dataset.type === "bar")?.data;
         const fullEnd = end == null ? bars?.at(-1)?.end : Math.max(Math.ceil(end / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS, start + QUARTER_MILLISECONDS);
@@ -488,7 +493,7 @@ function applyRange() {
     }
     // Set all windows and rounding visibility before computing the shared comparison axes.
     for (const instance of charts.values()) syncChartLegends.get(instance)?.(instance);
-    for (const instance of charts.values()) instance.update();
+    updateCharts(charts.values());
     if (first != null && end != null && start != null) {
         document.querySelector('[data-hours="0"]').textContent = `Full period: ${number(Math.max(0, end - Math.max(first, start)) / MILLISECONDS_PER_HOUR)} hours`;
         showPeriodCosts(start, planningHours ? start + planningHours * MILLISECONDS_PER_HOUR : Math.max(end, start + QUARTER_MILLISECONDS));
@@ -611,7 +616,7 @@ function clearPlanComparisons() {
     simulationReadPending = false;
     periodCostPlan = null; periodCostKey = ""; periodCostRequest++;
     for (const chartId of ["reference-chart", "self-consumption-chart"]) {
-        chart(chartId, [], {unit: "kW", balance: true});
+        chart(chartId, [], {unit: "kW", balance: true, deferRange: true});
         $(chartId).closest(".chart-wrap").hidden = true;
     }
     $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
@@ -676,7 +681,7 @@ function gridExchangeSeries(plan, comparison = null, baseline = null) {
     return series;
 }
 /** Add same-plan simulations and server-owned costs without rebuilding the user's plan charts. */
-function renderPlanComparisons(data, plan) {
+function renderPlanComparisons(data, plan, {deferRange = false} = {}) {
     const id = plan.plan_id, currency = plan.currency || "";
     const samePlan = renderedPlanId === id;
     const comparison = data.comparison;
@@ -687,7 +692,7 @@ function renderPlanComparisons(data, plan) {
         for (const [chartId, entry, issueId] of [["reference-chart", withoutBattery, "reference-issue"], ["self-consumption-chart", selfConsumption, "self-consumption-issue"]]) {
             const balance = entry?.chart ? energyBalances(entry.chart, new Map(Object.entries(plan.comparison_names || {})))[0] : null;
             $(chartId).closest(".chart-wrap").hidden = !balance;
-            chart(chartId, balance?.series || [], {unit: "kW", balance: true, preserveVisibility: samePlan});
+            chart(chartId, balance?.series || [], {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true});
             $(issueId).textContent = entry?.issue || (balance?.missing ? `${balance.missing} interval(s) have incomplete physical evidence.` : "");
         }
     }
@@ -702,11 +707,11 @@ function renderPlanComparisons(data, plan) {
     if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
     $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
     if (!confirmedProjection) {
-        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W", preserveVisibility: samePlan});
+        chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W", preserveVisibility: samePlan, deferRange: true});
         periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
         periodCostKey = ""; periodCostRequest++;
     }
-    inspect(); applyRange();
+    inspect(); if (!deferRange) applyRange();
 }
 
 /**
@@ -746,7 +751,7 @@ async function showPlan(signal, background = false) {
         inspectSteps = [];
         for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
             if (chartId === "price-chart" && !clearPrices) continue;
-            if (charts.has(chartId)) chart(chartId, []);
+            if (charts.has(chartId)) chart(chartId, [], {deferRange: true});
         }
         $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
         for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = id ? "Loading original plan comparison…" : "No plan selected.";
@@ -841,14 +846,14 @@ async function showPlan(signal, background = false) {
             step.text += `\n${rows.join("\n")}`;
         });
         const balance = balances[0];
-        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan});
+        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true});
         if (balance.missing) {
             const warning = document.createElement("p"); warning.className = "balance-warning";
             warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
             $("plan-chart-legend").append(warning);
         }
-        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan});
-        chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan});
+        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
+        chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan, deferRange: true});
         const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
         if (tariffEvidence.length) {
             buy.length = 0; sell.length = 0;
@@ -868,8 +873,8 @@ async function showPlan(signal, background = false) {
         currentPriceWindow = null;
         $("price-chart").closest(".chart-wrap").hidden = false;
         $("current-price-status").textContent = `Selected plan: ${when(plan.generated_at)}: Original contract rates. ${bonusRules.length ? "Potential export bonus is shown before the volume cap." : "No bonus applies in this plan."}`;
-        chart("price-chart", priceSeries, {unit: `${currency}/kWh`});
-        if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan);
+        chart("price-chart", priceSeries, {unit: `${currency}/kWh`, deferRange: true});
+        if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan, {deferRange: true});
         const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
         $("planning-window").textContent = `${number(hours)}-hour planning window`;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
