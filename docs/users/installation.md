@@ -100,9 +100,9 @@ Select **Planning strategy** in the installation area selector. The saved **Opti
 
 [![Saved optimization goal and its explanation in Installation settings.](../assets/optimization-goal.png)](../assets/optimization-goal.png)
 
-*The selected goal is saved configuration. Home Assistant acceptance is separate status evidence and does not prove physical execution.*
+*The saved goal applies to the next replacement plan.*
 
-The new choice requests a replacement plan. Requested, published and accepted strategies can temporarily differ. A failed replacement does not rewrite the old plan or extend its validity. See [how the goals differ](how-oep-works.md#choose-the-optimization-goal).
+Saving requests a replacement plan. Installation shows the saved preference while the new plan is being calculated. A failed replacement does not rewrite the old plan or extend its validity. See [how the goals differ](how-oep-works.md#choose-the-optimization-goal).
 
 ## Revisit a saved installation
 

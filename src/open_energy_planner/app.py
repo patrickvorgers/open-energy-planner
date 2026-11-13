@@ -1128,7 +1128,7 @@ def create_app(
     if live:
         live.requested_strategy = lambda: strategy.current
         live.strategy_issue = lambda: strategy.issue
-    register_strategy(app, strategy, repository, live, lock, persist_then_install)
+    register_strategy(app, strategy, live, lock, persist_then_install)
     register_solar(
         app,
         solar,

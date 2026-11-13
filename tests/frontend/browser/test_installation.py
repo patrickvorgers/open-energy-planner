@@ -18,6 +18,7 @@ from tests.frontend.browser.helpers import (
     installation_area,
     physical_plan,
     read_settings,
+    wait_for_product_reads,
 )
 
 
@@ -661,7 +662,7 @@ def test_manual_strategy_choice_is_persistent_and_explains_stock_correction(app_
     expect(page.locator("#strategy-help")).to_contain_text("depleted starting battery stock")
     page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
     page.get_by_role("button", name="Save planning strategy", exact=True).click()
-    expect(page.locator("#strategy-status")).to_contain_text("Requested: Minimize consumption")
+    expect(page.locator("#strategy-status")).to_be_empty()
     edit_strategy(page)
     page.get_by_label("Optimization goal", exact=True).select_option("minimize cost")
     with page.expect_response(
@@ -669,7 +670,7 @@ def test_manual_strategy_choice_is_persistent_and_explains_stock_correction(app_
     ):
         page.clock.fast_forward(31000)
     expect(page.get_by_label("Optimization goal", exact=True)).to_have_value("minimize cost")
-    expect(page.locator("#strategy-status")).to_contain_text("Requested: Minimize consumption")
+    expect(page.locator("#strategy-status")).to_be_empty()
     page.reload()
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -723,7 +724,7 @@ def test_strategy_summary_matches_saved_fields_and_retains_edit_save_cancel(app_
     expect(page.locator("#strategy-help")).to_contain_text("Export does not offset import")
     comparison.click()
     expect(page.locator("#strategy-help")).to_be_hidden()
-    expect(page.get_by_role("status", name="Strategy status")).to_contain_text("Requested:")
+    expect(page.get_by_role("status", name="Strategy status")).to_be_empty()
     screenshots = Path("results/ci")
     screenshots.mkdir(parents=True, exist_ok=True)
     width = page.viewport_size["width"]
@@ -796,9 +797,7 @@ def test_strategy_status_failure_does_not_block_setup_or_retry(app_page):
     page.get_by_role("button", name="Edit installation", exact=True).click()
     page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
     expect(page.get_by_role("button", name="Save planning strategy", exact=True)).to_be_enabled()
-    expect(page.get_by_role("status", name="Strategy status")).to_contain_text(
-        "Requested: Minimize cost"
-    )
+    expect(page.get_by_role("status", name="Strategy status")).to_be_empty()
 
 
 def test_missing_energy_capacity_directs_user_to_home_assistant(app_page):
@@ -1437,32 +1436,26 @@ def test_installation_lists_four_solar_sources_and_all_grid_meters(app_page):
     assert read_settings(page, url)["installation"] is None
 
 
-@pytest.mark.parametrize("aligned", [False, True])
-def test_installation_strategy_only_expands_when_activation_differs(app_page, aligned):
-    """Requested, published and accepted are expanded only while their states differ. Drafts remain separate."""
+def test_installation_is_usable_before_strategy_preference_arrives(app_page):
+    """A held preference response cannot block setup. Its eventual arrival preserves physical drafts."""
     page, url = app_page
     discover(page, url)
-    page.route(
-        "**/v1/strategy",
-        lambda route: route.fulfill(
-            json={
-                "requested": "minimize cost",
-                "published": "minimize cost" if aligned else None,
-                "active": "minimize cost" if aligned else None,
-                "issue": None,
-            }
-        ),
-    )
+    pending = []
+    page.route("**/v1/strategy", lambda route: pending.append(route))
     connect(page)
+    expect(page.get_by_label("Maximum grid import (kW)", exact=True)).to_be_visible()
+    page.get_by_label("Maximum grid import (kW)", exact=True).fill("7")
+    assert pending
+    expect(page.locator("#strategy")).to_have_value("")
+    expect(page.locator("#strategy")).to_be_disabled()
+    for route in pending:
+        route.fulfill(json={"requested": "minimize cost", "issue": None})
+    page.unroute("**/v1/strategy")
     page.get_by_role("button", name="Home Assistant", exact=True).click()
     page.get_by_role("button", name="Planning strategy", exact=True).click()
-    expect(page.locator("#installation-strategy-value")).to_contain_text("Minimize cost")
-    if aligned:
-        expect(page.locator("#strategy-status")).to_contain_text("published and accepted")
-        expect(page.locator("#strategy-status")).not_to_contain_text("Requested:")
-    else:
-        expect(page.locator("#strategy-status")).to_contain_text("Requested: Minimize cost")
-        expect(page.locator("#strategy-status")).to_contain_text("Published plan: No accepted plan")
+    expect(page.get_by_label("Optimization goal", exact=True)).to_have_value("minimize cost")
+    expect(page.locator("#strategy-status")).to_be_empty()
+    expect(page.get_by_label("Maximum grid import (kW)", exact=True)).to_have_value("7")
 
 
 def test_installation_duplicate_solar_names_keep_distinct_hybrid_choices(app_page):
@@ -1502,3 +1495,323 @@ def test_installation_duplicate_solar_names_keep_distinct_hybrid_choices(app_pag
     connection.select_option(label="Solar (sensor.shed)")
     expect(connection).to_have_value(inverter)
     assert read_settings(page, url)["installation"] is None
+
+
+@pytest.mark.parametrize("action", ["cancel", "reload"])
+def test_failed_explicit_strategy_reload_recovers_current_baseline(app_page, action):
+    """An explicit read failure invalidates the old goal and polling recovers the real external CAS baseline."""
+    page, url = app_page
+    page.clock.install()
+    discover(page, url)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    physical_before = read_settings(page, url)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    if action == "cancel":
+        installation_area(page, 0, edit=True)
+        page.get_by_label("Maximum grid import (kW)", exact=True).fill("7")
+    else:
+        installation_area(page, -1)
+    assert page.request.put(
+        url + "/v1/strategy",
+        headers=headers,
+        data={"strategy": "minimize consumption", "expected_strategy": "minimize cost"},
+    ).ok
+    page.route("**/v1/strategy", lambda route: route.fulfill(status=503))
+    page.route("**/v1/setup?refresh=1", lambda route: route.fulfill(json=physical_before))
+    page.get_by_role(
+        "button", name="Cancel" if action == "cancel" else "Refresh Home Assistant data", exact=True
+    ).click()
+    expect(page.locator("#installation-save-bar")).not_to_have_attribute(
+        "data-save-state", "saving"
+    )
+    installation_area(page, 4)
+    expect(page.locator("#strategy-status")).to_contain_text("unavailable")
+    expect(page.locator("#strategy")).to_have_value("")
+    expect(page.locator("#installation-strategy-value")).not_to_contain_text("Minimize cost")
+    expect(page.locator("#strategy")).to_be_disabled()
+    expect(page.get_by_role("button", name="Edit installation", exact=True)).to_be_hidden()
+    page.unroute("**/v1/strategy")
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        page.clock.fast_forward(31000)
+    expect(page.locator("#strategy-status")).to_be_empty()
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    edit_strategy(page)
+    expect(page.locator("#strategy")).to_be_enabled()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    page.locator("#strategy").select_option("minimize cost")
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        page.clock.fast_forward(31000)
+    expect(page.locator("#strategy")).to_have_value("minimize cost")
+    expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
+    with page.expect_request(
+        lambda request: request.url.endswith("/v1/strategy") and request.method == "PUT"
+    ) as saved_request:
+        page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    assert saved_request.value.post_data_json == {
+        "strategy": "minimize cost",
+        "expected_strategy": "minimize consumption",
+    }
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert (
+        page.request.get(url + "/v1/strategy", headers=headers).json()["requested"]
+        == "minimize cost"
+    )
+    assert read_settings(page, url)["installation"] == physical_before["installation"]
+
+
+def test_slow_initial_preference_survives_repeated_discovery(app_page):
+    """Successful preference reads slower than discovery still settle once instead of starving the editor."""
+    page, url = app_page
+    page.clock.install()
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    assert page.request.put(
+        url + "/v1/strategy",
+        headers=headers,
+        data={"strategy": "minimize consumption", "expected_strategy": "minimize cost"},
+    ).ok
+    saved = page.request.get(url + "/v1/strategy", headers=headers).json()
+    pending = []
+
+    def hold_preference(route):
+        """Delay successful replies while the real discovery timer continues issuing setup reads."""
+        pending.append(route)
+        page.evaluate("window.preferenceReadHeld = true")
+
+    page.route("**/v1/strategy", hold_preference)
+    page.goto(url + "/setup")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.wait_for_function("() => window.preferenceReadHeld === true")
+    expect(page.locator("#status")).to_contain_text("Waiting for Home Assistant")
+    page.get_by_role("button", name="Planning strategy", exact=True).click()
+    for _ in range(3):
+        with page.expect_response(lambda response: response.url.endswith("/v1/setup")):
+            page.clock.fast_forward(5100)
+    pending[0].fulfill(json=saved)
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    assert len(pending) == 1
+    expect(page.locator("#strategy-status")).to_be_empty()
+    edit_strategy(page)
+    expect(page.locator("#strategy")).to_be_enabled()
+
+
+@pytest.mark.parametrize("action", ["save", "reload"])
+def test_explicit_preference_read_supersedes_pending_background_read(app_page, action):
+    """A held passive request cannot delay a new explicit baseline or overwrite it when finally released."""
+    page, url = app_page
+    page.clock.install()
+    discover(page, url)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    original = page.request.get(url + "/v1/strategy", headers=headers).json()
+    physical_before = read_settings(page, url)
+    if action == "save":
+        edit_strategy(page)
+        page.locator("#strategy").select_option("minimize consumption")
+    else:
+        installation_area(page, -1)
+        assert page.request.put(
+            url + "/v1/strategy",
+            headers=headers,
+            data={"strategy": "minimize consumption", "expected_strategy": "minimize cost"},
+        ).ok
+    pending = []
+
+    def hold_background_only(route):
+        """Hold the older passive read and let real subsequent explicit requests reach storage."""
+        if route.request.method == "GET" and not pending:
+            pending.append(route)
+            page.evaluate("window.backgroundPreferenceHeld = true")
+        else:
+            route.continue_()
+
+    page.route("**/v1/strategy", hold_background_only)
+    page.route("**/v1/setup?refresh=1", lambda route: route.fulfill(json=physical_before))
+    page.clock.fast_forward(31000)
+    page.wait_for_function("() => window.backgroundPreferenceHeld === true")
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        page.get_by_role(
+            "button",
+            name="Save planning strategy" if action == "save" else "Refresh Home Assistant data",
+            exact=True,
+        ).click()
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        pending[0].fulfill(json=original)
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert (
+        page.request.get(url + "/v1/strategy", headers=headers).json()["requested"]
+        == "minimize consumption"
+    )
+    assert read_settings(page, url)["installation"] == physical_before["installation"]
+
+
+@pytest.mark.parametrize("action", ["cancel", "reload"])
+def test_strategy_reload_owns_baseline_during_inflight_price_poll(app_page, action):
+    """A delayed price poll cannot supersede explicit reload/discard or confirm a stale strategy baseline."""
+    page, url = app_page
+    page.clock.install()
+    discover(page, url)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    physical_before = read_settings(page, url)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    saved_goal = "minimize consumption"
+    if action == "cancel":
+        installation_area(page, 0, edit=True)
+        page.get_by_label("Maximum grid import (kW)", exact=True).fill("7")
+        expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
+    else:
+        installation_area(page, -1)
+    assert page.request.put(
+        url + "/v1/strategy",
+        headers=headers,
+        data={"strategy": saved_goal, "expected_strategy": "minimize cost"},
+    ).ok
+    prices = page.request.get(url + "/v1/prices", headers=headers).json()
+    prices["market_area"] = "overlap-test"
+    price_pending = []
+
+    def hold_price(route):
+        """Expose completion of the browser route callback without a timing-based sleep."""
+        price_pending.append(route)
+        page.evaluate("window.heldPriceRequest = true")
+
+    page.route("**/v1/prices", hold_price)
+    page.clock.fast_forward(31000)
+    page.wait_for_function("() => window.heldPriceRequest === true")
+    assert len(price_pending) == 1
+    strategy_pending = []
+
+    def preference_response(route):
+        """Hold the explicit read while allowing the older price poll's later read to finish."""
+        if not strategy_pending:
+            strategy_pending.append(route)
+            page.evaluate("window.explicitPreferenceHeld = true")
+        else:
+            route.fulfill(json={"requested": saved_goal, "issue": None})
+
+    page.route("**/v1/strategy", preference_response)
+    page.route("**/v1/setup?refresh=1", lambda route: route.fulfill(json=physical_before))
+    with page.expect_request("**/v1/strategy"):
+        page.get_by_role(
+            "button",
+            name="Cancel" if action == "cancel" else "Refresh Home Assistant data",
+            exact=True,
+        ).click()
+    page.wait_for_function("() => window.explicitPreferenceHeld === true")
+    expect(page.locator("#installation-save-state")).to_contain_text(
+        "Discarding changes" if action == "cancel" else "Refreshing settings"
+    )
+    expect(page.locator("#strategy")).to_be_disabled()
+    price_pending[0].fulfill(json=prices)
+    expect(page.locator("#price-market")).to_contain_text("overlap-test")
+    expect(page.locator("#strategy")).to_be_disabled()
+    strategy_pending[0].fulfill(json={"requested": saved_goal, "issue": None})
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    expect(page.locator("#strategy")).to_have_value(saved_goal)
+    assert read_settings(page, url)["installation"] == physical_before["installation"]
+    assert page.request.get(url + "/v1/strategy", headers=headers).json()["requested"] == saved_goal
+    page.unroute("**/v1/strategy")
+    page.unroute("**/v1/prices")
+    page.unroute("**/v1/setup?refresh=1")
+    edit_strategy(page)
+    next_goal = "minimize consumption" if saved_goal == "minimize cost" else "minimize cost"
+    page.get_by_label("Optimization goal", exact=True).select_option(next_goal)
+    with page.expect_request(
+        lambda request: request.url.endswith("/v1/strategy") and request.method == "PUT"
+    ) as saved_request:
+        page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    assert saved_request.value.post_data_json == {
+        "strategy": next_goal,
+        "expected_strategy": saved_goal,
+    }
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert page.request.get(url + "/v1/strategy", headers=headers).json()["requested"] == next_goal
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        page.clock.fast_forward(31000)
+    expect(page.locator("#strategy")).to_have_value(next_goal)
+    expect(page.locator("#strategy-status")).to_be_empty()
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+
+
+def test_pending_discovery_cannot_supersede_saved_strategy_baseline(app_page):
+    """An Energy-discovery retry during a real strategy save must preserve its confirmed baseline and next CAS write."""
+    page, url = app_page
+    page.clock.install()
+    page.goto(url + "/setup")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_strategy(page)
+    wait_for_product_reads(page)
+    page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
+    pending = []
+
+    def hold_explicit_preference(route):
+        """Hold the save confirmation read while the real discovery timer issues background reads."""
+        if route.request.method != "GET":
+            route.continue_()
+        elif not pending:
+            pending.append(route)
+            page.evaluate("window.savedPreferenceReadHeld = true")
+        else:
+            route.fulfill(json={"requested": "minimize consumption", "issue": None})
+
+    page.route("**/v1/strategy", hold_explicit_preference)
+    with page.expect_request(
+        lambda request: request.url.endswith("/v1/strategy") and request.method == "GET"
+    ):
+        page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    page.wait_for_function("() => window.savedPreferenceReadHeld === true")
+    expect(page.locator("#installation-save-state")).to_contain_text("Saving changes")
+    page.clock.fast_forward(5100)
+    expect(page.locator("#status")).to_contain_text("Waiting for Home Assistant")
+    expect(page.locator("#strategy")).to_be_disabled()
+    pending[0].fulfill(json={"requested": "minimize consumption", "issue": None})
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    assert page.request.get(url + "/v1/strategy", headers=headers).json() == {
+        "requested": "minimize consumption",
+        "issue": None,
+    }
+    page.unroute("**/v1/strategy")
+    edit_strategy(page)
+    page.get_by_label("Optimization goal", exact=True).select_option("minimize cost")
+    with page.expect_request(
+        lambda request: request.url.endswith("/v1/strategy") and request.method == "PUT"
+    ) as saved_request:
+        page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    assert saved_request.value.post_data_json == {
+        "strategy": "minimize cost",
+        "expected_strategy": "minimize consumption",
+    }
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert (
+        page.request.get(url + "/v1/strategy", headers=headers).json()["requested"]
+        == "minimize cost"
+    )
+    assert read_settings(page, url)["installation"] is None
+    page.clock.fast_forward(5100)
+    expect(page.locator("#strategy")).to_have_value("minimize cost")
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")

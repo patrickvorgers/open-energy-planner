@@ -15,6 +15,8 @@ let token = "", ingressSession = false,
     busy = false,
     discoveryTimer;
 let requestedStrategy = null, installationBaseline = null, installationReady = false;
+let strategyRequestVersion = 0;
+let strategyPendingRequest = null;
 let configurationGeneration = 0;
 let pendingSolarSources = [];
 /** Include precise drafts and import provenance even when their visible controls are unchanged. */
@@ -773,8 +775,7 @@ async function refreshPriceSources() {
         $("price-source-provenance").replaceChildren();
         $("price-market").textContent = "Price source status unavailable. Retrying automatically.";
     }
-    try { await loadStrategy(false); }
-    catch { $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically."; }
+    refreshStrategy();
     try { await refreshSourceNames(); }
     catch { /* Retain the last confirmed names when metadata is temporarily unavailable. */ }
     priceTimer = setTimeout(refreshPriceSources, PRICE_STATUS_REFRESH_MS);
@@ -817,22 +818,20 @@ async function refreshSourceNames(signal) {
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
 async function load(refresh = false, discard = false, signal) {
     const generation = ++configurationGeneration;
-    const nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal);
+    let nextConfig;
+    try { nextConfig = await api(refresh ? "/v1/setup?refresh=1" : "/v1/setup", "GET", undefined, signal); }
+    catch (error) {
+        if (generation !== configurationGeneration) return;
+        throw error;
+    }
     if (generation !== configurationGeneration) return;
     if (nextConfig.mode !== "home_assistant")
         throw new Error("Installation setup requires Home Assistant mode.");
-    try { await loadStrategy(requestedStrategy === null || refresh || discard, signal, generation); }
-    catch {
-        signal?.throwIfAborted();
-        if (generation !== configurationGeneration) return;
-        $("strategy-settings").hidden = false;
-        $("installation-save-bar").hidden = false;
-        $("strategy-status").textContent = "Strategy status unavailable. Retrying automatically.";
-        saveState.update("Strategy status unavailable. Retrying automatically.");
-    }
-    if (generation !== configurationGeneration) return;
     config = nextConfig;
     installationReady = false;
+    // Explicit reloads settle both baselines before SaveBar unlocks or confirms a discard.
+    if (refresh || discard) await refreshStrategy(true, signal);
+    else refreshStrategy(false, signal);
     refreshPriceSources();
     const catalogue = config.catalogue;
     if (
@@ -1145,11 +1144,42 @@ async function initializeIngress() {
 }
 initializeIngress();
 
-/** Refresh acceptance status. Synchronize editable intent only on initial load, explicit reload or successful save. */
-async function loadStrategy(updateChoice = true, signal, generation) {
-    const state = await api("/v1/strategy", "GET", undefined, signal);
-    if (generation !== undefined && generation !== configurationGeneration) return;
-    if (updateChoice || requestedStrategy === null) {
+/** Load the independent preference without delaying installation rendering or reporting aborted reads. */
+async function refreshStrategy(updateChoice = false, signal) {
+    // Background reads must yield to the active save or reload's preference baseline.
+    if (!updateChoice && (saveState.busy || strategyPendingRequest)) return;
+    const pending = loadStrategy(updateChoice, signal);
+    const requestVersion = strategyRequestVersion;
+    try { await pending; }
+    catch {
+        if (signal?.aborted || requestVersion !== strategyRequestVersion) return;
+        if (updateChoice) {
+            // A failed explicit reload cannot certify the old compare-and-set baseline.
+            requestedStrategy = null;
+            $("strategy").value = "";
+            layout.controls.set($("strategy"), true);
+            $("strategy").disabled = true;
+            layout.sync();
+        }
+        $("strategy-settings").hidden = false;
+        $("installation-save-bar").hidden = false;
+        $("strategy-status").textContent = "Strategy settings unavailable. Retrying automatically.";
+    }
+}
+/** Synchronize saved intent only on initial load, explicit reload or successful save. */
+async function loadStrategy(updateChoice = true, signal) {
+    const requestVersion = ++strategyRequestVersion;
+    const selected = $("strategy").value, baseline = requestedStrategy;
+    const pending = api("/v1/strategy", "GET", undefined, signal);
+    strategyPendingRequest = pending;
+    let state;
+    try { state = await pending; }
+    finally {
+        // An older passive read must not release a newer explicit request's ownership.
+        if (strategyPendingRequest === pending) strategyPendingRequest = null;
+    }
+    if (requestVersion !== strategyRequestVersion) return;
+    if (requestedStrategy === null || (updateChoice && selected === $("strategy").value && baseline === requestedStrategy)) {
         requestedStrategy = state.requested;
         $("strategy").value = state.requested;
     }
@@ -1159,11 +1189,8 @@ async function loadStrategy(updateChoice = true, signal, generation) {
     if (!saveState.busy) $("strategy").disabled = false;
     if (!saveState.ready) saveState.loaded();
     saveState.update();
-    const label = (value) => ({"minimize cost": "Minimize cost", "minimize consumption": "Minimize consumption"}[value] || "No accepted plan");
     layout.sync();
-    const aligned = state.requested === state.published && state.requested === state.active;
     $("strategy-status").textContent = state.issue
         ? "Strategy settings could not be read. Save a supported choice to restore planning."
-        : aligned ? "Current goal is published and accepted by Home Assistant. Acceptance does not prove physical execution."
-        : `Requested: ${label(state.requested)}: Published plan: ${label(state.published)}: Active in Home Assistant: ${label(state.active)}. A change takes effect with a validated replacement. Existing commands retain their normal validity. Acceptance does not prove physical execution.`;
+        : "";
 }

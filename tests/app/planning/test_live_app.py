@@ -203,7 +203,7 @@ def test_manual_strategy_switch_retains_old_plan_until_valid_replacement(tmp_pat
                 status = await response.json()
             await asyncio.wait_for(entered.wait(), 5)
             assert status["requested"] == "minimize consumption"
-            assert status["published"] == status["active"] == "minimize cost"
+            assert status == {"requested": "minimize consumption", "issue": None}
             async with session.get(url + "/v1/snapshot") as response:
                 assert (await response.json())["plan"] == plan
             async with session.put(
@@ -219,13 +219,13 @@ def test_manual_strategy_switch_retains_old_plan_until_valid_replacement(tmp_pat
             assert read_plan(tmp_path, plan["plan_id"]) == original_record
             async with session.get(url + "/v1/strategy") as response:
                 status = await response.json()
-            assert status["active"] == "minimize cost"
+            assert status == {"requested": "minimize consumption", "issue": None}
             async with session.post(
                 url + "/v1/ack", json={"plan_id": replacement["plan"]["plan_id"]}
             ) as response:
                 assert response.status == 200
             async with session.get(url + "/v1/strategy") as response:
-                assert (await response.json())["active"] == "minimize consumption"
+                assert await response.json() == {"requested": "minimize consumption", "issue": None}
 
     asyncio.run(scenario())
 

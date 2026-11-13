@@ -1,8 +1,6 @@
-"""Strategy archive failures, manual settings validation and off-loop accepted-plan reads."""
+"""Saved strategy preferences remain independent of published and acknowledged plans."""
 
 import asyncio
-import threading
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -13,65 +11,45 @@ from open_energy_planner.optimization.domain import Strategy
 from open_energy_planner.optimization.strategy_api import register
 
 
-@pytest.mark.parametrize(
-    "fault", [None, OSError, ValueError, KeyError, TypeError, "corrupt", "revoked"]
-)
-def test_strategy_read_offloads_archive_and_reports_explicit_unavailability(fault):
-    """Read accepted strategy outside the event loop. Corrupt/unreadable archives return 503 and revoked plans stay inactive."""
+@pytest.mark.parametrize("issue", [None, "invalid_strategy"])
+def test_strategy_preferences_read_save_and_compare_without_an_archive(issue):
+    """Read intent, retain configuration issues and reject stale writes without needing a plan repository."""
 
     async def scenario():
-        """Exercise actual HTTP handlers with an observable archive boundary. Persistence contracts are tested separately."""
+        """Exercise HTTP validation and persistence with only the settings dependencies."""
+        saved = []
+        store = SimpleNamespace(current=Strategy.COST, issue=issue)
 
-        def save(_strategy):
-            """Unchanged intent must not write to a database in this HTTP-boundary test."""
-            raise AssertionError("Unchanged strategy must not be saved")
+        def save(candidate):
+            """Record the persisted preference and clear the configuration issue."""
+            saved.append(candidate)
+            store.current = candidate
+            store.issue = None
 
-        store = SimpleNamespace(current=Strategy.COST, issue=None, save=save)
-        loop_thread = threading.get_ident()
-        threads = []
-        plan = {
-            "strategy": "minimize cost",
-            "config_revision": "same",
-            "valid_until": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-        }
-
-        def get_plan(_identity):
-            """Record native thread ownership and simulate only the archive failure under test."""
-            threads.append(threading.get_ident())
-            if isinstance(fault, type):
-                raise fault("archive fixture")
-            return {**plan, "valid_until": "corrupt"} if fault == "corrupt" else plan
-
-        state = {
-            "plan": None if fault == "revoked" else plan,
-            "acknowledged_plan": "accepted",
-            "enabled": True,
-        }
+        store.save = save
 
         async def persist(save, candidate, **_kwargs):
-            """Commit intent without an unrelated planner in this archive-specific test."""
-            await asyncio.to_thread(save, candidate)
+            """Apply the same serialized persistence boundary without a planner."""
+            save(candidate)
 
         app = web.Application()
-        register(
-            app,
-            store,
-            SimpleNamespace(state=state, get_plan=get_plan),
-            object(),
-            asyncio.Lock(),
-            persist,
-        )
+        register(app, store, object(), asyncio.Lock(), persist)
         async with TestClient(TestServer(app)) as client:
-            for method, body in (
-                ("GET", None),
-                ("PUT", {"strategy": "minimize cost", "expected_strategy": "minimize cost"}),
-            ):
-                response = await client.request(method, "/v1/strategy", json=body)
-                assert response.status == (503 if fault not in (None, "revoked") else 200)
-                if response.status == 200:
-                    assert (await response.json())["active"] == (
-                        None if fault == "revoked" else "minimize cost"
-                    )
-        assert threads and all(identity != loop_thread for identity in threads)
+            response = await client.get("/v1/strategy")
+            assert response.status == 200
+            assert await response.json() == {"requested": "minimize cost", "issue": issue}
+            response = await client.put(
+                "/v1/strategy",
+                json={"strategy": "minimize consumption", "expected_strategy": "minimize cost"},
+            )
+            assert response.status == 200
+            assert await response.json() == {"requested": "minimize consumption", "issue": None}
+            assert saved == [Strategy.CONSUMPTION]
+            response = await client.put(
+                "/v1/strategy",
+                json={"strategy": "minimize cost", "expected_strategy": "minimize cost"},
+            )
+            assert response.status == 409
+            assert saved == [Strategy.CONSUMPTION]
 
     asyncio.run(scenario())
