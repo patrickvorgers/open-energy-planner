@@ -16,6 +16,7 @@ let token = "", ingressSession = false,
     discoveryTimer;
 let requestedStrategy = null, installationBaseline = null, installationReady = false;
 let strategyRequestVersion = 0;
+let strategyPendingRequest = null;
 let configurationGeneration = 0;
 let pendingSolarSources = [];
 /** Include precise drafts and import provenance even when their visible controls are unchanged. */
@@ -830,7 +831,7 @@ async function load(refresh = false, discard = false, signal) {
     installationReady = false;
     // Explicit reloads settle both baselines before SaveBar unlocks or confirms a discard.
     if (refresh || discard) await refreshStrategy(true, signal);
-    else refreshStrategy(requestedStrategy === null, signal);
+    else refreshStrategy(false, signal);
     refreshPriceSources();
     const catalogue = config.catalogue;
     if (
@@ -1146,7 +1147,7 @@ initializeIngress();
 /** Load the independent preference without delaying installation rendering or reporting aborted reads. */
 async function refreshStrategy(updateChoice = false, signal) {
     // Background reads must yield to the active save or reload's preference baseline.
-    if (!updateChoice && saveState.busy) return;
+    if (!updateChoice && (saveState.busy || strategyPendingRequest)) return;
     const pending = loadStrategy(updateChoice, signal);
     const requestVersion = strategyRequestVersion;
     try { await pending; }
@@ -1169,7 +1170,14 @@ async function refreshStrategy(updateChoice = false, signal) {
 async function loadStrategy(updateChoice = true, signal) {
     const requestVersion = ++strategyRequestVersion;
     const selected = $("strategy").value, baseline = requestedStrategy;
-    const state = await api("/v1/strategy", "GET", undefined, signal);
+    const pending = api("/v1/strategy", "GET", undefined, signal);
+    strategyPendingRequest = pending;
+    let state;
+    try { state = await pending; }
+    finally {
+        // An older passive read must not release a newer explicit request's ownership.
+        if (strategyPendingRequest === pending) strategyPendingRequest = null;
+    }
     if (requestVersion !== strategyRequestVersion) return;
     if (requestedStrategy === null || (updateChoice && selected === $("strategy").value && baseline === requestedStrategy)) {
         requestedStrategy = state.requested;

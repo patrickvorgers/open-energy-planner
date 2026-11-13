@@ -1566,6 +1566,102 @@ def test_failed_explicit_strategy_reload_recovers_current_baseline(app_page, act
     assert read_settings(page, url)["installation"] == physical_before["installation"]
 
 
+def test_slow_initial_preference_survives_repeated_discovery(app_page):
+    """Successful preference reads slower than discovery still settle once instead of starving the editor."""
+    page, url = app_page
+    page.clock.install()
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    assert page.request.put(
+        url + "/v1/strategy",
+        headers=headers,
+        data={"strategy": "minimize consumption", "expected_strategy": "minimize cost"},
+    ).ok
+    saved = page.request.get(url + "/v1/strategy", headers=headers).json()
+    pending = []
+
+    def hold_preference(route):
+        """Delay successful replies while the real discovery timer continues issuing setup reads."""
+        pending.append(route)
+        page.evaluate("window.preferenceReadHeld = true")
+
+    page.route("**/v1/strategy", hold_preference)
+    page.goto(url + "/setup")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.wait_for_function("() => window.preferenceReadHeld === true")
+    expect(page.locator("#status")).to_contain_text("Waiting for Home Assistant")
+    page.get_by_role("button", name="Planning strategy", exact=True).click()
+    for _ in range(3):
+        with page.expect_response(lambda response: response.url.endswith("/v1/setup")):
+            page.clock.fast_forward(5100)
+    pending[0].fulfill(json=saved)
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    assert len(pending) == 1
+    expect(page.locator("#strategy-status")).to_be_empty()
+    edit_strategy(page)
+    expect(page.locator("#strategy")).to_be_enabled()
+
+
+@pytest.mark.parametrize("action", ["save", "reload"])
+def test_explicit_preference_read_supersedes_pending_background_read(app_page, action):
+    """A held passive request cannot delay a new explicit baseline or overwrite it when finally released."""
+    page, url = app_page
+    page.clock.install()
+    discover(page, url)
+    connect(page)
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    original = page.request.get(url + "/v1/strategy", headers=headers).json()
+    physical_before = read_settings(page, url)
+    if action == "save":
+        edit_strategy(page)
+        page.locator("#strategy").select_option("minimize consumption")
+    else:
+        installation_area(page, -1)
+        assert page.request.put(
+            url + "/v1/strategy",
+            headers=headers,
+            data={"strategy": "minimize consumption", "expected_strategy": "minimize cost"},
+        ).ok
+    pending = []
+
+    def hold_background_only(route):
+        """Hold the older passive read and let real subsequent explicit requests reach storage."""
+        if route.request.method == "GET" and not pending:
+            pending.append(route)
+            page.evaluate("window.backgroundPreferenceHeld = true")
+        else:
+            route.continue_()
+
+    page.route("**/v1/strategy", hold_background_only)
+    page.route("**/v1/setup?refresh=1", lambda route: route.fulfill(json=physical_before))
+    page.clock.fast_forward(31000)
+    page.wait_for_function("() => window.backgroundPreferenceHeld === true")
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        page.get_by_role(
+            "button",
+            name="Save planning strategy" if action == "save" else "Refresh Home Assistant data",
+            exact=True,
+        ).click()
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    with page.expect_response(
+        lambda response: response.url.endswith("/v1/strategy") and response.request.method == "GET"
+    ):
+        pending[0].fulfill(json=original)
+    expect(page.locator("#strategy")).to_have_value("minimize consumption")
+    expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
+    assert (
+        page.request.get(url + "/v1/strategy", headers=headers).json()["requested"]
+        == "minimize consumption"
+    )
+    assert read_settings(page, url)["installation"] == physical_before["installation"]
+
+
 @pytest.mark.parametrize("action", ["cancel", "reload"])
 def test_strategy_reload_owns_baseline_during_inflight_price_poll(app_page, action):
     """A delayed price poll cannot supersede explicit reload/discard or confirm a stale strategy baseline."""

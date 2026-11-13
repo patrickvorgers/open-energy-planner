@@ -105,7 +105,9 @@ Installation loads its saved preference independently of the physical settings.
 A slow or unavailable preference request does not delay rendering the connection,
 solar or battery settings. The preference refresh preserves unsaved selections
 and their compare-and-set baseline. Background preference reads yield to explicit
-saves, reloads and discards. Configuration read failures remain visible
+saves, reloads and discards. Discovery and price polling share any pending preference
+read, so slow successful responses can finish. Explicit saves and reloads start a
+new read without waiting for an older background request. Configuration read failures remain visible
 beside the preference and retry automatically. If an explicit preference reload
 fails, its old saved value and compare-and-set baseline become unknown. Physical
 settings remain usable. The next successful background read restores the current
