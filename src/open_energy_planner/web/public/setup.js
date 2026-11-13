@@ -1152,6 +1152,14 @@ async function refreshStrategy(updateChoice = false, signal) {
     try { await pending; }
     catch {
         if (signal?.aborted || requestVersion !== strategyRequestVersion) return;
+        if (updateChoice) {
+            // A failed explicit reload cannot certify the old compare-and-set baseline.
+            requestedStrategy = null;
+            $("strategy").value = "";
+            layout.controls.set($("strategy"), true);
+            $("strategy").disabled = true;
+            layout.sync();
+        }
         $("strategy-settings").hidden = false;
         $("installation-save-bar").hidden = false;
         $("strategy-status").textContent = "Strategy settings unavailable. Retrying automatically.";

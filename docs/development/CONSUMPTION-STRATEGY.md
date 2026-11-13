@@ -106,7 +106,11 @@ A slow or unavailable preference request does not delay rendering the connection
 solar or battery settings. The preference refresh preserves unsaved selections
 and their compare-and-set baseline. Background preference reads yield to explicit
 saves, reloads and discards. Configuration read failures remain visible
-beside the preference and retry automatically. Installation does not compare
+beside the preference and retry automatically. If an explicit preference reload
+fails, its old saved value and compare-and-set baseline become unknown. Physical
+settings remain usable. The next successful background read restores the current
+saved preference before editing is available again. Ordinary background failures
+retain existing manual drafts and their confirmed baseline. Installation does not compare
 requested, published and accepted strategies or reconstruct archived plans.
 
 ## Regression evidence
