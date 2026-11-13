@@ -499,19 +499,31 @@ function applyRange() {
         showPeriodCosts(start, planningHours ? start + planningHours * MILLISECONDS_PER_HOUR : Math.max(end, start + QUARTER_MILLISECONDS));
     }
 }
-/** Render server-owned period amounts, clearing old totals while another period is pending. */
-function renderPeriodCosts(period, scenarios, currency, message, valuation = null) {
+/** Read original full-horizon scenario amounts without revaluing any flow. */
+function originalScenarioCosts(plan) {
+    const baseline = plan.scenarios?.without_battery?.comparison, self = plan.scenarios?.self_consumption?.comparison;
+    return {
+        optimizer: {costs: baseline?.ems_costs || self?.ems_costs, benefit_vs_without_battery: baseline?.expected_savings},
+        self_consumption: {costs: self?.reference_costs, benefit_vs_without_battery: plan.scenarios?.self_consumption?.expected_savings_vs_without_battery},
+        without_battery: {costs: baseline?.reference_costs}
+    };
+}
+/** Keep successful full-plan valuations visible independently of selected-period loading or failure. */
+function renderPeriodCosts(period, scenarios, currency, message, plan = null) {
+    const valuation = plan?.projection.valuation, original = plan ? originalScenarioCosts(plan) : null;
+    const fullPeriod = period && plan && Date.parse(period.start) === plan.start && Date.parse(period.end) === plan.end;
     for (const [name, host] of [["optimizer", "ems-costs"], ["self_consumption", "self-consumption-costs"], ["without_battery", "reference-costs"]]) {
         const entry = scenarios?.[name];
         const corrected = valuation && name !== "without_battery";
-        const costs = corrected ? valuation[name === "optimizer" ? "ems_costs" : "reference_costs"] : entry?.costs;
-        renderScenarioCosts(host, costs, currency, corrected ? null : entry?.benefit_vs_without_battery, name !== "without_battery", {
-            valuation: corrected ? valuation : null,
-            originalCosts: corrected ? entry?.costs : null,
+        const correctedCosts = corrected ? valuation[name === "optimizer" ? "ems_costs" : "reference_costs"] : null;
+        const costs = corrected && fullPeriod ? correctedCosts : entry?.costs;
+        renderScenarioCosts(host, costs, currency, corrected && fullPeriod ? null : entry?.benefit_vs_without_battery, name !== "without_battery", {
+            valuation: corrected ? {costs: correctedCosts, evaluated_at: valuation.evaluated_at, period: plan.period, separate: !fullPeriod} : null,
+            originalCosts: corrected ? original[name]?.costs : null,
             basis: valuation && !corrected ? "Original contract: A corrected no-battery valuation is unavailable." : ""
         });
     }
-    const basis = valuation ? "Optimizer and self-consumption use the latest successful contract valuation. Without battery retains original contract rates." : "Battery value uses the original plan's valuation basis.";
+    const basis = !valuation ? "Battery value uses the original plan's valuation basis." : fullPeriod ? "Optimizer and self-consumption use the latest successful contract valuation. Without battery retains original contract rates." : "Original contract rates for this selected period. The full original plan valuation is shown separately.";
     for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}: ${number(period.duration_h)} hours: Expected, not measured. ${basis}` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
 }
 /** Request financial slices from their owning module. Late responses cannot replace another plan or range. */
@@ -523,22 +535,17 @@ async function showPeriodCosts(start, end) {
     periodCostKey = key;
     const request = ++periodCostRequest;
     if (start <= plan.start && end >= plan.end) {
-        const baseline = plan.scenarios?.without_battery?.comparison, self = plan.scenarios?.self_consumption?.comparison;
-        renderPeriodCosts(plan.period, {
-            optimizer: {costs: baseline?.ems_costs || self?.ems_costs, benefit_vs_without_battery: baseline?.expected_savings},
-            self_consumption: {costs: self?.reference_costs, benefit_vs_without_battery: plan.scenarios?.self_consumption?.expected_savings_vs_without_battery},
-            without_battery: {costs: baseline?.reference_costs}
-        }, plan.currency, undefined, plan.projection.valuation);
+        renderPeriodCosts(plan.period, originalScenarioCosts(plan), plan.currency, undefined, plan);
         return;
     }
-    renderPeriodCosts(null, null, plan.currency, "Loading expected costs for the selected period…");
+    renderPeriodCosts(null, null, plan.currency, "Loading expected costs for the selected period…", plan);
     try {
         const query = new URLSearchParams({start: new Date(start).toISOString(), end: new Date(end).toISOString()});
         const data = await api(`v1/plans/${encodeURIComponent(plan.id)}/comparison?${query}`, AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
         if (request !== periodCostRequest || periodCostPlan !== plan) return;
-        renderPeriodCosts(data.period, data.scenarios, plan.currency);
+        renderPeriodCosts(data.period, data.scenarios, plan.currency, undefined, plan);
         if (plan.projection.valuation) for (const caption of document.querySelectorAll(".scenario-period")) {
-            caption.textContent += " Original contract rates for this selected period. The latest successful contract valuation covers the full original plan only. ";
+            caption.append(" ");
             const link = document.createElement("a"), target = new URL(location.href);
             target.searchParams.set("plan", plan.id); link.href = target.href;
             link.textContent = "Open full original plan";
@@ -555,7 +562,7 @@ async function showPeriodCosts(start, end) {
     } catch (error) {
         if (request !== periodCostRequest || periodCostPlan !== plan) return;
         periodCostKey = "";
-        renderPeriodCosts(null, null, plan.currency, `Expected costs for the selected period are unavailable. ${error.message} Use Refresh overview to retry.`);
+        renderPeriodCosts(null, null, plan.currency, `Expected costs for the selected period are unavailable. ${error.message} Use Refresh overview to retry.`, plan);
     }
 }
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
@@ -607,11 +614,12 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit, {valuati
         name.textContent = label; amount.textContent = `${money(value)} ${currency}`;
         field.append(name, amount); parent.append(field);
     };
-    metric(totals, costs?.economic_cost == null ? "Expected costs unavailable" : "Expected economic cost", costs?.economic_cost);
+    if (valuation?.separate) totals.className = "selected-period-costs";
+    metric(totals, valuation?.separate ? "Selected period economic cost: Original contract" : costs?.economic_cost == null ? "Expected costs unavailable" : "Expected economic cost", costs?.economic_cost);
     if (showBenefit) {
         const known = typeof benefit === "number" && Number.isFinite(benefit);
         const zero = known && money(Math.abs(benefit)) === money(0);
-        metric(totals, "Expected benefit versus without battery", zero ? 0 : benefit);
+        metric(totals, valuation?.separate ? "Selected period benefit versus without battery: Original contract" : "Expected benefit versus without battery", zero ? 0 : benefit);
         totals.lastElementChild.dataset.benefitState = !known ? "unavailable" : zero ? "zero" : benefit > 0 ? "positive" : "negative";
     }
     const details = document.createElement("details"), summary = document.createElement("summary"), breakdown = document.createElement("dl");
@@ -629,7 +637,16 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit, {valuati
     const cashExplanation = document.createElement("p"), explanation = document.createElement("p");
     cashExplanation.textContent = "Net electricity cost = import cost - export income - bonus income. Amounts are rounded for display. Totals use full precision.";
     explanation.textContent = "Economic cost = net electricity cost + wear - battery value change. A positive value change reduces economic cost. Battery value change is not cash.";
-    details.append(summary, breakdown, cashExplanation, explanation);
+    details.append(summary);
+    if (valuation?.separate) {
+        const title = document.createElement("h4"); title.textContent = "Selected period: Original contract"; details.append(title);
+    }
+    details.append(breakdown, cashExplanation, explanation);
+    if (valuation?.separate) {
+        const updated = document.createElement("section"), title = document.createElement("h4"), amounts = document.createElement("dl");
+        updated.className = "valuation-costs"; title.textContent = "Latest valuation: Full original plan";
+        components(amounts, valuation.costs); updated.append(title, amounts); details.append(updated);
+    }
     if (valuation) {
         const original = document.createElement("section"), title = document.createElement("h4"), amounts = document.createElement("dl");
         original.className = "original-costs"; title.textContent = "Original expected costs";
@@ -638,14 +655,22 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit, {valuati
         original.append(title, amounts); details.append(original);
     }
     host.replaceChildren(totals, details);
+    if (valuation?.separate) {
+        const updated = document.createElement("dl"); updated.className = "contract-valuation";
+        metric(updated, "Latest expected economic cost: Full original plan", valuation.costs?.economic_cost);
+        host.prepend(updated);
+    }
     if (basis || valuation) {
         const note = document.createElement("p"); note.textContent = basis;
         if (valuation) {
+            note.className = "valuation-period";
             const calculated = document.createElement("time"); calculated.dateTime = valuation.evaluated_at;
+            calculated.className = "valuation-calculated";
             calculated.textContent = when(valuation.evaluated_at);
-            note.replaceChildren("Contract updated: Calculated ", calculated, ": Full original plan. Repricing does not re-optimize the plan. Benefit versus without battery is unavailable because a corrected no-battery valuation is unavailable.");
+            const period = valuation.period ? `From ${when(valuation.period.start)} to ${when(valuation.period.end)}: ${number(valuation.period.duration_h)} hours.` : "Period unavailable.";
+            note.replaceChildren("Contract updated: Calculated ", calculated, `: Full original plan: ${period} Repricing does not re-optimize the plan. Full-plan benefit versus without battery is unavailable because a corrected no-battery valuation is unavailable.`);
         }
-        host.insertBefore(note, details);
+        host.insertBefore(note, valuation?.separate ? totals : details);
     }
     if (!showBenefit) {
         const note = document.createElement("p"); note.textContent = "Baseline without storage"; host.append(note);

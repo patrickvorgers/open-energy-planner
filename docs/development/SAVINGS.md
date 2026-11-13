@@ -205,9 +205,12 @@ corrected effective tariffs. These are new expected valuations, not actuals or
 new optimal plans. Publish a separate success-only valuation pointer and retain
 the previous result on failure. The UI shows the original, the latest successful
 correction and any pending/failed correction independently.
-For exactly the full original horizon, the existing scenario cards default to the
-successful valuation's optimizer and self-consumption components and show its
-calculation time. Original amounts remain in the cards' disclosures. No corrected
+The existing scenario cards show the successful full-original-horizon valuation's
+optimizer and self-consumption costs by default, with its own period and
+calculation time. Shorter or remaining periods display their original-basis amounts
+alongside this whole-plan valuation. A selected-period read failure or pending
+request cannot hide the independent successful valuation. Original amounts and
+separate component groups remain in the cards' disclosures. No corrected
 without-battery valuation is supplied, so corrected costs are not compared with
 that original baseline. Period slices retain original contract and inventory
 values and link to the full original plan. No repriced slice is inferred in the UI.

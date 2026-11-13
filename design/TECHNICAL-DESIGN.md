@@ -1179,9 +1179,10 @@ The planning page shows all three scenario balances without a comparison selecto
 Chart batches skip unchanged rendered inputs and bounds. The redraw decision and renderer share the same padded-axis calculation. Native resize updates also record rendered inputs.
 
 Each graph identifies its expected economic cost, net grid cash, wear and
-inventory change. Full original horizons default to the latest successful
-optimizer and self-consumption contract valuation, with calculation time and
-original components in the cost disclosure. Period slices and without-battery
+inventory change. The latest successful full-original-horizon optimizer and
+self-consumption valuation remains visible by default with its own period and
+calculation time, independently of selected-period loading or failures. Original
+components remain in the cost disclosure. Period slices and without-battery
 costs retain their original basis. Never compare corrected costs with an original
 baseline. Self-consumption and OEP show benefit only for a comparable basis.
 Negative benefit remains negative. These are horizon
