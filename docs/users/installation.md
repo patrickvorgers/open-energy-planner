@@ -108,6 +108,8 @@ Saving requests a replacement plan. Installation shows the saved preference whil
 
 Select the area or source you want to inspect before choosing **Edit installation**. Area changes are locked while editing or saving. Changing which source is displayed does not itself change the configuration.
 
+The **Home Assistant** area shows the detected sources and **Refresh Home Assistant data**. Open **Planning strategy** or **Price sources** through the **Installation area** selector. Their shortcut buttons are shown only during the first-run wizard.
+
 After saving, check the saved summary and then **Planning**. If the setup cannot proceed, use [troubleshooting](troubleshooting.md). Developer contracts for source ownership, topology and validation remain in [Installation planning](../development/INSTALLATION-PLANNING.md) and [Energy mapping](../development/ENERGY-DASHBOARD.md).
 
 **Next:** [Contract and prices](contract.md).

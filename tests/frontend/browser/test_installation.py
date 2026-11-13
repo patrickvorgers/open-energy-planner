@@ -81,6 +81,65 @@ def _discovered_installation_devices(page, url, kind, count):
     return body
 
 
+@pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
+def test_saved_home_assistant_actions_keep_preferences_in_the_area_selector(app_page):
+    """Saving removes wizard shortcuts while refresh and both preference areas remain usable on desktop/mobile and ingress."""
+    page, url = app_page
+    page.clock.install()
+    discover(page, url)
+    ingress = "/api/hassio_ingress/" in url
+    if ingress:
+        page.reload()
+        page.get_by_role("button", name="Continue", exact=True).click()
+    else:
+        connect(page)
+    page.get_by_role("button", name="Home Assistant", exact=True).click()
+    expect(page.get_by_role("button", name="Planning strategy", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Price sources", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    grid(page)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    original = read_settings(page, url)
+
+    for reloaded in (False, True):
+        if reloaded:
+            page.reload()
+            if ingress:
+                expect(page.locator("#installation-shell")).to_be_visible()
+            else:
+                connect(page)
+        installation_area(page, -1)
+        expect(page.get_by_role("button", name="Planning strategy", exact=True)).to_be_hidden()
+        expect(page.get_by_role("button", name="Price sources", exact=True)).to_be_hidden()
+        refresh = page.get_by_role("button", name="Refresh Home Assistant data", exact=True)
+        expect(refresh).to_be_visible()
+        with page.expect_response(lambda response: response.url.endswith("/v1/setup?refresh=1")):
+            refresh.click()
+        discover(page, url)
+        page.clock.fast_forward(5100)
+        expect(page.locator("#ha-installation-state")).to_have_text("Connected")
+        installation_area(page, -1)
+        expect(refresh).to_be_enabled()
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        if not reloaded:
+            screenshots = Path("results/ci")
+            screenshots.mkdir(parents=True, exist_ok=True)
+            context = "ingress" if ingress else "standalone"
+            page.locator('[data-step="-1"]').screenshot(
+                path=str(
+                    screenshots
+                    / f"home-assistant-actions-{context}-{page.viewport_size['width']}.png"
+                ),
+            )
+        installation_area(page, 4)
+        expect(page.get_by_role("heading", name="Planning strategy", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="Edit installation", exact=True)).to_be_enabled()
+        installation_area(page, 5)
+        expect(page.locator("#price-sources")).to_be_visible()
+        assert read_settings(page, url)["installation"] == original["installation"]
+
+
 def test_grid_feed_in_permission_uses_the_persisted_export_limit(app_page):
     """Desktop/mobile save zero export, restore it on reload and require a confirmed limit when enabling again."""
     page, url = app_page
