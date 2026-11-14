@@ -72,16 +72,16 @@ def test_six_day_and_full_period_use_financial_module_and_preserve_original(app_
     page, url = app_page
     identity = open_plan(page, url)
     original = page.request.get(url + f"/v1/plans/{identity}", headers=HEADERS).json()
-    expect(page.locator('[data-hours="0"]')).to_have_text("Full period: 48 hours")
+    expect(page.locator('[data-hours="0"]')).to_have_text("Full period")
     totals = []
     for hours in (6, 24, 48):
         expected = period_response(page, url, identity, START, START + timedelta(hours=hours))
         page.locator(f'[data-hours="{0 if hours == 48 else hours}"]').click()
         assert_amounts(page, expected)
         totals.append(expected["scenarios"]["optimizer"]["costs"]["economic_cost"])
-        expect(page.locator(".scenario-period").first).to_contain_text(
-            f"{hours} hours: Expected, not measured"
-        )
+        for caption in page.locator(".scenario-period").all():
+            expect(caption).to_have_text(re.compile(r"^From .+ to .+: Expected, not measured\."))
+            expect(caption).not_to_contain_text("hours")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         for host in ("ems-costs", "self-consumption-costs", "reference-costs"):
             page.locator(f"#{host} details").evaluate("element => element.open = true")
@@ -133,18 +133,20 @@ def test_late_six_hour_response_cannot_replace_newer_day_selection(app_page):
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
 @pytest.mark.parametrize("linked", [False, True])
-def test_live_remaining_period_and_linked_original_period_are_distinct(app_page, linked):
-    """At one hour after publication the live view values 47 remaining hours, while a linked original retains all 48."""
+@pytest.mark.parametrize("elapsed_minutes", [17, 60])
+def test_live_remaining_period_and_linked_original_period_are_distinct(
+    app_page, linked, elapsed_minutes
+):
+    """Live fractional-hour and historical costs retain their actual periods behind one stable range label."""
     page, url = app_page
-    now = START + timedelta(hours=1)
+    now = START + timedelta(minutes=elapsed_minutes)
+    remaining_start = START + timedelta(minutes=elapsed_minutes // 15 * 15)
     identity = open_plan(page, url, now=now, linked=linked)
     expected = period_response(
-        page, url, identity, START if linked else now, START + timedelta(hours=48)
+        page, url, identity, START if linked else remaining_start, START + timedelta(hours=48)
     )
     assert_amounts(page, expected)
-    expect(page.locator('[data-hours="0"]')).to_have_text(
-        f"Full period: {48 if linked else 47} hours"
-    )
+    expect(page.locator('[data-hours="0"]')).to_have_text("Full period")
 
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
@@ -163,4 +165,4 @@ def test_failed_slice_and_expired_plan_never_show_previous_totals(app_page):
     page.locator('[data-hours="0"]').click()
     expect(page.locator(".scenario-period").first).to_contain_text("No planned intervals")
     expect(page.locator("#ems-costs > dl dd")).to_have_text(["- EUR", "- EUR"])
-    expect(page.locator('[data-hours="0"]')).to_have_text("Full period: 0 hours")
+    expect(page.locator('[data-hours="0"]')).to_have_text("Full period")

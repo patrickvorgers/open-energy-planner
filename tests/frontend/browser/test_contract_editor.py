@@ -156,7 +156,7 @@ def test_contract_valuation_failure_and_late_period_response_keep_correct_basis(
         expect(page.locator("#ems-costs .contract-valuation")).to_be_visible()
         expect(page.locator("#ems-costs .contract-valuation dd")).to_have_text("0.80 EUR")
     page.clock.set_fixed_time(first)
-    page.get_by_role("button", name="Full period:", exact=False).click()
+    page.get_by_role("button", name="Full period", exact=False).click()
     expect(page.locator("#ems-costs > dl dd").first).to_have_text(expected)
     for route in held:
         route.fulfill(response=route.fetch())
