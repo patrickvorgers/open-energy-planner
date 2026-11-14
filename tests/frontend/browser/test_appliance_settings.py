@@ -925,7 +925,9 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     energy = page.locator("#cycle-energy-chart").evaluate(
         "canvas => Chart.getChart(canvas).data.datasets[0].data"
     )
-    assert energy == pytest.approx([0.45, 0.02, 0.02, 0, 0.02, 0.30, 0.02, 0])
+    assert energy == pytest.approx(
+        [quarter / 3 for quarter in [0.45, 0.02, 0.02, 0, 0.02, 0.30, 0.02, 0] for _ in range(3)]
+    )
     assert sum(energy) == pytest.approx(0.83)
     power_bounds = page.locator("#cycle-chart").bounding_box()
     energy_bounds = page.locator("#cycle-energy-chart").bounding_box()
@@ -936,7 +938,7 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
         assert energy_bounds["y"] >= power_bounds["y"] + power_bounds["height"]
     assert page.evaluate("""() => {
         const chart = Chart.getChart(document.getElementById('cycle-chart'));
-        return chart.config.type === 'line' && chart.data.datasets[0].cubicInterpolationMode === 'monotone';
+        return chart.config.type === 'line' && chart.data.datasets[0].stepped === true;
     }""")
     expect(page.locator(".save-bar")).to_have_count(0)
     expect(page.get_by_label("Use in OEP", exact=True)).to_have_count(0)
@@ -946,11 +948,11 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     )
     assert (
         page.evaluate("Chart.getChart(document.getElementById('cycle-chart')).data.labels[0]")
-        == "0–15 min"
+        == "0–5 min"
     )
     assert page.evaluate(
         "Chart.getChart(document.getElementById('cycle-chart')).data.datasets[0].data"
-    ) == [1800, 80, 80, 0, 80, 1200, 80, 0]
+    ) == [power for power in [1800, 80, 80, 0, 80, 1200, 80, 0] for _ in range(3)]
     page.get_by_label("Finish before (Home Assistant time)").fill("2026-10-26T18:00")
     with page.expect_response(url + "/v1/appliances"):
         page.clock.fast_forward(10000)

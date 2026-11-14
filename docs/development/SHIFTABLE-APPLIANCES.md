@@ -166,7 +166,7 @@ published. Existing plan-validity and safe-fallback rules still apply.
 HiGHS receives immutable `ApplianceWork` records as part of `InstallationProblem`.
 Each candidate is one absolute UTC quarter-aligned start and the full consecutive
 profile. Energy is integrated across exact planning/billing overlaps. Only task
-windows are refined to quarter boundaries, including actual phase boundaries for
+windows are refined to their measured phase boundaries, including exact boundaries for
 already running work. Other coarse forecast hours remain coarse. This preserves
 heater peaks and shared grid/converter constraints, rather than diluting a peak
 over an hour. Nominal 120-step plans can therefore have additional segments.

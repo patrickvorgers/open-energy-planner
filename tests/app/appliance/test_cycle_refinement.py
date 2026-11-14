@@ -177,7 +177,10 @@ def test_observed_cycle_blocks_pending_start_without_forging_execution_feedback(
     assert restored.state["tasks"][ENTITY]["status"] == "cancelled"
 
 
-def test_observed_cycle_enters_short_term_plan_once_as_fixed_remaining_load(service):
+@pytest.mark.parametrize("attempt_status", [None, "unknown", "not_started"])
+def test_observed_cycle_enters_short_term_plan_once_as_fixed_remaining_load(
+    service, attempt_status
+):
     """The remaining half-hour consumes 1/6 kWh at its measured start, replacing the same forecast share."""
     from types import SimpleNamespace
 
@@ -188,7 +191,31 @@ def test_observed_cycle_enters_short_term_plan_once_as_fixed_remaining_load(serv
     from open_energy_planner.planning import InputSnapshot
 
     service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    if attempt_status:
+        before = NOW - timedelta(hours=1)
+        service.configure(ENTITY, True)
+        task = service.submit(ENTITY, "old-readiness", before, NOW + timedelta(hours=3), before)
+        plan = {
+            "plan_id": "old-plan",
+            "valid_until": (NOW + timedelta(hours=1)).isoformat(),
+            "appliance_schedule": [{"task_id": task["id"], "start": before.isoformat()}],
+        }
+        service.accept_plan(plan)
+        service.tick(before, True, plan)
+        attempt = service.state["tasks"][ENTITY]["attempt"]
+        if attempt_status == "unknown":
+            service.tick(NOW, True, plan)
+        else:
+            service.feedback(
+                ENTITY, task["id"], attempt["id"], "not_started", before, NOW, cancelled=True
+            )
     service.learn_history(ENTITY, POWER, running_readings(), False, NOW)
+    if attempt_status == "unknown":
+        assert service.state["tasks"][ENTITY]["attempt"]["status"] == "unknown"
+        assert service.state["tasks"][ENTITY]["events"] == []
+    elif attempt_status == "not_started":
+        assert service.state["tasks"][ENTITY]["status"] == "execution_observed"
+        assert service.state["tasks"][ENTITY]["attempt"]["status"] == "not_started"
     steps = [{"start": NOW.isoformat(), "duration_h": 1, "kwh": 0.3}]
     residual = {"issued_at": NOW.isoformat(), "steps": steps}
     forecast = {"issued_at": NOW.isoformat(), "steps": [{**steps[0], "kwh": 1 / 6}]}

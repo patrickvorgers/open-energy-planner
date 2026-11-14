@@ -99,7 +99,10 @@ def test_dishwasher_history_learning_virtual_entities_and_blueprint_reject_stale
                 return_response=True,
             )
             learned = result["appliances"]["devices"][0]["profile"]
-            assert learned["power_w"] == pytest.approx([1800, 80, 80, 0, 80, 1200, 80, 0])
+            assert learned["phase_seconds"] == 300
+            assert learned["power_w"] == pytest.approx(
+                [power for power in [1800, 80, 80, 0, 80, 1200, 80, 0] for _ in range(3)]
+            )
             assert learned["samples"] == 1 and learned["evidence"] == "synthetic"
             await hass.async_block_till_done()
             from homeassistant.helpers import entity_registry as er

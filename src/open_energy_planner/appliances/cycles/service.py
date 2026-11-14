@@ -325,7 +325,7 @@ class ApplianceService:
             task = data["tasks"].get(entity)
             observe(settings, rows, cycles, activity, power_entity, now)
             if running and task and task["status"] in OPEN_STATUSES:
-                if task.get("attempt"):
+                if task.get("attempt") and task["attempt"]["status"] != "not_started":
                     settings["observed_run"]["profile"] = deepcopy(task["profile"])
                 else:
                     task.update(status="execution_observed", scheduled_start=None, plan_id=None)
@@ -536,6 +536,8 @@ class ApplianceService:
             validate_components,
         )
 
+        from .observed import work as observed_work
+
         problem = snapshot.problem
         self.issue = None
         works, task_windows, entities = [], [], set(excluded_entities)
@@ -551,11 +553,15 @@ class ApplianceService:
             except ValueError:
                 continue
             attempt = task["attempt"]
-            fixed = (
-                instant(attempt.get("started_at") or attempt["start"])
-                if attempt and attempt["status"] != "not_started"
-                else None
+            run = self.observed(entity)
+            observed = (
+                observed_work(entity, run, now) if run and run["status"] == "observed" else None
             )
+            fixed = None
+            if attempt and attempt["status"] != "not_started":
+                fixed = instant(attempt.get("started_at") or attempt["start"])
+                if not attempt.get("started_at") and observed:
+                    fixed = observed.fixed_start
             work = ApplianceWork(
                 task["id"],
                 entity,
@@ -575,8 +581,6 @@ class ApplianceService:
                         max(starts) + timedelta(seconds=work.profile.duration_seconds),
                     )
                 )
-        from .observed import work as observed_work
-
         for entity in self.state["devices"]:
             if entity in entities:
                 continue
