@@ -513,6 +513,7 @@ class SolarRuntime:
             key == self.failed_key and self.retry_after and now < self.retry_after
         ):
             return None
+        self.issue = "solar_forecast_updating"
         return (
             key,
             self.configuration,
