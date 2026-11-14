@@ -104,6 +104,16 @@ Select **Planning strategy** in the installation area selector. The saved **Opti
 
 Saving requests a replacement plan. Installation shows the saved preference while the new plan is being calculated. A failed replacement does not rewrite the old plan or extend its validity. See [how the goals differ](how-oep-works.md#choose-the-optimization-goal).
 
+## Read the installation summary
+
+**Your installation** summarizes configured grid limits, panel capacity and usable battery storage. With batteries configured, it also shows the planning reserve as a percentage and reserved energy in kWh, plus configured charging and discharging power in kW. The wide **Optimization goal** tile shows the selected cost or consumption goal.
+
+Reserve energy is calculated separately for each battery from its usable capacity and precise configured minimum percentage, then summed. Different percentages show **Per battery** rather than a misleading common percentage. Reserved energy is a planning boundary, not the energy currently available to discharge.
+
+Battery power adds the configured limits of all batteries. These totals are not simultaneous AC power guarantees. Shared converters, inverter efficiency, grid limits, actual state of charge and other planning constraints can reduce usable power. Missing or invalid inputs remain **Not configured**, rather than contributing an invented zero or partial total.
+
+The summary follows edits and identifies unsaved configuration values. It does not save them. **Cancel** restores saved settings. Changing the optimization goal retains the existing explicit save action. These figures are configuration values, not live measurements.
+
 ## Revisit a saved installation
 
 Select the area or source you want to inspect before choosing **Edit installation**. Area changes are locked while editing or saving. Changing which source is displayed does not itself change the configuration.

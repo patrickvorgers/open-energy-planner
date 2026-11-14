@@ -75,3 +75,19 @@
 .installation-workspace [data-step="3"] a { display:inline-block; margin:12px 16px 0 0; }
 @media(max-width:1050px) { .installation-workspace .settings-layout { grid-template-columns:1fr; }.installation-workspace .settings-layout > aside { position:static; grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:700px) { .installation-workspace .workspace-main { padding-left:16px; padding-right:16px; }.installation-workspace #wizard fieldset { grid-template-columns:1fr; }.installation-workspace .settings-layout > aside { grid-template-columns:1fr; }.installation-workspace #installation-steps button { padding:8px 4px; font-size:11px; text-align:center; }.installation-workspace #installation-steps { gap:4px; margin-bottom:20px; }.installation-workspace .settings-summary > div { grid-template-columns:.9fr 1.1fr; gap:12px; }.installation-workspace .chart-card { padding:20px; } }
+
+#installation-capacities .capacity-detail { margin-top:3px; font-variant-numeric:tabular-nums; }
+#installation-capacities .capacity-power { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 6px; margin:6px 0 0; font-size:12px; }
+#installation-capacities .capacity-power dt { color:var(--oep-muted); }
+#installation-capacities .capacity-power dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+#installation-capacities .capacity-goal { grid-column:1/-1; display:grid; grid-template-columns:24px minmax(0,1fr); column-gap:12px; align-items:center; padding:14px 12px; }
+#installation-capacities .capacity-goal img { grid-row:1/3; margin:0; }
+#installation-capacities .capacity-goal small { grid-column:2; grid-row:1; margin:0; }
+#installation-capacities .capacity-goal strong { grid-column:2; grid-row:2; overflow-wrap:anywhere; }
+
+#installation-capacities { container-type:inline-size; }
+@container(max-width:240px) {
+    #installation-capacities .capacity-power { grid-template-columns:minmax(0,1fr); gap:2px; }
+    #installation-capacities .capacity-power dd { text-align:left; }
+    #installation-capacities .capacity-power dt:not(:first-child) { margin-top:4px; }
+}
