@@ -21,7 +21,14 @@ def test_benchmark_executes_each_identity_once_and_rejects_mismatched_image(tmp_
         "    assert number >= 0\n",
         encoding="utf-8",
     )
-    for variant, machines in (("baseline", 1), ("memory", 1), ("split", 2), ("cpu", 1)):
+    for variant, machines in (
+        ("baseline", 1),
+        ("memory", 1),
+        ("split", 2),
+        ("cpu", 1),
+        ("wide", 1),
+        ("split-wide", 2),
+    ):
         for machine in range(machines):
             location = tmp_path / f"{variant}-{machine}"
             location.mkdir()
@@ -78,11 +85,17 @@ def test_benchmark_executes_each_identity_once_and_rejects_mismatched_image(tmp_
         "memory": {"seconds": 10, "machine_seconds": 10, "cases": 8},
         "split": {"seconds": 5, "machine_seconds": 10, "cases": 8},
     }
-    summarize(tmp_path, cpu_only=True)
+    summarize(tmp_path, comparison="cpu")
     cpu_result = json.loads((tmp_path / "comparison.json").read_text(encoding="utf-8"))
     assert cpu_result["variants"] == {
         "memory": {"seconds": 10, "machine_seconds": 10, "cases": 8},
         "cpu": {"seconds": 10, "machine_seconds": 10, "cases": 8},
+    }
+    summarize(tmp_path, comparison="wide")
+    wide = json.loads((tmp_path / "comparison.json").read_text(encoding="utf-8"))
+    assert wide["variants"] == {
+        "wide": {"seconds": 10, "machine_seconds": 10, "cases": 8},
+        "split-wide": {"seconds": 5, "machine_seconds": 10, "cases": 8},
     }
     metadata = tmp_path / "split-1/benchmark.json"
     record = json.loads(metadata.read_text(encoding="utf-8"))

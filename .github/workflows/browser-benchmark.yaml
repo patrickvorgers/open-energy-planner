@@ -1,33 +1,42 @@
-name: Browser CPU paired benchmark
+name: CI resource allocation benchmark
 on:
   push:
     branches: [ci/browser-resource-benchmark]
-
 concurrency:
   group: browser-resource-benchmark-${{ github.ref }}
   cancel-in-progress: false
-
 permissions:
   contents: read
   actions: read
 
 jobs:
-  paired:
+  browsers:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      OEP_BENCH_EXPECTED_INVENTORY: c71c8d6dd512d8fbda677dbb90398a0dff9c9e2e981ecc3f1f66c1837b5cb339
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: wide
+            machine: 0
+          - variant: split-wide
+            machine: 0
+          - variant: split-wide
+            machine: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.14'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: benchmark-image
           run-id: 43607042861
           github-token: ${{ github.token }}
           path: .local/benchmark
-      - name: Verify the original image and preserve provenance
+      - name: Verify the original browser image
         run: |
           test "$(cat .local/benchmark/source-commit.txt)" = "1ba09a77f7fb7351e9f0961ab667a5e211d566b5"
           cd .local/benchmark
@@ -35,24 +44,169 @@ jobs:
           docker load -i image.tar
           test "$(docker image inspect --format '{{.Id}}' oep-browser-benchmark)" = "sha256:15bec8f392e57f5c4eb43b98dcda9e97cf1e50203f6509bcc19384cb960d38a4"
           cd ../..
-          mkdir -p results/ci/provenance
-          cp .local/benchmark/image.json .local/benchmark/image.sha256 .local/benchmark/source-commit.txt results/ci/provenance/
-          git rev-parse HEAD > results/ci/provenance/harness-commit.txt
-          sha256sum script/ci/browser_benchmark.py > results/ci/provenance/harness.sha256
           python -m pip install pytest==9.1.1
-      - name: Control with two workers at one CPU and two GiB each
-        run: python -m script.ci.browser_benchmark run --variant memory --directory results/ci/memory-0
-      - name: Experiment with two workers at two CPUs and two GiB each
-        if: ${{ !cancelled() }}
-        run: python -m script.ci.browser_benchmark run --variant cpu --directory results/ci/cpu-0
-      - name: Compare only complete successful executions
-        run: |
-          python -m script.ci.browser_benchmark compare-cpu --directory results/ci
-          cat results/ci/comparison.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Run the complete assigned browser selection at two CPUs and four GiB per worker
+        env:
+          VARIANT: ${{ matrix.variant }}
+          MACHINE: ${{ matrix.machine }}
+        run: python -m script.ci.browser_benchmark run --variant "$VARIANT" --machine "$MACHINE" --directory "results/ci/$VARIANT-$MACHINE"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: browser-cpu-paired
+          name: browser-wide-${{ matrix.variant }}-${{ matrix.machine }}
           path: results/ci/
+          retention-days: 2
+          if-no-files-found: error
+
+  browser-comparison:
+    needs: browsers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: browser-wide-*
+          merge-multiple: true
+          path: results/ci
+      - name: Verify identical complete browser executions
+        env:
+          OEP_BENCH_EXPECTED_INVENTORY: c71c8d6dd512d8fbda677dbb90398a0dff9c9e2e981ecc3f1f66c1837b5cb339
+        run: |
+          python -m pip install pytest==9.1.1
+          python -m script.ci.browser_benchmark compare-wide --directory results/ci
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: browser-wide-comparison
+          path: results/ci/comparison.json
+          retention-days: 2
+          if-no-files-found: error
+
+  native-and-databases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [native, databases]
+    env:
+      COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 1d08355e1ae3e9a12fa22826a878033064e496de
+          path: .local/workload
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.14'
+      - uses: ./.github/actions/shared-image-storage
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ci-prepared
+          run-id: 43516401921
+          github-token: ${{ github.token }}
+          path: .local/lane-images
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ci-image-native
+          run-id: 43516401921
+          github-token: ${{ github.token }}
+          path: .local/lane-images
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: matrix.lane == 'native'
+        with:
+          name: ci-image-ha-tests
+          run-id: 43516401921
+          github-token: ${{ github.token }}
+          path: .local/lane-images
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: matrix.lane == 'native'
+        with:
+          name: ci-image-app
+          run-id: 43516401921
+          github-token: ${{ github.token }}
+          path: .local/lane-images
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ci-reports-${{ matrix.lane }}
+          run-id: 43516401921
+          github-token: ${{ github.token }}
+          path: .local/machine-proof/${{ matrix.lane }}/original
+      - name: Verify frozen images and add identical measurement instrumentation
+        env:
+          LANE: ${{ matrix.lane }}
+        run: python -m script.ci.lane_benchmark prepare --lane "$LANE" --workload .local/workload --output .local/machine-proof/unused
+      - name: Original lane with current limits
+        env:
+          LANE: ${{ matrix.lane }}
+        run: python -m script.ci.lane_benchmark run --lane "$LANE" --workload .local/workload --output ".local/machine-proof/$LANE/control"
+      - name: Original native and HA lane with four CPU and four GiB limits
+        if: ${{ !cancelled() && matrix.lane == 'native' }}
+        run: python -m script.ci.lane_benchmark run --lane native --roomy --workload .local/workload --output .local/machine-proof/native/roomy
+      - name: Compare successful identical selections or record the already uncapped DB lane
+        env:
+          LANE: ${{ matrix.lane }}
+        run: python -m script.ci.lane_benchmark compare --output ".local/machine-proof/$LANE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: machine-resources-${{ matrix.lane }}
+          include-hidden-files: true
+          path: |
+            .local/machine-proof/
+            .local/lane-images/parallel-plan.json
+            .local/lane-images/measured-images.json
+          retention-days: 2
+          if-no-files-found: error
+
+  supervisor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 1d08355e1ae3e9a12fa22826a878033064e496de
+          path: .local/workload
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ci-reports-native
+          run-id: 43516401921
+          github-token: ${{ github.token }}
+          path: .local/machine-proof/supervisor/original
+      - name: Release unused hosted SDK storage and warm the immutable outer image build
+        run: |
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          docker compose -p oep-benchmark-prebuild -f .local/workload/compose.dev.yaml build dev
+      - name: Original complete private Supervisor acceptance with two CPUs and four GiB
+        run: python -m script.ci.lane_benchmark run --lane supervisor --workload .local/workload --output .local/machine-proof/supervisor/control
+      - name: Original complete private Supervisor acceptance with four CPUs and eight GiB
+        if: ${{ !cancelled() }}
+        run: python -m script.ci.lane_benchmark run --lane supervisor --roomy --workload .local/workload --output .local/machine-proof/supervisor/roomy
+      - name: Compare identical complete Supervisor acceptance and platform images
+        run: python -m script.ci.lane_benchmark compare --output .local/machine-proof/supervisor
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: machine-resources-supervisor
+          include-hidden-files: true
+          path: .local/machine-proof/
           retention-days: 2
           if-no-files-found: error
