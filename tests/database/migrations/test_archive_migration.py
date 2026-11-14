@@ -30,6 +30,64 @@ ROUTES = [
 ]
 
 
+def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
+    """Every backend route retains raw cycles, fine checkpoints, frozen tasks and distinct observed activity."""
+    from open_energy_planner.appliances.cycles import history
+    from open_energy_planner.appliances.cycles.service import ApplianceService
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
+    from tests.app.appliance.test_cycle_refinement import running_readings
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    consumers = ConsumerForecasts(SqlDocuments(source, "demand"))
+    consumers.sync(
+        {
+            "entities": [{"entity_id": ENTITY, "name": "Washer"}],
+            "suggestions": {
+                "consumers": [{"entity_id": ENTITY, "upstream": None, "power_entity": POWER}]
+            },
+        }
+    )
+    consumers.save([{"entity_id": ENTITY, "weather_sensitive": False}], consumers.version)
+    service = ApplianceService(SqlDocuments(source, "planning"), consumers)
+    service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    service.configure(ENTITY, True)
+    service.submit(ENTITY, "frozen-before-manual-start", NOW, NOW + timedelta(hours=4), NOW)
+    history.scan(
+        service,
+        ENTITY,
+        POWER,
+        "processing",
+        (NOW - timedelta(days=40)).isoformat(),
+        (NOW - timedelta(hours=1)).isoformat(),
+        NOW,
+        resolution="5minute",
+    )
+    service.learn_history(ENTITY, POWER, running_readings(), False, NOW)
+    expected = json.loads(json.dumps(service.document()))
+    raw = list(service.documents.iter_prefix("appliance-detected-"))
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored_consumers = ConsumerForecasts(SqlDocuments(target, "demand"))
+    # HA owns current display metadata. Rebuild it without reading the old database.
+    restored_consumers.sync(
+        {
+            "entities": [{"entity_id": ENTITY, "name": "Washer"}],
+            "suggestions": {
+                "consumers": [{"entity_id": ENTITY, "upstream": None, "power_entity": POWER}]
+            },
+        }
+    )
+    restored = ApplianceService(SqlDocuments(target, "planning"), restored_consumers)
+    assert restored.document() == expected
+    assert list(restored.documents.iter_prefix("appliance-detected-")) == raw
+    assert expected["devices"][0]["task"]["attempt"] is None
+    assert expected["devices"][0]["task"]["status"] == "execution_observed"
+    assert expected["devices"][0]["fine_import"]["phase"] == "processing"
+
+
 def test_battery_calibration_transfers_without_source_dependency(route):
     """Every backend route preserves calibration after the original database is closed."""
     from datetime import UTC, datetime

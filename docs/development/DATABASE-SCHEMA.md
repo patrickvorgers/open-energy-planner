@@ -1247,15 +1247,15 @@ HTTP actions and plan publication serialize mutations with the application lock.
 | --- | --- |
 | `appliance-state.json` | Current pointer document: `devices` keyed by Energy entity, explicit `shiftable` permission, average `profile`, optional aware ISO `finish_before` draft for HA dashboard controls. `tasks` keyed by entity containing the latest task. |
 | `appliance-state-<sha256>.json` | Immutable model/task state version for each accepted transition, excluding mutable history progress. Old versions are retained. |
-| `appliance-progress.json` | Mutable `devices` map containing each source-bound `learning_history` and `history_import` described below. Coverage and checkpoint-only refreshes do not create immutable task/model versions. Startup joins this document with the current state for the live device projection. |
+| `appliance-progress.json` | Mutable `devices` map containing each source-bound `learning_history`, `history_import` and `fine_import` described below. Coverage and checkpoint-only refreshes do not create immutable task/model versions. Startup joins this document with the current state for the live device projection. |
 | `appliance-task-<uuid>.json` | Latest durable task: ID, source entity, readiness request ID, aware `ready_at`/`deadline`, frozen average profile, task status, scheduled start, accepted plan ID, attempt and ordered evidence events. Earlier revisions remain in state archives. |
 | `appliance-request-<sha256>.json` | Exact readiness request and resulting task ID. Prevents a transport retry from creating another runnable cycle. |
 | `appliance-cycle-<sha256>.json` | Completed-cycle identity, source entity, actual start/end, fine cumulative kWh points (`at`, `kwh`) and synthetic provenance. Prevents duplicate learning or reuse with different evidence. |
 | `appliance-hourly-<sha256>.json` | Hourly estimated run identity from source entities and UTC bounds. Stores `id`, `entity_id`, `power_entity`, `started_at`, `completed_at`, original cumulative kWh `points`, `synthetic` and `quality: hourly_estimate`. Atomically committed with the hourly checkpoint. Retained separately from fine detected cycles. |
 | `appliance-detected-<sha256>.json` | Automatic cycle identity from energy/power entities and detected UTC boundaries. Stores `id`, `entity_id`, `power_entity`, `started_at`, `completed_at`, measured `energy_kwh`, `synthetic` and cumulative kWh `points`. Existing keys prevent duplicate learning. |
 
-Profiles contain `power_w` (consecutive quarter-hour mean AC W), `samples` (positive
-completed-cycle count, or one placeholder sample for manual estimates) and `evidence` (`measured`/`synthetic`/`manual`/`hourly_estimate`). Device settings may retain `manual_profile` (`duration_minutes`, `energy_kwh`), `learned_profile`, `learning_source` (Energy power entity), `last_detected_end` (UTC watermark rejecting overlapping ranges) and up to twelve `recent_cycles` summaries. The effective `profile` switches to automatic learning after two complete samples. Original manual values and detected archives remain retained. Power binding changes withdraw learned evidence and restore the manual fallback. Additional source-bound JSON fields in `devices[entity]` are:
+Profiles contain `power_w` (consecutive quarter-hour mean AC W, with a potentially partial last phase), optional `measured_duration_seconds` (positive seconds within that last phase, null or absent for legacy complete phases), `samples` (positive
+completed-cycle count, or one placeholder sample for manual estimates) and `evidence` (`measured`/`synthetic`/`manual`/`hourly_estimate`). Device settings may retain `manual_profile` (`duration_minutes`, `energy_kwh`), `learned_profile`, `learning_source` (Energy power entity), `last_detected_end` (latest accepted fine completion) and up to twelve `recent_cycles` summaries. The effective `profile` switches to automatic learning after the first complete sample. Original manual values and detected archives remain retained. Power binding changes withdraw learned evidence and restore the manual fallback. Additional source-bound JSON fields in `devices[entity]` are:
 
 | Field | Meaning and units |
 | --- | --- |
@@ -1267,6 +1267,18 @@ completed-cycle count, or one placeholder sample for manual estimates) and `evid
 | `history_import.start`, `end`, `cursor` | Aware hourly UTC initial examined boundary, target boundary and exclusive committed core checkpoint. No cursor means no bounded range yet. Failed work resumes this checkpoint. |
 | `history_import.expected_intervals`, `usable_intervals`, `detected_cycles` | Cumulative core hours examined, usable paired nonreset hourly deltas and accepted hourly cycles. Retries and read overlap never add to these totals twice. Missing hours count only toward examined hours. |
 | `history_import.last_batch` | Last committed core `start`, exclusive `end`, expected/usable interval counts and accepted cycle count, excluding detector overlap. |
+| `fine_import` | Source-bound backwards fine scan with the same phase/bounds/count fields as `history_import`. `cursor` is the earliest examined boundary, moving backwards in seven-day cores. Counts represent five-minute intervals. Empty weeks advance coverage without declaring older data absent. `fine_history_request` projects the exact next core and overlap. |
+| `profile_sources` | Selected model counts of distinct `fine_cycles` and nonoverlapping `hourly_cycles`. Fine observations supersede overlapping hourly ranges without deleting original evidence. |
+| `observed_run` | Separate measured activity with owning `power_entity`, aware `started_at`, `observed_until`, measured `energy_kwh`, frozen optional `profile` and status `observed`, `uncertain`, `idle` or `complete`. This never supplies authenticated task feedback. Recent observed activity may create fixed remaining planning work. Idle after missing evidence does not invent a completed-cycle sample. |
+
+The effective profile averages distinct cycle energy with the existing recency
+weights and uses available fine observations for timing. Raw resolution-specific
+archives remain immutable. A pending task overtaken by observed manual activity
+uses `execution_observed`, retains its original profile and has no fabricated
+attempt or events. It remains unresolved until user cancellation, preventing a
+second start after the manual run ends. Fine progress, evidence and changed
+model/task state commit in one transaction and transfer with the shared archive.
+
 
 Prefix archive reads remain namespace-bound and reuse an active transaction,
 including its uncommitted rows. Numeric measurement faults are excluded from

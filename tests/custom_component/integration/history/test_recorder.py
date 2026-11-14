@@ -477,14 +477,24 @@ def test_delayed_observations_or_appliance_history_sync_cannot_overwrite_newer_u
 
                 monkeypatch.setattr(coordinator.client, "observations", observations)
                 monkeypatch.setattr(
-                    "custom_components.open_energy_planner.appliance_history.synchronize", upload
+                    "custom_components.open_energy_planner.appliance_history.process", upload
                 )
+            if upload_stage == "appliance_history":
+                from custom_components.open_energy_planner.appliance_history import synchronize
+
+                if coordinator.appliance_history_task:
+                    await coordinator.appliance_history_task
+                await synchronize(coordinator)
             task = asyncio.create_task(coordinator.sync())
             await asyncio.wait_for(started.wait(), 5)
+            if upload_stage == "appliance_history":
+                await task
             requested = dt_util.utcnow()
             coordinator.schedule.resume(requested)
             coordinator.pending_enabled = True
             finish.set()
+            if upload_stage == "appliance_history":
+                await coordinator.appliance_history_task
             await task
             assert coordinator.schedule.enabled is True
             assert coordinator.schedule.resume_after == requested
@@ -1647,14 +1657,25 @@ def test_hourly_recorder_backlog_automatically_admits_provisional_planning_profi
             coordinator.consumer_forecasts = await coordinator.client.request(
                 "GET", "/v1/consumers"
             )
+            original_request = coordinator.client.request
+            excluded_owner = [None]
+
+            async def authoritative_membership(method, path, body=None):
+                """Project specialist ownership through the genuine API response boundary."""
+                result = await original_request(method, path, body)
+                if path == "/v1/consumers?view=settings" and excluded_owner[0]:
+                    result[excluded_owner[0]] = [entity]
+                return result
+
+            monkeypatch.setattr(coordinator.client, "request", authoritative_membership)
             for owner in ("charging_meters", "thermal_meters"):
-                coordinator.consumer_forecasts[owner] = [entity]
+                excluded_owner[0] = owner
                 await synchronize(coordinator)
                 await coordinator.appliance_history_task
                 assert (entity, power) not in coordinator.appliance_history_attempts
                 assert not reads
                 assert not (await coordinator.client.request("GET", "/v1/appliances"))["devices"]
-                coordinator.consumer_forecasts[owner] = []
+                excluded_owner[0] = None
             await synchronize(coordinator)
             await coordinator.appliance_history_task
             document = await coordinator.client.request("GET", "/v1/appliances")
@@ -1665,6 +1686,12 @@ def test_hourly_recorder_backlog_automatically_admits_provisional_planning_profi
             assert row["hourly_synthetic"] is True
             assert row["profile"]["evidence"] == "hourly_estimate"
             assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.75, abs=0.001)
+            assert row["history_import"]["phase"] == "processing"
+            # Each pass handles one week fairly. A second pass finishes this twelve-day backlog.
+            coordinator.appliance_history_attempts.clear()
+            await synchronize(coordinator)
+            await coordinator.appliance_history_task
+            row = (await coordinator.client.request("GET", "/v1/appliances"))["devices"][0]
             assert row["history_import"]["phase"] == "complete"
             assert row["history_import"]["usable_intervals"] == 6
             if fine_fault is None:
@@ -1722,6 +1749,91 @@ def test_background_appliance_scan_does_not_hold_sync_open_and_is_cancelled_on_c
             reader.assert_not_awaited()
 
     asyncio.run(scenario())
+
+
+def test_appliance_history_timer_runs_when_command_synchronization_fails(monkeypatch):
+    """A failed plan exchange cannot starve the independently registered history timer."""
+    from custom_components.open_energy_planner import appliance_history
+    from custom_components.open_energy_planner import coordinator as coordinator_module
+    from custom_components.open_energy_planner.client import AuthenticationError
+
+    callbacks = []
+    original_track = coordinator_module.async_track_time_interval
+
+    def track(hass, action, interval):
+        """Retain actual timer registration and expose the callback for a deterministic tick."""
+        callbacks.append((action, interval))
+        return original_track(hass, action, interval)
+
+    monkeypatch.setattr(coordinator_module, "async_track_time_interval", track)
+
+    async def scenario():
+        """Fire real HA time listeners after an unrelated rejected plan request, without manually starting history."""
+        async with running_chain(fixture_devices=False) as (_, entry, _, _):
+            coordinator = entry.runtime_data
+            if coordinator.appliance_history_task:
+                await coordinator.appliance_history_task
+            entered = asyncio.Event()
+
+            async def read_history(_coordinator):
+                """Observe the timer-owned worker without accessing devices or changing control state."""
+                entered.set()
+
+            async def failed_snapshot():
+                """Represent the independent command path rejecting the current connection."""
+                raise AuthenticationError("Synthetic command exchange failure")
+
+            monkeypatch.setattr(appliance_history, "process", read_history)
+            monkeypatch.setattr(coordinator.client, "snapshot", failed_snapshot)
+            await coordinator.sync()
+            assert not entered.is_set()
+            ticks = [action for action, interval in callbacks if interval == timedelta(seconds=60)]
+            assert ticks, "History owns a separate one-minute timer"
+            for action in ticks:
+                await action(dt_util.utcnow() + timedelta(seconds=61))
+            await asyncio.wait_for(entered.wait(), 5)
+            await coordinator.appliance_history_task
+            assert coordinator.issue is not None
+
+    asyncio.run(scenario())
+
+
+def test_native_appliance_sensors_keep_the_measured_partial_phase():
+    """Native HA entities show 35 minutes and 7/12 kWh, while a legacy three-quarter profile remains 45 minutes."""
+    from types import SimpleNamespace
+
+    from custom_components.open_energy_planner.appliances import ApplianceSensor, profile_duration
+
+    start = dt_util.utcnow()
+    profile = {"power_w": [1000, 1000, 1000], "measured_duration_seconds": 2100}
+    coordinator = SimpleNamespace(
+        entry=SimpleNamespace(entry_id="test-entry", data={"url": "http://127.0.0.1:8100"}),
+        appliances={
+            "devices": [
+                {
+                    "entity_id": "sensor.example_energy",
+                    "profile": profile,
+                    "task": {"scheduled_start": start.isoformat()},
+                }
+            ]
+        },
+    )
+    duration = ApplianceSensor(
+        coordinator, "sensor.example_energy", "Example washer", "cycle_duration"
+    )
+    energy = ApplianceSensor(coordinator, "sensor.example_energy", "Example washer", "cycle_energy")
+    completion = ApplianceSensor(
+        coordinator, "sensor.example_energy", "Example washer", "planned_completion"
+    )
+    assert duration.native_value == 35
+    assert energy.native_value == pytest.approx(7 / 12)
+    assert completion.native_value == start + timedelta(minutes=35)
+    profile.pop("measured_duration_seconds")
+    assert duration.native_value == 45
+    assert energy.native_value == pytest.approx(0.75)
+    for invalid in (True, float("nan"), 1800, 2701):
+        with pytest.raises(ValueError, match="Invalid measured cycle duration"):
+            profile_duration({**profile, "measured_duration_seconds": invalid})
 
 
 @pytest.mark.parametrize("fault", ["authentication", "release"])

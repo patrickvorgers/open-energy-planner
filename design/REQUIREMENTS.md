@@ -205,11 +205,18 @@ For cycle-based appliances, learn one average cycle profile per device: energy, 
 
 Reuse the Energy dashboard's device energy and optional power sensor for automatic cycle detection. Do not require manual start/end times or user detection thresholds. Missing power links point to Home Assistant Energy. Insufficient history remains explicit. A user may enter only duration and total kWh as a manual fallback. Label that estimate separately from learned measurements, retain it after learning becomes ready, and preserve the profile frozen into accepted tasks. Bootstrap test data must exercise the same detector with labelled simulated histories, not bypass it with learned profiles. See [automatic learning](../docs/development/APPLIANCE-LEARNING.md).
 
+Cycle learning runs independently of successful command and forecast exchanges.
+Recent observed manual activity can provide fixed remaining load using a frozen
+profile. Use the existing component replacement boundary to preserve household
+balance. Inferred activity must never authorize another start, confirm a task's
+physical outcome or make an unknown attempt safe to retry. Pending planned work
+intercepted by manual activity requires explicit cancellation before new readiness.
+
 Use all available paired hourly Recorder history as a separate provisional cycle
 estimate. Process the initial backlog in the background with durable bounded
 checkpoints and honest progress. Automatically admit a provisional planning
-profile after initial completion and two usable hourly runs, unless an explicit
-manual fallback or ready fine model takes precedence. Use a 90-day recency
+profile after the first usable hourly run while the backlog continues, unless an explicit
+manual fallback or ready fine model takes precedence. Use all available fine history in bounded resumable batches to refine coarse observations without counting the same run twice. Retain raw evidence beyond HA retention. The first complete fine cycle supplies usable timing including its actual partial final phase. Use a 90-day recency
 half-life for both automatic models. Keep raw counts, weights, usable coverage
 and estimated versus fine measured evidence visible per appliance. Hourly energy
 may be spread uniformly into estimated planning quarters, retaining occupied-hour

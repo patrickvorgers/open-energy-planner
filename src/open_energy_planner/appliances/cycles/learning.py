@@ -27,7 +27,7 @@ from open_energy_planner.core.units import (
 SAMPLE_SECONDS = 300
 QUIET_SAMPLES = 6
 MIN_ACTIVE_SAMPLES = 3
-MIN_COMPLETE_CYCLES = 2
+MIN_COMPLETE_CYCLES = 1
 MIN_ACTIVITY_W = 10.0
 STANDBY_MARGIN_W = 5.0
 STANDBY_QUANTILE = 0.1
@@ -138,15 +138,15 @@ def manual_profile(duration_minutes, energy_kwh):
     return CycleProfile(powers, evidence="manual")
 
 
-def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS):
+def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
     """Return complete ranges and cumulative kWh points, never fill missing samples.
 
     Each row contains the interval start, mean W, and cumulative kWh at its end.
     Five-minute rows require thirty quiet minutes on both sides and at least
     fifteen active minutes. Hourly rows conservatively round these thresholds
     to one quiet hour on each side and one active hour. Ten W or five W above
-    the observed low decile defines activity. The seven-day fine-history request
-    has one additional admission day of tolerance. Hourly history has no age cap.
+    the observed low decile defines activity. Requests are bounded by sample count,
+    not evidence age, so retained fine history remains admissible after seven days.
     Continuous loads and ambiguous long pauses are not reliable program labels.
     Numeric power/counter faults become unknown samples. They break the affected
     run without preventing later valid cycles or historical checkpoint progress.
@@ -171,9 +171,6 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS):
         if (
             at.timestamp() % sample_seconds
             or at + timedelta(seconds=sample_seconds) > now
-            or (
-                sample_seconds == SAMPLE_SECONDS and at < now - timedelta(days=MAX_HISTORY_DAYS + 1)
-            )
             or (checked and at <= checked[-1][0])
         ):
             raise ValueError("History needs ordered completed intervals at the declared resolution")
@@ -231,6 +228,30 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS):
                         ]
                         cycles.append((start, end, points))
                 start_index, active, last_active = None, 0, None
+    if (
+        activity is not None
+        and sample_seconds == SAMPLE_SECONDS
+        and start_index is not None
+        and active >= MIN_ACTIVE_SAMPLES
+        and checked
+        and now - (checked[-1][0] + timedelta(seconds=sample_seconds))
+        <= timedelta(seconds=sample_seconds)
+        and checked[-1][0] + timedelta(seconds=sample_seconds) - checked[start_index][0]
+        <= timedelta(hours=MAX_CYCLE_HOURS)
+    ):
+        activity["running"] = {
+            "started_at": checked[start_index][0].isoformat(),
+            "observed_until": (checked[-1][0] + timedelta(seconds=sample_seconds)).isoformat(),
+            "energy_kwh": checked[-1][2] - checked[start_index - 1][2],
+            "status": "observed",
+        }
+    if activity is not None and checked and sample_seconds == SAMPLE_SECONDS:
+        activity["quiet"] = (
+            quiet >= QUIET_SAMPLES
+            and start_index is None
+            and now - (checked[-1][0] + timedelta(seconds=sample_seconds))
+            <= timedelta(seconds=sample_seconds)
+        )
     return cycles
 
 

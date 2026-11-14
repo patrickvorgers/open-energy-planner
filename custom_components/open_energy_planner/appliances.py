@@ -38,10 +38,40 @@ TASK_STATUSES = (
     "requested",
     "start_not_confirmed",
     "running",
+    "execution_observed",
     "completed",
     "deadline_not_achievable",
     "forecast_not_ready",
 )
+
+
+def profile_duration(profile):
+    """Validate optional measured timing while retaining legacy complete quarter-hour phases."""
+    full = len(profile["power_w"]) * PROFILE_INTERVAL_HOURS * 3600
+    measured = profile.get("measured_duration_seconds")
+    if measured is None:
+        return full
+    if (
+        type(measured) not in (int, float)
+        or not isfinite(measured)
+        or not full - PROFILE_INTERVAL_HOURS * 3600 < measured <= full
+    ):
+        raise ValueError("Invalid measured cycle duration")
+    return measured
+
+
+def profile_energy(profile):
+    """Integrate the admitted final partial phase for the read-only cycle-energy sensor."""
+    duration = profile_duration(profile)
+    return (
+        sum(
+            power
+            * min(PROFILE_INTERVAL_HOURS * 3600, duration - index * PROFILE_INTERVAL_HOURS * 3600)
+            for index, power in enumerate(profile["power_w"])
+        )
+        / 3600
+        / WATTS_PER_KILOWATT
+    )
 
 
 def consumer_identity(entity):
@@ -266,6 +296,8 @@ def receive(coordinator, value):
             )
         ):
             raise ValueError("Invalid average cycle profile")
+        if learned:
+            profile_duration(learned)
         if row.get("finish_date") is not None:
             date.fromisoformat(row["finish_date"])
         if (
@@ -297,6 +329,8 @@ def receive(coordinator, value):
                 )
             ):
                 raise ValueError("Invalid accepted cycle profile")
+            if frozen_profile:
+                profile_duration(frozen_profile)
             timestamp(task["deadline"])
             if task.get("scheduled_start"):
                 timestamp(task["scheduled_start"])
@@ -466,11 +500,10 @@ class ApplianceSensor(ConsumerSensor):
             return timestamp(task["scheduled_start"]) if task.get("scheduled_start") else None
         learned = task.get("profile") or row.get("profile")
         if self.key == "cycle_duration":
-            return len(learned["power_w"]) * PROFILE_INTERVAL_HOURS * 60 if learned else None
+            return profile_duration(learned) / 60 if learned else None
         if self.key == "planned_completion":
             return (
-                timestamp(task["scheduled_start"])
-                + timedelta(hours=len(learned["power_w"]) * PROFILE_INTERVAL_HOURS)
+                timestamp(task["scheduled_start"]) + timedelta(seconds=profile_duration(learned))
                 if learned and task.get("scheduled_start")
                 else None
             )
@@ -483,13 +516,7 @@ class ApplianceSensor(ConsumerSensor):
                 and self.coordinator.projection.command is not None
                 else "idle"
             )
-        return (
-            sum((row.get("profile") or {}).get("power_w", []))
-            * PROFILE_INTERVAL_HOURS
-            / WATTS_PER_KILOWATT
-            if row.get("profile")
-            else None
-        )
+        return profile_energy(row["profile"]) if row.get("profile") else None
 
     @property
     def extra_state_attributes(self):

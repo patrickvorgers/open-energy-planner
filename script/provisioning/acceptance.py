@@ -15,9 +15,9 @@ def verify_device_examples(app_request, states):
         device = devices[f"sensor.oep_test_{name}_energy"]
         assert device["shiftable"] and not device.get("task")
         profile = device["profile"]
-        assert profile["evidence"] == ("manual" if name == "dryer" else "synthetic")
+        assert profile["evidence"] == "synthetic"
         assert profile["samples"] == (1 if name == "dryer" else 2)
-        assert device["profile_kind"] == ("Manual" if name == "dryer" else "Learned")
+        assert device["profile_kind"] == "Learned"
         assert len(device["recent_cycles"]) == (1 if name == "dryer" else 2)
         assert len(profile["power_w"]) == quarter_hour_count
         assert abs(sum(profile["power_w"]) / 4000 - energy_kwh) < 0.000001

@@ -25,6 +25,7 @@ def appliance_schedule(plan, *, immediate=False):
             tuple(work["profile"]["power_w"]),
             work["profile"]["samples"],
             work["profile"]["evidence"],
+            work["profile"].get("measured_duration_seconds"),
         )
         start = (
             datetime.fromisoformat(work["fixed_start"])

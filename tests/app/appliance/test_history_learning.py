@@ -192,8 +192,8 @@ def test_checkpoint_restart_overlap_and_empty_hours_never_duplicate_coverage(ser
     first = deepcopy(service.state)
     assert service.document()["devices"][0]["history_import"]["cursor"] == pending["end"]
     assert service.document()["devices"][0]["hourly_profile"]["samples"] == 1
-    assert "profile" not in service.document()["devices"][0]
-    assert service.revision == revision
+    assert service.document()["devices"][0]["profile"]["samples"] == 1
+    assert service.revision != revision
     history.batch(service, ENTITY, POWER, [], False, **pending, now=NOW)
     assert service.state == first
     restored = ApplianceService(service.documents, service.consumers)

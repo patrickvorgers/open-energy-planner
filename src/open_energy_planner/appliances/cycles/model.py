@@ -34,6 +34,7 @@ class CycleProfile:
     power_w: tuple[float, ...]
     samples: int = 1
     evidence: str = "measured"
+    measured_duration_seconds: float | None = None
 
     def __post_init__(self):
         """Require finite measured nonnegative phases, including legitimate zero-power pauses."""
@@ -49,6 +50,16 @@ class CycleProfile:
                 or not 0 <= power <= MAX_CYCLE_POWER_W
                 for power in self.power_w
             )
+            or (
+                self.measured_duration_seconds is not None
+                and (
+                    type(self.measured_duration_seconds) not in (int, float)
+                    or not isfinite(self.measured_duration_seconds)
+                    or not (len(self.power_w) - 1) * PROFILE_STEP_SECONDS
+                    < self.measured_duration_seconds
+                    <= len(self.power_w) * PROFILE_STEP_SECONDS
+                )
+            )
             or sum(self.power_w) <= 0
         ):
             raise ValueError("A complete measured cycle profile is required")
@@ -56,19 +67,30 @@ class CycleProfile:
     @property
     def duration_seconds(self):
         """Return the conservative complete profile duration in seconds."""
-        return len(self.power_w) * PROFILE_STEP_SECONDS
+        return self.measured_duration_seconds or len(self.power_w) * PROFILE_STEP_SECONDS
 
     @property
     def energy_kwh(self):
         """Return the whole-cycle AC energy, including partial-power phases."""
-        return sum(self.power_w) * PROFILE_STEP_SECONDS / SECONDS_PER_HOUR / WATTS_PER_KW
+        return (
+            sum(
+                power
+                * min(PROFILE_STEP_SECONDS, self.duration_seconds - index * PROFILE_STEP_SECONDS)
+                for index, power in enumerate(self.power_w)
+            )
+            / SECONDS_PER_HOUR
+            / WATTS_PER_KW
+        )
 
     def energy(self, started_at, left, right):
         """Integrate phase overlaps exactly, including mixed planning intervals and remaining work."""
         energy = 0.0
         for index, power in enumerate(self.power_w):
             start = started_at + timedelta(seconds=index * PROFILE_STEP_SECONDS)
-            end = start + timedelta(seconds=PROFILE_STEP_SECONDS)
+            end = min(
+                start + timedelta(seconds=PROFILE_STEP_SECONDS),
+                started_at + timedelta(seconds=self.duration_seconds),
+            )
             overlap = max(0, (min(end, right) - max(start, left)).total_seconds())
             energy += power * overlap / SECONDS_PER_HOUR / WATTS_PER_KW
         return energy
@@ -136,12 +158,18 @@ def average_profiles(previous, learned, *, previous_weight=None):
     weight = previous.samples if previous_weight is None else previous_weight
     if type(weight) not in (int, float) or not isfinite(weight) or weight < 0:
         raise ValueError("Invalid retained cycle weight")
+    duration = max(previous.duration_seconds, learned.duration_seconds)
     powers = tuple(
-        (
-            (previous.power_w[index] if index < len(previous.power_w) else 0) * weight
-            + (learned.power_w[index] if index < len(learned.power_w) else 0)
+        sum(
+            (item.power_w[index] if index < len(item.power_w) else 0)
+            * max(
+                0, min(PROFILE_STEP_SECONDS, item.duration_seconds - index * PROFILE_STEP_SECONDS)
+            )
+            * item_weight
+            for item, item_weight in ((previous, weight), (learned, 1))
         )
         / (weight + 1)
+        / min(PROFILE_STEP_SECONDS, duration - index * PROFILE_STEP_SECONDS)
         for index in range(max(len(previous.power_w), len(learned.power_w)))
     )
     return CycleProfile(
@@ -152,6 +180,7 @@ def average_profiles(previous, learned, *, previous_weight=None):
         else "synthetic"
         if "synthetic" in (previous.evidence, learned.evidence)
         else "measured",
+        duration if duration % PROFILE_STEP_SECONDS else None,
     )
 
 
@@ -193,7 +222,14 @@ def learn_cycle(points, started_at, completed_at, *, synthetic=False):
     while start < completed_at:
         end = min(completed_at, start + timedelta(seconds=PROFILE_STEP_SECONDS))
         powers.append(
-            (counter(end) - counter(start)) * WATTS_PER_KW * SECONDS_PER_HOUR / PROFILE_STEP_SECONDS
+            (counter(end) - counter(start))
+            * WATTS_PER_KW
+            * SECONDS_PER_HOUR
+            / (end - start).total_seconds()
         )
         start = end
-    return CycleProfile(tuple(powers), evidence="synthetic" if synthetic else "measured")
+    return CycleProfile(
+        tuple(powers),
+        evidence="synthetic" if synthetic else "measured",
+        measured_duration_seconds=duration if duration % PROFILE_STEP_SECONDS else None,
+    )

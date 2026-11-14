@@ -8,23 +8,23 @@ from script.provisioning.acceptance import verify_device_examples
 
 
 def expected_examples():
-    """Specify independent learned/manual profile and blueprint outputs for the shipped examples."""
+    """Specify independent learned profile and blueprint outputs for the shipped examples."""
     devices = []
     for name, quarter_hour_count, energy_kwh in (
         ("dishwasher", 7, 0.83),
         ("washing_machine", 9, 0.92),
         ("dryer", 12, 1.4),
     ):
-        manual = name == "dryer"
+        single_cycle = name == "dryer"
         devices.append(
             {
                 "entity_id": "sensor.oep_test_" + name + "_energy",
                 "shiftable": True,
-                "profile_kind": "Manual" if manual else "Learned",
-                "recent_cycles": ["cycle"] * (1 if manual else 2),
+                "profile_kind": "Learned",
+                "recent_cycles": ["cycle"] * (1 if single_cycle else 2),
                 "profile": {
-                    "evidence": "manual" if manual else "synthetic",
-                    "samples": 1 if manual else 2,
+                    "evidence": "synthetic",
+                    "samples": 1 if single_cycle else 2,
                     "power_w": [energy_kwh * 4000 / quarter_hour_count] * quarter_hour_count,
                 },
             }

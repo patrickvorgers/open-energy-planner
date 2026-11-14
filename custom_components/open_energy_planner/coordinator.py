@@ -63,6 +63,7 @@ class PlanCoordinator:
         self.appliances = {}
         self.appliance_history_attempts = {}
         self.appliance_history_task = None
+        self.appliance_history_cancel = None
         self.solar_feedback_task = None
         self.solar_feedback_attempts = {}
         self.solar_feedback_reads = {}
@@ -931,10 +932,7 @@ class PlanCoordinator:
                         )
                     self.issue = None
                     self.notification_message = None
-                from .appliance_history import synchronize as synchronize_appliance_history
-
                 self.refresh()
-                await synchronize_appliance_history(self)
                 from .solar_feedback import synchronize as synchronize_solar_feedback
 
                 await synchronize_solar_feedback(self, data)
@@ -1044,6 +1042,16 @@ class PlanCoordinator:
             self.startup_cancel = self.hass.bus.async_listen_once(
                 EVENT_HOMEASSISTANT_STARTED, started
             )
+        from .appliance_history import RETRY_SECONDS, synchronize
+
+        async def refresh_history(now):
+            """Refresh learning independently from forecast and physical command exchanges."""
+            await synchronize(self, now)
+
+        self.appliance_history_cancel = async_track_time_interval(
+            self.hass, refresh_history, timedelta(seconds=RETRY_SECONDS)
+        )
+        self.hass.async_create_background_task(synchronize(self), "OEP appliance history startup")
         self.poll_cancel = async_track_time_interval(
             self.hass, self.sync, timedelta(seconds=POLL_INTERVAL_SECONDS)
         )
@@ -1063,6 +1071,8 @@ class PlanCoordinator:
         for task in pending_feedback_reads:
             task.cancel()
         await asyncio.gather(*pending_feedback_reads, return_exceptions=True)
+        if self.appliance_history_cancel:
+            self.appliance_history_cancel()
         if self.appliance_history_task:
             self.appliance_history_task.cancel()
             try:

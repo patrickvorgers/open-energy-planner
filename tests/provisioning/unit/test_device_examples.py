@@ -158,11 +158,9 @@ class ProductBoundary:
             start, end, points = cycles[0]
             learned = learn_cycle(points, start, end, synthetic=body["synthetic"])
             row = self.devices[body["entity_id"]]
-            if len(cycles) == 1:
-                return {"accepted": True}
             row["profile"] = {
                 "power_w": learned.power_w,
-                "samples": 2,
+                "samples": len(cycles),
                 "evidence": learned.evidence,
             }
         elif path == "/v1/appliances/manual_profile":
@@ -307,7 +305,7 @@ def test_first_start_configures_all_device_types_without_submitting_tasks(tmp_pa
         assert len(row["profile"]["power_w"]) == duration
         assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(energy)
         assert row["profile"]["samples"] == (1 if name == "dryer" else 2)
-        assert row["profile"]["evidence"] == ("manual" if name == "dryer" else "synthetic")
+        assert row["profile"]["evidence"] == "synthetic"
     assert next(row for row in boundary.selected if "heat_pump" in row["entity_id"])[
         "weather_sensitive"
     ]

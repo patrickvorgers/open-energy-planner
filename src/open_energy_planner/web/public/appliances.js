@@ -1,7 +1,7 @@
 import "./chart_theme.js";
 import {confirmAction} from "./confirmation.js";
 import {money, percentage, when, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
-import {PROFILE_MINUTES, WATT_PHASES_PER_KWH, profileMetrics} from "./appliance-profile.js";
+import {PROFILE_MINUTES, profileMetrics} from "./appliance-profile.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {identity} from "./identity.js";
 import {pollApplianceEvidence} from "./appliance-evidence.js";
@@ -33,20 +33,20 @@ function node(tag, text) { const item = document.createElement(tag); if (text !=
 function profile() {
     if (!current.devices.length) { chart?.destroy(); energyChart?.destroy(); chart = energyChart = renderedProfile = null; return; }
     const device = current.devices.find((item) => item.entity_id === find("profile-device").value), learned = device?.profile;
-    const powers = learned?.power_w || [], labels = powers.map((_, index) => `${index * PROFILE_MINUTES}–${(index + 1) * PROFILE_MINUTES} min`);
+    const powers = learned?.power_w || [], labels = powers.map((_, index) => `${index * PROFILE_MINUTES}–${Math.min((index + 1) * PROFILE_MINUTES, profileMetrics(learned).minutes)} min`);
     const profileKey = JSON.stringify([device?.entity_id, learned]);
     find("cycle-charts").hidden = !learned;
     if (profileKey !== renderedProfile) {
         chart?.destroy(); energyChart?.destroy(); chart = energyChart = null;
         if (learned) {
             chart = new Chart(find("cycle-chart"), {type: "line", data: {labels, datasets: [{label: "Power (W)", data: powers, backgroundColor: "#e69f00", borderColor: "#e69f00", cubicInterpolationMode: "monotone", pointRadius: 2, fill: false}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: "AC power (W)"}}}}});
-            energyChart = new Chart(find("cycle-energy-chart"), {type: "bar", data: {labels, datasets: [{label: "Energy (kWh)", data: powers.map(power => power / WATT_PHASES_PER_KWH), backgroundColor: "#e69f00"}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per quarter-hour (kWh)"}}}}});
+            energyChart = new Chart(find("cycle-energy-chart"), {type: "bar", data: {labels, datasets: [{label: "Energy (kWh)", data: profileMetrics(learned).phaseEnergy, backgroundColor: "#e69f00"}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per phase (kWh)"}}}}});
         }
         renderedProfile = profileKey;
     }
     find("profile-evidence").textContent = learned ? (learned.evidence === "hourly_estimate" ? `Profile: Historical estimate: Estimated cycles: ${learned.samples}: Energy: ${profileMetrics(learned).energyKwh.toFixed(2)} kWh: Cycle time: ${profileMetrics(learned).minutes} minutes: Provisional hourly shape${device.hourly_synthetic ? ": Simulated data" : ""}.` : `Profile: ${learned.evidence === "manual" ? "Manual estimate" : "Learned"}: Completed cycles: ${learned.evidence === "manual" ? 0 : learned.samples}: Evidence: ${optionLabel(learned.evidence)}: Energy: ${(profileMetrics(learned).energyKwh).toFixed(2)} kWh: Cycle time: ${profileMetrics(learned).minutes} minutes: Zero-power phases remain part of the cycle.`) : "Profile not ready. Wait for automatic learning or enter duration and energy in Appliances settings.";
     const history = find("profile-history"); history.replaceChildren();
-    history.append(node("h3", "Detected fine cycles"));
+    history.append(node("h3", "Detected cycles"));
     if (!device?.recent_cycles?.length) history.append(node("p", "No completed measured cycles available."));
     else {
         const list = node("ul");
@@ -56,7 +56,7 @@ function profile() {
         }
         history.append(list);
     }
-    if (device?.learning_half_life_days) history.append(node("p", `Recency weighting: ${device.learning_half_life_days}-day half-life. A cycle ${device.learning_half_life_days} days older has half the weight. Fine and hourly models stay separate.`));
+    if (device?.learning_half_life_days) history.append(node("p", `Recency weighting: ${device.learning_half_life_days}-day half-life. A cycle ${device.learning_half_life_days} days older has half the weight. Fine timing refines hourly evidence. Each detected run counts once.`));
     if (device?.hourly_synthetic) history.append(node("p", "Hourly evidence: Simulated data"));
     const evidenceCard = node("div"), facts = node("dl"); evidenceCard.className = "evidence-card";
     evidenceCard.append(node("h4", "Model and usable history"), facts);
@@ -69,6 +69,11 @@ function profile() {
         addFact("Usable fine intervals", `${recent.usable_intervals} of ${recent.expected_intervals}: ${percentage(recent.expected_intervals ? 100 * recent.usable_intervals / recent.expected_intervals : null)}`);
     }
     history.append(evidenceCard);
+    if (learned && learned.evidence !== "manual" && learned.samples === 1) history.append(node("p", "Provisional profile: One complete cycle. Further cycles refine this estimate."));
+    const run = device?.observed_run;
+    if (run && !["complete", "idle"].includes(run.status)) history.append(node("p", `Measured activity: ${run.status === "observed" ? "Cycle in progress" : "Execution uncertain"}: Started ${when(run.started_at)}: ${money(run.energy_kwh)} kWh measured. Pending starts are blocked. This is separate from execution confirmation.`));
+    const fine = device?.fine_import;
+    if (fine) history.append(node("p", `Fine history: ${optionLabel(fine.phase)}${fine.cursor ? `: Examined back to ${when(fine.cursor)}` : ""}`));
     const scan = device?.history_import, status = node("p"); status.setAttribute("role", "status");
     const phases = {discovering: "Discovering available hourly history…", processing: "Processing hourly history", complete: "Historical scan complete", unavailable: "No paired hourly energy and power history available", failed: "History processing interrupted. Retained progress will resume automatically"};
     status.textContent = `Historical learning: ${phases[scan?.phase] || (device?.power_entity ? "Waiting for background processing" : "Power sensor required")}`;
@@ -82,7 +87,7 @@ function profile() {
         }
         if (scan.expected_intervals) history.append(node("p", `Usable hourly intervals: ${scan.usable_intervals} of ${scan.expected_intervals}: ${percentage(100 * scan.usable_intervals / scan.expected_intervals)}`));
     }
-    if (learned?.evidence === "hourly_estimate") history.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. Two complete fine cycles replace this estimate automatically."));
+    if (learned?.evidence === "hourly_estimate") history.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. The first complete fine cycle refines this estimate automatically."));
 }
 /** Limit profile inspection to followed cycle devices, including those still scanning without a profile or shift permission. */
 function followedDevices(data) {

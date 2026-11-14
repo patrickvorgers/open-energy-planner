@@ -50,7 +50,7 @@ function settings(consumers, specializedMeters, devices) {
         };
         card.append(node("h3", "Energy source"), node("p", "Provided by Home Assistant Energy."), node("code", device.entity_id));
         card.append(node("h3", "Power source"), device.power_entity ? node("code", device.power_entity) : node("p", "Automatic cycle learning requires a power sensor. Configure device power consumption in Home Assistant Energy."));
-        card.append(node("h3", "Manual cycle profile"), node("p", "Optional fallback until two complete cycles are detected. Energy is spread evenly over the duration. The estimate stays saved when a learned profile becomes available."));
+        card.append(node("h3", "Manual cycle profile"), node("p", "Optional fallback until the first complete cycle is detected. Energy is spread evenly over the duration. The estimate stays saved when a learned profile becomes available."));
         const duration = node("input"), energy = node("input");
         duration.type = energy.type = "number"; duration.min = "15"; duration.max = "720"; duration.step = "1"; energy.min = "0.001"; energy.step = "any";
         duration.value = appliance?.manual_profile?.duration_minutes ?? ""; energy.value = appliance?.manual_profile?.energy_kwh ?? "";
@@ -143,7 +143,7 @@ function showEvidence() {
         for (const [label, value] of [["Average cycle", `${money(metrics.energyKwh)} kWh`], ["Cycle time", `${metrics.minutes} minutes`], ["Cycles in profile", String(profile.evidence === "manual" ? 0 : profile.samples)]]) { const fact = node("div"); fact.append(node("dt", label), node("dd", value)); facts.append(fact); }
         evidence.append(facts, node("small", "Planning profile: Not a measured run today."));
     } else evidence.textContent = "No profile available yet. Use the appliance normally or enter duration and energy to start planning.";
-    evidence.append(node("p", selected?.device.power_entity ? (appliance?.learning_status === "ready" ? "Automatic learning: Ready" : appliance?.learning_status === "provisional" ? "Automatic learning: Provisional hourly profile: Collecting fine cycles" : "Automatic learning: Waiting for sufficient power history and two complete cycles") : "Automatic learning: Power sensor missing in Home Assistant Energy"));
+    evidence.append(node("p", selected?.device.power_entity ? (appliance?.learning_status === "ready" ? "Automatic learning: Ready" : appliance?.learning_status === "provisional" ? "Automatic learning: Provisional hourly profile: Collecting fine cycles" : "Automatic learning: Waiting for sufficient power history and one complete cycle") : "Automatic learning: Power sensor missing in Home Assistant Energy"));
     syncEditor();
 }
 /** Poll evidence only, retaining previous evidence on failure and the version protecting an unsaved draft. */

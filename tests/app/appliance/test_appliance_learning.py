@@ -82,7 +82,7 @@ def test_manual_fallback_survives_learning_and_accepted_tasks_stay_frozen(servic
     """A .8-kWh, 100-minute estimate survives two detected cycles and cannot change an accepted task."""
     service.set_manual_profile(ENTITY, 100, 0.8, service.revision)
     assert sum(service.state["devices"][ENTITY]["profile"]["power_w"]) / 4000 == pytest.approx(0.8)
-    service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    service.learn_history(ENTITY, POWER, readings(cycles=1)[:20], False, NOW)
     assert service.document()["devices"][0]["profile_kind"] == "Manual"
     service.configure(ENTITY, True)
     task = service.submit(ENTITY, "ready", NOW, NOW + timedelta(hours=4), NOW)
