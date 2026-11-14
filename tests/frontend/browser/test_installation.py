@@ -304,6 +304,54 @@ def test_installation_summary_keeps_unknown_goal_and_configuration_unavailable(a
     )
 
 
+def test_installation_summary_rejects_partial_solar_total_after_last_panel_removal(app_page):
+    """A meter with no remaining panel group makes both totals unknown and cannot change saved geometry."""
+    page, url = app_page
+    _discovered_installation_devices(page, url, "solar", 2)
+    connect(page)
+    grid(page)
+    for index, capacity in enumerate(("3", "5")):
+        page.locator("#installation-solar").select_option(str(index))
+        source = page.locator("#solar-rows > fieldset").nth(index)
+        source.get_by_label("Panel capacity (kWp)", exact=True).fill(capacity)
+        source.get_by_label("Inverter AC rating (kW)", exact=True).fill(capacity)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    original = read_settings(page, url)
+    capacity = (
+        page.locator("#installation-capacities")
+        .get_by_role("group", name="Panel capacity summary", exact=True)
+        .locator("strong")
+    )
+    expect(capacity).to_have_text("8 kWp")
+    installation_area(page, 1, edit=True)
+    page.locator("#installation-solar").select_option("1")
+    source = page.locator("#solar-rows > fieldset").nth(1)
+    source.get_by_role("button", name="Remove panel group", exact=True).click()
+    expect(source.locator(".solar-panel")).to_have_count(0)
+    complete_source = page.locator("#solar-rows > fieldset").first
+    expect(complete_source.get_by_label("Panel capacity (kWp)", exact=True)).to_have_value("3")
+    assert (capacity.inner_text(), page.locator("#review-solar").inner_text()) == (
+        "Not configured",
+        "2 sources: Not configured",
+    )
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#status")).to_contain_text(
+        "Add at least one panel group for this production meter"
+    )
+    assert read_settings(page, url)["solar"] == original["solar"]
+    assert read_settings(page, url)["installation"] == original["installation"]
+    source.get_by_role("button", name="Add panel group", exact=True).click()
+    source.get_by_label("Panel capacity (kWp)", exact=True).fill("5")
+    source.get_by_label("Tilt (°)", exact=True).fill("35")
+    source.get_by_label("Azimuth (° clockwise from north)", exact=True).fill("180")
+    expect(capacity).to_have_text("8 kWp")
+    expect(page.locator("#review-solar")).to_have_text("2 sources: 8 kWp")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    assert read_settings(page, url)["solar"] == original["solar"]
+    assert read_settings(page, url)["installation"] == original["installation"]
+
+
 def test_grid_feed_in_permission_uses_the_persisted_export_limit(app_page):
     """Desktop/mobile save zero export, restore it on reload and require a confirmed limit when enabling again."""
     page, url = app_page

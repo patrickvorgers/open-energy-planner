@@ -284,10 +284,10 @@ export class InstallationLayout {
         const numeric = input => input && input.value !== "" && input.validity.valid && Number.isFinite(inputNumber(input)) ? inputNumber(input) : null;
         const total = values => values.length && values.every(value => value !== null) ? values.reduce((sum, value) => sum + value, 0) : null;
         const quantity = (value, unit) => value == null ? "Not configured" : `${number(value)} ${unit}`;
-        const solar = [...find("solar-rows").querySelectorAll('[data-key="capacity"],[data-key="panel_capacity"]')];
+        const solarCapacities = [...find("solar-rows").children].map(source => total([...source.querySelectorAll('[data-key="capacity"],[data-key="panel_capacity"]')].map(numeric)));
         const batteryRows = [...find("battery-rows").children];
         const batteryValues = key => batteryRows.map(row => numeric(row.querySelector(`[data-key="${key}"]`)));
-        const solarCapacity = total(solar.map(numeric)), batteryCapacity = total(batteryValues("capacity_kwh"));
+        const solarCapacity = total(solarCapacities), batteryCapacity = total(batteryValues("capacity_kwh"));
         const facts = [["home", "Grid import limit", quantity(numeric(find("import")), "kW")], ["home", "Grid export limit", quantity(numeric(find("export")), "kW")], ["solar", "Panel capacity", quantity(solarCapacity, "kWp")], ["battery", "Usable storage", quantity(batteryCapacity, "kWh")]];
         find("review-connection").textContent = `${number(numeric(find("import")))} kW import: ${number(numeric(find("export")))} kW export`;
         find("review-solar").textContent = `${find("solar-rows").children.length} sources: ${quantity(solarCapacity, "kWp")}`;
