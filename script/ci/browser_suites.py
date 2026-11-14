@@ -4,8 +4,20 @@ import json
 from pathlib import Path
 from xml.etree import ElementTree
 
-BROWSER_WORKERS = 2
+BROWSER_MACHINES = 2
+BROWSER_WORKERS_PER_MACHINE = 2
+BROWSER_WORKERS = BROWSER_MACHINES * BROWSER_WORKERS_PER_MACHINE
 NODE_PROPERTY = "oep_nodeid"
+
+
+def machine_workers(machine=None):
+    """Return all worker identities locally or one hosted machine's fixed disjoint pair."""
+    if machine is None:
+        return tuple(range(BROWSER_WORKERS))
+    if type(machine) is not int or machine not in range(BROWSER_MACHINES):
+        raise ValueError("Invalid browser machine")
+    first = machine * BROWSER_WORKERS_PER_MACHINE
+    return tuple(range(first, first + BROWSER_WORKERS_PER_MACHINE))
 
 
 def partition(identifiers, worker):
@@ -25,11 +37,14 @@ def worker_directory(directory, worker):
     return Path(directory) / f"browser-{worker}"
 
 
-def collections(directory):
-    """Reject inconsistent inventories, missing workers and omitted or duplicated selected tests."""
+def collections(directory, *, machine=None):
+    """Verify all worker inventories or one hosted machine's assigned pair.
+
+    Whole-suite completion omits the machine argument and requires every worker.
+    """
     records = []
     try:
-        for worker in range(BROWSER_WORKERS):
+        for worker in machine_workers(machine):
             record = json.loads(
                 (worker_directory(directory, worker) / "browser-collected.json").read_text(
                     encoding="utf-8"
@@ -72,12 +87,15 @@ def case_identities(document):
     return identifiers
 
 
-def execution_reports(directory, *, combined=False):
-    """Bind every passing worker case to its preflight inventory before completion or reuse."""
-    records = collections(directory)
+def execution_reports(directory, *, combined=False, machine=None):
+    """Bind passing cases to their inventories, requiring all machines for canonical evidence."""
+    if combined and machine is not None:
+        raise ValueError("Canonical browser evidence requires every machine")
+    records = collections(directory, machine=machine)
     documents = []
     try:
-        for worker, collected in enumerate(records):
+        for collected in records:
+            worker = collected["worker"]
             location = worker_directory(directory, worker)
             executed = json.loads((location / "browser-executed.json").read_text(encoding="utf-8"))
             if (
@@ -109,7 +127,7 @@ def execution_reports(directory, *, combined=False):
 
 
 def combine_reports(directory):
-    """Publish the existing canonical browser report only after both complete workers pass."""
+    """Publish the canonical browser report only after every machine's complete workers pass."""
     documents = execution_reports(directory)
     combined = ElementTree.Element("testsuites")
     for document in documents:

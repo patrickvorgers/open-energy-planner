@@ -1044,13 +1044,13 @@ job executes the immutable base policy, records collection inventories and build
 only the selected test images. Scope labels continue to describe that decision.
 Labels do not override the policy or directly choose workloads.
 
-The resulting required suites are partitioned across at most four GitHub-hosted
+The resulting required suites are partitioned across at most five GitHub-hosted
 Ubuntu machines. A machine is omitted when none of its suites is selected.
 
 | Machine | Assigned work |
 | --- | --- |
 | Native and HA | Documentation or CI checks, selected native/unit groups, HA contracts, integration and provisioning |
-| Browser | Selected browser cases through the existing two isolated workers |
+| Browser | Selected browser cases across two machines, each running two isolated workers |
 | Databases | Selected database contracts/migrations followed by query-performance tests when required |
 | Supervisor | Actual isolated installation, retention, restart, update and chronological replay |
 
@@ -1086,25 +1086,48 @@ from the remaining two-worker HA run. When the four-backend suite runs separatel
 native execution excludes database contracts instead of repeating them on SQLite.
 A legacy native-only selection still includes its original SQLite coverage.
 
-Browser execution uses two isolated containers with one CPU and 1 GiB each. Together
-they retain the original browser budget of two CPUs, 2 GiB and 512 MiB shared memory.
-Both use the selected built browser image. Packaged preflight and execution share
+The suite-selection policy and its selected profile remain unchanged. Only a
+selected browser lane expands into `browser-0` and `browser-1` machine entries.
+Unselected browser suites create neither browser machine. Other logical lanes
+retain one machine each, and the selected native, HA, database and Supervisor
+suite membership remains unchanged.
+
+Browser execution uses four global worker partitions. Machine zero runs workers
+zero and one. Machine one runs workers two and three. Each worker has two CPUs,
+4 GiB of RAM and 256 MiB of shared memory. Each browser machine therefore permits
+four CPUs and 8 GiB across its two worker containers. All workers use the selected
+built browser image. Packaged preflight and execution share
 the same pytest paths, filters and partition plugin. Each worker owns its reports
 and screenshots under `results/ci/browser-<worker>/`.
 
-Preflight records the complete collected inventory and its disjoint worker
-partitions. Execution records actual setup, call and teardown outcomes and embeds
+Preflight records the complete collected inventory and all four disjoint worker
+partitions. Each browser machine downloads only its own two original collection
+records. It proves those workers' actual execution and publishes a machine-specific
+completion record and timing file. Partial machine counts do not authorize a
+completed browser suite. An empty worker or machine partition is permitted only
+when the other partitions prove the complete nonempty selected browser inventory.
+Execution records actual setup, call and teardown outcomes and embeds
 the pytest identity in each JUnit case. Completion rejects missing or duplicated
 identities, changed collections, failed or skipped phases and inconsistent worker
-reports. The canonical `ui.xml` is written only after the full union passes, so
+reports. Aggregation requires both browser machines, verifies their original
+preflight inventories, and rejects overlapping or missing worker reports.
+The canonical `ui.xml` is written only after all four workers' full union passes, so
 existing candidate and package readers retain one browser report. Every worker is
 joined before service cleanup, including after failure.
 
 Hosted native work runs cheap policy checks before its selected unit and HA groups.
 Browser, database and Supervisor machines run independently after preparation.
-Local runs without `--lane` retain the bounded single-machine orchestration.
+Native and HA test containers have four CPUs and 4 GiB of RAM. The app fixture
+has 1 GiB, and the separate HA Core fixture has four CPUs and 4 GiB when selected.
+Database and Supervisor resource limits remain unchanged.
+
+Local runs without `--lane` retain single-machine orchestration. They execute the
+same four browser partitions with at most two browser containers concurrently.
 The hosted controller requires `--prebuilt --stage tests --lane <name>` and keeps
-the original selection profile unchanged. Browser teaching examples reuse a real solved and
+the original selection profile unchanged. The browser lane additionally requires
+`--browser-machine 0` or `--browser-machine 1`. Local whole-suite execution does
+not require that hosted machine argument. Browser teaching examples reuse a real
+solved and
 independently validated plan once per process. Each case still initializes a fresh
 database and receives its own mutable copy. No database snapshot or persistent
 fixture cache is used.
@@ -1160,8 +1183,8 @@ historical replay results in PR evidence rather than a permanent timing promise.
 
 ### HA process isolation
 
-The HA test container runs two pytest processes within its existing two-CPU and
-2 GiB limit. Every collected case belongs to exactly one process. Recorder-heavy
+The HA test container runs two pytest processes within its four-CPU and
+4 GiB limit. Every collected case belongs to exactly one process. Recorder-heavy
 cases start first and alternate between workers. Each process owns its temporary
 HA directories, Recorder databases, event loops and local app ports. Tests named
 `test_remote_*` stay together in worker zero because they mutate the shared

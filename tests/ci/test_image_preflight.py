@@ -74,7 +74,7 @@ def test_packaged_collection_preserves_diagnostics_and_stops_on_failure(
             2
             if failure
             else 5
-            if "--browser-shard" in command and command[command.index("--browser-shard") + 1] == "1"
+            if "--browser-shard" in command and command[command.index("--browser-shard") + 1] != "0"
             else 0,
             "ModuleNotFoundError: missing_fixture_module\n" if failure else "4 tests collected\n",
             "",
@@ -89,7 +89,7 @@ def test_packaged_collection_preserves_diagnostics_and_stops_on_failure(
         assert "missing_fixture_module" in Path("results/ci/preflight-native.log").read_text()
     else:
         check_images.check_images(["docker", "compose"], "oep-test", "frontend", {"browser"})
-        assert len(calls) == 3
+        assert len(calls) == 5
         assert calls[0][calls[0].index("--entrypoint") + 2 :] == [
             "native",
             *pytest_arguments("native", collect_only=True),
@@ -100,7 +100,7 @@ def test_packaged_collection_preserves_diagnostics_and_stops_on_failure(
                 *pytest_arguments("browser", worker=worker, collect_only=True),
             ]
         assert "oep-test-ui-tests" in summary.read_text()
-        assert summary.read_text().count("**PASS**") == 3
+        assert summary.read_text().count("**PASS**") == 5
 
 
 @pytest.mark.parametrize("existing_reports", [False, True])
@@ -112,7 +112,7 @@ def test_real_browser_collection_prepares_only_its_collection_file(
     output = tmp_path / "results/ci"
     preserved = {}
     if existing_reports:
-        for worker in (0, 1):
+        for worker in (0, 1, 2, 3):
             location = output / f"browser-{worker}"
             location.mkdir(parents=True)
             (location / "browser-collected.json").write_bytes(b"stale collection")
@@ -134,7 +134,9 @@ def test_real_browser_collection_prepares_only_its_collection_file(
             assert not (location / "browser-collected.json").exists()
             assert {path: path.read_bytes() for path in preserved} == preserved
             (location / "browser-collected.json").write_text(
-                json.dumps({"worker": worker, "all": identities, "selected": [identities[worker]]}),
+                json.dumps(
+                    {"worker": worker, "all": identities, "selected": identities[worker::4]}
+                ),
                 encoding="utf-8",
             )
         return subprocess.CompletedProcess(command, 0, "Collection completed\n", "")
@@ -155,8 +157,8 @@ def test_inconsistent_browser_inventory_has_concrete_failure_diagnostics(monkeyp
         if "--browser-shard" in command:
             worker = int(command[command.index("--browser-shard") + 1])
             write_browser_evidence(Path("results/ci"), collected_only=True)
-            if worker == 1:
-                path = Path("results/ci/browser-1/browser-collected.json")
+            if worker == 3:
+                path = Path("results/ci/browser-3/browser-collected.json")
                 record = json.loads(path.read_text())
                 record["all"] = ["tests/frontend/browser/test_different.py::test_different"]
                 path.write_text(json.dumps(record))
@@ -169,7 +171,7 @@ def test_inconsistent_browser_inventory_has_concrete_failure_diagnostics(monkeyp
     assert "Browser inventory validation failed" in summary.read_text()
     assert (
         "Browser inventory validation failed"
-        in Path("results/ci/preflight-browser-1.log").read_text()
+        in Path("results/ci/preflight-browser-3.log").read_text()
     )
 
 

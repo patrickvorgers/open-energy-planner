@@ -1,4 +1,4 @@
-"""Prove four-machine selection, image transfer and fail-closed report aggregation."""
+"""Prove selected-machine distribution, image transfer and fail-closed report aggregation."""
 
 import json
 import runpy
@@ -103,6 +103,15 @@ def test_every_selection_partitions_without_expansion_or_duplicate_suites(profil
     assert len(assignments) <= 4
     assert len(flattened) == len(set(flattened))
     assert set(flattened) == completion.required_suites(profile)
+    machines = parallel.machine_matrix(profile)
+    assert len(machines) <= 5
+    assert len({machine["name"] for machine in machines}) == len(machines)
+    assert {machine["lane"] for machine in machines} == set(assignments)
+    assert [machine["browser_machine"] for machine in machines if machine["lane"] == "browser"] == (
+        [0, 1] if "browser" in assignments else []
+    )
+    for lane in set(assignments) - {"browser"}:
+        assert sum(machine["lane"] == lane for machine in machines) == 1
 
 
 @pytest.mark.parametrize(
@@ -147,6 +156,7 @@ def hosted_identity(monkeypatch, tmp_path):
 def prepare_plan(profile):
     """Write a captured selection independently from the transfer or aggregation operations."""
     document = parallel.identity(profile)
+    document["machines"] = parallel.machine_matrix(profile)
     document["lanes"] = {
         lane: sorted(suites) for lane, suites in parallel.lane_suites(profile).items()
     }
@@ -263,9 +273,14 @@ def test_preparation_exports_shared_native_image_once_and_retains_all_aliases(
     matrix = json.loads(Path("outputs").read_text().removeprefix("matrix="))
     assert matrix == {
         "include": [
-            {"lane": "native", "images": ["native"]},
-            {"lane": "databases", "images": ["native"]},
-            {"lane": "supervisor", "images": []},
+            {"lane": "native", "name": "native", "browser_machine": None, "images": ["native"]},
+            {
+                "lane": "databases",
+                "name": "databases",
+                "browser_machine": None,
+                "images": ["native"],
+            },
+            {"lane": "supervisor", "name": "supervisor", "browser_machine": None, "images": []},
         ]
     }
 
@@ -374,7 +389,18 @@ def test_join_requires_every_original_lane_and_rechecks_actual_reports(
         }
 
 
-@pytest.mark.parametrize("fault", ["none", "browser-extra", "native-extra", "missing-worker"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "browser-extra",
+        "native-extra",
+        "missing-worker",
+        "missing-machine",
+        "machine-swap",
+        "preflight-inventory",
+    ],
+)
 def test_join_validates_nested_xml_without_rejecting_proven_browser_worker_reports(
     hosted_identity, monkeypatch, fault
 ):
@@ -382,18 +408,22 @@ def test_join_validates_nested_xml_without_rejecting_proven_browser_worker_repor
     profile = "selected:browser,ci"
     prepare_plan(profile)
     lanes = Path(".local/ci-lanes")
-    for lane, suites in {"native": {"ci"}, "browser": {"browser"}}.items():
-        location = lanes / f"ci-reports-{lane}"
+    write_browser_evidence(parallel.PREPARED / "preflight", collected_only=True)
+    for machine in parallel.machine_matrix(profile):
+        lane = machine["lane"]
+        location = lanes / f"ci-reports-{machine['name']}"
         location.mkdir(parents=True)
         if lane == "browser":
-            write_browser_evidence(location)
+            write_browser_evidence(location, machine=machine["browser_machine"])
         else:
             (location / "ci.xml").write_text('<testsuite><testcase name="ci" /></testsuite>')
         monkeypatch.setattr(completion, "REPORT", location / "suite-completion.json")
-        parallel.write_lane_completion(profile, lane, suites)
+        parallel.write_lane_completion(
+            profile, lane, {lane}, browser_machine=machine["browser_machine"]
+        )
     monkeypatch.setattr(completion, "REPORT", hosted_identity / "results/ci/suite-completion.json")
     if fault == "browser-extra":
-        (lanes / "ci-reports-browser/browser-0/extra.xml").write_text(
+        (lanes / "ci-reports-browser-0/browser-0/extra.xml").write_text(
             '<testsuite><testcase name="unassigned" /></testsuite>'
         )
     elif fault == "native-extra":
@@ -401,7 +431,19 @@ def test_join_validates_nested_xml_without_rejecting_proven_browser_worker_repor
         extra.parent.mkdir()
         extra.write_text('<testsuite><testcase name="unassigned" /></testsuite>')
     elif fault == "missing-worker":
-        (lanes / "ci-reports-browser/browser-1/ui.xml").unlink()
+        (lanes / "ci-reports-browser-1/browser-2/ui.xml").unlink()
+    elif fault == "missing-machine":
+        (lanes / "ci-reports-browser-1").rename(lanes / "ci-reports-unexpected")
+    elif fault == "machine-swap":
+        receipt = lanes / "ci-reports-browser-1/lane-completion-browser-1.json"
+        record = json.loads(receipt.read_text())
+        record["browser_machine"] = 0
+        receipt.write_text(json.dumps(record))
+    elif fault == "preflight-inventory":
+        original = parallel.PREPARED / "preflight/browser-0/browser-collected.json"
+        record = json.loads(original.read_text())
+        record["all"] = ["tests/frontend/browser/test_other.py::test_other"]
+        original.write_text(json.dumps(record))
     if fault != "none":
         with pytest.raises(RuntimeError):
             parallel.join_reports(profile, lanes)
@@ -413,7 +455,7 @@ def test_join_validates_nested_xml_without_rejecting_proven_browser_worker_repor
             "ci": 1,
             "browser": 1,
         }
-        for worker in (0, 1):
+        for worker in (0, 1, 2, 3):
             assert (completion.REPORT.parent / f"browser-{worker}/ui.xml").is_file()
 
 
@@ -437,11 +479,11 @@ def test_hosted_controller_executes_only_its_assigned_real_command_boundaries(
     monkeypatch.setattr(
         parallel,
         "write_lane_completion",
-        lambda route, owner, suites: completed.append((owner, suites)),
+        lambda route, owner, suites, **options: completed.append((owner, suites)),
     )
     from script.ci import check_browser
 
-    def browser(compose):
+    def browser(compose, *, machine=None):
         """Record the worker controller boundary and model a terminal worker failure."""
         calls.append(["browser"])
         if fails:
@@ -451,7 +493,8 @@ def test_hosted_controller_executes_only_its_assigned_real_command_boundaries(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["ci.py", "--prebuilt", "--stage", "tests", "--profile", profile, "--lane", lane],
+        ["ci.py", "--prebuilt", "--stage", "tests", "--profile", profile, "--lane", lane]
+        + (["--browser-machine", "0"] if lane == "browser" else []),
     )
     if fails:
         with pytest.raises(subprocess.CalledProcessError):
@@ -489,12 +532,13 @@ def test_legacy_and_documentation_lanes_retain_original_execution_without_repeat
     monkeypatch.setattr(
         parallel,
         "write_lane_completion",
-        lambda route, owner, suites: completed.append((owner, suites)),
+        lambda route, owner, suites, **options: completed.append((owner, suites)),
     )
     monkeypatch.setattr(
         sys,
         "argv",
-        ["ci.py", "--prebuilt", "--stage", "tests", "--profile", profile, "--lane", lane],
+        ["ci.py", "--prebuilt", "--stage", "tests", "--profile", profile, "--lane", lane]
+        + (["--browser-machine", "0"] if lane == "browser" else []),
     )
     runpy.run_path(str(ROOT / "script/ci/ci.py"), run_name="__main__")
     assert completed == [(lane, expected)]

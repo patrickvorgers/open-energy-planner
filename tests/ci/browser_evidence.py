@@ -6,14 +6,17 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from script.ci import check_browser
+from script.ci.browser_suites import machine_workers
 
 
-def write_browser_evidence(directory, *, collected_only=False):
-    """Describe one passing independent case and its genuinely empty peer without changing other suite oracles."""
+def write_browser_evidence(directory, *, collected_only=False, machine=None):
+    """Describe one passing independent case and three genuinely empty peers without changing other suite oracles."""
     directory = Path(directory)
     identity = "tests/frontend/browser/test_example.py::test_example"
     combined = ElementTree.Element("testsuites")
-    for worker, selected in ((0, [identity]), (1, [])):
+    for worker, selected in ((0, [identity]), (1, []), (2, []), (3, [])):
+        if machine is not None and worker // 2 != machine:
+            continue
         location = directory / f"browser-{worker}"
         location.mkdir(parents=True, exist_ok=True)
         record = {"worker": worker, "all": [identity], "selected": selected}
@@ -38,16 +41,16 @@ def write_browser_evidence(directory, *, collected_only=False):
             ElementTree.SubElement(properties, "property", name="oep_nodeid", value=name)
         ElementTree.ElementTree(suite).write(location / "ui.xml", encoding="utf-8")
         combined.append(suite)
-    if not collected_only:
+    if not collected_only and machine is None:
         ElementTree.ElementTree(combined).write(directory / "ui.xml", encoding="utf-8")
 
 
 def observe_browser_boundary(monkeypatch):
     """Keep controller mocks at the container-launch boundary while worker proof has actual subprocess tests."""
 
-    def run_workers(compose):
-        """Expose both private commands to the controller test's existing subprocess observer."""
-        for worker in (0, 1):
+    def run_workers(compose, *, machine=None):
+        """Expose the assigned private commands to the controller test's existing subprocess observer."""
+        for worker in machine_workers(machine):
             arguments = check_browser.worker_arguments(Path("results/ci"), worker)
             subprocess.run([*compose, *arguments], check=True)
 

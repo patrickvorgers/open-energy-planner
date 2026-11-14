@@ -5,7 +5,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
 
-from script.ci.browser_suites import BROWSER_WORKERS, collections, combine_reports, worker_directory
+from script.ci.browser_suites import (
+    BROWSER_WORKERS_PER_MACHINE,
+    collections,
+    combine_reports,
+    execution_reports,
+    worker_directory,
+)
 from script.ci.pytest_suites import pytest_arguments
 
 
@@ -36,13 +42,14 @@ def prepare_worker_reports(directory, worker, *, collect_only=False):
         (location / name).unlink(missing_ok=True)
 
 
-def run_workers(compose):
+def run_workers(compose, *, machine=None):
     """Allow completion only after every worker has exited and its actual cases are verified."""
     directory = Path("results/ci")
-    records = collections(directory)
+    records = collections(directory, machine=machine)
+    identifiers = [record["worker"] for record in records]
     (directory / "ui.xml").unlink(missing_ok=True)
-    arguments = [worker_arguments(directory, worker) for worker in range(BROWSER_WORKERS)]
-    for worker in range(BROWSER_WORKERS):
+    arguments = {worker: worker_arguments(directory, worker) for worker in identifiers}
+    for worker in identifiers:
         prepare_worker_reports(directory, worker)
 
     def launch(worker):
@@ -56,14 +63,18 @@ def run_workers(compose):
         )
         return result
 
-    with ThreadPoolExecutor(max_workers=BROWSER_WORKERS) as workers:
-        results = list(workers.map(launch, range(BROWSER_WORKERS)))
+    with ThreadPoolExecutor(max_workers=BROWSER_WORKERS_PER_MACHINE) as workers:
+        results = list(workers.map(launch, identifiers))
     for result, record in zip(results, records, strict=True):
         if result.returncode != 5 or record["selected"]:
             result.check_returncode()
-    combine_reports(directory)
+    if machine is None:
+        combine_reports(directory)
+    else:
+        execution_reports(directory, machine=machine)
+    count = sum(len(record["selected"]) for record in records)
     print(
-        f"Browser suite: {len(records[0]['all'])} collected identities executed exactly once "
-        f"across {BROWSER_WORKERS} workers.",
+        f"Browser execution: {count} assigned identities executed exactly once "
+        f"across workers {identifiers}.",
         flush=True,
     )
