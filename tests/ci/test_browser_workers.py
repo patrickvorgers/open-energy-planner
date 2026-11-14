@@ -35,7 +35,7 @@ def worker_artifact_sentinels(tmp_path):
     directory = tmp_path / "results/ci"
     paths = [directory / "ui.xml"] + [
         directory / f"browser-{worker}" / name
-        for worker in (0, 1)
+        for worker in (0, 1, 2, 3)
         for name in ("browser-collected.json", "browser-executed.json", "ui.xml")
     ]
     expected = {}
@@ -50,9 +50,9 @@ def worker_artifact_sentinels(tmp_path):
 def test_worker_argument_construction_preserves_existing_parent_evidence(
     worker_artifact_sentinels, collect_only
 ):
-    """Inspecting either worker command cannot remove or rewrite any parent proof file."""
+    """Inspecting any worker command cannot remove or rewrite any parent proof file."""
     directory, expected = worker_artifact_sentinels
-    for worker in (0, 1):
+    for worker in (0, 1, 2, 3):
         check_browser.worker_arguments(directory, worker, collect_only=collect_only)
     assert {path: path.read_bytes() for path in expected} == expected
 
@@ -61,7 +61,7 @@ def test_worker_argument_construction_preserves_existing_parent_evidence(
 def test_worker_argument_construction_does_not_create_directories(tmp_path, collect_only):
     """Constructing commands for an unused output path leaves the filesystem unchanged."""
     directory = tmp_path / "not-created"
-    for worker in (0, 1):
+    for worker in (0, 1, 2, 3):
         check_browser.worker_arguments(directory, worker, collect_only=collect_only)
     assert not directory.exists()
 
@@ -78,7 +78,7 @@ def test_mock_browser_boundary_preserves_parent_evidence(
     )
     observe_browser_boundary(monkeypatch)
     check_browser.run_workers(["docker", "compose"])
-    assert len(calls) == 2
+    assert len(calls) == 4
     assert {path: path.read_bytes() for path in expected} == expected
 
 
@@ -104,7 +104,7 @@ def actual_browser_reports(tmp_path_factory):
     """Collect and execute real pytest children with independent files and the production partition plugin."""
     directory = tmp_path_factory.mktemp("browser-workers")
     output = directory / "reports"
-    for worker in (0, 1):
+    for worker in (0, 1, 2, 3):
         project = directory / f"worker-{worker}"
         source = project / "tests/frontend/browser/test_cases.py"
         source.parent.mkdir(parents=True)
@@ -124,8 +124,7 @@ def test_real_browser_workers_execute_exactly_their_collected_cases(actual_brows
     """The actual pytest plugin preserves all parametrized cases exactly once and produces readable original JUnit."""
     records = browser_suites.collections(actual_browser_reports)
     assert records[0]["all"] == IDENTIFIERS
-    assert records[0]["selected"] == [IDENTIFIERS[0], IDENTIFIERS[2]]
-    assert records[1]["selected"] == [IDENTIFIERS[1], IDENTIFIERS[3]]
+    assert [record["selected"] for record in records] == [[identity] for identity in IDENTIFIERS]
     browser_suites.combine_reports(actual_browser_reports)
     browser_suites.execution_reports(actual_browser_reports, combined=True)
     assert len(ElementTree.parse(actual_browser_reports / "ui.xml").findall(".//testcase")) == 4
@@ -134,7 +133,7 @@ def test_real_browser_workers_execute_exactly_their_collected_cases(actual_brows
 def test_filtered_browser_run_allows_only_a_genuinely_empty_peer(tmp_path, actual_browser_reports):
     """Actual pytest filtering keeps the same complete selected identity and proves an empty worker with exit five."""
     output = tmp_path / "reports"
-    for worker in (0, 1):
+    for worker in (0, 1, 2, 3):
         project = tmp_path / f"worker-{worker}"
         shutil.copytree(
             actual_browser_reports.parent / f"worker-{worker}" / "tests", project / "tests"
@@ -167,7 +166,7 @@ def test_actual_browser_phase_failure_prevents_completion(tmp_path, failed_phase
         encoding="utf-8",
     )
     output = tmp_path / "reports"
-    for worker in (0, 1):
+    for worker in (0, 1, 2, 3):
         collected = pytest_child(project, worker, collect_only=True)
         assert collected.returncode == (0 if worker == 0 else 5), (
             collected.stdout + collected.stderr
@@ -218,7 +217,7 @@ def test_browser_completion_rejects_partial_or_inconsistent_execution(
         document = ElementTree.parse(path)
         case = document.find(".//testcase")
         if corruption == "duplicate":
-            case.find("./properties/property").set("value", IDENTIFIERS[3])
+            document.getroot().append(ElementTree.fromstring(ElementTree.tostring(case)))
         else:
             ElementTree.SubElement(case, "skipped")
         document.write(path)
@@ -233,16 +232,16 @@ def test_browser_completion_rejects_partial_or_inconsistent_execution(
         assert str(cause) == expected_message
 
 
-@pytest.mark.parametrize("failed_worker", [None, 0, 1])
+@pytest.mark.parametrize("failed_worker", [None, 0, 1, 2, 3])
 def test_browser_workers_overlap_and_join_before_failure_or_combination(
     tmp_path, actual_browser_reports, monkeypatch, failed_worker
 ):
-    """Both bounded containers launch and exit before failure propagates or complete reports are combined."""
+    """Each bounded worker pair launches and exits before failure propagates or complete reports are combined."""
     monkeypatch.chdir(tmp_path)
     shutil.copytree(actual_browser_reports, tmp_path / "results/ci")
     (tmp_path / "results/ci/ui.xml").write_bytes(b"stale canonical report")
-    started = [Event(), Event()]
-    finished = [Event(), Event()]
+    started = [Event() for _ in range(4)]
+    finished = [Event() for _ in range(4)]
 
     def run(command, **options):
         """Observe the actual private mount and shared worker selection while returning retained execution evidence."""
@@ -261,7 +260,7 @@ def test_browser_workers_overlap_and_join_before_failure_or_combination(
             actual_browser_reports / f"browser-{worker}" / "browser-collected.json"
         ).read_bytes()
         started[worker].set()
-        assert started[1 - worker].wait(5)
+        assert started[worker ^ 1].wait(5)
         for name in ("browser-executed.json", "ui.xml"):
             shutil.copy2(
                 actual_browser_reports / f"browser-{worker}" / name,

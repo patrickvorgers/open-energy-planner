@@ -9,7 +9,7 @@ services:
     tmpfs:
       - /data:uid=10001,gid=10001,mode=0700
     cpus: 2
-    mem_limit: 512m
+    mem_limit: 1g
     healthcheck:
       test: [CMD, python, /app/script/runtime/healthcheck.py]
       interval: 2s
@@ -23,8 +23,8 @@ services:
       context: .
       dockerfile: Dockerfile.native-test
     network_mode: none
-    cpus: 2
-    mem_limit: 2g
+    cpus: 4
+    mem_limit: 4g
     volumes:
       - ./results/ci:/workspace/results/ci
     command: [script/ci/check_native.py]
@@ -40,8 +40,8 @@ services:
       app:
         condition: service_healthy
     networks: [test]
-    cpus: 2
-    mem_limit: 2g
+    cpus: 4
+    mem_limit: 4g
     volumes:
       - ./results/ci:/workspace/results/ci
     command: [-m, script.ci.check_ha]
@@ -54,8 +54,8 @@ services:
       - ./.devcontainer/ha-configuration.yaml:/config/configuration.yaml:ro
     tmpfs: [/config]
     networks: [test]
-    cpus: 2
-    mem_limit: 2g
+    cpus: 4
+    mem_limit: 4g
 
   provision-tests:
     profiles: [test]
@@ -80,7 +80,7 @@ services:
       dockerfile: Dockerfile.ui-test
     network_mode: none
     cpus: 2
-    mem_limit: 2g
+    mem_limit: 4g
     shm_size: 512m
     volumes:
       - ./results/ci:/workspace/results/ci
@@ -88,8 +88,6 @@ services:
   ui-worker:
     <<: *ui-tests
     image: ${COMPOSE_PROJECT_NAME}-ui-tests
-    cpus: 1
-    mem_limit: 1g
     shm_size: 256m
 
   postgres-test:

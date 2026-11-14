@@ -214,12 +214,12 @@ jobs:
   tests:
     needs: prepare
     if: needs.prepare.result == 'success'
-    name: Selected tests (${{ matrix.lane }})
+    name: Selected tests (${{ matrix.name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: true
-      max-parallel: 4
+      max-parallel: 5
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
@@ -268,14 +268,24 @@ jobs:
         uses: ./.github/actions/shared-image-storage
         if: matrix.lane != 'supervisor'
       - name: Verify the prepared image bytes and load selected images
-        run: python -m script.ci.parallel_checks load --profile "$OEP_CI_PROFILE" --lane "${{ matrix.lane }}"
+        run: |
+          arguments=()
+          if [[ "${{ matrix.lane }}" == "browser" ]]; then
+            arguments+=(--browser-machine "${{ matrix.browser_machine }}")
+          fi
+          python -m script.ci.parallel_checks load --profile "$OEP_CI_PROFILE" --lane "${{ matrix.lane }}" "${arguments[@]}"
       - name: Execute this machine's assigned suites
-        run: python script/ci/ci.py --prebuilt --stage tests --profile "$OEP_CI_PROFILE" --lane "${{ matrix.lane }}"
+        run: |
+          arguments=()
+          if [[ "${{ matrix.lane }}" == "browser" ]]; then
+            arguments+=(--browser-machine "${{ matrix.browser_machine }}")
+          fi
+          python script/ci/ci.py --prebuilt --stage tests --profile "$OEP_CI_PROFILE" --lane "${{ matrix.lane }}" "${arguments[@]}"
       - name: Preserve test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ci-reports-${{ matrix.lane }}
+          name: ci-reports-${{ matrix.name }}
           path: |
             results/ci/*.xml
             results/ci/browser-*/*.xml

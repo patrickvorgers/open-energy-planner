@@ -18,6 +18,7 @@ scope = importlib.import_module("script.ci.ci_scope")
 check_images = importlib.import_module("script.ci.check_images").check_images
 completion = importlib.import_module("script.ci.check_suite_completion")
 browser_execution = importlib.import_module("script.ci.check_browser")
+browser_suites = importlib.import_module("script.ci.browser_suites")
 parallel = importlib.import_module("script.ci.parallel_checks")
 
 EARLY_CHECK_WORKERS = 2
@@ -48,9 +49,14 @@ parser.add_argument(
 parser.add_argument(
     "--lane", choices=parallel.LANES, help="Execute only this hosted machine assignment."
 )
+parser.add_argument("--browser-machine", type=int, choices=range(browser_suites.BROWSER_MACHINES))
 arguments = parser.parse_args()
 if arguments.lane and (arguments.stage != "tests" or not arguments.prebuilt):
     parser.error("--lane requires --prebuilt --stage tests")
+if arguments.lane == "browser" and arguments.browser_machine is None:
+    parser.error("The browser lane requires --browser-machine")
+if arguments.browser_machine is not None and arguments.lane != "browser":
+    parser.error("--browser-machine requires the browser lane")
 if arguments.documentation_only and arguments.profile != "full":
     parser.error("Choose --documentation-only or --profile")
 profile = "documentation" if arguments.documentation_only else arguments.profile
@@ -68,10 +74,13 @@ app_selected = bool(suites & {"ha", "ha-controls", "ha-solver", "provisioning"})
 database_selected = bool(database_suites or "performance-queries" in suites)
 phase_times = []
 pipeline_started = monotonic()
+lane_name = (
+    f"browser-{arguments.browser_machine}" if arguments.lane == "browser" else arguments.lane
+)
 timing_report = Path(
     "results/ci/phase-times-preflight.json"
     if arguments.stage == "preflight"
-    else f"results/ci/phase-times-{arguments.lane}.json"
+    else f"results/ci/phase-times-{lane_name}.json"
     if arguments.lane
     else "results/ci/phase-times.json"
 )
@@ -118,7 +127,7 @@ def run_browser():
     started = monotonic()
     succeeded = False
     try:
-        browser_execution.run_workers(compose)
+        browser_execution.run_workers(compose, machine=arguments.browser_machine)
         completed_suites.add("browser")
         succeeded = True
     finally:
@@ -287,7 +296,7 @@ try:
             if database_checks is not None:
                 database_checks.result()
     else:
-        # Separate stores/reports fit within 4 GiB, before any DB or HA services start.
+        # Browser containers keep bounded local concurrency before DB or HA services start.
         with ThreadPoolExecutor(max_workers=EARLY_CHECK_WORKERS) as early:
             native_arguments = (
                 ("script/ci/check_native.py", "--without-database-contracts")
@@ -384,6 +393,8 @@ if "supervisor" in suites and arguments.stage != "preflight":
 
 if arguments.stage != "preflight":
     if arguments.lane:
-        parallel.write_lane_completion(profile, arguments.lane, completed_suites)
+        parallel.write_lane_completion(
+            profile, arguments.lane, completed_suites, browser_machine=arguments.browser_machine
+        )
     else:
         completion.write_completion(profile, completed_suites)
