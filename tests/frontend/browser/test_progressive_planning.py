@@ -335,7 +335,7 @@ def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app
         == []
     )
     identities = ["plan-chart", "reference-chart", "self-consumption-chart"]
-    for action in (None, "Full period:", "Next 6 hours"):
+    for action in (None, "Full period", "Next 6 hours"):
         if action is not None:
             page.evaluate("window.balanceDraws=[]")
             page.get_by_role("button", name=action, exact=False).click()
@@ -346,7 +346,7 @@ def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app
         })""",
             identities,
         )
-        expected_counts = {None: [0, 1, 1], "Full period:": [0, 0, 0], "Next 6 hours": [1, 1, 1]}
+        expected_counts = {None: [0, 1, 1], "Full period": [0, 0, 0], "Next 6 hours": [1, 1, 1]}
         assert result["counts"] == expected_counts[action], {
             **result,
             "chart_assignments": page.evaluate("window.chartAssignments"),

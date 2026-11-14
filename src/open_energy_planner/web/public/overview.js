@@ -452,7 +452,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     if (series.some(s => s.deviceState != null)) {
         const key = document.createElement("p"); key.id = `${id}-device-key`; deviceKey = key;
         key.className = "chart-device-key";
-        key.textContent = "Striped bars show expected use. Solid bars show scheduled use. Expected use does not authorize a start.";
+        key.textContent = "Striped bars show expected use. Solid bars show scheduled use.";
         legend.append(key);
     }
     if (!datasets.some((d) => d.data.length)) {
@@ -495,7 +495,6 @@ function applyRange() {
     for (const instance of charts.values()) syncChartLegends.get(instance)?.(instance);
     updateCharts(charts.values());
     if (first != null && end != null && start != null) {
-        document.querySelector('[data-hours="0"]').textContent = `Full period: ${number(Math.max(0, end - Math.max(first, start)) / MILLISECONDS_PER_HOUR)} hours`;
         showPeriodCosts(start, planningHours ? start + planningHours * MILLISECONDS_PER_HOUR : Math.max(end, start + QUARTER_MILLISECONDS));
     }
 }
@@ -524,7 +523,7 @@ function renderPeriodCosts(period, scenarios, currency, message, plan = null) {
         });
     }
     const basis = !valuation ? "Battery value uses the original plan's valuation basis." : fullPeriod ? "Optimizer and self-consumption use the latest successful contract valuation. Without battery retains original contract rates." : "Original contract rates for this selected period. The full original plan valuation is shown separately.";
-    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}: ${number(period.duration_h)} hours: Expected, not measured. ${basis}` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
+    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}: Expected, not measured. ${basis}` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
 }
 /** Request financial slices from their owning module. Late responses cannot replace another plan or range. */
 async function showPeriodCosts(start, end) {
