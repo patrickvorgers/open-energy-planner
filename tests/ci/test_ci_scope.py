@@ -515,7 +515,7 @@ def test_orchestrator_preserves_scope_failure_and_cleanup(
                     "ui-tests",
                     "db-tests",
                 ],
-                *(worker_arguments(Path("results/ci"), worker) for worker in (0, 1)),
+                *(worker_arguments(Path("results/ci"), worker) for worker in (0, 1, 2, 3)),
                 [
                     "run",
                     "--no-deps",
@@ -555,7 +555,7 @@ def test_orchestrator_preserves_scope_failure_and_cleanup(
                     "script/ci/check_native.py",
                     "--without-database-contracts",
                 ],
-                *(worker_arguments(Path("results/ci"), worker) for worker in (0, 1)),
+                *(worker_arguments(Path("results/ci"), worker) for worker in (0, 1, 2, 3)),
             ]
             for command in early_commands:
                 assert operations.count(command) == 1

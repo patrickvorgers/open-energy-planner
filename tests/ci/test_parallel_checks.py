@@ -52,7 +52,7 @@ def test_hosted_images_share_one_storage_setup_and_failed_machines_cancel_peers(
     assert "if: matrix.lane != 'supervisor'" in setup
     assert tests.index(action) < tests.index("script.ci.parallel_checks load")
     assert "fail-fast: true" in tests
-    assert "if: always()" in tests and "ci-reports-${{ matrix.lane }}" in tests
+    assert "if: always()" in tests and "ci-reports-${{ matrix.name }}" in tests
     assert "needs.tests.result == 'success'" in quality
     assert quality.index("script.ci.parallel_checks join") < quality.index(
         "script.release.package_release"
@@ -419,7 +419,10 @@ def test_join_validates_nested_xml_without_rejecting_proven_browser_worker_repor
             (location / "ci.xml").write_text('<testsuite><testcase name="ci" /></testsuite>')
         monkeypatch.setattr(completion, "REPORT", location / "suite-completion.json")
         parallel.write_lane_completion(
-            profile, lane, {lane}, browser_machine=machine["browser_machine"]
+            profile,
+            lane,
+            {"ci"} if lane == "native" else {"browser"},
+            browser_machine=machine["browser_machine"],
         )
     monkeypatch.setattr(completion, "REPORT", hosted_identity / "results/ci/suite-completion.json")
     if fault == "browser-extra":
