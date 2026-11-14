@@ -13,11 +13,22 @@ def explain_solar_problem(reason: str, detail: str | None = None) -> NoticeText 
     """Own the propagated solar forecast cause and describe automatic, conditional recovery."""
     if reason != "solar_forecast_unavailable":
         return None
+    if detail == "solar_forecast_updating":
+        return NoticeText(
+            "Solar forecast is updating",
+            "Solar forecast inputs are available. The forecast is being recalculated. "
+            "This notification clears when a valid, up-to-date solar forecast is available. "
+            "No action is needed while the update is running.",
+            "View solar forecast",
+            "/quality",
+        )
     message = "The solar generation forecast is missing, too old or unusable. "
     if detail == "solar_weather_expired":
         message = "Weather data for the solar forecast is too old. "
     elif detail == "solar_weather_unavailable":
         message = "Usable weather data for the solar forecast is currently unavailable. "
+    elif detail == "solar_forecast_unusable":
+        message = "The solar forecast update failed. Existing input data has not been discarded. "
     return NoticeText(
         "Solar forecast is unavailable",
         message + "Weather retrieval and solar forecast updates are retried automatically. "

@@ -122,6 +122,58 @@ def test_new_weather_cannot_clear_warning_before_forecast_recovery(solar_runtime
     assert [item["owner"] for item in center.document()["notifications"]] == ["other"]
 
 
+def test_weather_recovery_reports_recalculation_until_forecast_is_installed(tmp_path):
+    """Recovered inputs replace the missing-weather cause without prematurely clearing the warning."""
+    runtime = SolarRuntime(make_store(tmp_path, SolarStore))
+    runtime.configure(plant())
+    runtime.set_weather(SITE, ())
+    assert runtime.job(START) is None
+    missing = solar_forecast_notifications(runtime.configuration, None, SITE, START, runtime.issue)[
+        0
+    ]
+    assert "Usable weather data" in missing.text.message
+
+    runtime.set_weather(SITE, weather())
+    job = runtime.job(START)
+    assert job is not None
+    updating = solar_forecast_notifications(
+        runtime.configuration, None, SITE, START, runtime.issue
+    )[0]
+    assert updating.key == missing.key
+    assert updating.text.title == "Solar forecast is updating"
+    assert "inputs are available" in updating.text.message
+    assert "being recalculated" in updating.text.message
+    assert updating.blocks == ("planning",)
+    assert runtime.install(runtime.build(job), START)
+    assert (
+        solar_forecast_notifications(
+            runtime.configuration, runtime.forecast, SITE, START, runtime.issue
+        )
+        == ()
+    )
+
+
+def test_failed_recalculation_reports_failure_during_backoff_then_retry(tmp_path):
+    """A failed calculation reports a retryable model failure instead of missing weather or active work."""
+    runtime = SolarRuntime(make_store(tmp_path, SolarStore))
+    runtime.configure(plant())
+    runtime.set_weather(SITE, weather())
+    job = runtime.job(START)
+    assert runtime.failed(job, START)
+    assert runtime.job(START + timedelta(minutes=4)) is None
+    failed = solar_forecast_notifications(runtime.configuration, None, SITE, START, runtime.issue)[
+        0
+    ]
+    assert "update failed" in failed.text.message
+    assert "retried automatically" in failed.text.message
+    assert "being recalculated" not in failed.text.message
+    assert runtime.job(START + timedelta(minutes=5)) is not None
+    retrying = solar_forecast_notifications(
+        runtime.configuration, None, SITE, START, runtime.issue
+    )[0]
+    assert retrying.text.title == "Solar forecast is updating"
+
+
 def test_solar_warning_deduplicates_and_publication_recovery_remains_honest(solar_runtime):
     """One solar cause renders once. Fresh solar permits calculation but does not claim successful publication."""
     runtime = solar_runtime
