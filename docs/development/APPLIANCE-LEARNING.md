@@ -27,7 +27,7 @@ Fine failures do not block hourly processing. Connection and release failures
 retain the existing recovery and unload safeguards.
 
 The authenticated peer gateway explicitly permits profile/membership reads and
-validated history uploads. It continues to reject configuration and permission
+validated history uploads. Complete appliance projections use the existing bounded 4-MiB snapshot budget in both the HTTP reader and native receiver, allowing long five-minute profiles across many devices. Oversized declared or streamed responses are still rejected. Ordinary small API routes retain their 256-KiB limit. It continues to reject configuration and permission
 writes. The app owns cycle segmentation and planning. HA only transports evidence.
 
 The application recognizes activity above the larger of 10 W and the observed
@@ -38,13 +38,12 @@ null readings, counter resets and unfinished cycles break the candidate. Recorde
 have negative arbitrary origins. Only their increments determine cycle energy.
 A candidate with unusable energy resolution is skipped without blocking later
 valid cycles. Power
-finds boundaries. Cumulative energy supplies the actual kWh and quarter-hour
+finds boundaries. Cumulative energy supplies the actual kWh and native five-minute
 profile. The trailing quiet confirmation is not part of the profile.
 
 The first complete cycle admits a usable provisional profile. Additional cycles
-refine it with the existing 90-day recency half-life. Aligned quarter phases are
-averaged by their energy and shorter runs contribute zero after their end. Fine
-profiles retain their measured final partial phase and longest measured duration,
+refine it with the existing 90-day recency half-life. Aligned source phases are
+averaged by their energy and shorter runs contribute zero after their end. Five-minute source profiles retain their measured phase duration and final partial phase and longest measured duration,
 without rounding a 35-minute run to 45 minutes. Different appliance programs are not automatically identified.
 Long internal pauses can resemble separate cycles. Continuous loads, anti-crease
 runs, coarse sensors and changing standby behavior may remain unsuitable for
@@ -118,6 +117,8 @@ of treating the configured Recorder retention or one empty week as proof that
 older fine data is absent. The source-bound `fine_import` checkpoint and
 `fine_history_request` survive restart. Fine evidence older than seven days remains
 admissible. Recent fine refreshes continue while the backlog is pending.
+
+Both cycle charts always display five-minute intervals. Hourly estimates are spread uniformly across their twelve display intervals. Average power stays flat within an hour and each energy bar contains one twelfth of that hour's kWh. Legacy quarter-hour profiles are similarly spread uniformly for display. These are explicitly labelled estimates. Actual five-minute observations retain their phase detail in the model and charts. Regridding preserves total energy and never relabels estimated detail as measured. Planning start choices remain UTC quarters, while task windows preserve finer measured power peaks.
 
 Energy > Appliances shows source-bound progress, usable coverage, detected cycles,
 provisional profiles and measured activity. Settings retains the short planning

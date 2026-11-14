@@ -3,16 +3,17 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import pairwise
-from math import isfinite
+from math import ceil, isfinite
 
 from open_energy_planner.core.units import SECONDS_PER_HOUR, SECONDS_PER_MINUTE, WATTS_PER_KW
 from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
 
 PROFILE_STEP_SECONDS = FINE_INTERVAL_MINUTES * SECONDS_PER_MINUTE
+FINE_PROFILE_SECONDS = 5 * SECONDS_PER_MINUTE
 MAX_CYCLE_HOURS = 12
 MAX_CYCLE_POWER_W = 20000
 MAX_ENERGY_COUNTER_KWH = 1e12
-MAX_PROFILE_STEPS = int(MAX_CYCLE_HOURS * SECONDS_PER_HOUR / PROFILE_STEP_SECONDS)
+MAX_PROFILE_STEPS = int(MAX_CYCLE_HOURS * SECONDS_PER_HOUR / FINE_PROFILE_SECONDS)
 CONFIRMATION_SECONDS = 120
 DURATION_ALLOWANCE_SECONDS = 300
 TIME_TOLERANCE_SECONDS = 1
@@ -29,18 +30,21 @@ def instant(value):
 
 @dataclass(frozen=True)
 class CycleProfile:
-    """One learned average or manual estimated cycle, in quarter-hour mean AC watts."""
+    """One immutable average or estimate in explicitly declared mean-AC-power phases."""
 
     power_w: tuple[float, ...]
     samples: int = 1
     evidence: str = "measured"
     measured_duration_seconds: float | None = None
+    phase_seconds: int = PROFILE_STEP_SECONDS
 
     def __post_init__(self):
         """Require finite measured nonnegative phases, including legitimate zero-power pauses."""
         if (
-            not isinstance(self.power_w, tuple)
-            or not 1 <= len(self.power_w) <= MAX_PROFILE_STEPS
+            type(self.phase_seconds) is not int
+            or self.phase_seconds not in (FINE_PROFILE_SECONDS, PROFILE_STEP_SECONDS)
+            or not isinstance(self.power_w, tuple)
+            or not 1 <= len(self.power_w) <= MAX_CYCLE_HOURS * SECONDS_PER_HOUR / self.phase_seconds
             or type(self.samples) is not int
             or self.samples < 1
             or self.evidence not in ("measured", "synthetic", "manual", "hourly_estimate")
@@ -55,11 +59,12 @@ class CycleProfile:
                 and (
                     type(self.measured_duration_seconds) not in (int, float)
                     or not isfinite(self.measured_duration_seconds)
-                    or not (len(self.power_w) - 1) * PROFILE_STEP_SECONDS
+                    or not (len(self.power_w) - 1) * self.phase_seconds
                     < self.measured_duration_seconds
-                    <= len(self.power_w) * PROFILE_STEP_SECONDS
+                    <= len(self.power_w) * self.phase_seconds
                 )
             )
+            or self.duration_seconds < PROFILE_STEP_SECONDS
             or sum(self.power_w) <= 0
         ):
             raise ValueError("A complete measured cycle profile is required")
@@ -67,15 +72,14 @@ class CycleProfile:
     @property
     def duration_seconds(self):
         """Return the conservative complete profile duration in seconds."""
-        return self.measured_duration_seconds or len(self.power_w) * PROFILE_STEP_SECONDS
+        return self.measured_duration_seconds or len(self.power_w) * self.phase_seconds
 
     @property
     def energy_kwh(self):
         """Return the whole-cycle AC energy, including partial-power phases."""
         return (
             sum(
-                power
-                * min(PROFILE_STEP_SECONDS, self.duration_seconds - index * PROFILE_STEP_SECONDS)
+                power * min(self.phase_seconds, self.duration_seconds - index * self.phase_seconds)
                 for index, power in enumerate(self.power_w)
             )
             / SECONDS_PER_HOUR
@@ -86,9 +90,9 @@ class CycleProfile:
         """Integrate phase overlaps exactly, including mixed planning intervals and remaining work."""
         energy = 0.0
         for index, power in enumerate(self.power_w):
-            start = started_at + timedelta(seconds=index * PROFILE_STEP_SECONDS)
+            start = started_at + timedelta(seconds=index * self.phase_seconds)
             end = min(
-                start + timedelta(seconds=PROFILE_STEP_SECONDS),
+                start + timedelta(seconds=self.phase_seconds),
                 started_at + timedelta(seconds=self.duration_seconds),
             )
             overlap = max(0, (min(end, right) - max(start, left)).total_seconds())
@@ -152,25 +156,43 @@ def candidates(work, intervals):
 
 
 def average_profiles(previous, learned, *, previous_weight=None):
-    """Average aligned cycles with optional retained weight, preserving count and longest duration."""
+    """Average at the coarser source resolution, preserving weighted energy and longest duration."""
     if previous is None:
         return learned
     weight = previous.samples if previous_weight is None else previous_weight
     if type(weight) not in (int, float) or not isfinite(weight) or weight < 0:
         raise ValueError("Invalid retained cycle weight")
     duration = max(previous.duration_seconds, learned.duration_seconds)
-    powers = tuple(
-        sum(
-            (item.power_w[index] if index < len(item.power_w) else 0)
+    phase_seconds = max(previous.phase_seconds, learned.phase_seconds)
+
+    def phase_energy(cycle, left, right):
+        """Integrate only intersecting source phases without inventing finer source detail."""
+        return sum(
+            cycle.power_w[index]
             * max(
-                0, min(PROFILE_STEP_SECONDS, item.duration_seconds - index * PROFILE_STEP_SECONDS)
+                0,
+                min(right, (index + 1) * cycle.phase_seconds, cycle.duration_seconds)
+                - max(left, index * cycle.phase_seconds),
             )
-            * item_weight
-            for item, item_weight in ((previous, weight), (learned, 1))
+            for index in range(
+                int(left // cycle.phase_seconds),
+                min(len(cycle.power_w), ceil(right / cycle.phase_seconds)),
+            )
+        )
+
+    powers = tuple(
+        (
+            phase_energy(
+                previous, index * phase_seconds, min(duration, (index + 1) * phase_seconds)
+            )
+            * weight
+            + phase_energy(
+                learned, index * phase_seconds, min(duration, (index + 1) * phase_seconds)
+            )
         )
         / (weight + 1)
-        / min(PROFILE_STEP_SECONDS, duration - index * PROFILE_STEP_SECONDS)
-        for index in range(max(len(previous.power_w), len(learned.power_w)))
+        / min(phase_seconds, duration - index * phase_seconds)
+        for index in range(ceil(duration / phase_seconds))
     )
     return CycleProfile(
         powers,
@@ -180,7 +202,8 @@ def average_profiles(previous, learned, *, previous_weight=None):
         else "synthetic"
         if "synthetic" in (previous.evidence, learned.evidence)
         else "measured",
-        duration if duration % PROFILE_STEP_SECONDS else None,
+        duration if duration % phase_seconds else None,
+        phase_seconds,
     )
 
 
@@ -188,7 +211,7 @@ def learn_cycle(points, started_at, completed_at, *, synthetic=False):
     """Build a completed cycle from fine cumulative kWh observations and known boundaries.
 
     Linear interpolation is limited to adjacent measurements no farther apart
-    than one profile phase. Hourly totals cannot invent quarter-hour phases.
+    than one profile phase. The output retains five-minute detail only when the observations support it.
     """
     duration = (completed_at - started_at).total_seconds()
     if not PROFILE_STEP_SECONDS <= duration <= MAX_CYCLE_HOURS * SECONDS_PER_HOUR:
@@ -217,10 +240,18 @@ def learn_cycle(points, started_at, completed_at, *, synthetic=False):
                 return left[1] + (right[1] - left[1]) * fraction
         raise ValueError("Cycle endpoint missing")
 
+    phase_seconds = (
+        FINE_PROFILE_SECONDS
+        if all(
+            (right[0] - left[0]).total_seconds() <= FINE_PROFILE_SECONDS
+            for left, right in pairwise(samples)
+        )
+        else PROFILE_STEP_SECONDS
+    )
     powers = []
     start = started_at
     while start < completed_at:
-        end = min(completed_at, start + timedelta(seconds=PROFILE_STEP_SECONDS))
+        end = min(completed_at, start + timedelta(seconds=phase_seconds))
         powers.append(
             (counter(end) - counter(start))
             * WATTS_PER_KW
@@ -231,5 +262,6 @@ def learn_cycle(points, started_at, completed_at, *, synthetic=False):
     return CycleProfile(
         tuple(powers),
         evidence="synthetic" if synthetic else "measured",
-        measured_duration_seconds=duration if duration % PROFILE_STEP_SECONDS else None,
+        measured_duration_seconds=duration if duration % phase_seconds else None,
+        phase_seconds=phase_seconds,
     )

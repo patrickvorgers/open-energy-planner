@@ -17,7 +17,7 @@ Home Assistant Energy owns consumer meters and their relationships. Do not selec
 1. Configure the appliance's energy and power measurement in Home Assistant Energy.
 2. Select it under **Settings > Appliances** and save its forecast membership.
 3. Enable complete-cycle shifting only when the appliance can be started through a suitable automation.
-4. Inspect its cycle evidence under **Energy > Appliances**. The first complete detected cycle establishes a provisional profile. Hourly history supplies an initial estimate, refined with available five-minute history. Detected evidence stays saved after Home Assistant removes older fine history. A manual duration and energy estimate can serve as an explicitly labelled fallback before enough evidence exists.
+4. Inspect its cycle evidence under **Energy > Appliances**. The first complete detected cycle establishes a provisional profile. Hourly history supplies an initial estimate, refined with available five-minute history. Detected evidence stays saved after Home Assistant removes older fine history. Both cycle charts show five-minute intervals. With only hourly data, power is flat within each hour and each energy bar estimates one twelfth of that hour's consumption. Fine measurements refine that shape without losing the measured total. A manual duration and energy estimate can serve as an explicitly labelled fallback before enough evidence exists.
 5. Load and prepare the appliance, choose the finish date/time and explicitly declare it ready.
 6. Inspect task status and the proposed start. A deadline alone does not declare readiness or start equipment.
 

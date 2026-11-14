@@ -216,7 +216,7 @@ Use all available paired hourly Recorder history as a separate provisional cycle
 estimate. Process the initial backlog in the background with durable bounded
 checkpoints and honest progress. Automatically admit a provisional planning
 profile after the first usable hourly run while the backlog continues, unless an explicit
-manual fallback or ready fine model takes precedence. Use all available fine history in bounded resumable batches to refine coarse observations without counting the same run twice. Retain raw evidence beyond HA retention. The first complete fine cycle supplies usable timing including its actual partial final phase. Use a 90-day recency
+manual fallback or ready fine model takes precedence. Use all available fine history in bounded resumable batches to refine coarse observations without counting the same run twice. Retain raw evidence beyond HA retention. The first complete fine cycle supplies usable timing including its actual partial final phase. Retain native five-minute detail for both average cycle power and consumed-energy charts. Both charts use a five-minute display grid even for hourly-only evidence, uniformly spreading each hour without presenting estimated detail as measurements. Regridding preserves measured total energy. Use a 90-day recency
 half-life for both automatic models. Keep raw counts, weights, usable coverage
 and estimated versus fine measured evidence visible per appliance. Hourly energy
 may be spread uniformly into estimated planning quarters, retaining occupied-hour

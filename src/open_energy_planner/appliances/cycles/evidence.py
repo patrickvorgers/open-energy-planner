@@ -105,6 +105,7 @@ def refine(settings, records):
             combined.samples,
             "synthetic" if any(record["synthetic"] for record in distinct) else "measured",
             fine_profile.measured_duration_seconds,
+            fine_profile.phase_seconds,
         )
     previous = settings.get("profile", {})
     if fine_profile or (

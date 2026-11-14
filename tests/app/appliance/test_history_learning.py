@@ -131,7 +131,7 @@ def test_numeric_sensor_faults_do_not_block_later_fine_cycles(service, field, va
     service.learn_history(ENTITY, POWER, rows, False, NOW)
     row = service.document()["devices"][0]
     assert row["learned_profile"]["samples"] == 2
-    assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.5)
+    assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
     assert row["learning_history"]["expected_intervals"] == 117
     assert row["learning_history"]["usable_intervals"] == (115 if field == "power_w" else 114)
     assert rows[13][field] is value
@@ -273,7 +273,7 @@ def test_legacy_automatic_evidence_reconstructs_weights_before_next_run(service)
     row = service.document()["devices"][0]
     assert row["profile"]["samples"] == 3
     assert 2.9 < row["learning_weight"] < 3
-    assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.5)
+    assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
 
 
 def test_usable_coverage_counts_missing_core_hours_and_not_overlap():

@@ -58,6 +58,7 @@ def profile(value):
         value["samples"],
         value["evidence"],
         value.get("measured_duration_seconds"),
+        value.get("phase_seconds", PROFILE_STEP_SECONDS),
     )
 
 
@@ -713,12 +714,11 @@ class ApplianceService:
                 for work, first, last in task_windows:
                     if end <= first or step.start >= last:
                         continue
-                    boundary = (
-                        int(step.start.timestamp()) // PROFILE_STEP_SECONDS + 1
-                    ) * PROFILE_STEP_SECONDS
+                    phase_seconds = work.profile.phase_seconds
+                    boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds
                     while boundary < end.timestamp():
                         boundaries.add(step.start.fromtimestamp(boundary, step.start.tzinfo))
-                        boundary += PROFILE_STEP_SECONDS
+                        boundary += phase_seconds
                     if work.fixed_start:
                         actual_end = work.fixed_start + timedelta(
                             seconds=work.profile.duration_seconds
@@ -726,25 +726,22 @@ class ApplianceService:
                         if step.start < actual_end < end:
                             boundaries.add(actual_end)
                         boundaries.update(
-                            work.fixed_start + timedelta(seconds=index * PROFILE_STEP_SECONDS)
+                            work.fixed_start + timedelta(seconds=index * phase_seconds)
                             for index in range(len(work.profile.power_w) + 1)
                             if step.start
-                            < work.fixed_start + timedelta(seconds=index * PROFILE_STEP_SECONDS)
+                            < work.fixed_start + timedelta(seconds=index * phase_seconds)
                             < end
                         )
-                    elif work.profile.duration_seconds % PROFILE_STEP_SECONDS:
-                        remainder = work.profile.duration_seconds % PROFILE_STEP_SECONDS
+                    elif work.profile.duration_seconds % phase_seconds:
+                        remainder = work.profile.duration_seconds % phase_seconds
                         boundary = (
-                            int(step.start.timestamp())
-                            // PROFILE_STEP_SECONDS
-                            * PROFILE_STEP_SECONDS
-                            + remainder
+                            int(step.start.timestamp()) // phase_seconds * phase_seconds + remainder
                         )
                         if boundary <= step.start.timestamp():
-                            boundary += PROFILE_STEP_SECONDS
+                            boundary += phase_seconds
                         while boundary < end.timestamp():
                             boundaries.add(step.start.fromtimestamp(boundary, step.start.tzinfo))
-                            boundary += PROFILE_STEP_SECONDS
+                            boundary += phase_seconds
                 from itertools import pairwise
 
                 for left, right in pairwise(sorted(boundaries)):

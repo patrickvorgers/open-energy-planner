@@ -1834,6 +1834,13 @@ def test_native_appliance_sensors_keep_the_measured_partial_phase():
     for invalid in (True, float("nan"), 1800, 2701):
         with pytest.raises(ValueError, match="Invalid measured cycle duration"):
             profile_duration({**profile, "measured_duration_seconds": invalid})
+    profile.update(power_w=[1000] * 7, phase_seconds=300)
+    assert duration.native_value == 35
+    assert energy.native_value == pytest.approx(7 / 12)
+    assert completion.native_value == start + timedelta(minutes=35)
+    for invalid in (True, 0, 60, 600, 3600):
+        with pytest.raises(ValueError, match="Invalid cycle phase duration"):
+            profile_duration({**profile, "phase_seconds": invalid})
 
 
 @pytest.mark.parametrize("fault", ["authentication", "release"])

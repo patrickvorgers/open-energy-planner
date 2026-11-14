@@ -1,7 +1,7 @@
 import "./chart_theme.js";
 import {confirmAction} from "./confirmation.js";
 import {money, percentage, when, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
-import {PROFILE_MINUTES, profileMetrics} from "./appliance-profile.js";
+import {profileMetrics} from "./appliance-profile.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {identity} from "./identity.js";
 import {pollApplianceEvidence} from "./appliance-evidence.js";
@@ -25,22 +25,22 @@ async function readEvidence() {
     return results.map(result => result.value);
 }
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
-/** Replace both learned-cycle charts. Each bar integrates one PROFILE_MINUTES phase in kWh.
+/** Replace both learned-cycle charts. Each bar integrates one declared profile phase in kWh.
  * The physical lower bound is zero. Only the upper end receives clearance.
- * The power chart plots AC power in W. The energy chart plots kWh per quarter-hour phase.
+ * The power chart plots AC power in W. The energy chart plots kWh per declared phase, preserving five-minute evidence.
  * With no eligible device, destroy both charts and clear their references.
  */
 function profile() {
     if (!current.devices.length) { chart?.destroy(); energyChart?.destroy(); chart = energyChart = renderedProfile = null; return; }
     const device = current.devices.find((item) => item.entity_id === find("profile-device").value), learned = device?.profile;
-    const powers = learned?.power_w || [], labels = powers.map((_, index) => `${index * PROFILE_MINUTES}–${Math.min((index + 1) * PROFILE_MINUTES, profileMetrics(learned).minutes)} min`);
+    const metrics = learned ? profileMetrics(learned) : null, powers = metrics?.powerW || [], labels = powers.map((_, index) => `${index * metrics.phaseMinutes}–${Math.min((index + 1) * metrics.phaseMinutes, metrics.minutes)} min`);
     const profileKey = JSON.stringify([device?.entity_id, learned]);
     find("cycle-charts").hidden = !learned;
     if (profileKey !== renderedProfile) {
         chart?.destroy(); energyChart?.destroy(); chart = energyChart = null;
         if (learned) {
-            chart = new Chart(find("cycle-chart"), {type: "line", data: {labels, datasets: [{label: "Power (W)", data: powers, backgroundColor: "#e69f00", borderColor: "#e69f00", cubicInterpolationMode: "monotone", pointRadius: 2, fill: false}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: "AC power (W)"}}}}});
-            energyChart = new Chart(find("cycle-energy-chart"), {type: "bar", data: {labels, datasets: [{label: "Energy (kWh)", data: profileMetrics(learned).phaseEnergy, backgroundColor: "#e69f00"}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: "Energy per phase (kWh)"}}}}});
+            chart = new Chart(find("cycle-chart"), {type: "line", data: {labels, datasets: [{label: "Power (W)", data: powers, backgroundColor: "#e69f00", borderColor: "#e69f00", stepped: true, pointRadius: 2, fill: false}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: "AC power (W)"}}}}});
+            energyChart = new Chart(find("cycle-energy-chart"), {type: "bar", data: {labels, datasets: [{label: "Energy (kWh)", data: profileMetrics(learned).phaseEnergy, backgroundColor: "#e69f00"}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: `Energy per ${metrics.phaseMinutes}-minute interval (kWh)`}}}}});
         }
         renderedProfile = profileKey;
     }
@@ -87,6 +87,7 @@ function profile() {
         }
         if (scan.expected_intervals) history.append(node("p", `Usable hourly intervals: ${scan.usable_intervals} of ${scan.expected_intervals}: ${percentage(100 * scan.usable_intervals / scan.expected_intervals)}`));
     }
+    if (metrics?.sourcePhaseMinutes > metrics.phaseMinutes) history.append(node("p", learned?.evidence === "hourly_estimate" ? "Five-minute display: Hourly power is spread uniformly. Each energy bar estimates one twelfth of its hour. Fine measurements refine this shape later." : "Five-minute display: Coarser mean power is spread uniformly. These are estimates within each original measurement interval."));
     if (learned?.evidence === "hourly_estimate") history.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. The first complete fine cycle refines this estimate automatically."));
 }
 /** Limit profile inspection to followed cycle devices, including those still scanning without a profile or shift permission. */

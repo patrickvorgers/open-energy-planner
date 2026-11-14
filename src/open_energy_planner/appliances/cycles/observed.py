@@ -6,7 +6,7 @@ from datetime import timedelta
 from open_energy_planner.demand.calculation.model import digest
 
 from .learning import SAMPLE_SECONDS
-from .model import ApplianceWork, CycleProfile, instant
+from .model import PROFILE_STEP_SECONDS, ApplianceWork, CycleProfile, instant
 
 OBSERVATION_MAX_AGE_SECONDS = 2 * SAMPLE_SECONDS
 
@@ -60,6 +60,7 @@ def work(entity, run, now):
         value["samples"],
         value["evidence"],
         value.get("measured_duration_seconds"),
+        value.get("phase_seconds", PROFILE_STEP_SECONDS),
     )
     start = instant(run["started_at"])
     end = start + timedelta(seconds=cycle.duration_seconds)

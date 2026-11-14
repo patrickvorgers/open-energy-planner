@@ -41,7 +41,8 @@ def test_detects_complete_energy_conserving_cycles_with_internal_pauses(service)
     row = service.document()["devices"][0]
     assert row["learning_status"] == "ready" and row["profile_kind"] == "Learned"
     assert row["profile"]["samples"] == 2
-    assert row["profile"]["power_w"] == pytest.approx([1000, 0, 1000 / 3, 1000 / 3, 1000 / 3])
+    assert row["profile"]["phase_seconds"] == 300
+    assert row["profile"]["power_w"] == pytest.approx([1000] * 3 + [0] * 3 + [1000 / 3] * 9)
     assert [cycle["energy_kwh"] for cycle in row["recent_cycles"]] == pytest.approx([0.5, 0.5])
     assert not row["shiftable"] and row["task"] is None
     service.learn_history(ENTITY, POWER, readings(), False, NOW)

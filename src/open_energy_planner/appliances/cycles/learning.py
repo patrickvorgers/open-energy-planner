@@ -10,6 +10,7 @@ from itertools import pairwise
 from math import ceil, isfinite
 
 from open_energy_planner.appliances.cycles.model import (
+    FINE_PROFILE_SECONDS,
     MAX_CYCLE_HOURS,
     MAX_CYCLE_POWER_W,
     MAX_ENERGY_COUNTER_KWH,
@@ -24,7 +25,7 @@ from open_energy_planner.core.units import (
     WATTS_PER_KW,
 )
 
-SAMPLE_SECONDS = 300
+SAMPLE_SECONDS = FINE_PROFILE_SECONDS
 QUIET_SAMPLES = 6
 MIN_ACTIVE_SAMPLES = 3
 MIN_COMPLETE_CYCLES = 1

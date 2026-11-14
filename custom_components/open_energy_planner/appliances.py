@@ -25,7 +25,8 @@ from .subentries import add_grouped_entities, retire_empty_groups
 MAX_CYCLE_HISTORY_HOURS = 12
 FINE_STATISTIC_MINUTES = 5
 MAX_CYCLE_READING_GAP_SECONDS = 900
-MAX_PROFILE_PHASES = 48
+FINE_PROFILE_SECONDS = 5 * 60
+MAX_PROFILE_PHASES = MAX_CYCLE_HISTORY_HOURS * 3600 // FINE_PROFILE_SECONDS
 MAX_CYCLE_POWER_W = 20000
 MAX_CORRELATION_LENGTH = 64
 PROFILE_INTERVAL_HOURS = 0.25
@@ -45,28 +46,41 @@ TASK_STATUSES = (
 )
 
 
+def profile_phase_seconds(profile):
+    """Admit measured five-minute and legacy estimated quarter-hour phases only."""
+    seconds = profile.get("phase_seconds", int(PROFILE_INTERVAL_HOURS * 3600))
+    if type(seconds) is not int or seconds not in (
+        FINE_PROFILE_SECONDS,
+        int(PROFILE_INTERVAL_HOURS * 3600),
+    ):
+        raise ValueError("Invalid cycle phase duration")
+    return seconds
+
+
 def profile_duration(profile):
-    """Validate optional measured timing while retaining legacy complete quarter-hour phases."""
-    full = len(profile["power_w"]) * PROFILE_INTERVAL_HOURS * 3600
+    """Validate declared phase duration and optional partial ending, preserving legacy profiles."""
+    phase_seconds = profile_phase_seconds(profile)
+    full = len(profile["power_w"]) * phase_seconds
+    if full > MAX_CYCLE_HISTORY_HOURS * 3600:
+        raise ValueError("Invalid measured cycle duration")
     measured = profile.get("measured_duration_seconds")
     if measured is None:
         return full
     if (
         type(measured) not in (int, float)
         or not isfinite(measured)
-        or not full - PROFILE_INTERVAL_HOURS * 3600 < measured <= full
+        or not full - phase_seconds < measured <= full
     ):
         raise ValueError("Invalid measured cycle duration")
     return measured
 
 
 def profile_energy(profile):
-    """Integrate the admitted final partial phase for the read-only cycle-energy sensor."""
-    duration = profile_duration(profile)
+    """Integrate admitted phase durations for the read-only cycle-energy sensor."""
+    duration, phase_seconds = profile_duration(profile), profile_phase_seconds(profile)
     return (
         sum(
-            power
-            * min(PROFILE_INTERVAL_HOURS * 3600, duration - index * PROFILE_INTERVAL_HOURS * 3600)
+            power * min(phase_seconds, duration - index * phase_seconds)
             for index, power in enumerate(profile["power_w"])
         )
         / 3600
@@ -266,9 +280,9 @@ def register_services(hass):
 
 def receive(coordinator, value):
     """Validate optional task projection and emit request/expiry events once per state transition."""
-    from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
+    from .wire_limits import MAX_APPLIANCE_RESPONSE_BYTES, validate_projection_size
 
-    validate_projection_size(value, MAX_API_RESPONSE_BYTES)
+    validate_projection_size(value, MAX_APPLIANCE_RESPONSE_BYTES)
     if not isinstance(value, dict) or not isinstance(value.get("devices", []), list):
         raise TypeError("Invalid appliance projection")
     previous = getattr(coordinator, "appliances", {})

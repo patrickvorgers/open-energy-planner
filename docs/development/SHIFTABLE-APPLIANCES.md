@@ -127,9 +127,9 @@ The Recorder adapter uses supported raw-history and native five-minute-statistic
 interfaces, never SQL. Fine cumulative observations must cover the entire completed
 cycle, with no reset, unavailable reading or gap over one quarter. Hourly totals
 cannot reconstruct a phase profile. Watt-hour units are normalized inside HA.
-One average profile records quarter-hour mean AC watts, measured fine duration,
+One average profile records declared phase mean AC watts, measured fine duration,
 total kWh, sample count and measured/synthetic provenance. Different durations are
-zero-padded when averaging, preserving mean cycle energy. Incomplete cycles do not update the completed model. Hourly cycles supply labelled estimates. Fine observations refine overlapping coarse runs without counting them twice. Automatic detection supplies learning evidence independently of execution feedback.
+zero-padded when averaging, preserving mean cycle energy. Fine source profiles retain five-minute detail. Both charts use a five-minute display grid, distributing coarse means uniformly and labelling them as estimates. Incomplete cycles do not update the completed model. Hourly cycles supply labelled estimates. Fine observations refine overlapping coarse runs without counting them twice. Automatic detection supplies learning evidence independently of execution feedback.
 The blueprint reports physical outcomes and does not submit a second learning copy.
 The legacy completed-cycle API remains for existing clients only.
 

@@ -16,7 +16,7 @@ def test_first_complete_fine_cycle_is_usable_and_survives_restart(service):
     service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
     row = service.document()["devices"][0]
     assert row["profile"]["samples"] == 1
-    assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.5)
+    assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
     restored = ApplianceService(service.documents, service.consumers)
     restored.configure(ENTITY, True)
     task = restored.submit(ENTITY, "first-cycle", NOW, NOW + timedelta(hours=4), NOW)
@@ -46,7 +46,7 @@ def test_fine_observation_replaces_the_same_hourly_cycle_without_double_counting
     row = service.document()["devices"][0]
     assert row["profile"]["samples"] == 1
     assert row["profile_sources"] == {"hourly_cycles": 0, "fine_cycles": 1}
-    assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.5)
+    assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
     assert len(list(service.documents.iter_prefix("appliance-hourly-"))) == 1
     assert len(list(service.documents.iter_prefix("appliance-detected-"))) == 1
     service.learn_history(ENTITY, POWER, fine, False, NOW)
@@ -73,7 +73,8 @@ def test_partial_final_phase_preserves_measured_duration_and_energy():
     longer = learn_cycle(points, NOW, NOW + timedelta(minutes=35))
     shorter = learn_cycle(points[:5], NOW, NOW + timedelta(minutes=20))
     assert longer.duration_seconds == 2100
-    assert longer.power_w == pytest.approx((1000, 1000, 1000))
+    assert longer.phase_seconds == 300
+    assert longer.power_w == pytest.approx((1000,) * 7)
     assert longer.energy_kwh == pytest.approx(7 / 12)
     assert longer.energy(
         NOW, NOW + timedelta(minutes=30), NOW + timedelta(hours=1)
@@ -300,7 +301,7 @@ def test_coarse_energy_cannot_force_fine_timing_beyond_the_power_boundary(servic
     row = service.document()["devices"][0]
     assert row["profile"]["samples"] == 1
     assert row["profile_sources"] == {"hourly_cycles": 0, "fine_cycles": 1}
-    assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.5)
+    assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
     assert len(list(service.documents.iter_prefix("appliance-hourly-"))) == 1
 
 
@@ -333,3 +334,48 @@ def test_incomplete_restored_evidence_cannot_reduce_an_accepted_model(service, m
     with pytest.raises(ValueError, match="Archived cycle evidence is incomplete"):
         restored.learn_history(ENTITY, POWER, readings(cycles=3), False, NOW)
     assert restored.document() == before
+
+
+def test_five_minute_peak_is_not_hidden_by_the_quarter_hour_average(service):
+    """A 3-kW five-minute pulse cannot use a 2-kW grid, even though its quarter-hour mean is only 1 kW."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from open_energy_planner.appliances.cycles.model import CycleProfile
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.optimization.adapters.highs.solver import HighsSolver
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+
+    first = NOW - timedelta(days=1)
+    points = [
+        {"at": (first + timedelta(minutes=minute)).isoformat(), "kwh": energy}
+        for minute, energy in ((0, 0), (5, 0.25), (10, 0.25), (15, 0.25))
+    ]
+    service.record_cycle(ENTITY, "measured-pulse", first, first + timedelta(minutes=15), points)
+    service.configure(ENTITY, True)
+    service.submit(ENTITY, "ready-for-pulse", NOW, NOW + timedelta(hours=1), NOW)
+    residual = {
+        "issued_at": NOW.isoformat(),
+        "steps": [{"start": NOW.isoformat(), "duration_h": 1, "kwh": 0.1}],
+    }
+    forecast = {
+        "issued_at": NOW.isoformat(),
+        "steps": [{"start": NOW.isoformat(), "duration_h": 1, "kwh": 0.25}],
+    }
+    service.consumers.result = {
+        "residual_baseline": residual,
+        "devices": [{"entity_id": ENTITY, "forecast": forecast, "baseline_forecast": forecast}],
+    }
+    original = InstallationProblem((Interval(NOW, 1, 0.2, 0, 0.35),), (), (), (), 2000, 2000)
+    snapshot = InputSnapshot(
+        "snapshot", "configuration", NOW, "measurement", "forecast", "prices", original
+    )
+    prepared = service.prepare(snapshot, SimpleNamespace(), NOW)
+    [work] = prepared.problem.appliances
+    assert work.profile.phase_seconds == 300
+    assert work.profile.energy_kwh == pytest.approx(0.25)
+    assert all(step.duration_h <= 1 / 12 + 1e-12 for step in prepared.problem.intervals)
+    assert HighsSolver().solve(prepared.problem).plan.appliance_starts == ()
+    averaged = replace(prepared.problem, appliances=(replace(work, profile=CycleProfile((1000,))),))
+    assert HighsSolver().solve(averaged).plan.appliance_starts

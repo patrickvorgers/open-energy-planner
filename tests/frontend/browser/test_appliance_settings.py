@@ -20,6 +20,15 @@ from tests.frontend.browser.helpers import (
 )
 
 
+def wait_cycle_charts(page):
+    """Wait for actual final plotted values before inspecting or capturing the cycle charts."""
+    page.wait_for_function("""() => ["cycle-chart", "cycle-energy-chart"].every(id => {
+        const chart = Chart.getChart(id);
+        return chart && chart.getDatasetMeta(0).data.every((element, index) =>
+            Math.abs(element.y - chart.scales.y.getPixelForValue(chart.data.datasets[0].data[index])) < 0.1);
+    })""")
+
+
 @pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
@@ -64,24 +73,60 @@ def test_first_cycle_exact_timing_and_measured_activity_are_visible(app_page):
     ).ok
     now = datetime.now(UTC).replace(second=0, microsecond=0)
     now = now.replace(minute=now.minute // 5 * 5)
+    first = (now - timedelta(days=1)).replace(minute=0)
     total, rows = 0, []
-    for index, watts in enumerate([0] * 12 + [1000] * 7 + [0] * 12):
+    for index, watts in enumerate([0] * 12 + [1800, 1200, 600, 0, 1200, 1200, 1000] + [0] * 12):
         total += watts / 12000
         rows.append(
             {
-                "at": (now - timedelta(days=1) + timedelta(minutes=5 * index)).isoformat(),
+                "at": (first + timedelta(minutes=5 * index)).isoformat(),
                 "power_w": watts,
                 "kwh": total,
             }
         )
     pair = {"entity_id": entity, "power_entity": power, "synthetic": True}
+    coarse, total = [], 0
+    for index, watts in enumerate([0, 0, 7000 / 12, 0]):
+        total += watts / 1000
+        coarse.append(
+            {
+                "at": (first - timedelta(hours=1) + timedelta(hours=index)).isoformat(),
+                "power_w": watts,
+                "kwh": total,
+            }
+        )
+    assert page.request.post(
+        url + "/v1/appliances/history",
+        headers=headers,
+        data={**pair, "rows": coarse, "resolution": "hour"},
+    ).ok
+    page.goto(url + "/appliances")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#profile-evidence")).to_contain_text("Historical estimate")
+    expect(page.locator("#profile-evidence")).to_contain_text("Cycle time: 60 minutes")
+    expect(page.locator("#profile-history")).to_contain_text(
+        "Each energy bar estimates one twelfth of its hour"
+    )
+    wait_cycle_charts(page)
+    assert page.evaluate("Chart.getChart('cycle-chart').data.datasets[0].data") == pytest.approx(
+        [7000 / 12] * 12
+    )
+    assert page.evaluate(
+        "Chart.getChart('cycle-energy-chart').data.datasets[0].data"
+    ) == pytest.approx([7 / 144] * 12)
+    assert page.evaluate("Chart.getChart('cycle-chart').data.labels.at(-1)") == "55–60 min"
+    page.screenshot(
+        path=f"results/ci/cycle-hourly-estimate-{page.viewport_size['width']}.png", full_page=True
+    )
     result = page.request.post(
         url + "/v1/appliances/history", headers=headers, data={**pair, "rows": rows}
     )
     assert result.ok, result.text()
     [device] = result.json()["appliances"]["devices"]
     assert device["profile"]["samples"] == 1
-    assert device["profile"]["measured_duration_seconds"] == 2100
+    assert device["profile"]["phase_seconds"] == 300
+    assert len(device["profile"]["power_w"]) == 7
     active = []
     total = 0
     for index, watts in enumerate([0] * 12 + [1000] * 3):
@@ -119,15 +164,11 @@ def test_first_cycle_exact_timing_and_measured_activity_are_visible(app_page):
     expect(history).to_contain_text("Fine history: Processing")
     expect(page.locator("#cycle-charts")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-    page.wait_for_function("""() => ["cycle-chart", "cycle-energy-chart"].every(id => {
-        const chart = Chart.getChart(id);
-        return chart && chart.getDatasetMeta(0).data.every((element, index) =>
-            Math.abs(element.y - chart.scales.y.getPixelForValue(chart.data.datasets[0].data[index])) < 0.1);
-    })""")
+    wait_cycle_charts(page)
     assert page.evaluate("Chart.getChart('cycle-chart').data.labels.at(-1)") == "30–35 min"
     assert page.evaluate(
         "Chart.getChart('cycle-energy-chart').data.datasets[0].data"
-    ) == pytest.approx([0.25, 0.25, 1 / 12])
+    ) == pytest.approx([0.15, 0.1, 0.05, 0, 0.1, 0.1, 1 / 12])
     page.screenshot(
         path=f"results/ci/cycle-refinement-{page.viewport_size['width']}.png", full_page=True
     )
