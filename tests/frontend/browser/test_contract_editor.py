@@ -221,7 +221,7 @@ def test_latest_plan_shows_full_contract_valuation_by_default_after_first_quarte
     if slice_state == "available":
         expect(caption).to_contain_text("11/12/2026, 12:15 AM")
         expect(caption).to_contain_text("11/12/2026, 12:30 AM")
-        expect(caption).to_contain_text("0.25 hours")
+        expect(caption).not_to_contain_text("hours")
         expect(caption).to_contain_text("Original contract")
         expect(page.locator("#reference-costs > dl dd").first).to_have_text("0.30 EUR")
     elif slice_state == "loading":
