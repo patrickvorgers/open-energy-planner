@@ -73,6 +73,21 @@ def test_six_day_and_full_period_use_financial_module_and_preserve_original(app_
     identity = open_plan(page, url)
     original = page.request.get(url + f"/v1/plans/{identity}", headers=HEADERS).json()
     expect(page.locator('[data-hours="0"]')).to_have_text("Full period")
+    expect(page.get_by_role("heading", name="Original plan", exact=True)).to_be_visible()
+    expect(page.get_by_text(re.compile(r"hour planning window"))).to_have_count(0)
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.get_by_text(re.compile(r"hour planning window"))).to_have_count(0)
+    directory = Path("results/ci/planning-heading")
+    directory.mkdir(parents=True, exist_ok=True)
+    viewport = page.viewport_size
+    if viewport["width"] < 500:
+        page.set_viewport_size({**viewport, "height": 1800})
+    page.locator("#plan-heading").evaluate(
+        "element => window.scrollTo(0, element.getBoundingClientRect().top + scrollY - 100)"
+    )
+    page.screenshot(path=str(directory / f"planning-{viewport['width']}.png"))
+    page.set_viewport_size(viewport)
     totals = []
     for hours in (6, 24, 48):
         expected = period_response(page, url, identity, START, START + timedelta(hours=hours))

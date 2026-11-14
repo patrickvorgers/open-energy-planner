@@ -55,7 +55,7 @@ Open `.local/first-plan/administration-token` in a local text editor. Paste its 
 
 ## Recognize the first result
 
-Wait for the first calculation, then choose **Refresh overview**. Under **Original plan**, expect a planning window, a plan version and a generated timestamp. The synthetic demo normally shows **Status: Optimal** and a 48-hour planning window.
+Wait for the first calculation, then choose **Refresh overview**. Under **Original plan**, expect a plan version and a generated timestamp. The synthetic demo normally shows **Status: Optimal**.
 
 Start with the **Optimizer** chart, followed by **Battery self-consumption** and **Without battery: Baseline**. Use **Next 6 hours**, **Next 24 hours** and **Full period** to inspect the same plan at different scales. Tap or hover over the chart to read an interval.
 
