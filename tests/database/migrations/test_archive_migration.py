@@ -88,6 +88,12 @@ def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     service.feedback(
         ENTITY, task["id"], attempt["id"], "not_started", issued, later, cancelled=True
     )
+    from tests.app.appliance.test_history_resume import next_batch, start_fine
+
+    resumed_at = NOW + timedelta(days=20)
+    start_fine(service, NOW - timedelta(days=40), resumed_at, resumed_at)
+    next_batch(service, [], resumed_at)
+    pending = history.request(service.state["devices"][ENTITY], resolution="5minute")
     expected = json.loads(json.dumps(service.document()))
     raw = list(service.documents.iter_prefix("appliance-detected-"))
     explicit = list(service.documents.iter_prefix("appliance-cycle-"))
@@ -116,6 +122,14 @@ def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     assert restored.state["tasks"][ENTITY]["status"] == "execution_observed"
     assert expected["devices"][0]["task"]["status"] == "execution_observed"
     assert expected["devices"][0]["fine_import"]["phase"] == "processing"
+    assert history.request(restored.state["devices"][ENTITY], resolution="5minute") == pending
+    progress = deepcopy(restored.state["devices"][ENTITY]["fine_import"])
+    assert progress["forward_cursor"] == (NOW - timedelta(hours=1) + timedelta(days=7)).isoformat()
+    next_batch(restored, [], resumed_at)
+    resumed = restored.state["devices"][ENTITY]["fine_import"]
+    assert resumed["cursor"] == progress["cursor"]
+    assert resumed["forward_cursor"] == (NOW - timedelta(hours=1) + timedelta(days=14)).isoformat()
+    assert resumed["expected_intervals"] == 14 * 24 * 12
 
 
 def test_battery_calibration_transfers_without_source_dependency(route):

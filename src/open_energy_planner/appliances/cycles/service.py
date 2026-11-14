@@ -302,7 +302,13 @@ class ApplianceService:
                 body["energy_kwh"] = learned.energy_kwh
             records[record_key] = cached
             extra.append((key, body))
-        return records, extra
+        changed = (
+            bool(extra)
+            or pair not in self._cycle_records
+            or bool(records)
+            and self.state["devices"].get(entity, {}).get("learning_source") != power_entity
+        )
+        return records, extra, changed
 
     def learn_history(
         self, entity, power_entity, rows, synthetic, now, *, sample_seconds=SAMPLE_SECONDS
@@ -323,12 +329,13 @@ class ApplianceService:
         cycles = detect_cycles(rows, now, sample_seconds=sample_seconds, activity=activity)
         running = activity.get("running")
         self.sync_sources()
-        records, extra = self.collect_cycles(
+        records, extra, changed = self.collect_cycles(
             entity, power_entity, cycles, synthetic, hourly=sample_seconds == HOURLY_SAMPLE_SECONDS
         )
         data = deepcopy(self.state)
         settings = data["devices"].setdefault(entity, {"shiftable": False})
-        refine(settings, list(records.values()))
+        if changed:
+            refine(settings, list(records.values()))
         if sample_seconds == SAMPLE_SECONDS:
             from .observed import observe
 
@@ -453,7 +460,7 @@ class ApplianceService:
         learned = learn_cycle(points, started_at, completed_at, synthetic=synthetic)
         self.sync_sources()
         power_entity = self.source(entity)
-        records, _ = self.collect_cycles(entity, power_entity, (), synthetic)
+        records, _, _ = self.collect_cycles(entity, power_entity, (), synthetic)
         explicit = completion(body)
         explicit["_profile"] = learned
         records["appliance-cycle-" + explicit["id"]] = explicit

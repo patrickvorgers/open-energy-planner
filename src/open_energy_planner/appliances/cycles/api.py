@@ -336,21 +336,22 @@ def register(app, service, repository, live, lock, ev, thermal):
                         progress_field = (
                             "fine_import" if operation == "fine_history" else "history_import"
                         )
-                        previous_cursor = (
+                        previous_checkpoint = tuple(
                             service.state["devices"]
                             .get(body["entity_id"], {})
                             .get(progress_field, {})
-                            .get("cursor")
+                            .get(frontier)
+                            for frontier in ("cursor", "forward_cursor")
                         )
                         cancellation = await complete_write(apply)
-                        accepted = (
-                            operation not in ("hourly_history", "fine_history")
-                            or previous_cursor
-                            != (
-                                service.state["devices"][body["entity_id"]][progress_field][
-                                    "cursor"
-                                ]
+                        accepted = operation not in (
+                            "hourly_history",
+                            "fine_history",
+                        ) or previous_checkpoint != tuple(
+                            service.state["devices"][body["entity_id"]][progress_field].get(
+                                frontier
                             )
+                            for frontier in ("cursor", "forward_cursor")
                         )
                         await events.finish(
                             activity,

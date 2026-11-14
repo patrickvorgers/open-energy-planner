@@ -117,6 +117,17 @@ of treating the configured Recorder retention or one empty week as proof that
 older fine data is absent. The source-bound `fine_import` checkpoint and
 `fine_history_request` survive restart. Fine evidence older than seven days remains
 admissible. Recent fine refreshes continue while the backlog is pending.
+When the target grows, a separate forward checkpoint examines the new time range
+in seven-day cores before continuing the older backwards backlog. The original
+backwards cursor is retained. This also reopens a completed scan after an outage
+longer than the recent refresh window. Only committed cores add examined coverage,
+including empty cores. Neither recent uploads nor an extended target imply that
+the intervening range has been examined. Both checkpoints survive restart and
+database transfer, and failed writes advance neither checkpoint.
+
+Unchanged uploads and empty batches reuse the current reconstructed model while
+still processing observations and coverage. Reconstruction runs after restart,
+source changes or new cycle evidence. Failed commits do not publish a new cache.
 
 Both cycle charts always display five-minute intervals. Hourly estimates are spread uniformly across their twelve display intervals. Average power stays flat within an hour and each energy bar contains one twelfth of that hour's kWh. Legacy quarter-hour profiles are similarly spread uniformly for display. These are explicitly labelled estimates. Actual five-minute observations retain their phase detail in the model and charts. Regridding preserves total energy and never relabels estimated detail as measured. Planning start choices remain UTC quarters, while task windows preserve finer measured power peaks.
 

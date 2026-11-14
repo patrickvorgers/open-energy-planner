@@ -122,7 +122,7 @@ def test_first_cycle_exact_timing_and_measured_activity_are_visible(app_page):
     result = page.request.post(
         url + "/v1/appliances/history", headers=headers, data={**pair, "rows": rows}
     )
-    assert result.ok, result.text()
+    assert result.ok, f"Appliance fixture upload failed with HTTP {result.status}"
     [device] = result.json()["appliances"]["devices"]
     assert device["profile"]["samples"] == 1
     assert device["profile"]["phase_seconds"] == 300

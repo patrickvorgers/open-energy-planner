@@ -73,8 +73,14 @@ def scan(service, entity, power_entity, phase, start, end, now, *, resolution="h
             end=last.isoformat(),
             cursor=previous.get("cursor", (last if resolution == "5minute" else first).isoformat()),
         )
+        if resolution == "5minute":
+            initial_end = previous.get("end", last.isoformat())
+            current.update(
+                backfill_end=previous.get("backfill_end", initial_end),
+                forward_cursor=previous.get("forward_cursor", initial_end),
+            )
         if (
-            instant(current["cursor"]) <= first
+            instant(current["cursor"]) <= first and instant(current["forward_cursor"]) >= last
             if resolution == "5minute"
             else instant(current["cursor"]) >= last
         ):
@@ -103,9 +109,14 @@ def request(settings, *, resolution="hour"):
     if progress.get("phase") != HistoryPhase.PROCESSING:
         return None
     if resolution == "5minute":
-        end = instant(progress["cursor"])
-        start = max(instant(progress["start"]), end - timedelta(days=HISTORY_BATCH_DAYS))
-        core_end = end
+        forward = instant(progress.get("forward_cursor", progress["end"]))
+        if forward < instant(progress["end"]):
+            start = forward
+            core_end = min(start + timedelta(days=HISTORY_BATCH_DAYS), instant(progress["end"]))
+        else:
+            end = instant(progress["cursor"])
+            start = max(instant(progress["start"]), end - timedelta(days=HISTORY_BATCH_DAYS))
+            core_end = end
     else:
         start, end = instant(progress["cursor"]), instant(progress["end"])
         core_end = min(start + timedelta(days=HISTORY_BATCH_DAYS), end)
@@ -156,11 +167,16 @@ def batch(
     progress = settings.get(field, {})
     if not progress or progress.get("power_entity") != power_entity or not first < last:
         raise ValueError("History scan must be initialized for this source")
-    if progress.get("cursor") and (
-        first >= instant(progress["cursor"])
-        if resolution == "5minute"
-        else last <= instant(progress["cursor"])
-    ):
+    if resolution == "5minute":
+        boundary = instant(progress.get("backfill_end", progress["end"]))
+        backward_examined = instant(progress["cursor"]) <= first < last <= boundary
+        forward_examined = (
+            boundary <= first < last <= instant(progress.get("forward_cursor", progress["end"]))
+        )
+        already_examined = backward_examined or forward_examined
+    else:
+        already_examined = last <= instant(progress["cursor"])
+    if already_examined:
         return
     expected = request(settings, resolution=resolution)
     if expected != {"start": start, "end": end, "read_start": read_start, "read_end": read_end}:
@@ -171,7 +187,7 @@ def batch(
         raise ValueError("Hourly samples exceed the requested batch")
     from .evidence import refine
 
-    records, extra = service.collect_cycles(
+    records, extra, changed = service.collect_cycles(
         entity,
         power_entity,
         [
@@ -184,12 +200,16 @@ def batch(
     )
     data = deepcopy(service.state)
     target = data["devices"][entity]
-    refine(target, list(records.values()))
+    if changed:
+        refine(target, list(records.values()))
     if records:
         target["learning_source"] = power_entity
     accepted = len(extra)
     updated = target[field]
-    updated["cursor"] = (first if resolution == "5minute" else last).isoformat()
+    if resolution == "5minute" and first >= boundary:
+        updated["forward_cursor"] = last.isoformat()
+    else:
+        updated["cursor"] = (first if resolution == "5minute" else last).isoformat()
     evidence = history_evidence(
         rows, accepted, sample_seconds=sample_seconds, start=first, end=last
     )
@@ -197,7 +217,8 @@ def batch(
     for field in ("expected_intervals", "usable_intervals", "detected_cycles"):
         updated[field] = updated.get(field, 0) + evidence[field]
     if (
-        first == instant(updated["start"])
+        instant(updated["cursor"]) == instant(updated["start"])
+        and instant(updated.get("forward_cursor", updated["end"])) == instant(updated["end"])
         if resolution == "5minute"
         else last == instant(updated["end"])
     ):
