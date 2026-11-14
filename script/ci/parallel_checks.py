@@ -20,7 +20,7 @@ from script.ci.browser_suites import (
 from script.ci.ci_groups import FUNCTIONAL_DATABASE_SUITES, selected_suites
 from script.ci.proof_git import checkout_tree
 
-LANES = ("native", "browser", "databases", "supervisor")
+LANES = ("native", "browser", "databases", "performance-queries", "supervisor")
 PREPARED = Path(".local/ci-prepared")
 
 
@@ -29,7 +29,8 @@ def lane_suites(profile):
     required = completion.required_suites(profile)
     groups = {
         "browser": required & {"browser"},
-        "databases": required & {*FUNCTIONAL_DATABASE_SUITES, "performance-queries"},
+        "databases": required & set(FUNCTIONAL_DATABASE_SUITES),
+        "performance-queries": required & {"performance-queries"},
         "supervisor": required & {"supervisor"},
     }
     groups["native"] = required - set().union(*groups.values())
@@ -45,7 +46,7 @@ def lane_images(profile, lane):
         return []
     if lane == "browser":
         return ["ui-tests"]
-    if lane == "databases":
+    if lane in {"databases", "performance-queries"}:
         return ["native"]
     images = ["native"]
     if "ha" in suites or any(suite.startswith("ha-") for suite in suites):

@@ -233,7 +233,8 @@ try:
         targets = [
             target
             for target in targets
-            if target != "native" or arguments.lane in {"native", "databases"}
+            if target != "native"
+            or arguments.lane in {"native", "databases", "performance-queries"}
         ]
         if arguments.lane == "supervisor":
             targets = []
@@ -252,7 +253,7 @@ try:
     elif arguments.lane and not documentation_only:
         if arguments.lane == "browser":
             run_browser()
-        elif arguments.lane == "databases":
+        elif arguments.lane in {"databases", "performance-queries"}:
             run("up", "--detach", "--wait", "postgres-test", "mariadb-test", "mysql-test")
             run_database_suites()
         elif arguments.lane == "native":

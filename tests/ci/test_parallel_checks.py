@@ -95,16 +95,22 @@ def test_shared_storage_setup_preserves_configuration_and_rejects_invalid_json(t
         }
 
 
-@pytest.mark.parametrize("profile", [*PROFILES, *map(focused_profile, sorted(ATOMIC_SUITES))])
+@pytest.mark.parametrize(
+    "profile", [*PROFILES, "full+performance-queries", *map(focused_profile, sorted(ATOMIC_SUITES))]
+)
 def test_every_selection_partitions_without_expansion_or_duplicate_suites(profile):
     """Legacy parents and each independently selected group have exactly one machine owner."""
     assignments = parallel.lane_suites(profile)
     flattened = [suite for suites in assignments.values() for suite in suites]
-    assert len(assignments) <= 4
+    assert len(assignments) <= 5
     assert len(flattened) == len(set(flattened))
     assert set(flattened) == completion.required_suites(profile)
+    assert assignments.get("performance-queries", set()) == (
+        {"performance-queries"} if "performance-queries" in flattened else set()
+    )
+    assert "performance-queries" not in assignments.get("databases", set())
     machines = parallel.machine_matrix(profile)
-    assert len(machines) <= 5
+    assert len(machines) <= 6
     assert len({machine["name"] for machine in machines}) == len(machines)
     assert {machine["lane"] for machine in machines} == set(assignments)
     assert [machine["browser_machine"] for machine in machines if machine["lane"] == "browser"] == (
@@ -126,6 +132,14 @@ def test_every_selection_partitions_without_expansion_or_duplicate_suites(profil
         (
             "selected:ci,databases,supervisor",
             {"native": ["native"], "databases": ["native"], "supervisor": []},
+        ),
+        (
+            "selected:ci,databases,performance-queries",
+            {"native": ["native"], "databases": ["native"], "performance-queries": ["native"]},
+        ),
+        (
+            "selected:ci,performance-queries",
+            {"native": ["native"], "performance-queries": ["native"]},
         ),
         ("selected:ci,ha-controls", {"native": ["native", "ha-tests", "app"]}),
         ("selected:ci,ha-history", {"native": ["native", "ha-tests"]}),
@@ -175,6 +189,18 @@ def prepare_plan(profile):
             {"native", "app", "ha-tests", "ui-tests"},
             {"native", "browser", "databases", "supervisor"},
             {"native", "ha", "browser", "databases", "supervisor"},
+        ),
+        (
+            "full+performance-queries",
+            {"native", "app", "ha-tests", "ui-tests"},
+            {"native", "browser", "databases", "performance-queries", "supervisor"},
+            {"native", "ha", "browser", "databases", "performance-queries", "supervisor"},
+        ),
+        (
+            "selected:ci,performance-queries",
+            {"native"},
+            {"native", "performance-queries"},
+            {"ci", "performance-queries"},
         ),
         (
             "selected:browser,ci",
@@ -462,13 +488,61 @@ def test_join_validates_nested_xml_without_rejecting_proven_browser_worker_repor
             assert (completion.REPORT.parent / f"browser-{worker}/ui.xml").is_file()
 
 
+@pytest.mark.parametrize(
+    "fault", ["none", "missing-machine", "missing-receipt", "failed", "skipped"]
+)
+def test_query_performance_has_separate_required_source_bound_completion(
+    hosted_identity, monkeypatch, fault
+):
+    """Both database machines must pass independently before their original selected suites can join."""
+    profile = "selected:ci,databases,performance-queries"
+    prepare_plan(profile)
+    lanes = Path(".local/ci-lanes")
+    for lane, suite, count in (
+        ("native", "ci", 1),
+        ("databases", "databases", 1),
+        ("performance-queries", "performance-queries", 12),
+    ):
+        location = lanes / f"ci-reports-{lane}"
+        location.mkdir(parents=True)
+        cases = "".join(f'<testcase name="{suite}-{index}" />' for index in range(count))
+        (location / f"{suite}.xml").write_text(f"<testsuite>{cases}</testsuite>")
+        monkeypatch.setattr(completion, "REPORT", location / "suite-completion.json")
+        parallel.write_lane_completion(profile, lane, {suite})
+    monkeypatch.setattr(completion, "REPORT", hosted_identity / "results/ci/suite-completion.json")
+    performance = lanes / "ci-reports-performance-queries"
+    if fault == "missing-machine":
+        performance.rename(lanes / "ci-reports-unassigned")
+    elif fault == "missing-receipt":
+        (performance / "lane-completion-performance-queries.json").unlink()
+    elif fault in {"failed", "skipped"}:
+        outcome = "failure" if fault == "failed" else "skipped"
+        (performance / "performance-queries.xml").write_text(
+            f'<testsuite><testcase name="unsuccessful"><{outcome} /></testcase></testsuite>'
+        )
+    if fault != "none":
+        with pytest.raises((RuntimeError, FileNotFoundError)):
+            parallel.join_reports(profile, lanes)
+        assert not completion.REPORT.exists()
+    else:
+        parallel.join_reports(profile, lanes)
+        completion.verify_completion(profile, "2" * 40)
+        assert json.loads(completion.REPORT.read_text())["executed_tests"] == {
+            "ci": 1,
+            "databases": 1,
+            "performance-queries": 12,
+        }
+
+
 @pytest.mark.parametrize("fails", [False, True])
-@pytest.mark.parametrize("lane", ["native", "browser", "databases", "supervisor"])
+@pytest.mark.parametrize(
+    "lane", ["native", "browser", "databases", "performance-queries", "supervisor"]
+)
 def test_hosted_controller_executes_only_its_assigned_real_command_boundaries(
     hosted_identity, monkeypatch, lane, fails
 ):
     """The matrix cannot accidentally repeat native tests in browser, DB or Supervisor jobs."""
-    profile = "selected:browser,ci,databases,ha-controls,supervisor,unit-app"
+    profile = "selected:browser,ci,databases,ha-controls,performance-queries,supervisor,unit-app"
     calls = []
     completed = []
 
@@ -511,7 +585,18 @@ def test_hosted_controller_executes_only_its_assigned_real_command_boundaries(
     assert any(command[-1] == "script.supervisor.check_supervisor" for command in calls) is (
         lane == "supervisor"
     )
-    assert any("db-tests" in command for command in calls) is (lane == "databases")
+    assert any("db-tests" in command for command in calls) is (
+        lane in {"databases", "performance-queries"}
+    )
+    assert any(command[-1] == "performance-queries" for command in calls) is (
+        lane == "performance-queries"
+    )
+    if lane in {"databases", "performance-queries"}:
+        launches = [command for command in calls if "run" in command and "db-tests" in command]
+        assert len(launches) == 1
+        assert any(
+            command[-3:] == ["postgres-test", "mariadb-test", "mysql-test"] for command in calls
+        )
     assert any("--ci-only" in command for command in calls) is (lane == "native")
     assert any("ha-controls" == command[-1] for command in calls) is (lane == "native")
 
@@ -521,7 +606,8 @@ def test_hosted_controller_executes_only_its_assigned_real_command_boundaries(
     [
         ("full", "native", {"native", "ha", "ha-contracts", "provisioning"}),
         ("full", "databases", {"databases"}),
-        ("full+performance-queries", "databases", {"databases", "performance-queries"}),
+        ("full+performance-queries", "databases", {"databases"}),
+        ("full+performance-queries", "performance-queries", {"performance-queries"}),
         ("documentation", "native", {"documentation"}),
     ],
 )
