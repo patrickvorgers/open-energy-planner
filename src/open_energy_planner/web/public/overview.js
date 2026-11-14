@@ -813,7 +813,6 @@ async function showPlan(signal, background = false) {
         simulationReadPending = false;
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
         $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
-        $("planning-window").textContent = "";
         inspectSteps = [];
         for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
             if (chartId === "price-chart" && !clearPrices) continue;
@@ -941,8 +940,6 @@ async function showPlan(signal, background = false) {
         $("current-price-status").textContent = `Selected plan: ${when(plan.generated_at)}: Original contract rates. ${bonusRules.length ? "Potential export bonus is shown before the volume cap." : "No bonus applies in this plan."}`;
         chart("price-chart", priceSeries, {unit: `${currency}/kWh`, deferRange: true});
         if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan, {deferRange: true});
-        const hours = intervals.reduce((total, interval) => total + interval.duration_h, 0);
-        $("planning-window").textContent = `${number(hours)}-hour planning window`;
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
         renderedPlanId = id;
         planSourceNamesGeneration = sourceNamesAtRequest;
