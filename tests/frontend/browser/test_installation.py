@@ -145,6 +145,213 @@ def test_saved_home_assistant_actions_keep_preferences_in_the_area_selector(app_
         assert read_settings(page, url)["installation"] == original["installation"]
 
 
+@pytest.mark.parametrize("battery_count,shared_converter", [(1, False), (2, False), (2, True)])
+@pytest.mark.parametrize(
+    "app_page",
+    [{"width": 1280, "height": 900}, {"width": 768, "height": 1024}, {"width": 390, "height": 844}],
+    indirect=True,
+)
+def test_installation_summary_totals_reserves_power_and_goal_without_saving_drafts(
+    app_page, battery_count, shared_converter
+):
+    """The summary separates battery limits, exact reserve energy and draft goals while save/cancel/reload preserve actual settings."""
+    page, url = app_page
+    metadata = _discovered_installation_devices(page, url, "battery", battery_count)
+    metadata["suggestions"]["solar"] = True
+    metadata["suggestions"]["solar_sources"] = ["sensor.roof"]
+    metadata["suggestions"]["solar_configurations"] = [
+        {"entity_id": "sensor.roof", "providers": [], "issue": "solar_configuration_not_available"}
+    ]
+    metadata["suggestions"]["terms"].append({"entity_id": "sensor.roof", "sign": 1})
+    metadata["suggestions"]["batteries"][0]["capacity_kwh"] = 32
+    if battery_count == 2:
+        metadata["suggestions"]["batteries"][1]["capacity_kwh"] = 8
+    assert page.request.post(
+        url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=metadata
+    ).ok
+    connect(page)
+    grid(page)
+    solar = page.locator("#solar-rows > fieldset").first
+    solar.get_by_label("Panel capacity (kWp)", exact=True).fill("16.5")
+    solar.get_by_label("Inverter AC rating (kW)", exact=True).fill("6")
+    if shared_converter:
+        solar.get_by_text("Shared inverter settings", exact=True).click()
+        solar.get_by_label("Inverter ID", exact=True).fill("summary-converter")
+        solar.get_by_label("Hybrid inverter with battery connection", exact=True).check()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    for index in range(battery_count):
+        page.locator("#installation-battery").select_option(str(index))
+        editor = page.locator("#battery-rows > fieldset").nth(index)
+        editor.get_by_label("Maximum charge power (kW)", exact=True).fill(
+            "6" if index == 0 else "4"
+        )
+        editor.get_by_label("Maximum discharge power (kW)", exact=True).fill(
+            "8" if index == 0 else "2"
+        )
+        if shared_converter:
+            editor.get_by_label("Converter connection", exact=True).select_option(
+                "summary-converter"
+            )
+        else:
+            editor.get_by_label("Own inverter AC rating (kW)", exact=True).fill(
+                "6" if index == 0 else "4"
+            )
+        editor.get_by_label("Minimum state of charge (%)", exact=True).fill(
+            "10" if index == 0 else "25"
+        )
+    finish(page)
+    summary = page.locator("#installation-capacities")
+    reserve = summary.get_by_role("group", name="Planning reserve summary", exact=True)
+    power = summary.get_by_role("group", name="Battery power summary", exact=True)
+    goal = summary.get_by_role("group", name="Optimization goal summary", exact=True)
+    expect(reserve.locator("strong")).to_have_text("10.0%" if battery_count == 1 else "Per battery")
+    expect(reserve.locator(".capacity-detail")).to_have_text(
+        "3.2 kWh reserved" if battery_count == 1 else "5.2 kWh reserved"
+    )
+    expect(power.locator("dd")).to_have_text(
+        ["6 kW", "8 kW"] if battery_count == 1 else ["10 kW", "10 kW"]
+    )
+    expect(goal.locator("strong")).to_have_text("Minimize cost")
+    expect(page.locator("#installation-capacity-note")).to_contain_text(
+        "Battery power totals are before converter limits"
+    )
+    assert power.locator("dt").evaluate_all("""terms => terms.every(term => {
+        const range = document.createRange(); range.selectNodeContents(term);
+        const label = range.getBoundingClientRect();
+        range.selectNodeContents(term.nextElementSibling);
+        const value = range.getBoundingClientRect();
+        return label.right <= value.left + 1 || label.bottom <= value.top + 1 || value.bottom <= label.top + 1;
+    })""")
+    last_metric = power.bounding_box()
+    goal_bounds = goal.bounding_box()
+    summary_bounds = summary.bounding_box()
+    assert goal_bounds["width"] == pytest.approx(summary_bounds["width"], abs=1)
+    assert goal_bounds["y"] >= last_metric["y"] + last_metric["height"]
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    def capture_summary(state):
+        """Capture the actual card without the sticky toolbar covering its heading."""
+        if battery_count != 1:
+            return
+        screenshots = Path("results/ci/installation-summary")
+        screenshots.mkdir(parents=True, exist_ok=True)
+        viewport = page.viewport_size
+        page.set_viewport_size({"width": viewport["width"], "height": 2000})
+        try:
+            summary.locator("..").screenshot(
+                path=str(screenshots / f"{state}-{viewport['width']}.png")
+            )
+        finally:
+            page.set_viewport_size(viewport)
+
+    capture_summary("saved")
+    saved = read_settings(page, url)
+    installation_area(page, 2, edit=True)
+    page.locator("#installation-battery").select_option("0")
+    editor = page.locator("#battery-rows > fieldset").first
+    editor.get_by_label("Minimum state of charge (%)", exact=True).fill("10.03")
+    editor.get_by_label("Maximum charge power (kW)", exact=True).fill("0")
+    expect(power.locator("dd").first).to_have_text("0 kW" if battery_count == 1 else "4 kW")
+    editor.get_by_label("Maximum charge power (kW)", exact=True).fill("")
+    expect(power.locator("dd").first).to_have_text("Not configured")
+    expect(reserve.locator(".capacity-detail")).to_have_text(
+        "3.21 kWh reserved" if battery_count == 1 else "5.21 kWh reserved"
+    )
+    expect(page.locator("#installation-capacity-note")).to_contain_text(
+        "Unsaved configuration values"
+    )
+    editor.get_by_label("Minimum state of charge (%)", exact=True).fill("101")
+    expect(reserve.locator("strong")).to_have_text("Not configured")
+    expect(reserve.locator(".capacity-detail")).to_have_text("Reserved energy not configured")
+    assert read_settings(page, url)["installation"] == saved["installation"]
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(power.locator("dd")).to_have_text(
+        ["6 kW", "8 kW"] if battery_count == 1 else ["10 kW", "10 kW"]
+    )
+    installation_area(page, 4, edit=True)
+    page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
+    expect(goal.locator("strong")).to_have_text("Minimize consumption")
+    expect(page.locator("#installation-capacity-note")).to_contain_text(
+        "Unsaved configuration values"
+    )
+    capture_summary("draft")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(goal.locator("strong")).to_have_text("Minimize cost")
+    installation_area(page, 4, edit=True)
+    page.get_by_label("Optimization goal", exact=True).select_option("minimize consumption")
+    page.get_by_role("button", name="Save planning strategy", exact=True).click()
+    expect(page.locator("#installation-save-state")).to_contain_text("Planning strategy saved")
+    page.reload()
+    connect(page)
+    expect(goal.locator("strong")).to_have_text("Minimize consumption")
+    assert read_settings(page, url)["installation"] == saved["installation"]
+
+
+def test_installation_summary_keeps_unknown_goal_and_configuration_unavailable(app_page):
+    """Missing HA configuration and a failed strategy read never invent zero capacities or a selected goal."""
+    page, url = app_page
+    page.clock.install()
+    page.route("**/v1/strategy", lambda route: route.fulfill(status=503))
+    page.goto(url + "/setup")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#installation-shell")).to_be_visible()
+    summary = page.locator("#installation-capacities")
+    expect(summary.locator("strong")).to_have_text(["Unavailable"] * 5)
+    expect(summary.get_by_role("group", name="Battery power summary", exact=True)).to_have_count(0)
+    expect(summary.get_by_role("group", name="Planning reserve summary", exact=True)).to_have_count(
+        0
+    )
+
+
+def test_installation_summary_rejects_partial_solar_total_after_last_panel_removal(app_page):
+    """A meter with no remaining panel group makes both totals unknown and cannot change saved geometry."""
+    page, url = app_page
+    _discovered_installation_devices(page, url, "solar", 2)
+    connect(page)
+    grid(page)
+    for index, capacity in enumerate(("3", "5")):
+        page.locator("#installation-solar").select_option(str(index))
+        source = page.locator("#solar-rows > fieldset").nth(index)
+        source.get_by_label("Panel capacity (kWp)", exact=True).fill(capacity)
+        source.get_by_label("Inverter AC rating (kW)", exact=True).fill(capacity)
+    page.get_by_role("button", name="Continue", exact=True).click()
+    finish(page)
+    original = read_settings(page, url)
+    capacity = (
+        page.locator("#installation-capacities")
+        .get_by_role("group", name="Panel capacity summary", exact=True)
+        .locator("strong")
+    )
+    expect(capacity).to_have_text("8 kWp")
+    installation_area(page, 1, edit=True)
+    page.locator("#installation-solar").select_option("1")
+    source = page.locator("#solar-rows > fieldset").nth(1)
+    source.get_by_role("button", name="Remove panel group", exact=True).click()
+    expect(source.locator(".solar-panel")).to_have_count(0)
+    complete_source = page.locator("#solar-rows > fieldset").first
+    expect(complete_source.get_by_label("Panel capacity (kWp)", exact=True)).to_have_value("3")
+    assert (capacity.inner_text(), page.locator("#review-solar").inner_text()) == (
+        "Not configured",
+        "2 sources: Not configured",
+    )
+    page.get_by_role("button", name="Save installation", exact=True).click()
+    expect(page.locator("#status")).to_contain_text(
+        "Add at least one panel group for this production meter"
+    )
+    assert read_settings(page, url)["solar"] == original["solar"]
+    assert read_settings(page, url)["installation"] == original["installation"]
+    source.get_by_role("button", name="Add panel group", exact=True).click()
+    source.get_by_label("Panel capacity (kWp)", exact=True).fill("5")
+    source.get_by_label("Tilt (°)", exact=True).fill("35")
+    source.get_by_label("Azimuth (° clockwise from north)", exact=True).fill("180")
+    expect(capacity).to_have_text("8 kWp")
+    expect(page.locator("#review-solar")).to_have_text("2 sources: 8 kWp")
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    assert read_settings(page, url)["solar"] == original["solar"]
+    assert read_settings(page, url)["installation"] == original["installation"]
+
+
 def test_grid_feed_in_permission_uses_the_persisted_export_limit(app_page):
     """Desktop/mobile save zero export, restore it on reload and require a confirmed limit when enabling again."""
     page, url = app_page
@@ -1366,7 +1573,7 @@ def test_installation_design_first_run_review_and_readonly_maintenance(app_page)
     expect(page.locator("#review-solar")).to_have_text("0 sources: Not configured")
     expect(page.locator("#review-batteries")).to_have_text("0 batteries: Not configured")
     expect(page.locator("#installation-capacities strong")).to_have_text(
-        ["5 kW", "4 kW", "Not configured", "Not configured"]
+        ["5 kW", "4 kW", "Not configured", "Not configured", "Minimize cost"]
     )
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
