@@ -196,9 +196,17 @@ def test_observed_cycle_blocks_pending_start_without_forging_execution_feedback(
     assert service.state["devices"][ENTITY]["observed_run"]["status"] == "complete"
     restored = ApplianceService(service.documents, service.consumers)
     assert restored.document()["devices"][0]["task"]["status"] == "execution_observed"
-    assert (
-        restored.document(NOW + timedelta(minutes=90), True, plan)["devices"][0]["request"] is None
-    )
+    later = NOW + timedelta(minutes=90)
+    retry = {
+        "plan_id": "after-completion",
+        "valid_until": (later + timedelta(hours=1)).isoformat(),
+        "appliance_schedule": [{"task_id": task["id"], "start": later.isoformat()}],
+    }
+    restored.accept_plan(retry)
+    restored.tick(later, True, retry)
+    assert restored.document(later, True, retry)["devices"][0]["request"] is None
+    assert restored.state["tasks"][ENTITY]["status"] == "execution_observed"
+    assert restored.state["tasks"][ENTITY]["attempt"] is None
     with pytest.raises(ValueError, match="unresolved task"):
         restored.submit(
             ENTITY,
