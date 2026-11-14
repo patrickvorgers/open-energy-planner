@@ -11,6 +11,46 @@ from tests.frontend.browser.helpers import TOKEN, discover, open_primary_navigat
 
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+@pytest.mark.parametrize(
+    ("issue", "expected"),
+    [
+        ("solar_weather_unavailable", "Usable weather data"),
+        ("solar_forecast_updating", "The forecast is being recalculated"),
+        ("solar_forecast_unusable", "The solar forecast update failed"),
+    ],
+)
+def test_solar_notice_distinguishes_missing_inputs_update_and_failure(app_page, issue, expected):
+    """Desktop/mobile notices distinguish data outages from recalculation without claiming readiness."""
+    from open_energy_planner.notifications.model import Notification
+    from open_energy_planner.solar.notifications import explain_solar_problem
+
+    page, url = app_page
+    discover(page, url)
+    notice = Notification(
+        "planning:solar_forecast_unavailable",
+        "solar_forecast_unavailable",
+        explain_solar_problem("solar_forecast_unavailable", issue),
+        blocks=("planning",),
+        detail=issue,
+    )
+    result = {"notifications": [notice.document("solar")], "unavailable_sources": []}
+    page.route("**/v1/notifications", lambda route: route.fulfill(json=result))
+    page.goto(url + "/quality")
+    banner = page.get_by_role("region", name="Notifications")
+    expect(banner).to_contain_text(expected)
+    if issue == "solar_forecast_updating":
+        expect(banner).not_to_contain_text("weather data")
+    page.get_by_role("button", name="Notifications: 1 active", exact=True).click()
+    popup = page.locator("#notification-center-panel")
+    expect(popup).to_be_visible()
+    expect(popup).to_contain_text(expected)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=f"results/ci/solar-notice-{issue}-{page.viewport_size['width']}.png", full_page=True
+    )
+
+
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
 @pytest.mark.parametrize("named", [False, True])
 def test_sensor_identity_and_remedy_are_visible_in_both_notification_views(app_page, named):
     """Desktop/mobile ingress shows both real source failures without a technical-details disclosure or overflow."""

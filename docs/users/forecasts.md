@@ -44,6 +44,13 @@ Unreliable history can be excluded from training without changing Home Assistant
 
 Solar forecasts combine the configured arrays, their orientation and tilt, inverter limits and weather inputs. Review these under **Settings > Installation > Solar production**.
 
+Stored solar measurements and weather history survive restarts. The active solar
+forecast is recalculated after startup. **Solar forecast is updating** means that
+forecast inputs are available and calculation is running. It does not mean the
+stored data is missing. Missing or expired weather and failed forecast updates
+have separate explanations. Planning still requires a valid, current forecast,
+and the notification clears only when one is available.
+
 When Home Assistant Energy links supported Forecast.Solar panel metadata to the production meter, those panel groups are read-only in OEP. The link supplies geometry, not automatic permission to change the physical inverter's rating. With a confirmed absent link, manual geometry can be edited. A temporary discovery failure must not be mistaken for removal of that ownership.
 
 Available solar DC energy and measured inverter AC production are different quantities. Conversion losses, clipping, curtailment and hybrid battery flows can prevent a direct comparison. Do not infer forecast failure from two values that use different measurement boundaries.
