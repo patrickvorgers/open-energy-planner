@@ -120,6 +120,11 @@ def test_saved_home_assistant_actions_keep_preferences_in_the_area_selector(app_
         page.clock.fast_forward(5100)
         expect(page.locator("#ha-installation-state")).to_have_text("Connected")
         installation_area(page, -1)
+        summary = page.locator("#ha-installation-summary")
+        expect(summary).to_contain_text(
+            "Separately modeled appliance consumption is excluded from household background demand to prevent double counting."
+        )
+        expect(summary).not_to_contain_text("Devices removed from Energy")
         expect(refresh).to_be_enabled()
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         if not reloaded:
