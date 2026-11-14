@@ -59,11 +59,12 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def run(image, variant, machine, directory):
-    """Run the full assigned selection in fresh isolated containers with unchanged CPU and shared memory."""
+    """Run the assigned selection with fixed experimental CPU and memory limits."""
     machines = 2 if variant == "split" else 1
     if machine not in range(machines):
         raise ValueError("Invalid benchmark machine")
-    memory = "2g" if variant == "memory" else "1g"
+    memory = "2g" if variant in {"memory", "cpu"} else "1g"
+    cpus = "2" if variant == "cpu" else "1"
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     identity = json.loads(subprocess.check_output(["docker", "image", "inspect", image]))[0]["Id"]
@@ -80,7 +81,7 @@ def run(image, variant, machine, directory):
             "--network",
             "none",
             "--cpus",
-            "1",
+            cpus,
             "--memory",
             memory,
             "--shm-size",
@@ -108,31 +109,40 @@ def run(image, variant, machine, directory):
             check=True,
         )
 
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        list(workers.map(launch, range(2)))
-    execution_reports(directory)
-    (directory / "benchmark.json").write_text(
-        json.dumps(
-            {
-                "variant": variant,
-                "machine": machine,
-                "image_id": identity,
-                "seconds": monotonic() - started,
-                "memory_per_worker": memory,
-                "host_cpus": os.cpu_count(),
-                "host_memory": Path("/proc/meminfo").read_text(encoding="utf-8"),
-            }
-        ),
-        encoding="utf-8",
-    )
+    successful = False
+    try:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            list(workers.map(launch, range(2)))
+        execution_reports(directory)
+        successful = True
+    finally:
+        (directory / "benchmark.json").write_text(
+            json.dumps(
+                {
+                    "variant": variant,
+                    "machine": machine,
+                    "image_id": identity,
+                    "seconds": monotonic() - started,
+                    "memory_per_worker": memory,
+                    "cpus_per_worker": cpus,
+                    "successful": successful,
+                    "host_cpus": os.cpu_count(),
+                    "host_memory": Path("/proc/meminfo").read_text(encoding="utf-8"),
+                }
+            ),
+            encoding="utf-8",
+        )
 
 
-def summarize(directory):
+def summarize(directory, *, cpu_only=False):
     """Reject omitted, duplicated or unsuccessful cases before comparing full-suite elapsed times."""
     variants = {}
     full_inventory = None
     image_id = None
-    for variant, machines in (("baseline", 1), ("memory", 1), ("split", 2)):
+    groups = (
+        (("memory", 1), ("cpu", 1)) if cpu_only else (("baseline", 1), ("memory", 1), ("split", 2))
+    )
+    for variant, machines in groups:
         elapsed = []
         executed = []
         for machine in range(machines):
@@ -182,9 +192,9 @@ def summarize(directory):
 def main():
     """Expose only the fixed experimental variants and the final evidence comparison."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("run", "summarize"))
+    parser.add_argument("action", choices=("run", "summarize", "compare-cpu"))
     parser.add_argument("--image", default="oep-browser-benchmark")
-    parser.add_argument("--variant", choices=("baseline", "memory", "split"))
+    parser.add_argument("--variant", choices=("baseline", "memory", "split", "cpu"))
     parser.add_argument("--machine", type=int, default=0)
     parser.add_argument("--directory", required=True)
     options = parser.parse_args()
@@ -193,7 +203,7 @@ def main():
             parser.error("run requires --variant")
         run(options.image, options.variant, options.machine, options.directory)
     else:
-        summarize(options.directory)
+        summarize(options.directory, cpu_only=options.action == "compare-cpu")
 
 
 if __name__ == "__main__":
