@@ -55,7 +55,7 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
             expect(legend.get_by_role("checkbox", name="Charge point", exact=True)).to_be_visible()
             if hours == 6:
                 expect(legend.locator("label").filter(has_text="Dryer")).not_to_be_visible()
-    page.get_by_role("button", name=re.compile(r"^Full period:")).click()
+    page.get_by_role("button", name=re.compile(r"^Full period")).click()
     for identity in identities:
         later = page.locator(f"#{identity}-legend").get_by_role(
             "checkbox", name="Later appliance", exact=True

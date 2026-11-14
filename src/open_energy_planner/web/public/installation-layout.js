@@ -121,7 +121,7 @@ export class InstallationLayout {
         const connectionSources = find("installation-grid-sources"); connectionSources.replaceChildren();
         for (const [title, value] of this.gridSources) summaryFact(connectionSources, title, value);
         find("ha-installation-summary").textContent = catalogue
-            ? "Manage source membership, meters and battery capacity in Home Assistant Settings > Dashboards > Energy. All configured grid connections contribute to the balance. Devices removed from Energy are excluded automatically."
+            ? "Manage source membership, meters and battery capacity in Home Assistant Settings > Dashboards > Energy. All configured grid connections contribute to the balance. Separately modeled appliance consumption is excluded from household background demand to prevent double counting."
             : "Waiting for the Home Assistant integration to upload its Energy configuration.";
         find("installation-shell").hidden = false;
         find("wizard").hidden = false;
