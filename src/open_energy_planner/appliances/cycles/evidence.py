@@ -3,8 +3,26 @@
 from bisect import bisect_left
 from dataclasses import asdict
 
+from open_energy_planner.demand.calculation.model import digest
+
 from .learning import MAX_RECENT_CYCLES, hourly_profile, retained_weight
-from .model import MAX_CYCLE_POWER_W, CycleProfile, average_profiles, instant, learn_cycle
+from .model import (
+    FINE_PROFILE_SECONDS,
+    MAX_CYCLE_POWER_W,
+    CycleProfile,
+    average_profiles,
+    instant,
+    learn_cycle,
+)
+
+
+def completion(record):
+    """Normalize explicit energy-counter evidence without inventing a measured power sensor."""
+    return {
+        **record,
+        "id": digest([record["entity_id"], record["cycle_id"]]),
+        "quality": "explicit_completion",
+    }
 
 
 def measured(record):
@@ -23,15 +41,27 @@ def measured(record):
 
 
 def average(records):
-    """Average chronological observations with the existing recency policy and independent raw count."""
+    """Rebuild time-weighted automatic evidence and retain legacy explicit sample contributions.
+
+    Explicit completion records keep the existing arithmetic-mean contract.
+    They add one independent observation each to the automatic aggregate, whose
+    internal recency weights remain unchanged. Rebuilding uses original evidence,
+    never the previously merged profile, so refreshes cannot add or drop a copy.
+    """
     result, weight, previous_end = None, 0.0, None
+    explicit = []
     for record in sorted(records, key=lambda item: instant(item["completed_at"])):
+        if record.get("quality") == "explicit_completion":
+            explicit.append(record)
+            continue
         completed = instant(record["completed_at"])
         if previous_end:
             weight = retained_weight(weight, previous_end, completed)
         result = average_profiles(result, measured(record), previous_weight=weight)
         weight, previous_end = weight + 1, completed
-    return result, weight
+    for record in explicit:
+        result = average_profiles(result, measured(record))
+    return result, float(result.samples) if explicit else weight
 
 
 def distinct_ranges(records):
@@ -42,7 +72,11 @@ def distinct_ranges(records):
         if group_end is not None and start < group_end:
             result[-1] = max(
                 (result[-1], record),
-                key=lambda item: (len(item["points"]), instant(item["completed_at"])),
+                key=lambda item: (
+                    len(item["points"]),
+                    item.get("quality") == "explicit_completion",
+                    instant(item["completed_at"]),
+                ),
             )
             group_end = max(group_end, end)
         else:
@@ -76,6 +110,9 @@ def refine(settings, records):
         )
 
     distinct = fine + [record for record in coarse if not overlaps_fine(record)]
+    if fine and all(record.get("quality") == "explicit_completion" for record in fine):
+        # An explicit completed profile takes precedence over coarse-only fallback learning.
+        distinct = fine
     if not distinct:
         return
     fine_profile, fine_weight = average(fine)
@@ -123,7 +160,11 @@ def refine(settings, records):
             "completed_at": record["completed_at"],
             "energy_kwh": measured(record).energy_kwh,
             "synthetic": record["synthetic"],
-            "resolution": "hour" if record.get("quality") == "hourly_estimate" else "5minute",
+            "resolution": "hour"
+            if record.get("quality") == "hourly_estimate"
+            else "5minute"
+            if measured(record).phase_seconds == FINE_PROFILE_SECONDS
+            else "15minute",
         }
         for record in sorted(distinct, key=lambda item: instant(item["completed_at"]))[
             -MAX_RECENT_CYCLES:

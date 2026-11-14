@@ -22,7 +22,6 @@ from open_energy_planner.appliances.cycles.model import (
     PROFILE_STEP_SECONDS,
     ApplianceWork,
     CycleProfile,
-    average_profiles,
     candidates,
     instant,
     learn_cycle,
@@ -243,7 +242,7 @@ class ApplianceService:
         retain their original counters. The cache contains derived profiles only
         in memory and is updated by the caller after its durable transaction.
         """
-        from .evidence import measured
+        from .evidence import completion, measured
 
         pair = (entity, power_entity)
         if pair not in self._cycle_records:
@@ -253,7 +252,16 @@ class ApplianceService:
                 for record in self.documents.iter_prefix(prefix)
                 if record["entity_id"] == entity and record["power_entity"] == power_entity
             }
+            for record in self.documents.iter_prefix("appliance-cycle-"):
+                if record["entity_id"] == entity:
+                    explicit = completion(record)
+                    restored["appliance-cycle-" + explicit["id"]] = explicit
             settings = self.state["devices"].get(entity, {})
+            saved = settings.get("profile", {})
+            if saved.get("evidence") != "manual" and saved.get("samples", 0) > len(restored):
+                raise ValueError(
+                    "Archived cycle evidence is incomplete. Retained profile is unchanged"
+                )
             for field, is_hourly in (("learned_profile", False), ("hourly_profile", True)):
                 available = sum(
                     (record.get("quality") == "hourly_estimate") == is_hourly
@@ -263,8 +271,10 @@ class ApplianceService:
                     raise ValueError(
                         "Archived cycle evidence is incomplete. Retained profile is unchanged"
                     )
-            self._cycle_records[pair] = restored
-        records, extra = dict(self._cycle_records[pair]), []
+            records = restored
+        else:
+            records = dict(self._cycle_records[pair])
+        extra = []
         prefix = "appliance-hourly-" if hourly else "appliance-detected-"
         for started, completed, points in cycles:
             identity = digest([entity, power_entity, started.isoformat(), completed.isoformat()])
@@ -327,7 +337,11 @@ class ApplianceService:
             if running and task and task["status"] in OPEN_STATUSES:
                 if task.get("attempt") and task["attempt"]["status"] != "not_started":
                     settings["observed_run"]["profile"] = deepcopy(task["profile"])
-                else:
+                if (
+                    task["status"] == "execution_observed"
+                    or not task.get("attempt")
+                    or task["attempt"]["status"] not in ("started", "completed")
+                ):
                     task.update(status="execution_observed", scheduled_start=None, plan_id=None)
         if records:
             settings["learning_source"] = power_entity
@@ -434,18 +448,23 @@ class ApplianceService:
             if self.documents.read(key) != body:
                 raise ValueError("Completed cycle identity reused with different evidence")
             return
+        from .evidence import completion, refine
+
         learned = learn_cycle(points, started_at, completed_at, synthetic=synthetic)
+        self.sync_sources()
+        power_entity = self.source(entity)
+        records, _ = self.collect_cycles(entity, power_entity, (), synthetic)
+        explicit = completion(body)
+        explicit["_profile"] = learned
+        records["appliance-cycle-" + explicit["id"]] = explicit
         data = deepcopy(self.state)
         settings = data["devices"].setdefault(entity, {"shiftable": False})
-        previous = settings.get("profile")
-        old = (
-            profile(previous)
-            if previous and previous["evidence"] in ("measured", "synthetic")
-            else None
-        )
-        learned = average_profiles(old, learned)
-        settings["profile"] = asdict(learned)
+        refine(settings, list(records.values()))
         self.commit(data, extra=((key, body),))
+        for pair in tuple(self._cycle_records):
+            if pair[0] == entity:
+                self._cycle_records.pop(pair)
+        self._cycle_records[(entity, power_entity)] = records
 
     def submit(self, entity, request_id, ready_at, deadline, now):
         """Create one idempotent runnable task only on explicit readiness, never historical usage timing."""
@@ -840,7 +859,8 @@ class ApplianceService:
                 and now >= instant(attempt["expires_at"])
             ):
                 attempt["status"] = "unknown"
-                task["status"] = "start_not_confirmed"
+                if task["status"] != "execution_observed":
+                    task["status"] = "start_not_confirmed"
             if (
                 self.observed(entity)
                 or task["status"] != "scheduled"
@@ -888,7 +908,7 @@ class ApplianceService:
             raise ValueError("Start request expired, superseded, paused or already claimed")
         expires_at = min(instant(plan["valid_until"]), instant(attempt["expires_at"]))
         if (
-            task["status"] == "cancelled"
+            task["status"] in ("cancelled", "execution_observed")
             or self.observed(entity)
             or self.issue
             or not enabled
@@ -1003,8 +1023,8 @@ class ApplianceService:
             changed["status"] = "completed"
         else:
             changed.update(status="pending", scheduled_start=None, plan_id=None)
-        if task["status"] == "cancelled":
-            changed["status"] = "cancelled"
+        if task["status"] in ("cancelled", "execution_observed"):
+            changed["status"] = task["status"]
         if historical:
             with self.documents.transaction():
                 self.documents.write(
@@ -1036,6 +1056,7 @@ class ApplianceService:
                 and plan
                 and attempt
                 and attempt["status"] == "requested"
+                and task["status"] != "execution_observed"
                 and task["plan_id"] == plan["plan_id"]
                 and now < min(instant(attempt["expires_at"]), instant(plan["valid_until"]))
             ):

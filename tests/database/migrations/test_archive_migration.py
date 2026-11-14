@@ -33,10 +33,14 @@ ROUTES = [
 def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     """Every backend route retains raw cycles, fine checkpoints, frozen tasks and distinct observed activity."""
     from open_energy_planner.appliances.cycles import history
-    from open_energy_planner.appliances.cycles.service import ApplianceService
+    from open_energy_planner.appliances.cycles.service import ApplianceService, profile
     from open_energy_planner.appliances.forecasting import ConsumerForecasts
     from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
-    from tests.app.appliance.test_cycle_refinement import running_readings
+    from tests.app.appliance.test_cycle_refinement import (
+        complete_running_readings,
+        running_readings,
+    )
+    from tests.app.appliance.test_cycle_review_regressions import explicit_three_kwh
 
     (source, target), root = route
     original = SqlPlanRepository(root / "source", engine=source)
@@ -52,8 +56,22 @@ def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     consumers.save([{"entity_id": ENTITY, "weather_sensitive": False}], consumers.version)
     service = ApplianceService(SqlDocuments(source, "planning"), consumers)
     service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    explicit_three_kwh(service)
     service.configure(ENTITY, True)
-    service.submit(ENTITY, "frozen-before-manual-start", NOW, NOW + timedelta(hours=4), NOW)
+    issued = NOW - timedelta(hours=1)
+    task = service.submit(
+        ENTITY, "frozen-before-manual-start", issued, NOW + timedelta(hours=4), issued
+    )
+    frozen = json.loads(json.dumps(task["profile"]))
+    plan = {
+        "plan_id": "original",
+        "valid_until": (NOW + timedelta(hours=3)).isoformat(),
+        "appliance_schedule": [{"task_id": task["id"], "start": issued.isoformat()}],
+    }
+    service.accept_plan(plan)
+    service.tick(issued, True, plan)
+    service.tick(NOW, True, plan)
+    attempt = service.state["tasks"][ENTITY]["attempt"]
     history.scan(
         service,
         ENTITY,
@@ -65,8 +83,14 @@ def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
         resolution="5minute",
     )
     service.learn_history(ENTITY, POWER, running_readings(), False, NOW)
+    later = NOW + timedelta(minutes=90)
+    service.learn_history(ENTITY, POWER, complete_running_readings(), False, later)
+    service.feedback(
+        ENTITY, task["id"], attempt["id"], "not_started", issued, later, cancelled=True
+    )
     expected = json.loads(json.dumps(service.document()))
     raw = list(service.documents.iter_prefix("appliance-detected-"))
+    explicit = list(service.documents.iter_prefix("appliance-cycle-"))
     migrate_archive(source, target, overwrite_target=True)
     original.close()
     source.dispose()
@@ -83,7 +107,13 @@ def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     restored = ApplianceService(SqlDocuments(target, "planning"), restored_consumers)
     assert restored.document() == expected
     assert list(restored.documents.iter_prefix("appliance-detected-")) == raw
-    assert expected["devices"][0]["task"]["attempt"] is None
+    assert list(restored.documents.iter_prefix("appliance-cycle-")) == explicit
+    assert expected["devices"][0]["task"]["attempt"]["status"] == "not_started"
+    assert expected["devices"][0]["observed_run"]["status"] == "complete"
+    restored.learn_history(ENTITY, POWER, [], False, later)
+    assert profile(restored.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(4 / 3)
+    assert restored.state["tasks"][ENTITY]["profile"] == frozen
+    assert restored.state["tasks"][ENTITY]["status"] == "execution_observed"
     assert expected["devices"][0]["task"]["status"] == "execution_observed"
     assert expected["devices"][0]["fine_import"]["phase"] == "processing"
 

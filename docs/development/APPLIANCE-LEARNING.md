@@ -140,7 +140,7 @@ starts. Exhausting the expected profile does not confirm physical completion.
 A complete quiet-bracketed run closes measured evidence. Fresh quiet measurements
 can establish idle after uncertain data without inventing a completed cycle or
 execution feedback. A pending task intercepted by a manual start becomes
-`execution_observed` and requires explicit cancellation before new readiness.
+`execution_observed` and requires explicit cancellation before new readiness. This interception remains latched even if an old attempt expires or later authenticated feedback reports nonexecution, start or completion. Actual attempt outcomes and event times remain recorded independently. A normally confirmed running task without earlier interception retains its ordinary lifecycle.
 Already issued attempts retain their frozen profile and authenticated feedback.
 Measured activity never issues a start, grants readiness, reports task completion
 or makes an unknown attempt safe to retry. Physical actions remain in user-owned
@@ -169,7 +169,7 @@ their own frozen profiles. New learning cannot rewrite an already accepted run.
 Changing/removing the power binding withdraws that learned profile, retains its
 archives, and restores a saved manual fallback. Learning needs new evidence for
 the changed source. Ordinary restarts retain profiles and deduplication evidence.
-The legacy completed-cycle API remains for existing clients. The supplied
+The legacy completed-cycle API remains for existing clients. Its energy-only records retain their original source identity and points. Distinct explicit completions contribute once using the existing arithmetic-mean contract alongside the recency-weighted automatic aggregate. Empty history uploads, restart and later learning reconstruct the same contributions. Power-source relinking excludes old automatic pair evidence without inventing power provenance for energy-only records. Changing the energy source excludes its explicit records. The supplied
 blueprint no longer submits cycles through it, avoiding duplicate learning.
 
 ## Development examples and proof

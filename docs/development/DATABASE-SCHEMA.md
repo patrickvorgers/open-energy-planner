@@ -1250,7 +1250,7 @@ HTTP actions and plan publication serialize mutations with the application lock.
 | `appliance-progress.json` | Mutable `devices` map containing each source-bound `learning_history`, `history_import` and `fine_import` described below. Coverage and checkpoint-only refreshes do not create immutable task/model versions. Startup joins this document with the current state for the live device projection. |
 | `appliance-task-<uuid>.json` | Latest durable task: ID, source entity, readiness request ID, aware `ready_at`/`deadline`, frozen average profile, task status, scheduled start, accepted plan ID, attempt and ordered evidence events. Earlier revisions remain in state archives. |
 | `appliance-request-<sha256>.json` | Exact readiness request and resulting task ID. Prevents a transport retry from creating another runnable cycle. |
-| `appliance-cycle-<sha256>.json` | Completed-cycle identity, source entity, actual start/end, fine cumulative kWh points (`at`, `kwh`) and synthetic provenance. Prevents duplicate learning or reuse with different evidence. |
+| `appliance-cycle-<sha256>.json` | Completed-cycle identity, energy source entity, actual start/end, cumulative kWh points (`at`, `kwh`) and synthetic provenance. No power sensor is asserted by this energy-only API. Rebuilding includes records for the selected energy entity, reconciles overlapping automatic views and preserves each distinct explicit contribution without repeated averaging. Reusing the same identity with different evidence is rejected. |
 | `appliance-hourly-<sha256>.json` | Hourly estimated run identity from source entities and UTC bounds. Stores `id`, `entity_id`, `power_entity`, `started_at`, `completed_at`, original cumulative kWh `points`, `synthetic` and `quality: hourly_estimate`. Atomically committed with the hourly checkpoint. Retained separately from fine detected cycles. |
 | `appliance-detected-<sha256>.json` | Automatic cycle identity from energy/power entities and detected UTC boundaries. Stores `id`, `entity_id`, `power_entity`, `started_at`, `completed_at`, measured `energy_kwh`, `synthetic` and cumulative kWh `points`. Existing keys prevent duplicate learning. |
 
@@ -1275,8 +1275,8 @@ The effective profile averages distinct cycle energy with the existing recency
 weights and uses available fine observations for timing. Raw resolution-specific
 archives remain immutable. A pending task overtaken by observed manual activity
 uses `execution_observed`, retains its original profile and has no fabricated
-attempt or events. It remains unresolved until user cancellation, preventing a
-second start after the manual run ends. Fine progress, evidence and changed
+attempt or events. It remains unresolved until user cancellation, including after attempt expiry or authenticated started/not_started/completed feedback, preventing a
+second start after the manual run ends. Feedback still updates the actual attempt and its event archive. Fine progress, evidence and changed
 model/task state commit in one transaction and transfer with the shared archive.
 
 
@@ -1296,9 +1296,9 @@ Activating/replacing the effective profile does. API-only `history_request` proj
 the next seven-day core from the cursor, together with app-owned `read_start` and
 `read_end` including detector overlap. `learning_half_life_days`, `profile_kind`
 and `learning_status` are projections, not additional persisted policies. Historical
-planning uses `provisional` status. Fine readiness still requires two fine cycles.
-The hourly profile activates after initial completion only without a ready fine
-model or manual fallback. New models never rewrite frozen accepted tasks.
+planning uses `provisional` status. The first complete fine cycle supplies a usable provisional profile.
+The first usable hourly cycle activates its estimate during backfill when neither
+a ready fine model nor a manual fallback takes precedence. New models never rewrite frozen accepted tasks.
 
 See [automatic appliance learning](APPLIANCE-LEARNING.md). Task profiles are copied
 at submission. Later learning cannot change acknowledged work. An attempt has a

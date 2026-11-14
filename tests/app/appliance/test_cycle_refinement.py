@@ -63,25 +63,35 @@ def test_older_fine_cycles_are_retained_when_home_assistant_has_longer_history(s
 
 
 def test_partial_final_phase_preserves_measured_duration_and_energy():
-    """A 35-minute 1-kW run stays 35 minutes and 7/12 kWh, including its last five minutes."""
+    """A 32-minute 1-kW run retains its two-minute final phase and 8/15 kWh across averaging and restart."""
     from open_energy_planner.appliances.cycles.model import average_profiles, learn_cycle
 
     points = [
         {"at": (NOW + timedelta(minutes=minute)).isoformat(), "kwh": minute / 60}
         for minute in range(0, 36, 5)
     ]
-    longer = learn_cycle(points, NOW, NOW + timedelta(minutes=35))
+    longer = learn_cycle(points, NOW, NOW + timedelta(minutes=32))
     shorter = learn_cycle(points[:5], NOW, NOW + timedelta(minutes=20))
-    assert longer.duration_seconds == 2100
+    assert longer.duration_seconds == 1920
     assert longer.phase_seconds == 300
     assert longer.power_w == pytest.approx((1000,) * 7)
-    assert longer.energy_kwh == pytest.approx(7 / 12)
+    assert longer.energy_kwh == pytest.approx(8 / 15)
     assert longer.energy(
         NOW, NOW + timedelta(minutes=30), NOW + timedelta(hours=1)
-    ) == pytest.approx(1 / 12)
+    ) == pytest.approx(1 / 30)
     combined = average_profiles(shorter, longer)
-    assert combined.duration_seconds == 2100
-    assert combined.energy_kwh == pytest.approx(11 / 24)
+    assert combined.duration_seconds == 1920
+    assert combined.energy_kwh == pytest.approx(13 / 30)
+    from dataclasses import asdict
+
+    from open_energy_planner.appliances.cycles.service import profile
+
+    restored = profile(json.loads(json.dumps(asdict(longer))))
+    assert restored.duration_seconds == 1920
+    assert restored.energy_kwh == pytest.approx(8 / 15)
+    assert restored.energy(
+        NOW, NOW + timedelta(minutes=30), NOW + timedelta(hours=1)
+    ) == pytest.approx(1 / 30)
 
 
 def test_fine_backfill_crosses_empty_weeks_and_resumes_after_restart(service):
@@ -138,7 +148,7 @@ def test_failed_evidence_commit_cannot_advance_profile_or_cache(service, monkeyp
     with pytest.raises(OSError):
         service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
     assert not list(service.documents.iter_prefix("appliance-detected-"))
-    assert not service._cycle_records[(ENTITY, POWER)]
+    assert not service._cycle_records.get((ENTITY, POWER))
     monkeypatch.setattr(service.documents, "write", original)
     service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
     assert service.document()["devices"][0]["profile"]["samples"] == 1
@@ -150,6 +160,15 @@ def running_readings():
 
     rows = readings(cycles=1)[:21]
     offset = NOW - (instant(rows[-1]["at"]) + timedelta(minutes=5))
+    return [{**row, "at": (instant(row["at"]) + offset).isoformat()} for row in rows]
+
+
+def complete_running_readings():
+    """Return the full same run plus sixty quiet minutes, completing ninety minutes after NOW."""
+    from open_energy_planner.appliances.cycles.model import instant
+
+    rows = readings(cycles=1)
+    offset = instant(running_readings()[0]["at"]) - instant(rows[0]["at"])
     return [{**row, "at": (instant(row["at"]) + offset).isoformat()} for row in rows]
 
 
@@ -171,8 +190,23 @@ def test_observed_cycle_blocks_pending_start_without_forging_execution_feedback(
     service.accept_plan(plan)
     service.tick(NOW, True, plan)
     assert service.document(NOW, True, plan)["devices"][0]["request"] is None
+    service.learn_history(
+        ENTITY, POWER, complete_running_readings(), False, NOW + timedelta(minutes=90)
+    )
+    assert service.state["devices"][ENTITY]["observed_run"]["status"] == "complete"
     restored = ApplianceService(service.documents, service.consumers)
     assert restored.document()["devices"][0]["task"]["status"] == "execution_observed"
+    assert (
+        restored.document(NOW + timedelta(minutes=90), True, plan)["devices"][0]["request"] is None
+    )
+    with pytest.raises(ValueError, match="unresolved task"):
+        restored.submit(
+            ENTITY,
+            "after-completion",
+            NOW + timedelta(minutes=90),
+            NOW + timedelta(hours=4),
+            NOW + timedelta(minutes=90),
+        )
     restored.cancel_task(ENTITY, task["id"])
     assert restored.state["tasks"][ENTITY]["status"] == "cancelled"
 
