@@ -1,4 +1,4 @@
-import {configuredRate, percentage, optionLabel, sourceName} from "./display.js";
+import {configuredRate, percentage, inputNumber, optionLabel, sourceName} from "./display.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {azimuthLabel} from "./solar-geometry.js";
 
@@ -277,26 +277,54 @@ export class InstallationLayout {
         }
     }
 
-    /** Show configuration capacity totals, never live measurements or inferred missing zeroes. */
+    /** Show exact configured totals and drafts, without claiming live or converter-limited power. */
     capacities() {
         const container = find("installation-capacities"); container.replaceChildren();
-        const number = value => value === "" || value == null ? "Not configured" : Number(value).toLocaleString();
+        const number = value => value == null ? "Not configured" : Number(value).toLocaleString();
+        const numeric = input => input && input.value !== "" && input.validity.valid && Number.isFinite(inputNumber(input)) ? inputNumber(input) : null;
+        const total = values => values.length && values.every(value => value !== null) ? values.reduce((sum, value) => sum + value, 0) : null;
+        const quantity = (value, unit) => value == null ? "Not configured" : `${number(value)} ${unit}`;
         const solar = [...find("solar-rows").querySelectorAll('[data-key="capacity"],[data-key="panel_capacity"]')];
-        const batteries = [...find("battery-rows").querySelectorAll('[data-key="capacity_kwh"]')];
-        const totalCapacity = inputs => inputs.length && inputs.every(input => input.value !== "") ? inputs.reduce((total, input) => total + Number(input.value), 0) : null;
-        const solarCapacity = totalCapacity(solar), batteryCapacity = totalCapacity(batteries);
-        const facts = [["home", "Grid import limit", find("import").value, "kW"], ["home", "Grid export limit", find("export").value, "kW"], ["solar", "Panel capacity", solarCapacity, "kWp"], ["battery", "Usable storage", batteryCapacity, "kWh"]];
-        const reserves = [...find("battery-rows").querySelectorAll('[data-key="minimum_soc"]')];
-        find("review-connection").textContent = `${number(find("import").value)} kW import: ${number(find("export").value)} kW export`;
-        find("review-solar").textContent = `${find("solar-rows").children.length} sources: ${solarCapacity == null ? "Not configured" : `${number(solarCapacity)} kWp`}`;
-        find("review-batteries").textContent = `${batteries.length} batteries: ${batteryCapacity == null ? "Not configured" : `${number(batteryCapacity)} kWh usable capacity from Home Assistant`}`;
-        if (reserves.length === 1) facts.push(["settings", "Planning reserve", reserves[0].value === "" ? null : percentage(Number(reserves[0].value)), ""]);
-        else if (reserves.length > 1) facts.push(["settings", "Planning reserves", "Per battery", ""]);
-        for (const [icon, label, value, unit] of facts) {
-            const card = document.createElement("div"), image = document.createElement("img"), figure = document.createElement("strong"), caption = document.createElement("small");
+        const batteryRows = [...find("battery-rows").children];
+        const batteryValues = key => batteryRows.map(row => numeric(row.querySelector(`[data-key="${key}"]`)));
+        const solarCapacity = total(solar.map(numeric)), batteryCapacity = total(batteryValues("capacity_kwh"));
+        const facts = [["home", "Grid import limit", quantity(numeric(find("import")), "kW")], ["home", "Grid export limit", quantity(numeric(find("export")), "kW")], ["solar", "Panel capacity", quantity(solarCapacity, "kWp")], ["battery", "Usable storage", quantity(batteryCapacity, "kWh")]];
+        find("review-connection").textContent = `${number(numeric(find("import")))} kW import: ${number(numeric(find("export")))} kW export`;
+        find("review-solar").textContent = `${find("solar-rows").children.length} sources: ${quantity(solarCapacity, "kWp")}`;
+        find("review-batteries").textContent = `${batteryRows.length} batteries: ${batteryCapacity == null ? "Not configured" : `${number(batteryCapacity)} kWh usable capacity from Home Assistant`}`;
+        const appendCard = (icon, label, value, detail = "") => {
+            const card = document.createElement("div"), image = document.createElement("img"), caption = document.createElement("small");
             image.src = new URL(`icons/${icon}.svg`, import.meta.url).href; image.alt = "";
-            figure.textContent = !this.ready ? "Unavailable" : unit ? `${number(value)}${value === "" || value == null ? "" : ` ${unit}`}` : value ?? "Not configured"; caption.textContent = label;
-            card.append(image, figure, caption); container.append(card);
+            card.setAttribute("role", "group"); card.setAttribute("aria-label", `${label} summary`);
+            caption.textContent = label;
+            card.append(image);
+            if (typeof value === "string") {
+                const figure = document.createElement("strong");
+                figure.textContent = value; card.append(figure, caption);
+            } else card.append(caption, value);
+            if (detail) { const note = document.createElement("small"); note.className = "capacity-detail"; note.textContent = detail; card.append(note); }
+            container.append(card);
+            return card;
+        };
+        for (const [icon, label, value] of facts) appendCard(icon, label, this.ready ? value : "Unavailable");
+        if (batteryRows.length) {
+            const reserves = batteryValues("minimum_soc"), capacities = batteryValues("capacity_kwh");
+            const reserved = total(reserves.map((reserve, index) => reserve === null || capacities[index] === null ? null : capacities[index] * reserve / 100));
+            const reserve = reserves.some(value => value === null) ? "Not configured" : new Set(reserves).size === 1 ? percentage(reserves[0]) : "Per battery";
+            appendCard("settings", "Planning reserve", this.ready ? reserve : "Unavailable", this.ready ? (reserved === null ? "Reserved energy not configured" : `${number(reserved)} kWh reserved`) : "");
+            const power = document.createElement("dl"); power.className = "capacity-power";
+            for (const [key, label] of [["charge", "Charge"], ["discharge", "Discharge"]]) {
+                const term = document.createElement("dt"), value = document.createElement("dd");
+                term.textContent = label; value.textContent = this.ready ? quantity(total(batteryValues(key)), "kW") : "Unavailable";
+                power.append(term, value);
+            }
+            appendCard("battery", "Battery power", power);
         }
+        const goal = find("strategy");
+        const goalCard = appendCard("settings", "Optimization goal", goal.value ? goal.selectedOptions[0].textContent : "Unavailable");
+        goalCard.className = "capacity-goal";
+        const note = find("installation-capacity-note");
+        note.textContent = this.saveState.dirty ? "Unsaved configuration values, not live measurements." : "Configured values, not live measurements.";
+        if (batteryRows.length) note.textContent += " Battery power totals are before converter limits.";
     }
 }
