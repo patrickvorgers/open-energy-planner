@@ -1044,18 +1044,19 @@ job executes the immutable base policy, records collection inventories and build
 only the selected test images. Scope labels continue to describe that decision.
 Labels do not override the policy or directly choose workloads.
 
-The resulting required suites are partitioned across at most five GitHub-hosted
+The resulting required suites are partitioned across at most six GitHub-hosted
 Ubuntu machines. A machine is omitted when none of its suites is selected.
 
 | Machine | Assigned work |
 | --- | --- |
 | Native and HA | Documentation or CI checks, selected native/unit groups, HA contracts, integration and provisioning |
 | Browser | Selected browser cases across two machines, each running two isolated workers |
-| Databases | Selected database contracts/migrations followed by query-performance tests when required |
+| Databases | Selected database contracts and migrations |
+| Query performance | Selected query-performance tests, using a separate disposable four-backend stack |
 | Supervisor | Actual isolated installation, retention, restart, update and chronological replay |
 
-Preparation saves each built image once. Native and database machines share the
-same exported native image. Each machine downloads only its required images and
+Preparation saves each built image once. Native, database and query-performance
+machines share the same exported native image. Each machine downloads only its required images and
 verifies archive checksums, loaded image identities, source tree and workflow
 attempt before executing work. Preparation and image-consuming machines use the
 same shared Docker containerd image-store setup. The strict image-ID comparison
@@ -1281,10 +1282,16 @@ A local targeted invocation is:
 python script/ci/ci.py --profile selected:ci,performance-queries
 ```
 
-Both database suites use the same disposable four-backend services and run
-sequentially within their database worker. That worker can run in parallel with
-HA. Performance-only selection does not start unrelated HA, browser or Supervisor
-services. The performance group owns `results/ci/performance-queries.xml` and
+Hosted functional database and query-performance suites run on separate machines
+when selected. Each machine owns its disposable SQLite, PostgreSQL, MariaDB and
+MySQL databases, so schema resets cannot affect the other machine's tests. They
+reuse the same prepared native image and preserve separate JUnit, completion and
+timing evidence. Missing or unsuccessful query-performance evidence blocks the
+whole selected candidate. The suite-selection policy is unchanged.
+
+Local runs without `--lane` retain sequential database execution against the same
+disposable services. Performance-only selection does not start unrelated HA,
+browser or Supervisor services. The performance group owns `results/ci/performance-queries.xml` and
 must complete successfully before its tree-bound completion report is published.
 Collection regression checks retain all twelve original volume variants and prove
 that index repairs and the new small functional counterparts stay in the
