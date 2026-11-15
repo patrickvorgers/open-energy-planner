@@ -709,7 +709,7 @@ keyed by vehicle UUID and `sessions` keyed by point UUID. Vehicle evidence store
 `source_entity`, original `observed_at`, `reported_at`, `timestamp_kind`, optional
 `source_timestamp_attribute`, `measured_soc` in percent, estimated battery-side
 `stored_kwh` and `estimate_updated_at`. Session checkpoints store `session_id`,
-nullable current `vehicle_id`, `energy_entity`, nullable cumulative AC `energy_kwh`,
+nullable current `vehicle_id`, nullable `attributed_at`, `energy_entity`, nullable cumulative AC `energy_kwh`,
 baseline observation `energy_at`, capture `at`, nullable historical
 `credited_vehicle_id`, battery-side `credited_kwh`, vehicle-to-request UUID map
 `request_ids` and nullable `energy_issue`. Unchanged or missing meter readings
@@ -717,7 +717,12 @@ preserve the baseline time/value independently of later capture times. Current
 recognition may become unknown without undoing proved historical credit or
 terminal-request protection. A confirmed different car withdraws the old car's
 session credit. Genuine SoC samples reset preceding credit. Only whole meter
-intervals beginning at or after the anchor observation may add energy.
+intervals beginning at or after both the anchor observation and `attributed_at`
+may add energy. `attributed_at` is the UTC start of uninterrupted recognized
+car/source/connection ownership. Unknown identity clears this boundary without
+erasing proved credit. Recovery, source replacement and new nonces establish a
+new boundary. An older meter baseline remains evidence but cannot contribute a
+straddling interval. The next fully attributable interval may contribute.
 Configuration edits retain session facts for the same point and physical
 connection source. Changed meter/power bindings clear the energy baseline.
 Request guards remain per vehicle and nonce, including across changed defaults,

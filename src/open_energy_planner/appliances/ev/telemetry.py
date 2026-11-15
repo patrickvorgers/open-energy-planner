@@ -46,7 +46,7 @@ def configure_telemetry(previous, before, after):
             if vehicle_id in cars
         }
         if session["vehicle_id"] not in unchanged:
-            session["vehicle_id"] = None
+            session.update(vehicle_id=None, attributed_at=None)
         if session["credited_vehicle_id"] not in unchanged:
             session.update(credited_vehicle_id=None, credited_kwh=0.0)
     for point in after["points"]:
@@ -55,7 +55,12 @@ def configure_telemetry(previous, before, after):
             point[field] != old_points[point["id"]][field]
             for field in ("energy_entity", "power_entity")
         ):
-            session.update(energy_entity=point["energy_entity"], energy_kwh=None)
+            session.update(
+                energy_entity=point["energy_entity"],
+                energy_kwh=None,
+                vehicle_id=None,
+                attributed_at=None,
+            )
     return updated
 
 
@@ -128,9 +133,20 @@ def update_telemetry(previous, state, report):
                 )
             credited = 0.0
         meter_at = point.get("energy_observed_at") or report["at"]
+        continuous = (
+            same_session
+            and vehicle_id is not None
+            and previous_session.get("vehicle_id") == vehicle_id
+            and previous_session.get("energy_entity") == configured[point["id"]]["energy_entity"]
+        )
         checkpoint = {
             "session_id": point["session_id"],
             "vehicle_id": vehicle_id,
+            "attributed_at": previous_session["attributed_at"]
+            if continuous
+            else report["at"]
+            if vehicle_id
+            else None,
             "energy_entity": configured[point["id"]]["energy_entity"],
             "energy_kwh": point.get("energy_kwh"),
             "energy_at": meter_at,
@@ -141,12 +157,6 @@ def update_telemetry(previous, state, report):
             "energy_issue": None,
         }
         evidence = updated["vehicles"].get(vehicle_id)
-        continuous = (
-            same_session
-            and vehicle_id is not None
-            and previous_session.get("vehicle_id") == vehicle_id
-            and previous_session.get("energy_entity") == checkpoint["energy_entity"]
-        )
         if continuous:
             baseline_at = previous_session["energy_at"]
             current_energy, previous_energy = (
@@ -180,6 +190,7 @@ def update_telemetry(previous, state, report):
                     delta > 0
                     and hours > 0
                     and instant(baseline_at) >= instant(evidence["observed_at"])
+                    and instant(baseline_at) >= instant(checkpoint["attributed_at"])
                 ):
                     average_w = min(maximum, delta * WATTS_PER_KW / hours)
                     useful = delta * delivered_power(average_w) / average_w

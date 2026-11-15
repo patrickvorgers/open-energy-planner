@@ -229,3 +229,66 @@ def test_invalid_energy_timestamp_cannot_publish_session_or_soc(ev_service, ener
     assert ev_service.report is None
     assert ev_service.state["requests"] == {}
     assert ev_service.vehicle_readings(NOW) == {}
+
+
+@pytest.mark.parametrize("known_connection", [False, True])
+def test_timely_completion_report_received_after_departure_remains_completed(
+    ev_service, known_connection
+):
+    """Capture at t=55 proves the t=60 target even when received at t=65, without a replacement request."""
+    single_car(ev_service)
+    request_id = str(uuid4())
+    ev_service.save_request(
+        {
+            "request_id": request_id,
+            "vehicle_id": CAR,
+            "departure": (NOW + timedelta(seconds=60)).isoformat(),
+        },
+        NOW,
+        "Europe/Amsterdam",
+    )
+    if known_connection:
+        ev_service.receive(observations(ev_service), NOW, "Europe/Amsterdam")
+    captured = NOW + timedelta(seconds=55)
+    received = NOW + timedelta(seconds=65)
+    ev_service.receive(observations(ev_service, captured, soc=80), received, "Europe/Amsterdam")
+    assert ev_service.state["requests"][request_id]["status"] == "completed"
+    assert len(ev_service.state["requests"]) == 1
+    assert ev_service.state["active_requests"] == {}
+    later = NOW + timedelta(seconds=70)
+    ev_service.receive(observations(ev_service, later, soc=None), later, "Europe/Amsterdam")
+    assert len(ev_service.state["requests"]) == 1
+    assert ev_service.work(later, "Europe/Amsterdam") == ()
+
+
+def test_late_delivered_meter_completion_credits_energy_once(ev_service):
+    """A timely one-hour 2.3-AC-kWh interval completes a 51% request and adds 1.84 battery kWh once."""
+    single_car(ev_service)
+    request_id = str(uuid4())
+    ev_service.save_request(
+        {
+            "request_id": request_id,
+            "vehicle_id": CAR,
+            "target_soc": 51,
+            "departure": (NOW + timedelta(seconds=3605)).isoformat(),
+        },
+        NOW,
+        "Europe/Amsterdam",
+    )
+    first = observations(ev_service)
+    first["points"][0]["energy_kwh"] = 100
+    ev_service.receive(first, NOW, "Europe/Amsterdam")
+    captured = NOW + timedelta(hours=1)
+    report = observations(ev_service, captured, soc=None)
+    report["points"][0].update(energy_kwh=102.3, energy_observed_at=captured.isoformat())
+    ev_service.receive(report, NOW + timedelta(seconds=3610), "Europe/Amsterdam")
+    assert ev_service.state["requests"][request_id]["status"] == "completed"
+    assert (
+        ev_service.state["requests"][request_id]["completion_soc_basis"] == "estimated_from_meter"
+    )
+    assert ev_service.vehicle_readings(captured)[CAR]["stored_kwh"] == pytest.approx(1.84)
+    later = NOW + timedelta(seconds=3620)
+    report["at"] = later.isoformat()
+    ev_service.receive(report, later, "Europe/Amsterdam")
+    assert len(ev_service.state["requests"]) == 1
+    assert ev_service.vehicle_readings(later)[CAR]["stored_kwh"] == pytest.approx(1.84)

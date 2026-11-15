@@ -167,3 +167,35 @@ def test_delayed_genuine_soc_credits_only_whole_subsequent_meter_interval(sample
         "soc"
     ] == pytest.approx(55 + credited / 60 * 100)
     assert update_telemetry(telemetry, state, report) == telemetry
+
+
+@pytest.mark.parametrize("transition", ["new_connection", "identity_recovery"])
+def test_stale_meter_baseline_cannot_credit_pre_attribution_energy(transition):
+    """A 90-minute-old baseline crosses attribution at t=2h and contributes no gap energy at t=3h."""
+    state, report, telemetry = example()
+    report["at"] = (NOW + timedelta(hours=1)).isoformat()
+    report["points"][0].update(energy_kwh=102.3, energy_observed_at=report["at"])
+    telemetry = update_telemetry(telemetry, state, report)
+    assert telemetry["vehicles"][CAR]["stored_kwh"] == pytest.approx(1.84)
+    stale = (NOW + timedelta(minutes=90)).isoformat()
+    if transition == "new_connection":
+        report["points"][0]["session_id"] = "new-physical-connection"
+        state["assignments"][POINT]["session_id"] = "new-physical-connection"
+    else:
+        state["assignments"] = {}
+        report["at"] = stale
+        report["points"][0].update(energy_kwh=104.6, energy_observed_at=stale)
+        telemetry = update_telemetry(telemetry, state, report)
+        state["assignments"][POINT] = {"vehicle_id": CAR, "session_id": SESSION}
+    report["at"] = (NOW + timedelta(hours=2)).isoformat()
+    report["points"][0].update(energy_kwh=104.6, energy_observed_at=stale)
+    telemetry = update_telemetry(telemetry, state, report)
+    report["at"] = (NOW + timedelta(hours=3)).isoformat()
+    report["points"][0].update(energy_kwh=106.9, energy_observed_at=report["at"])
+    telemetry = update_telemetry(telemetry, state, report)
+    assert telemetry["vehicles"][CAR]["stored_kwh"] == pytest.approx(1.84)
+    report["at"] = (NOW + timedelta(hours=4)).isoformat()
+    report["points"][0].update(energy_kwh=109.2, energy_observed_at=report["at"])
+    telemetry = update_telemetry(telemetry, state, report)
+    assert telemetry["vehicles"][CAR]["stored_kwh"] == pytest.approx(3.68)
+    assert update_telemetry(telemetry, state, report) == telemetry

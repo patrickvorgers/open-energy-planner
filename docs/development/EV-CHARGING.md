@@ -131,7 +131,10 @@ request identity derives from the session nonce and car. Its session checkpoint
 prevents polling, temporary recognition loss, unrelated configuration edits or
 app restart from recreating a cancelled or completed request on that nonce.
 Guards are kept per car so another car can still receive its own request.
-Overdue requests expire before a new arrival chooses a request. A current
+Reports captured before departure retain eligible completion evidence even
+when received just after departure. That request is linked to the captured
+connection before completion or expiration, preventing a second automatic
+request on the same nonce. Genuinely overdue requests expire before a new arrival chooses a request. A current
 request is reused, including an explicitly submitted replacement. Each plan recalculates useful energy from the
 best available labelled SoC:
 
@@ -173,7 +176,10 @@ without inventing energy. A later genuine SoC sample resets preceding credit.
 A delayed sample still permits an entire following meter interval whose
 baseline is at or after the sample time. An interval straddling that time is
 not prorated. Unknown identity preserves proved credit but cannot authorize
-new attribution. Recovery starts from a new known baseline. A positively
+new attribution. Recovery starts a new attribution boundary. A meter interval
+whose baseline predates the recognized connection, recovery or source replacement
+is excluded in full. The next interval wholly after that boundary may add energy.
+A positively
 identified reassignment withdraws that session's earlier credit from the
 previous car. Values are capped at 100%.
 
