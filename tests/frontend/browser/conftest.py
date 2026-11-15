@@ -242,6 +242,7 @@ def app_site(request, savings_now):
                 "appliance_followed",
                 "appliance_quality_observed",
                 "appliance_quality_statistics",
+                "appliance_quality_legacy",
             ):
                 from tests.frontend.browser.appliance_quality_fixture import seed
 
@@ -249,6 +250,7 @@ def app_site(request, savings_now):
                     Path(directory),
                     representative=request.param != "appliance_followed",
                     statistical=request.param == "appliance_quality_statistics",
+                    legacy=request.param == "appliance_quality_legacy",
                 )
             application = application_factory(
                 Path(directory),

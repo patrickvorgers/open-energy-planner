@@ -94,7 +94,7 @@ function profile() {
     if (metrics?.variable) history.append(node("p", "Recorded state timing: This learned profile preserves actual irregular phase durations. It does not imply a fixed measurement frequency."));
     if (device?.planning_issue) history.append(node("p", device.planning_issue));
     if (learned && learned.evidence !== "manual" && learned.samples === 1) history.append(node("p", "Provisional profile: One complete cycle. Further cycles refine this estimate."));
-    if (device?.profile_basis === "statistics" && learned && !["manual", "hourly_estimate"].includes(learned.evidence)) history.append(node("p", "Provisional statistical profile: Five-minute mean power supplies the shape. The energy counter supplies the total. Historical data cannot prove continuous reporting."));
+    if (device?.profile_basis === "statistics" && learned && !["manual", "hourly_estimate"].includes(learned.evidence)) history.append(node("p", "Provisional statistical profile: Reconstructed from historical interval data. The energy counter supplies the total. Historical data cannot prove continuous reporting."));
     if (device?.profile_basis === "observed") history.append(node("p", "Continuously followed profile: Complete cycles with current power reports refine this shape. Historical statistics cannot replace it."));
     const run = device?.observed_run;
     if (run && !["complete", "idle"].includes(run.status)) history.append(node("p", `Measured activity: ${run.status === "observed" ? "Cycle in progress" : "Execution uncertain"}: Started ${when(run.started_at)}: ${money(run.energy_kwh)} kWh measured. Pending starts are blocked. This is separate from execution confirmation.`));

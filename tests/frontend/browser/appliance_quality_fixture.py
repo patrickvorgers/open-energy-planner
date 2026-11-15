@@ -13,7 +13,7 @@ from tests.app.appliance.raw_support import follow_raw_trace, raw_trace
 from tests.app.appliance.support import ENTITY, POWER
 
 
-def seed(directory, *, representative=False, statistical=False):
+def seed(directory, *, representative=False, statistical=False, legacy=False):
     """Follow two real SQL-backed traces with heartbeats, then close storage before the browser app restarts."""
     with closing(SqlPlanRepository(directory)) as repository:
         consumers = ConsumerForecasts(SqlDocuments(repository.engine, "demand"))
@@ -34,6 +34,25 @@ def seed(directory, *, representative=False, statistical=False):
             consumers.version,
         )
         service = ApplianceService(SqlDocuments(repository.engine, "planning"), consumers)
+        if legacy:
+            start = datetime.now(UTC) - timedelta(hours=3)
+            service.documents.write(
+                "appliance-detected-counter-only.json",
+                {
+                    "id": "counter-only",
+                    "entity_id": ENTITY,
+                    "power_entity": POWER,
+                    "started_at": start.isoformat(),
+                    "completed_at": (start + timedelta(hours=1)).isoformat(),
+                    "synthetic": False,
+                    "points": [
+                        {"at": (start + timedelta(minutes=15 * index)).isoformat(), "kwh": kwh}
+                        for index, kwh in enumerate([10, 10.2, 10.2, 10.4, 10.5])
+                    ],
+                },
+            )
+            service.learn_history(ENTITY, POWER, [], False, datetime.now(UTC))
+            return
         body = representative_trace() if representative else raw_trace()
         anchor = datetime.now(UTC)
         if representative:
