@@ -180,6 +180,13 @@ their own frozen profiles. New learning cannot rewrite an already accepted run.
 Changing/removing the power binding withdraws that learned profile, retains its
 archives, and restores a saved manual fallback. Learning needs new evidence for
 the changed source. Ordinary restarts retain profiles and deduplication evidence.
+Reconstruction binds retained automatic fine and hourly aggregates to their actual
+power source, including reconstruction through the completed-cycle API. A later
+power change removes that source's automatic contributions immediately and
+reconstructs any retained energy-only explicit completions without inventing a
+power source for them. A pure explicit profile survives power relinking. Archive
+caches are invalidated only after successful withdrawal, so a failed write retains
+the previous state and cache and can be retried.
 The legacy completed-cycle API remains for existing clients. Its energy-only records retain their original source identity and points. Distinct explicit completions contribute once using the existing arithmetic-mean contract alongside the recency-weighted automatic aggregate. Empty history uploads, restart and later learning reconstruct the same contributions. Power-source relinking excludes old automatic pair evidence without inventing power provenance for energy-only records. Changing the energy source excludes its explicit records. The supplied
 blueprint no longer submits cycles through it, avoiding duplicate learning.
 

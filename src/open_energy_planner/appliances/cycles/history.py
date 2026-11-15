@@ -202,8 +202,6 @@ def batch(
     target = data["devices"][entity]
     if changed:
         refine(target, list(records.values()))
-    if records:
-        target["learning_source"] = power_entity
     accepted = len(extra)
     updated = target[field]
     if resolution == "5minute" and first >= boundary:

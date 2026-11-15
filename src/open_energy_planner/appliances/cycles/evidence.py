@@ -115,6 +115,14 @@ def refine(settings, records):
         distinct = fine
     if not distinct:
         return
+    automatic = next(
+        (record for record in fine + coarse if record.get("quality") != "explicit_completion"),
+        None,
+    )
+    if automatic:
+        settings["learning_source"] = automatic["power_entity"]
+    else:
+        settings.pop("learning_source", None)
     fine_profile, fine_weight = average(fine)
     hourly, hourly_weight = average(coarse)
     combined, _ = average(distinct)

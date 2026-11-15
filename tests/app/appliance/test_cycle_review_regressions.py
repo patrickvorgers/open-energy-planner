@@ -334,3 +334,120 @@ def test_explicit_profile_keeps_precedence_over_only_hourly_estimates(service):
         "hourly_cycles": 0,
         "fine_cycles": 1,
     }
+
+
+def relink(service, power):
+    """Change the selected source and run the real withdrawal without uploading history."""
+    service.consumers.options = ({"entity_id": ENTITY, "name": "Washer", "power_entity": power},)
+    service.sync_sources()
+
+
+def test_explicit_reconstruction_rebinds_automatic_evidence_before_another_relink(service):
+    """A->B->A->explicit reconstruction->B removes the old 1-kWh contribution without a history pass."""
+    service.learn_history(ENTITY, POWER, one_kwh_readings(), False, NOW)
+    service.configure(ENTITY, True)
+    task = service.submit(ENTITY, "frozen-source-a", NOW, NOW + timedelta(hours=4), NOW)
+    frozen = deepcopy(task["profile"])
+    relink(service, "sensor.other_power")
+    relink(service, POWER)
+    explicit_three_kwh(service)
+    settings = service.state["devices"][ENTITY]
+    assert profile(settings["profile"]).energy_kwh == pytest.approx(2)
+    relink(service, "sensor.other_power")
+    assert profile(service.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(3)
+    assert service.state["devices"][ENTITY]["profile"]["samples"] == 1
+    assert "learning_source" not in service.state["devices"][ENTITY]
+    assert service.state["tasks"][ENTITY]["profile"] == frozen
+    assert len(list(service.documents.iter_prefix("appliance-detected-"))) == 1
+    assert len(list(service.documents.iter_prefix("appliance-cycle-"))) == 1
+
+
+def test_explicit_only_source_stays_unbound_and_unchanged_refreshes_reuse_model(
+    service, monkeypatch
+):
+    """Energy-only 3-kWh evidence survives power relinking without fabricated provenance or repeat rebuilding."""
+    from tests.app.appliance.test_history_resume import trace_refinement
+
+    explicit_three_kwh(service)
+    calls = trace_refinement(monkeypatch)
+    for _ in range(2):
+        service.learn_history(ENTITY, POWER, [], False, NOW)
+    assert calls == []
+    assert "learning_source" not in service.state["devices"][ENTITY]
+    relink(service, "sensor.other_power")
+    assert profile(service.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(3)
+    [raw] = list(service.documents.iter_prefix("appliance-cycle-"))
+    assert "power_entity" not in raw
+    service = ApplianceService(service.documents, service.consumers)
+    service.learn_history(ENTITY, "sensor.other_power", [], False, NOW)
+    service.learn_history(ENTITY, "sensor.other_power", [], False, NOW)
+    assert len(calls) == 1
+    assert "learning_source" not in service.state["devices"][ENTITY]
+
+
+def test_explicit_winning_overlap_does_not_inherit_discarded_automatic_power_owner(service):
+    """The explicit view wins an equal-detail tie and remains a single energy-only sample after relinking."""
+    from open_energy_planner.appliances.cycles.learning import detect_cycles
+
+    rows = one_kwh_readings()
+    service.learn_history(ENTITY, POWER, rows, False, NOW)
+    [(start, end, points)] = detect_cycles(rows, NOW)
+    service.record_cycle(ENTITY, "overlap-explicit", start, end, points)
+    assert service.state["devices"][ENTITY]["profile"]["samples"] == 1
+    assert "learning_source" not in service.state["devices"][ENTITY]
+    relink(service, "sensor.other_power")
+    assert profile(service.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(1)
+
+
+def test_explicit_reconstruction_keeps_retained_coarse_summary_source_bound(service):
+    """Restored hourly aggregates keep their actual source even when a known explicit profile takes precedence."""
+    from tests.app.appliance.test_history_learning import hourly_rows
+
+    service.learn_history(
+        ENTITY,
+        POWER,
+        hourly_rows(NOW - timedelta(days=10), [0, 0, 1000, 0, 0]),
+        False,
+        NOW,
+        sample_seconds=3600,
+    )
+    relink(service, "sensor.other_power")
+    relink(service, POWER)
+    explicit_three_kwh(service)
+    settings = service.state["devices"][ENTITY]
+    assert profile(settings["profile"]).energy_kwh == pytest.approx(3)
+    assert profile(settings["hourly_profile"]).energy_kwh == pytest.approx(1)
+    assert settings.get("learning_source") == POWER
+    relink(service, "sensor.other_power")
+    assert "hourly_profile" not in service.state["devices"][ENTITY]
+    assert profile(service.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(3)
+    assert "learning_source" not in service.state["devices"][ENTITY]
+    assert "power_entity" not in next(service.documents.iter_prefix("appliance-cycle-"))
+
+
+def test_failed_source_withdrawal_keeps_state_and_cache_until_explicit_only_rebuild_commits(
+    service, monkeypatch
+):
+    """A failed relink cannot publish withdrawal or invalidate cached evidence. Retry retains only explicit 3 kWh."""
+    service.learn_history(ENTITY, POWER, one_kwh_readings(), False, NOW)
+    explicit_three_kwh(service)
+    before, cache = deepcopy(service.state), deepcopy(service._cycle_records)
+    original = service.documents.write
+
+    def fail_state(name, value):
+        """Reject the atomic withdrawal pointer before cache invalidation."""
+        if name == "appliance-state.json":
+            raise OSError("Synthetic source withdrawal outage")
+        original(name, value)
+
+    monkeypatch.setattr(service.documents, "write", fail_state)
+    with pytest.raises(OSError):
+        relink(service, "sensor.other_power")
+    assert service.state == before
+    assert service._cycle_records == cache
+    monkeypatch.setattr(service.documents, "write", original)
+    service.sync_sources()
+    assert not service._cycle_records
+    assert profile(service.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(3)
+    restored = ApplianceService(service.documents, service.consumers)
+    assert restored.state == json.loads(json.dumps(service.state))

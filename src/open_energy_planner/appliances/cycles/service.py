@@ -185,7 +185,10 @@ class ApplianceService:
 
     def sync_sources(self):
         """Withdraw learned profiles after a sensor change, retaining manual estimates and archives."""
+        from .evidence import completion, refine
+
         data = deepcopy(self.state)
+        withdrawn = set()
         for entity, settings in data["devices"].items():
             for field in ("fine_import", "observed_run"):
                 if settings.get(field, {}).get("power_entity") not in (None, self.source(entity)):
@@ -204,6 +207,10 @@ class ApplianceService:
             if settings.get("learning_source") and settings["learning_source"] != self.source(
                 entity
             ):
+                withdrawn.add(entity)
+                for key in tuple(settings):
+                    if key.startswith("hourly_"):
+                        settings.pop(key)
                 settings.pop("learned_profile", None)
                 settings.pop("learning_source", None)
                 settings.pop("recent_cycles", None)
@@ -214,7 +221,17 @@ class ApplianceService:
                 settings.pop("profile", None)
                 if settings.get("manual_profile"):
                     settings["profile"] = asdict(manual_profile(**settings["manual_profile"]))
+                explicit = [
+                    completion(record)
+                    for record in self.documents.iter_prefix("appliance-cycle-")
+                    if record["entity_id"] == entity
+                ]
+                if explicit:
+                    refine(settings, explicit)
         self.commit(data)
+        for pair in tuple(self._cycle_records):
+            if pair[0] in withdrawn:
+                self._cycle_records.pop(pair)
 
     def set_manual_profile(self, entity, duration_minutes, energy_kwh, expected_version):
         """Retain an explicit estimate without replacing a ready learned profile or accepted task."""
@@ -302,12 +319,7 @@ class ApplianceService:
                 body["energy_kwh"] = learned.energy_kwh
             records[record_key] = cached
             extra.append((key, body))
-        changed = (
-            bool(extra)
-            or pair not in self._cycle_records
-            or bool(records)
-            and self.state["devices"].get(entity, {}).get("learning_source") != power_entity
-        )
+        changed = bool(extra) or pair not in self._cycle_records
         return records, extra, changed
 
     def learn_history(
@@ -350,8 +362,6 @@ class ApplianceService:
                     or task["attempt"]["status"] not in ("started", "completed")
                 ):
                     task.update(status="execution_observed", scheduled_start=None, plan_id=None)
-        if records:
-            settings["learning_source"] = power_entity
         summary = history_evidence(rows, len(cycles), sample_seconds=sample_seconds)
         summary["power_entity"], summary["synthetic"] = power_entity, synthetic
         settings[
