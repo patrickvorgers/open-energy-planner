@@ -1,9 +1,11 @@
 """Prove selected-machine distribution, image transfer and fail-closed report aggregation."""
 
+import io
 import json
 import runpy
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from textwrap import dedent
 
@@ -54,6 +56,12 @@ def test_hosted_images_share_one_storage_setup_and_failed_machines_cancel_peers(
     assert "fail-fast: true" in tests
     assert "if: always()" in tests and "ci-reports-${{ matrix.name }}" in tests
     assert "needs.tests.result == 'success'" in quality
+    assert "report_download_path: ${{ steps.parallel.outputs.report_download_path }}" in preparation
+    download = quality.split(
+        "      - name: Download each machine's original reports separately\n", 1
+    )[1]
+    download = download.split("      - name:", 1)[0]
+    assert "path: ${{ needs.prepare.outputs.report_download_path }}" in download
     assert quality.index("script.ci.parallel_checks join") < quality.index(
         "script.release.package_release"
     )
@@ -296,7 +304,8 @@ def test_preparation_exports_shared_native_image_once_and_retains_all_aliases(
         "oep-check-123-2-db-tests",
         "oep-check-123-2-provision-tests",
     ]
-    matrix = json.loads(Path("outputs").read_text().removeprefix("matrix="))
+    outputs = dict(line.split("=", 1) for line in Path("outputs").read_text().splitlines())
+    matrix = json.loads(outputs["matrix"])
     assert matrix == {
         "include": [
             {"lane": "native", "name": "native", "browser_machine": None, "images": ["native"]},
@@ -309,6 +318,88 @@ def test_preparation_exports_shared_native_image_once_and_retains_all_aliases(
             {"lane": "supervisor", "name": "supervisor", "browser_machine": None, "images": []},
         ]
     }
+
+
+@pytest.mark.parametrize("fault", ["none", "missing", "extra", "attempt", "failed"])
+@pytest.mark.parametrize(
+    "profile,names,expected_download_path",
+    [
+        ("documentation", ["native"], ".local/ci-lanes/ci-reports-native"),
+        ("ci", ["native"], ".local/ci-lanes/ci-reports-native"),
+        ("native", ["native"], ".local/ci-lanes/ci-reports-native"),
+        ("selected:ci,unit-app", ["native"], ".local/ci-lanes/ci-reports-native"),
+        (
+            "selected:ci,supervisor,unit-supervisor",
+            ["native", "supervisor"],
+            ".local/ci-lanes",
+        ),
+    ],
+)
+def test_exported_report_path_joins_single_and_multiple_downloads_without_relaxing_guards(
+    hosted_identity, monkeypatch, profile, names, expected_download_path, fault
+):
+    """One-match flat ZIPs and multiple named ZIPs join only complete, passing, candidate-bound reports."""
+    Path("results/ci").mkdir(parents=True)
+
+    def save(command, **options):
+        """Provide nonempty already-built image bytes without launching Docker."""
+        Path(command[command.index("-o") + 1]).write_bytes(b"prepared image layers")
+
+    monkeypatch.setattr(subprocess, "run", save)
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda command: json.dumps([{"Id": "sha256:prepared"} for _ in command[3:]]).encode(),
+    )
+    parallel.export_images(profile)
+    outputs = dict(line.split("=", 1) for line in Path("outputs").read_text().splitlines())
+    assert outputs["report_download_path"] == expected_download_path
+    machines = json.loads(outputs["matrix"])["include"]
+    assert [machine["name"] for machine in machines] == names
+    archives = {}
+    for machine in machines:
+        lane = machine["lane"]
+        suites = parallel.lane_suites(profile)[lane]
+        receipt = {
+            "profile": profile,
+            "source_tree": "2" * 40,
+            "run_id": "123",
+            "run_attempt": "3" if fault == "attempt" else "2",
+            "tested_commit": "1" * 40,
+            "lane": lane,
+            "completed": sorted(suites),
+            "executed_tests": {suite: 1 for suite in suites},
+        }
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, "w") as archive:
+            archive.writestr(f"lane-completion-{machine['name']}.json", json.dumps(receipt))
+            for suite in suites:
+                name = "supervisor-replay" if suite == "supervisor" else suite
+                failure = "<failure />" if fault == "failed" else ""
+                archive.writestr(
+                    f"{name}.xml",
+                    f'<testsuite tests="1"><testcase classname="{suite}" name="known">'
+                    f"{failure}</testcase></testsuite>",
+                )
+        archives[f"ci-reports-{machine['name']}"] = content.getvalue()
+    if fault == "missing":
+        archives.pop(next(iter(archives)))
+    elif fault == "extra":
+        archives["ci-reports-unselected"] = next(iter(archives.values()))
+    download_path = Path(outputs["report_download_path"])
+    for name, content in archives.items():
+        # The pinned v8 action flattens one match even when merge-multiple is false.
+        destination = download_path if len(archives) == 1 else download_path / name
+        destination.mkdir(parents=True)
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            archive.extractall(destination)
+    if fault == "none":
+        parallel.join_reports(profile, Path(".local/ci-lanes"))
+        completion.verify_completion(profile, "2" * 40)
+    else:
+        with pytest.raises((RuntimeError, FileNotFoundError)):
+            parallel.join_reports(profile, Path(".local/ci-lanes"))
+        assert not completion.REPORT.exists()
 
 
 @pytest.mark.parametrize("fault", ["none", "checksum", "image", "attempt", "assignment"])
