@@ -16,6 +16,7 @@ from tests.ha_contract.support.metadata import setup_metadata
 @pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
+@pytest.mark.parametrize("app_site", ["appliance_followed"], indirect=True)
 @pytest.mark.parametrize(
     "missing,claimed_complete",
     [
@@ -28,7 +29,7 @@ from tests.ha_contract.support.metadata import setup_metadata
     ],
 )
 def test_empty_state_sources_keep_other_curve_and_profile_visible(
-    app_page, missing, claimed_complete
+    app_page, missing, claimed_complete, app_site
 ):
     """Actual desktop/mobile detail distinguishes loading, empty sources and unknown gaps, preserving selection and profile."""
     page, url = app_page

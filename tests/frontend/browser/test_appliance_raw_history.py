@@ -14,11 +14,15 @@ from tests.frontend.browser.helpers import TOKEN, discover
 @pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
-@pytest.mark.parametrize("conflict", [False, True])
-def test_original_recorder_events_and_conservation_fallback_are_visible(app_page, conflict):
+@pytest.mark.parametrize(
+    "conflict,app_site", [(False, "appliance_followed"), (True, None)], indirect=["app_site"]
+)
+def test_original_recorder_events_and_conservation_fallback_are_visible(
+    app_page, conflict, app_site
+):
     """Desktop/mobile show an actual twenty-second 3-kW event, exact timing and an honest retained-profile fallback."""
     page, url = app_page
-    catalogue = discover(page, url)
+    catalogue = discover(page, url, publish=False)
     catalogue["entities"].extend(
         [
             {
@@ -108,7 +112,7 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(app_page
     expect(page.locator("#recorded-cycle")).to_be_visible()
     expect(page.locator("#recorded-cycle-status")).to_contain_text("Actual event times")
     expect(page.locator("#recorded-cycle-status")).to_contain_text(
-        "cannot establish a conserved cycle" if conflict else "Power and energy agree"
+        "cannot establish a conserved cycle" if conflict else "not continuously followed"
     )
     page.wait_for_function(
         "() => Chart.getChart('recorded-power-chart')?.data.datasets[0].data.length > 3"
@@ -139,6 +143,7 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(app_page
             page.evaluate("Chart.getChart('cycle-chart').data.datasets[0].data")
         ) == pytest.approx(1000)
         expect(page.locator("#profile-evidence")).to_contain_text("Energy: 0.50 kWh")
+        expect(page.locator("#profile-history")).to_contain_text("Provisional statistical profile")
     else:
         learned = page.evaluate("Chart.getChart('cycle-chart').data.datasets[0].data")
         assert max(point["y"] for point in learned) == 3000
@@ -146,6 +151,7 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(app_page
             page.evaluate("Chart.getChart('cycle-energy-chart').data.datasets[0].data")
         ) == pytest.approx(23 / 45)
         expect(page.locator("#profile-history")).to_contain_text("actual irregular phase durations")
+        expect(page.locator("#profile-history")).to_contain_text("Continuously followed profile")
     page.screenshot(
         path=f"results/ci/cycle-recorder-{'conflict' if conflict else 'complete'}-{page.viewport_size['width']}.png",
         full_page=True,

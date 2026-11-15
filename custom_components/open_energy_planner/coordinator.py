@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import replace
 from datetime import timedelta
+from uuid import uuid4
 
 from aiohttp import ClientError, ClientResponseError, ServerFingerprintMismatch
 from homeassistant.components import persistent_notification
@@ -64,6 +65,7 @@ class PlanCoordinator:
         self.appliance_history_attempts = {}
         self.appliance_history_task = None
         self.appliance_raw_history_future = None
+        self.appliance_observer_session = str(uuid4())
         self.appliance_history_cancel = None
         self.solar_feedback_task = None
         self.solar_feedback_attempts = {}

@@ -22,6 +22,7 @@ export function renderRawHistory(device) {
     const statuses = {
         running: "Cycle in progress. Measurements do not confirm execution.",
         complete: "Power and energy agree for a completed cycle.",
+        not_observed: "The recorded cycle was not continuously followed. The existing profile is retained.",
         unverified: "These measurements cannot establish a conserved cycle. The existing usable profile is retained.",
         limited: "Only a limited recent tail is available. Missing earlier coverage remains unknown.",
         complexity_limited: "The recorded curve is retained. The existing profile remains in use because this trace is too detailed for planning.",
