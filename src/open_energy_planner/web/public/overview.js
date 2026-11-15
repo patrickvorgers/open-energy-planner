@@ -136,7 +136,12 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             if (point && !items.some(item => item.dataset === dataset)) items.push({dataset: {...dataset, label: `${dataset.label} at start`}, parsed: point});
         });
     }
-    const groups = balance ? ["Production", "Consumption", "Battery state"].map(name => [name, items.filter(item => item.dataset.tooltipGroup === name)]).filter(([, items]) => items.length) : [[null, items]];
+    // Totals retain original flows even when the legend or display threshold hides a series.
+    const totalItems = interval ? instance.data.datasets.filter(dataset => dataset.type === "bar").map(dataset => {
+        const point = dataset.data.find(point => point.start === interval.raw.start && point.end === interval.raw.end);
+        return {dataset, parsed: {y: point?.y}};
+    }) : tooltip.balanceItems || [];
+    const groups = balance ? ["Production", "Consumption", "Battery state"].map(name => [name, items.filter(item => item.dataset.tooltipGroup === name)]).filter(([name, items]) => items.length || totalItems.some(item => item.dataset.tooltipGroup === name)) : [[null, items]];
     const sections = document.createElement("div"); sections.className = balance ? "balance-tooltip-groups" : "";
     node.classList.toggle("chart-tooltip-balance", balance);
     for (const [name, items] of groups) {
@@ -155,10 +160,21 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             unit.className = "chart-tooltip-unit"; unit.textContent = item.dataset.unit;
             line.append(label, value, unit); table.append(line);
         }
+        const flows = totalItems.filter(item => item.dataset.tooltipGroup === name);
+        if (flows.length) {
+            const total = flows.every(item => Number.isFinite(item.parsed.y)) ? flows.reduce((sum, item) => sum + item.parsed.y, 0) : null;
+            const line = document.createElement("tr"), label = document.createElement("td"), value = document.createElement("td"), unit = document.createElement("td");
+            line.className = "chart-tooltip-total";
+            label.textContent = `Total ${name.toLowerCase()}`;
+            value.className = "chart-tooltip-value"; value.textContent = valueText(total, flows[0].dataset.unit);
+            unit.className = "chart-tooltip-unit"; unit.textContent = flows[0].dataset.unit;
+            line.append(label, value, unit); table.append(line);
+        }
         section.append(table); sections.append(section);
     }
     node.append(sections);
-    const notes = interval ? balanceNotes(interval.raw, instance.canvas.id, when) : tooltip.afterBody;
+    const notes = [...(interval ? balanceNotes(interval.raw, instance.canvas.id, when) : tooltip.afterBody)];
+    if (totalItems.length) notes.push("Totals include all flows, including hidden series. Supply is positive. Use is negative.");
     if (notes.length) {
         const explanation = document.createElement("p"); explanation.className = "chart-tooltip-explanation";
         explanation.textContent = notes.join("\n"); node.append(explanation);
@@ -214,21 +230,21 @@ function planningDayHeading(instance, series, tooltip, summary, heading, {date, 
         const from = Math.max(start, intervals[0].coveredStart ?? intervals[0].start);
         const to = Math.min(end, intervals.at(-1).coveredEnd ?? intervals.at(-1).end);
         if (to <= from) return;
-        const items = series.flatMap((entry, index) => entry.type !== "bar" || !instance.isDatasetVisible(index) ? [] : [{
-            dataset: {...instance.data.datasets[index], unit: "kWh"}, raw: {},
+        const balanceItems = series.flatMap((entry, index) => entry.type !== "bar" ? [] : [{
+            dataset: {...instance.data.datasets[index], unit: "kWh"}, datasetIndex: index, raw: {},
             parsed: {y: balancePeriodEnergy(entry.intervals, from, to)}
         }]);
+        const items = balanceItems.filter(item => instance.isDatasetVisible(item.datasetIndex));
         const partial = from > calendarDayStart(date) || to < calendarDayStart(nextDate(date));
         const notes = [partial ? "Partial day. Totals cover only the shown planned period." : "Totals cover this complete calendar day.",
             `From ${when(from)} to ${when(to)}.`, "Supply is positive. Use is negative."];
-        if (items.some(item => item.parsed.y == null)) notes.push("A dash means that energy is unavailable because interval evidence is missing or inconsistent.");
-        if (!items.length) notes.push("All energy series are hidden. Show a series in the legend to see its total.");
+        if (balanceItems.some(item => item.parsed.y == null)) notes.push("A dash means that energy is unavailable because interval evidence is missing or inconsistent.");
         if (summary.owner !== button) {
             summary.owner?.removeAttribute("aria-describedby");
             summary.owner = button; summary.pinned = false;
         }
         const bounds = button.getBoundingClientRect(), canvas = instance.canvas.getBoundingClientRect();
-        renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, title: [`Energy totals: ${full}`],
+        renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, balanceItems, title: [`Energy totals: ${full}`],
             afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
         tooltip.classList.add("chart-tooltip-day");
         button.setAttribute("aria-describedby", tooltip.id);
