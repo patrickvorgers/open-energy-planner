@@ -831,7 +831,6 @@ Solar learning treats production as unrestricted when no actual-curtailment sens
 | Nord Pool | Published bidding-area prices | Public-portal adapter implemented and NL format read-checked. Product coverage/distribution rights remain unconfirmed |
 | Energy Price Forecast EU | Prices beyond publication | Forecast-only adapter implemented and NL native hourly format read-checked. Product access/terms and broad market coverage remain admission work |
 | EpexPredictor | Public price-forecast API through 72h | Adapter implemented. Hourly keyless fair-use access, no local model dependency. Provider availability/terms remain release admission work |
-| DAO/DAP | Research references | No operational dependency |
 
 ### Price source composition and refresh
 
@@ -946,7 +945,7 @@ Automatic VS Code setup uses pinned compatible runtimes, simulated HA and no pro
 
 ## 11. Build order and acceptance
 
-[Independent scenarios](PLANNER-SCENARIOS.md) specify cheap/expensive cycles, negative prices, partially consumed bonus caps and terminal energy, with loss/wear/reserve/power/curtailment/order/future-use variants. [Coverage](TEST-COVERAGE.md) traces planner versus HA/storage/forecast/UI work. Other EMS projects inspire categories only, not copied tests/oracles or implicit soft-SoC/inter-battery prohibitions. [Arithmetic audit](scenario-arithmetic-audit.json) uses exact amounts/small enumeration. Hand arguments establish continuous optimality, not discretization alone. These audit receipts are not automatically executed EMS/HA tests or proof of automatic terminal-value derivation. Reference PV keeps producing. EMS-curtailed actual production needs a provenance-marked available-PV estimate.
+[Independent scenarios](PLANNER-SCENARIOS.md) specify cheap/expensive cycles, negative prices, partially consumed bonus caps and terminal energy, with loss/wear/reserve/power/curtailment/order/future-use variants. [Coverage](TEST-COVERAGE.md) traces planner versus HA/storage/forecast/UI work. Coverage follows OEP's requirements and independent expected outcomes. Do not introduce implicit soft-SoC or inter-battery prohibitions. [Arithmetic audit](scenario-arithmetic-audit.json) uses exact amounts/small enumeration. Hand arguments establish continuous optimality, not discretization alone. These audit receipts are not automatically executed EMS/HA tests or proof of automatic terminal-value derivation. Reference PV keeps producing. EMS-curtailed actual production needs a provenance-marked available-PV estimate.
 
 | Step | Result | Acceptance |
 |---|---|---|
@@ -1084,7 +1083,7 @@ regression tests capture native query plans and warmed timing evidence. See
 
 ### Interactive workspace
 
-[EMS visualization](../docs/development/EMS-VISUALIZATION.md) records the researched chart selection, local Chart.js dependency, navigation, accessibility, units, missing-coverage rules and scheduling ownership. Original plan content and financial evaluations remain authoritative. Browser exploration never changes control state. Command lifetime is separate from input admission age, with a central next-quarter-plus-five-minute deadline and immediate hard revocation.
+[EMS visualization](../docs/development/EMS-VISUALIZATION.md) records the chart selection, local Chart.js dependency, navigation, accessibility, units, missing-coverage rules and scheduling ownership. Original plan content and financial evaluations remain authoritative. Browser exploration never changes control state. Command lifetime is separate from input admission age, with a central next-quarter-plus-five-minute deadline and immediate hard revocation.
 
 ### Active notification center
 
