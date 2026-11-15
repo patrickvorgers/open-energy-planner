@@ -292,3 +292,90 @@ def test_late_delivered_meter_completion_credits_energy_once(ev_service):
     ev_service.receive(report, later, "Europe/Amsterdam")
     assert len(ev_service.state["requests"]) == 1
     assert ev_service.vehicle_readings(later)[CAR]["stored_kwh"] == pytest.approx(1.84)
+
+
+@pytest.mark.parametrize("delivery_seconds, expected_vehicle", [(0, CAR), (1, CAR), (10, None)])
+def test_live_recognition_retains_receipt_time_signal_age_limit(
+    ev_service, delivery_seconds, expected_vehicle
+):
+    """A 299-second-old capture signal expires at receipt age309 and cannot create a current request."""
+    configuration = settings()
+    configuration["vehicles"][0]["connected_entity"] = "binary_sensor.synthetic_car_plug"
+    sources = catalogue()
+    sources["entities"].append(
+        {
+            "entity_id": "binary_sensor.synthetic_car_plug",
+            "name": "Car plug",
+            "unit": "",
+            "device_class": "plug",
+        }
+    )
+    ev_service.configure(configuration, sources, NOW)
+    body = observations(ev_service)
+    observed = NOW - timedelta(seconds=299)
+    body["vehicles"][0]["connected"] = {
+        "value": True,
+        "observed_at": observed.isoformat(),
+        "reported_at": NOW.isoformat(),
+        "timestamp_kind": "device_sample",
+    }
+    body["points"][0]["power_w"] = 3500
+    received = NOW + timedelta(seconds=delivery_seconds)
+    ev_service.receive(body, received, "Europe/Amsterdam")
+    assert ev_service.state["assignments"][POINT]["vehicle_id"] == expected_vehicle
+    if expected_vehicle is None:
+        assert ev_service.state["requests"] == {}
+        assert ev_service.work(received, "Europe/Amsterdam") == ()
+    else:
+        assert ev_service.work(received, "Europe/Amsterdam")
+
+
+def test_historical_completion_cannot_install_stale_live_identity(ev_service):
+    """Capture-time evidence can complete its old request while current identity and permission remain unknown."""
+    configuration = settings()
+    configuration["vehicles"][0]["connected_entity"] = "binary_sensor.synthetic_car_plug"
+    sources = catalogue()
+    sources["entities"].append(
+        {
+            "entity_id": "binary_sensor.synthetic_car_plug",
+            "name": "Car plug",
+            "unit": "",
+            "device_class": "plug",
+        }
+    )
+    ev_service.configure(configuration, sources, NOW)
+    request_id = str(uuid4())
+    ev_service.save_request(
+        {
+            "request_id": request_id,
+            "vehicle_id": CAR,
+            "departure": (NOW + timedelta(seconds=5)).isoformat(),
+        },
+        NOW,
+        "Europe/Amsterdam",
+    )
+    body = observations(ev_service, soc=80)
+    observed = NOW - timedelta(seconds=299)
+    body["vehicles"][0]["connected"] = {
+        "value": True,
+        "observed_at": observed.isoformat(),
+        "reported_at": NOW.isoformat(),
+        "timestamp_kind": "device_sample",
+    }
+    received = NOW + timedelta(seconds=10)
+    ev_service.receive(body, received, "Europe/Amsterdam")
+    assert ev_service.state["requests"][request_id]["status"] == "completed"
+    assert ev_service.state["assignments"][POINT]["vehicle_id"] is None
+    assert ev_service.work(received, "Europe/Amsterdam") == ()
+    later = NOW + timedelta(seconds=20)
+    fresh = observations(ev_service, later, soc=None)
+    fresh["vehicles"][0]["connected"] = {
+        "value": True,
+        "observed_at": later.isoformat(),
+        "reported_at": later.isoformat(),
+        "timestamp_kind": "device_sample",
+    }
+    ev_service.receive(fresh, later, "Europe/Amsterdam")
+    assert ev_service.state["assignments"][POINT]["vehicle_id"] == CAR
+    assert len(ev_service.state["requests"]) == 1
+    assert ev_service.work(later, "Europe/Amsterdam") == ()

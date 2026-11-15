@@ -287,19 +287,22 @@ class EVService:
             ):
                 raise ValueError("Invalid EV meter provenance")
         state = deepcopy(self.state)
-        state["assignments"] = recognize(state, body, at)
+        completion_state = {**state, "assignments": recognize(state, body, at)}
+        state["assignments"] = recognize(state, body, now)
         telemetry = update_telemetry(self.telemetry, state, body)
         completion_report = deepcopy(body)
         estimates = vehicle_estimates(telemetry, state["vehicles"], now)
         for vehicle in completion_report["vehicles"]:
             vehicle["soc"] = estimates.get(vehicle["id"], {}).get("soc")
             vehicle["soc_basis"] = estimates.get(vehicle["id"], {}).get("basis")
-        for session in telemetry["sessions"].values():
-            vehicle_id = session["vehicle_id"]
-            request = active_request(state, vehicle_id)
+        for point_id, assignment in completion_state["assignments"].items():
+            vehicle_id = assignment.get("vehicle_id")
+            request = active_request(completion_state, vehicle_id)
             if request and instant(request["ready_at"]) <= at < instant(request["departure"]):
-                session["request_ids"][vehicle_id] = request["id"]
-        state = advance_requests(state, completion_report, now, timezone)
+                telemetry["sessions"][point_id]["request_ids"][vehicle_id] = request["id"]
+        current_assignments = state["assignments"]
+        state = advance_requests(completion_state, completion_report, now, timezone)
+        state["assignments"] = current_assignments
         if timezone:
             for point in state["points"]:
                 session = telemetry["sessions"][point["id"]]

@@ -134,7 +134,10 @@ Guards are kept per car so another car can still receive its own request.
 Reports captured before departure retain eligible completion evidence even
 when received just after departure. That request is linked to the captured
 connection before completion or expiration, preventing a second automatic
-request on the same nonce. Genuinely overdue requests expire before a new arrival chooses a request. A current
+request on the same nonce. Current recognition still evaluates the five-minute
+signal limit at receipt time. Capture-time recognition is used only for historical
+completion and never replaces the current identity or permission decision.
+Genuinely overdue requests expire before a new arrival chooses a request. A current
 request is reused, including an explicitly submitted replacement. Each plan recalculates useful energy from the
 best available labelled SoC:
 
