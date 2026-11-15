@@ -51,6 +51,7 @@ def test_vehicle_recognition_sources_are_scoped_and_saved_as_optional_fields(app
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
     page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
     Path("results/ci").mkdir(parents=True, exist_ok=True)
+    page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(
         path=f"results/ci/ev-recognition-settings-{page.viewport_size['width']}.png", full_page=True
     )
