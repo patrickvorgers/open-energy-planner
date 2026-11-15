@@ -6,7 +6,11 @@ from http import HTTPStatus
 from aiohttp import ClientSession, ClientTimeout, Fingerprint
 
 from .const import BUILD_INFO
-from .wire_limits import MAX_API_RESPONSE_BYTES, MAX_SNAPSHOT_RESPONSE_BYTES
+from .wire_limits import (
+    MAX_API_RESPONSE_BYTES,
+    MAX_APPLIANCE_RESPONSE_BYTES,
+    MAX_SNAPSHOT_RESPONSE_BYTES,
+)
 
 RESPONSE_READ_CHUNK_BYTES = 16384
 
@@ -34,7 +38,7 @@ class LocalClient:
 
         Use a five-second deadline. Authentication rejection is distinguished from
         other HTTP, transport and malformed-response failures for user-facing recovery.
-        Whole-plan and catalogue membership replies allow 4 MiB. Other endpoints
+        Whole-plan, complete appliance and catalogue membership replies allow 4 MiB. Other endpoints
         allow 256 KiB.
 
         Raises:
@@ -82,7 +86,13 @@ class LocalClient:
                 "/v1/replan",
                 "/v1/ha/catalogue",
             ) or (method == "PUT" and path == "/v1/installation")
-            limit = MAX_SNAPSHOT_RESPONSE_BYTES if snapshot_response else MAX_API_RESPONSE_BYTES
+            limit = (
+                MAX_APPLIANCE_RESPONSE_BYTES
+                if path == "/v1/appliances" or path.startswith("/v1/appliances/")
+                else MAX_SNAPSHOT_RESPONSE_BYTES
+                if snapshot_response
+                else MAX_API_RESPONSE_BYTES
+            )
             data = bytearray()
             async for part in response.content.iter_chunked(RESPONSE_READ_CHUNK_BYTES):
                 data.extend(part)

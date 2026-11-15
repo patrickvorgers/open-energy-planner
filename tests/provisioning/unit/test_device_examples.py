@@ -158,11 +158,10 @@ class ProductBoundary:
             start, end, points = cycles[0]
             learned = learn_cycle(points, start, end, synthetic=body["synthetic"])
             row = self.devices[body["entity_id"]]
-            if len(cycles) == 1:
-                return {"accepted": True}
             row["profile"] = {
                 "power_w": learned.power_w,
-                "samples": 2,
+                "samples": len(cycles),
+                "phase_seconds": learned.phase_seconds,
                 "evidence": learned.evidence,
             }
         elif path == "/v1/appliances/manual_profile":
@@ -298,16 +297,16 @@ def test_first_start_configures_all_device_types_without_submitting_tasks(tmp_pa
     provision(boundary, tmp_path / "examples.json")
     assert len(boundary.devices) == 3
     for name, energy, duration in (
-        ("dishwasher", 0.83, 7),
-        ("washing_machine", 0.92, 9),
-        ("dryer", 1.4, 12),
+        ("dishwasher", 0.83, 21),
+        ("washing_machine", 0.92, 27),
+        ("dryer", 1.4, 36),
     ):
         row = boundary.devices[f"sensor.oep_test_{name}_energy"]
         assert row["shiftable"] and row["task"] is None
         assert len(row["profile"]["power_w"]) == duration
-        assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(energy)
+        assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(energy)
         assert row["profile"]["samples"] == (1 if name == "dryer" else 2)
-        assert row["profile"]["evidence"] == ("manual" if name == "dryer" else "synthetic")
+        assert row["profile"]["evidence"] == "synthetic"
     assert next(row for row in boundary.selected if "heat_pump" in row["entity_id"])[
         "weather_sensitive"
     ]
@@ -845,7 +844,7 @@ def test_original_bootstrap_profile_upgrade_preserves_user_changes(tmp_path, cha
     provision(boundary, path)
     if change == "rounding":
         assert device["profile"]["samples"] == 2
-        assert len(device["profile"]["power_w"]) == 7
+        assert len(device["profile"]["power_w"]) == 21
     else:
         assert device == before
         assert not any(

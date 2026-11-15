@@ -30,6 +30,160 @@ ROUTES = [
 ]
 
 
+def test_raw_state_profile_original_frame_and_frozen_task_transfer_without_source(route):
+    """Every real backend route retains exact irregular phases, original Recorder provenance and accepted work."""
+    from open_energy_planner.appliances.cycles.model import instant
+    from open_energy_planner.appliances.cycles.service import ApplianceService, profile
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from tests.app.appliance.raw_support import raw_trace
+    from tests.app.appliance.support import ENTITY, POWER
+
+    (source, target), root = route
+    repository = SqlPlanRepository(root / "source", engine=source)
+    consumers = ConsumerForecasts(SqlDocuments(source, "demand"))
+    consumers.sync(
+        {
+            "entities": [{"entity_id": ENTITY, "name": "Recorded washer"}],
+            "suggestions": {
+                "consumers": [{"entity_id": ENTITY, "upstream": None, "power_entity": POWER}]
+            },
+        }
+    )
+    consumers.save([{"entity_id": ENTITY, "weather_sensitive": False}], consumers.version)
+    service = ApplianceService(SqlDocuments(source, "planning"), consumers)
+    body = raw_trace()
+    now = instant(body["end"])
+    service.learn_raw_history(body, now)
+    service.configure(ENTITY, True)
+    task = service.submit(ENTITY, "raw-frozen", now, now + timedelta(hours=4), now)
+    frozen = json.loads(json.dumps(task["profile"]))
+    expected = json.loads(json.dumps(service.document()))
+    [original] = list(service.documents.iter_prefix("appliance-raw-"))
+    frame = service.documents.read(original["history_ref"])
+    migrate_archive(source, target, overwrite_target=True)
+    repository.close()
+    source.dispose()
+    restored_consumers = ConsumerForecasts(SqlDocuments(target, "demand"))
+    restored_consumers.options = consumers.options
+    restored = ApplianceService(SqlDocuments(target, "planning"), restored_consumers)
+    assert restored.document() == expected
+    restored.learn_history(ENTITY, POWER, [], False, now)
+    restored.learn_raw_history(body, now)
+    assert restored.state["devices"][ENTITY]["profile"]["samples"] == 1
+    retained = profile(restored.state["devices"][ENTITY]["profile"])
+    assert retained.phase_boundaries == pytest.approx((0, 600.3, 620.3, 1800))
+    assert retained.energy_kwh == pytest.approx(23 / 45)
+    assert retained.power_w == (1000, 3000, 1000)
+    assert restored.state["tasks"][ENTITY]["profile"] == frozen
+    assert restored.documents.read(original["history_ref"]) == frame == body
+    assert list(restored.documents.iter_prefix("appliance-raw-")) == [original]
+
+
+def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
+    """Every backend route retains raw cycles, fine checkpoints, frozen tasks and distinct observed activity."""
+    from open_energy_planner.appliances.cycles import history
+    from open_energy_planner.appliances.cycles.service import ApplianceService, profile
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from tests.app.appliance.support import (
+        ENTITY,
+        NOW,
+        POWER,
+        complete_running_readings,
+        explicit_three_kwh,
+        readings,
+        running_readings,
+    )
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    consumers = ConsumerForecasts(SqlDocuments(source, "demand"))
+    consumers.sync(
+        {
+            "entities": [{"entity_id": ENTITY, "name": "Washer"}],
+            "suggestions": {
+                "consumers": [{"entity_id": ENTITY, "upstream": None, "power_entity": POWER}]
+            },
+        }
+    )
+    consumers.save([{"entity_id": ENTITY, "weather_sensitive": False}], consumers.version)
+    service = ApplianceService(SqlDocuments(source, "planning"), consumers)
+    service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    explicit_three_kwh(service)
+    service.configure(ENTITY, True)
+    issued = NOW - timedelta(hours=1)
+    task = service.submit(
+        ENTITY, "frozen-before-manual-start", issued, NOW + timedelta(hours=4), issued
+    )
+    frozen = json.loads(json.dumps(task["profile"]))
+    plan = {
+        "plan_id": "original",
+        "valid_until": (NOW + timedelta(hours=3)).isoformat(),
+        "appliance_schedule": [{"task_id": task["id"], "start": issued.isoformat()}],
+    }
+    service.accept_plan(plan)
+    service.tick(issued, True, plan)
+    service.tick(NOW, True, plan)
+    attempt = service.state["tasks"][ENTITY]["attempt"]
+    history.scan(
+        service,
+        ENTITY,
+        POWER,
+        "processing",
+        (NOW - timedelta(days=40)).isoformat(),
+        (NOW - timedelta(hours=1)).isoformat(),
+        NOW,
+        resolution="5minute",
+    )
+    service.learn_history(ENTITY, POWER, running_readings(), False, NOW)
+    later = NOW + timedelta(minutes=90)
+    service.learn_history(ENTITY, POWER, complete_running_readings(), False, later)
+    service.feedback(
+        ENTITY, task["id"], attempt["id"], "not_started", issued, later, cancelled=True
+    )
+    from tests.app.appliance.support import next_batch, start_fine
+
+    resumed_at = NOW + timedelta(days=20)
+    start_fine(service, NOW - timedelta(days=40), resumed_at, resumed_at)
+    next_batch(service, [], resumed_at)
+    pending = history.request(service.state["devices"][ENTITY], resolution="5minute")
+    expected = json.loads(json.dumps(service.document()))
+    raw = list(service.documents.iter_prefix("appliance-detected-"))
+    explicit = list(service.documents.iter_prefix("appliance-cycle-"))
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored_consumers = ConsumerForecasts(SqlDocuments(target, "demand"))
+    # HA owns current display metadata. Rebuild it without reading the old database.
+    restored_consumers.sync(
+        {
+            "entities": [{"entity_id": ENTITY, "name": "Washer"}],
+            "suggestions": {
+                "consumers": [{"entity_id": ENTITY, "upstream": None, "power_entity": POWER}]
+            },
+        }
+    )
+    restored = ApplianceService(SqlDocuments(target, "planning"), restored_consumers)
+    assert restored.document() == expected
+    assert list(restored.documents.iter_prefix("appliance-detected-")) == raw
+    assert list(restored.documents.iter_prefix("appliance-cycle-")) == explicit
+    assert expected["devices"][0]["task"]["attempt"]["status"] == "not_started"
+    assert expected["devices"][0]["observed_run"]["status"] == "complete"
+    restored.learn_history(ENTITY, POWER, [], False, later)
+    assert profile(restored.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(4 / 3)
+    assert restored.state["tasks"][ENTITY]["profile"] == frozen
+    assert restored.state["tasks"][ENTITY]["status"] == "execution_observed"
+    assert expected["devices"][0]["task"]["status"] == "execution_observed"
+    assert expected["devices"][0]["fine_import"]["phase"] == "processing"
+    assert history.request(restored.state["devices"][ENTITY], resolution="5minute") == pending
+    progress = deepcopy(restored.state["devices"][ENTITY]["fine_import"])
+    assert progress["forward_cursor"] == (NOW - timedelta(hours=1) + timedelta(days=7)).isoformat()
+    next_batch(restored, [], resumed_at)
+    resumed = restored.state["devices"][ENTITY]["fine_import"]
+    assert resumed["cursor"] == progress["cursor"]
+    assert resumed["forward_cursor"] == (NOW - timedelta(hours=1) + timedelta(days=14)).isoformat()
+    assert resumed["expected_intervals"] == 14 * 24 * 12
+
+
 def test_battery_calibration_transfers_without_source_dependency(route):
     """Every backend route preserves calibration after the original database is closed."""
     from datetime import UTC, datetime
@@ -468,8 +622,7 @@ def test_hourly_learning_resumes_after_cross_backend_transfer_without_source(rou
     """Every supported transfer preserves the actual hourly model, source-bound checkpoint and original cycle points."""
     from open_energy_planner.appliances.cycles.service import ApplianceService
     from open_energy_planner.appliances.forecasting import ConsumerForecasts
-    from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER
-    from tests.app.appliance.test_history_learning import begin, hourly_rows, upload
+    from tests.app.appliance.support import ENTITY, NOW, POWER, begin, hourly_rows, upload
 
     (source, target), root = route
     original = SqlPlanRepository(root / "source", engine=source)

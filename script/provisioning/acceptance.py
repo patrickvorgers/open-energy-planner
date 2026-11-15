@@ -7,20 +7,21 @@ def verify_device_examples(app_request, states):
     selected = {row["entity_id"]: row for row in consumers["selected"]}
     assert selected["sensor.oep_test_heat_pump_energy"]["weather_sensitive"] is True
     devices = {row["entity_id"]: row for row in app_request("appliances")["devices"]}
-    for name, quarter_hour_count, energy_kwh in (
-        ("dishwasher", 7, 0.83),
-        ("washing_machine", 9, 0.92),
-        ("dryer", 12, 1.40),
+    for name, five_minute_count, energy_kwh in (
+        ("dishwasher", 21, 0.83),
+        ("washing_machine", 27, 0.92),
+        ("dryer", 36, 1.40),
     ):
         device = devices[f"sensor.oep_test_{name}_energy"]
         assert device["shiftable"] and not device.get("task")
         profile = device["profile"]
-        assert profile["evidence"] == ("manual" if name == "dryer" else "synthetic")
+        assert profile["evidence"] == "synthetic"
         assert profile["samples"] == (1 if name == "dryer" else 2)
-        assert device["profile_kind"] == ("Manual" if name == "dryer" else "Learned")
+        assert device["profile_kind"] == "Learned"
         assert len(device["recent_cycles"]) == (1 if name == "dryer" else 2)
-        assert len(profile["power_w"]) == quarter_hour_count
-        assert abs(sum(profile["power_w"]) / 4000 - energy_kwh) < 0.000001
+        assert profile["phase_seconds"] == 300
+        assert len(profile["power_w"]) == five_minute_count
+        assert abs(sum(profile["power_w"]) / 12000 - energy_kwh) < 0.000001
     charging = app_request("ev")
     assert len(charging["vehicles"]) == len(charging["points"]) == 2
     assert len(app_request("thermal")["configuration"]["stores"]) == 1

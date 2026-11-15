@@ -2,11 +2,14 @@
 
 import logging
 from datetime import UTC, datetime
+from time import monotonic
 
 from aiohttp import web
 
 from open_energy_planner.appliances.cycles import history as historical
+from open_energy_planner.appliances.cycles.learning import HOURLY_SAMPLE_SECONDS, SAMPLE_SECONDS
 from open_energy_planner.appliances.cycles.model import instant
+from open_energy_planner.appliances.cycles.raw import MAX_RAW_BODY_BYTES
 from open_energy_planner.appliances.sources import SOURCE_ALREADY_ASSIGNED
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
 from open_energy_planner.storage.writes import complete_write
@@ -14,6 +17,7 @@ from open_energy_planner.storage.writes import complete_write
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
     SOURCE_ALREADY_ASSIGNED,
+    "Appliance activity is unresolved. Wait for quiet measurements before submitting readiness",
     "A complete measured cycle profile is required",
     "A stable completed cycle identity is required",
     "A stable readiness request identity is required",
@@ -89,24 +93,41 @@ PUBLIC_VALIDATION_MESSAGES = (
 def register(app, service, repository, live, lock, ev, thermal):
     """Serialize readiness, measurements and execution events with plan admission."""
 
-    async def state(_request):
+    async def state(request):
         """Return durable task/profile evidence and only current, unclaimed start requests."""
         async with lock:
+            raw_entity = request.query.get("raw_entity")
+            if raw_entity is not None:
+                try:
+                    service.member(raw_entity)
+                except ValueError:
+                    raise web.HTTPBadRequest(
+                        text="Select this consumer in Appliances settings first"
+                    ) from None
             return web.json_response(
                 service.document(
-                    datetime.now(UTC), repository.state["enabled"], repository.state["plan"]
+                    datetime.now(UTC),
+                    repository.state["enabled"],
+                    repository.state["plan"],
+                    raw_entity=raw_entity,
                 )
             )
 
     async def mutate(request):
         """Validate exact operation schemas and finish each durable mutation before refreshing planning."""
         try:
-            body = await request.json()
+            operation = request.match_info["operation"]
+            reader = (
+                request.clone(client_max_size=MAX_RAW_BODY_BYTES)
+                if operation == "raw_history"
+                else request
+            )
+            body = await reader.json()
             if not isinstance(body, dict):
                 raise TypeError("An appliance operation must be an object")
-            operation = request.match_info["operation"]
             async with lock:
                 now = datetime.now(UTC)
+                processing_started = monotonic()
                 previous_revision = service.revision
                 if operation == "device" and set(body) in (
                     {"entity_id", "shiftable"},
@@ -138,7 +159,20 @@ def register(app, service, repository, live, lock, ev, thermal):
                         ),
                         {},
                     )
-                elif operation == "history_scan" and set(body) == {
+                elif operation == "raw_history" and set(body) == {
+                    "entity_id",
+                    "power_entity",
+                    "start",
+                    "end",
+                    "energy_states",
+                    "power_states",
+                    "energy_reported_at",
+                    "power_reported_at",
+                    "limited",
+                    "synthetic",
+                }:
+                    function, arguments, keywords = service.learn_raw_history, (body, now), {}
+                elif operation == "history_scan" and set(body) - {"resolution"} == {
                     "entity_id",
                     "power_entity",
                     "phase",
@@ -155,9 +189,9 @@ def register(app, service, repository, live, lock, ev, thermal):
                             body["start"],
                             body["end"],
                         ),
-                        {"now": now},
+                        {"now": now, "resolution": body.get("resolution", "hour")},
                     )
-                elif operation == "hourly_history" and set(body) == {
+                elif operation in ("hourly_history", "fine_history") and set(body) == {
                     "entity_id",
                     "power_entity",
                     "rows",
@@ -180,9 +214,12 @@ def register(app, service, repository, live, lock, ev, thermal):
                             body["read_start"],
                             body["read_end"],
                         ),
-                        {"now": now},
+                        {
+                            "now": now,
+                            "resolution": "5minute" if operation == "fine_history" else "hour",
+                        },
                     )
-                elif operation == "history" and set(body) == {
+                elif operation == "history" and set(body) - {"resolution"} == {
                     "entity_id",
                     "power_entity",
                     "rows",
@@ -197,7 +234,12 @@ def register(app, service, repository, live, lock, ev, thermal):
                             body["synthetic"],
                             now,
                         ),
-                        {},
+                        {
+                            "sample_seconds": {
+                                "hour": HOURLY_SAMPLE_SECONDS,
+                                "5minute": SAMPLE_SECONDS,
+                            }[body.get("resolution", "5minute")]
+                        },
                     )
                 elif operation == "deadline" and set(body) == {"entity_id", "deadline"}:
                     function, arguments, keywords = (
@@ -296,6 +338,8 @@ def register(app, service, repository, live, lock, ev, thermal):
                     )
                 else:
                     raise ValueError("Unsupported appliance operation or fields")
+                if operation in ("history", "raw_history"):
+                    keywords["processing_started"] = processing_started
                 result = []
 
                 def apply():
@@ -306,7 +350,7 @@ def register(app, service, repository, live, lock, ev, thermal):
                 from open_energy_planner.activities.events import Outcome
 
                 events = app.get(EVENTS)
-                if events and operation in ("history", "hourly_history", "cycles"):
+                if events and operation in ("history", "hourly_history", "fine_history", "cycles"):
                     async with events.attempt(
                         "appliances",
                         "history",
@@ -323,29 +367,47 @@ def register(app, service, repository, live, lock, ev, thermal):
                         },
                         failure="Cycle learning failed. Previously accepted profiles are retained.",
                     ) as activity:
-                        previous_cursor = (
+                        progress_field = (
+                            "fine_import" if operation == "fine_history" else "history_import"
+                        )
+                        previous_checkpoint = tuple(
                             service.state["devices"]
                             .get(body["entity_id"], {})
-                            .get("history_import", {})
-                            .get("cursor")
+                            .get(progress_field, {})
+                            .get(frontier)
+                            for frontier in ("cursor", "forward_cursor")
                         )
                         cancellation = await complete_write(apply)
-                        accepted = (
-                            operation != "hourly_history"
-                            or previous_cursor
-                            != (
-                                service.state["devices"][body["entity_id"]]["history_import"][
-                                    "cursor"
-                                ]
+                        accepted = operation not in (
+                            "hourly_history",
+                            "fine_history",
+                        ) or previous_checkpoint != tuple(
+                            service.state["devices"][body["entity_id"]][progress_field].get(
+                                frontier
                             )
+                            for frontier in ("cursor", "forward_cursor")
                         )
+                        usable = operation == "cycles"
+                        if operation != "cycles":
+                            settings = service.state["devices"][body["entity_id"]]
+                            if operation == "history":
+                                summary = settings[
+                                    "hourly_history"
+                                    if body.get("resolution", "5minute") == "hour"
+                                    else "learning_history"
+                                ]
+                            else:
+                                summary = settings[progress_field]["last_batch"]
+                            usable = accepted and summary["usable_intervals"] > 0
                         await events.finish(
                             activity,
-                            Outcome.COMPLETED if accepted else Outcome.SKIPPED,
+                            Outcome.COMPLETED if usable else Outcome.SKIPPED,
                             "Appliance history was processed. Detected cycles and usable profiles are shown in Appliance settings."
+                            if usable
+                            else "Appliance history was processed with no usable paired measurements. Retained profiles remain available."
                             if accepted
                             else "This appliance history batch was already processed.",
-                            usable=accepted,
+                            usable=usable,
                         )
                 else:
                     cancellation = await complete_write(apply)

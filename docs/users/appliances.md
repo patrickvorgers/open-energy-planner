@@ -17,7 +17,7 @@ Home Assistant Energy owns consumer meters and their relationships. Do not selec
 1. Configure the appliance's energy and power measurement in Home Assistant Energy.
 2. Select it under **Settings > Appliances** and save its forecast membership.
 3. Enable complete-cycle shifting only when the appliance can be started through a suitable automation.
-4. Inspect its cycle evidence under **Energy > Appliances**. Complete detected cycles establish a learned profile. A manual duration and energy estimate can serve as an explicitly labelled fallback before enough evidence exists.
+4. Inspect its cycle evidence under **Energy > Appliances**. The first complete detected cycle establishes a provisional profile. Hourly history supplies an initial estimate, refined with available five-minute history. Detected evidence stays saved after Home Assistant removes older fine history. Both cycle charts show five-minute intervals. With only hourly data, power is flat within each hour and each energy bar estimates one twelfth of that hour's consumption. Fine measurements refine that shape without losing the measured total. A manual duration and energy estimate can serve as an explicitly labelled fallback before enough evidence exists.
 5. Load and prepare the appliance, choose the finish date/time and explicitly declare it ready.
 6. Inspect task status and the proposed start. A deadline alone does not declare readiness or start equipment.
 
@@ -226,3 +226,17 @@ Use **Energy > Thermal storage** to inspect temperature, proposed heating and an
 After any daily request, confirm the intended device and saved/requested state. A failure must retain your input. An accepted request is not evidence of physical completion. Use the device's real status and the supported execution feedback to establish what happened.
 
 **Next:** [Read your plan](read-your-plan.md), or [understand evaluated savings](savings.md).
+
+## Hand-started cycles
+
+When recent measurements show that you started a cycle yourself, its learned
+profile can supply the remaining consumption to the short-term plan at that
+measured start time. It cannot be moved to a cheaper period. Expected appliance
+consumption is adjusted through the same household balance, avoiding a second
+copy of that remaining load.
+
+A measured run never starts hardware or confirms an automation's execution.
+Uncertain measurements keep ordinary forecasts and block duplicate starts.
+If it interrupts a pending planned task, cancel that task before submitting new
+readiness. Fresh quiet measurements clear unresolved measured activity. Physical
+started/completed confirmation continues through your execution automation.

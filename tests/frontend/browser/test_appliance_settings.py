@@ -20,6 +20,160 @@ from tests.frontend.browser.helpers import (
 )
 
 
+def wait_cycle_charts(page):
+    """Wait for actual final plotted values before inspecting or capturing the cycle charts."""
+    page.wait_for_function("""() => ["cycle-chart", "cycle-energy-chart"].every(id => {
+        const chart = Chart.getChart(id);
+        return chart && chart.getDatasetMeta(0).data.every((element, index) =>
+            Math.abs(element.y - chart.scales.y.getPixelForValue(chart.data.datasets[0].data[index])) < 0.1);
+    })""")
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_first_cycle_exact_timing_and_measured_activity_are_visible(app_page):
+    """One synthetic 35-minute .58-kWh cycle is usable and ongoing measurements stay distinct from execution."""
+    page, url = app_page
+    body = discover(page, url)
+    entity, power = "sensor.refinement_washer_energy", "sensor.refinement_washer_power"
+    body["entities"].extend(
+        [
+            {
+                "entity_id": entity,
+                "name": "Example washer",
+                "unit": "kWh",
+                "device_class": "energy",
+                "state_class": "total_increasing",
+                "device_id": "",
+            },
+            {
+                "entity_id": power,
+                "name": "Example washer power",
+                "unit": "W",
+                "device_class": "power",
+                "state_class": "measurement",
+                "device_id": "",
+            },
+        ]
+    )
+    body["suggestions"]["consumers"] = [
+        {"entity_id": entity, "upstream": None, "power_entity": power}
+    ]
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    consumers = page.request.get(url + "/v1/consumers?view=settings", headers=headers).json()
+    assert page.request.put(
+        url + "/v1/consumers",
+        headers=headers,
+        data={
+            "expected_version": consumers["version"],
+            "selected": [{"entity_id": entity, "weather_sensitive": False}],
+        },
+    ).ok
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    now = now.replace(minute=now.minute // 5 * 5)
+    first = (now - timedelta(days=1)).replace(minute=0)
+    total, rows = 0, []
+    for index, watts in enumerate([0] * 12 + [1800, 1200, 600, 0, 1200, 1200, 1000] + [0] * 12):
+        total += watts / 12000
+        rows.append(
+            {
+                "at": (first + timedelta(minutes=5 * index)).isoformat(),
+                "power_w": watts,
+                "kwh": total,
+            }
+        )
+    pair = {"entity_id": entity, "power_entity": power, "synthetic": True}
+    coarse, total = [], 0
+    for index, watts in enumerate([0, 0, 7000 / 12, 0]):
+        total += watts / 1000
+        coarse.append(
+            {
+                "at": (first - timedelta(hours=1) + timedelta(hours=index)).isoformat(),
+                "power_w": watts,
+                "kwh": total,
+            }
+        )
+    assert page.request.post(
+        url + "/v1/appliances/history",
+        headers=headers,
+        data={**pair, "rows": coarse, "resolution": "hour"},
+    ).ok
+    page.goto(url + "/appliances")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#profile-evidence")).to_contain_text("Historical estimate")
+    expect(page.locator("#profile-evidence")).to_contain_text("Cycle time: 60 minutes")
+    expect(page.locator("#profile-history")).to_contain_text(
+        "Each energy bar estimates one twelfth of its hour"
+    )
+    wait_cycle_charts(page)
+    assert page.evaluate("Chart.getChart('cycle-chart').data.datasets[0].data") == pytest.approx(
+        [7000 / 12] * 12
+    )
+    assert page.evaluate(
+        "Chart.getChart('cycle-energy-chart').data.datasets[0].data"
+    ) == pytest.approx([7 / 144] * 12)
+    assert page.evaluate("Chart.getChart('cycle-chart').data.labels.at(-1)") == "55–60 min"
+    page.screenshot(
+        path=f"results/ci/cycle-hourly-estimate-{page.viewport_size['width']}.png", full_page=True
+    )
+    result = page.request.post(
+        url + "/v1/appliances/history", headers=headers, data={**pair, "rows": rows}
+    )
+    assert result.ok, f"Appliance fixture upload failed with HTTP {result.status}"
+    [device] = result.json()["appliances"]["devices"]
+    assert device["profile"]["samples"] == 1
+    assert device["profile"]["phase_seconds"] == 300
+    assert len(device["profile"]["power_w"]) == 7
+    active = []
+    total = 0
+    for index, watts in enumerate([0] * 12 + [1000] * 3):
+        total += watts / 12000
+        active.append(
+            {
+                "at": (now - timedelta(minutes=75) + timedelta(minutes=5 * index)).isoformat(),
+                "power_w": watts,
+                "kwh": total,
+            }
+        )
+    assert page.request.post(
+        url + "/v1/appliances/history", headers=headers, data={**pair, "rows": active}
+    ).ok
+    assert page.request.post(
+        url + "/v1/appliances/history_scan",
+        headers=headers,
+        data={
+            "entity_id": entity,
+            "power_entity": power,
+            "resolution": "5minute",
+            "phase": "processing",
+            "start": (now - timedelta(days=40)).isoformat(),
+            "end": (now - timedelta(hours=1)).isoformat(),
+        },
+    ).ok
+    page.goto(url + "/appliances")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#profile-evidence")).to_contain_text("Cycle time: 35 minutes")
+    expect(page.locator("#profile-evidence")).to_contain_text("Energy: 0.58 kWh")
+    history = page.locator("#profile-history")
+    expect(history).to_contain_text("Provisional profile: One complete cycle")
+    expect(history).to_contain_text("Cycle in progress")
+    expect(history).to_contain_text("Fine history: Processing")
+    expect(page.locator("#cycle-charts")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    wait_cycle_charts(page)
+    assert page.evaluate("Chart.getChart('cycle-chart').data.labels.at(-1)") == "30–35 min"
+    assert page.evaluate(
+        "Chart.getChart('cycle-energy-chart').data.datasets[0].data"
+    ) == pytest.approx([0.15, 0.1, 0.05, 0, 0.1, 0.1, 1 / 12])
+    page.screenshot(
+        path=f"results/ci/cycle-refinement-{page.viewport_size['width']}.png", full_page=True
+    )
+
+
 @pytest.mark.parametrize("action", ["click", "enter"])
 def test_appliance_connect_waits_for_module_initialization(app_page, action):
     """Delayed initialization blocks native submission, then accepts clicks and Enter without navigation."""
@@ -154,7 +308,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     evidence = page.locator("#appliance-evidence")
-    expect(evidence).to_contain_text("No profile available yet")
+    expect(evidence).to_contain_text("Profile: Historical estimate: Simulated data")
     expect(page.get_by_role("heading", name="Planning readiness", exact=True)).to_be_visible()
     expect(page.get_by_role("progressbar", name="Hourly history progress")).to_have_count(0)
     page.get_by_role("button", name="Edit appliance settings", exact=True).click()
@@ -167,10 +321,24 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     assert page.request.post(
         url + "/v1/appliances/hourly_history",
         headers=headers,
-        data={**pair, **pending, "synthetic": True, "rows": []},
+        data={
+            **pair,
+            **pending,
+            "synthetic": True,
+            "rows": [
+                {
+                    "at": (
+                        datetime.fromisoformat(pending["start"]) + timedelta(hours=index)
+                    ).isoformat(),
+                    "power_w": watts,
+                    "kwh": total,
+                }
+                for index, (watts, total) in enumerate([(0, 0), (0, 0), (750, 0.75), (0, 0.75)])
+            ],
+        },
     ).ok
     page.clock.fast_forward(10000)
-    expect(evidence).to_contain_text("No profile available yet")
+    expect(evidence).to_contain_text("Profile: Historical estimate: Simulated data")
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}))")
     page.clock.fast_forward(10000)
     expect(evidence).to_contain_text("Profile: Historical estimate: Simulated data")
@@ -757,7 +925,9 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     energy = page.locator("#cycle-energy-chart").evaluate(
         "canvas => Chart.getChart(canvas).data.datasets[0].data"
     )
-    assert energy == pytest.approx([0.45, 0.02, 0.02, 0, 0.02, 0.30, 0.02, 0])
+    assert energy == pytest.approx(
+        [quarter / 3 for quarter in [0.45, 0.02, 0.02, 0, 0.02, 0.30, 0.02, 0] for _ in range(3)]
+    )
     assert sum(energy) == pytest.approx(0.83)
     power_bounds = page.locator("#cycle-chart").bounding_box()
     energy_bounds = page.locator("#cycle-energy-chart").bounding_box()
@@ -768,7 +938,7 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
         assert energy_bounds["y"] >= power_bounds["y"] + power_bounds["height"]
     assert page.evaluate("""() => {
         const chart = Chart.getChart(document.getElementById('cycle-chart'));
-        return chart.config.type === 'line' && chart.data.datasets[0].cubicInterpolationMode === 'monotone';
+        return chart.config.type === 'line' && chart.data.datasets[0].stepped === true;
     }""")
     expect(page.locator(".save-bar")).to_have_count(0)
     expect(page.get_by_label("Use in OEP", exact=True)).to_have_count(0)
@@ -778,11 +948,11 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     )
     assert (
         page.evaluate("Chart.getChart(document.getElementById('cycle-chart')).data.labels[0]")
-        == "0–15 min"
+        == "0–5 min"
     )
     assert page.evaluate(
         "Chart.getChart(document.getElementById('cycle-chart')).data.datasets[0].data"
-    ) == [1800, 80, 80, 0, 80, 1200, 80, 0]
+    ) == [power for power in [1800, 80, 80, 0, 80, 1200, 80, 0] for _ in range(3)]
     page.get_by_label("Finish before (Home Assistant time)").fill("2026-10-26T18:00")
     with page.expect_response(url + "/v1/appliances"):
         page.clock.fast_forward(10000)

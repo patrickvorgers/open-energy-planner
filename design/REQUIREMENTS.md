@@ -205,11 +205,18 @@ For cycle-based appliances, learn one average cycle profile per device: energy, 
 
 Reuse the Energy dashboard's device energy and optional power sensor for automatic cycle detection. Do not require manual start/end times or user detection thresholds. Missing power links point to Home Assistant Energy. Insufficient history remains explicit. A user may enter only duration and total kWh as a manual fallback. Label that estimate separately from learned measurements, retain it after learning becomes ready, and preserve the profile frozen into accepted tasks. Bootstrap test data must exercise the same detector with labelled simulated histories, not bypass it with learned profiles. See [automatic learning](../docs/development/APPLIANCE-LEARNING.md).
 
+Cycle learning runs independently of successful command and forecast exchanges.
+Recent observed manual activity can provide fixed remaining load using a frozen
+profile. Use the existing component replacement boundary to preserve household
+balance. Inferred activity must never authorize another start, confirm a task's
+physical outcome or make an unknown attempt safe to retry. Pending planned work
+intercepted by manual activity requires explicit cancellation before new readiness.
+
 Use all available paired hourly Recorder history as a separate provisional cycle
 estimate. Process the initial backlog in the background with durable bounded
 checkpoints and honest progress. Automatically admit a provisional planning
-profile after initial completion and two usable hourly runs, unless an explicit
-manual fallback or ready fine model takes precedence. Use a 90-day recency
+profile after the first usable hourly run while the backlog continues, unless an explicit
+manual fallback or ready fine model takes precedence. Use all available fine history in bounded resumable batches to refine coarse observations without counting the same run twice. Retain raw evidence beyond HA retention. The first complete fine cycle supplies usable timing including its actual partial final phase. Retain native five-minute detail for both average cycle power and consumed-energy charts. Both charts use a five-minute display grid even for hourly-only evidence, uniformly spreading each hour without presenting estimated detail as measurements. Regridding preserves measured total energy. Use a 90-day recency
 half-life for both automatic models. Keep raw counts, weights, usable coverage
 and estimated versus fine measured evidence visible per appliance. Hourly energy
 may be spread uniformly into estimated planning quarters, retaining occupied-hour
@@ -558,6 +565,21 @@ setup still opens the wizard. Test environments use live market/Open-Meteo
 sources and quarter-varying simulated energy meters with matching native
 five-minute/hourly Recorder history. Do not resample real source data to invent
 quarter variability or reset original plan archives.
+
+### Original appliance Recorder evidence
+
+The selected appliance Energy/power pair can additionally supply bounded original
+Recorder states for recent cycles. Preserve irregular event timestamps, original
+unit provenance, actual power peaks and independently conserved counter energy.
+Do not invent a regular measurement cadence, interpolate missing counter anchors
+or scale measured peaks to force agreement. Unverified curves remain visible
+with the previously usable statistical profile retained. Complete conserved runs
+refine durable profiles. Partial runs only refine existing observed activity and
+remaining forecasts, without training, execution feedback or new start rights.
+Original evidence and learned phases survive restart and backend transfer.
+Bound actual native query rows, outstanding executor work, response bytes, phase
+union and planning expansion. Over-budget detail must not block unrelated
+appliances or alter already accepted task profiles.
 
 
 Contract configuration implementation: the app-owned [Contract page](../docs/development/CONTRACT-PRICES.md#contract-page) edits dated import/export formulas and separate bonus versions, previews negative/zero/positive prices, reports measured remaining budgets and confirms missing baselines using HA meter provenance. Current database revisions drive source selection and background revaluation. Original plans and expectations remain immutable. No supplier-origin exclusions or tax/subscription engine were added.

@@ -174,6 +174,10 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                 for operation in (
                     "tasks",
                     "cycles",
+                    "history",
+                    "history_scan",
+                    "hourly_history",
+                    "fine_history",
                     "claim",
                     "feedback",
                     "deadline",
@@ -189,6 +193,23 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                         assert response.status == 400, (
                             "Confirmed peer reaches validated appliance operation"
                         )
+                for path in ("/v1/appliances", "/v1/consumers?view=settings"):
+                    async with client.get(
+                        url + path, ssl=fingerprint, headers={"Authorization": "Bearer " + token}
+                    ) as response:
+                        assert response.status == 200, (
+                            "Paired history worker can read its source/profile state"
+                        )
+                        assert isinstance(await response.json(), dict)
+                async with client.put(
+                    url + "/v1/consumers",
+                    json={},
+                    ssl=fingerprint,
+                    headers={"Authorization": "Bearer " + token},
+                ) as response:
+                    assert response.status == 403, (
+                        "History reads do not grant consumer configuration writes"
+                    )
                 for operation in ("observations", "assign", "intent", "requests", "cancel"):
                     async with client.post(
                         url + "/v1/ev/" + operation,

@@ -109,7 +109,7 @@ client of the same readiness operation. All paths share one authoritative task.
 1. Configure the appliance's cumulative energy meter and optional power sensor in Home Assistant Energy.
 2. Select the appliance in **Settings > Appliances** and save. Both sensor bindings remain Energy-owned.
 3. Explicitly allow shifting complete cycles and save. Forecast quality remains read-only analysis.
-4. Run the appliance normally. OEP detects complete cycles from fine power/energy history. Two cycles admit a learned profile. Until then, optionally enter only duration and kWh as a manual fallback. No start/end entry or detection thresholds are required.
+4. Run the appliance normally. OEP detects complete cycles from fine power/energy history. One complete cycle admits a provisional profile. Hourly history supplies an initial estimate and available fine history refines it. Until then, optionally enter only duration and kWh as a manual fallback. No start/end entry or detection thresholds are required.
 5. Create an automation from **Open Energy Planner appliance execution**, installed
    at `blueprints/automation/open_energy_planner/appliance.yaml` with the integration.
    Choose the virtual device, immediate physical start action and reliable actual
@@ -127,10 +127,9 @@ The Recorder adapter uses supported raw-history and native five-minute-statistic
 interfaces, never SQL. Fine cumulative observations must cover the entire completed
 cycle, with no reset, unavailable reading or gap over one quarter. Hourly totals
 cannot reconstruct a phase profile. Watt-hour units are normalized inside HA.
-One average profile records quarter-hour mean AC watts, conservative duration,
+One average profile records declared phase mean AC watts, measured fine duration,
 total kWh, sample count and measured/synthetic provenance. Different durations are
-zero-padded when averaging, preserving mean cycle energy. Incomplete or coarse
-cycles do not update the model. Automatic detection supplies learning evidence independently of execution feedback.
+zero-padded when averaging, preserving mean cycle energy. Fine source profiles retain five-minute detail. Both charts use a five-minute display grid, distributing coarse means uniformly and labelling them as estimates. Incomplete cycles do not update the completed model. Hourly cycles supply labelled estimates. Fine observations refine overlapping coarse runs without counting them twice. Automatic detection supplies learning evidence independently of execution feedback.
 The blueprint reports physical outcomes and does not submit a second learning copy.
 The legacy completed-cycle API remains for existing clients only.
 
@@ -167,7 +166,7 @@ published. Existing plan-validity and safe-fallback rules still apply.
 HiGHS receives immutable `ApplianceWork` records as part of `InstallationProblem`.
 Each candidate is one absolute UTC quarter-aligned start and the full consecutive
 profile. Energy is integrated across exact planning/billing overlaps. Only task
-windows are refined to quarter boundaries, including actual phase boundaries for
+windows are refined to their measured phase boundaries, including exact boundaries for
 already running work. Other coarse forecast hours remain coarse. This preserves
 heater peaks and shared grid/converter constraints, rather than diluting a peak
 over an hour. Nominal 120-step plans can therefore have additional segments.
@@ -289,7 +288,7 @@ unreleased development state is provided.
 The [automatic learning contract](APPLIANCE-LEARNING.md) supersedes any initial
 setup instruction requiring cycle start/end entry. Select a device from Energy.
 OEP reuses its power/energy bindings, detects complete cycles from fine history
-and uses a learned average after two samples. Until then, enter only duration
+and uses a provisional learned average after one complete sample. Until then, enter only duration
 and kWh in Appliances settings. Missing power is reported there. The estimate
 stays saved after automatic learning takes over. The supplied execution blueprint
 retains physical feedback but no longer submits a second copy for learning.

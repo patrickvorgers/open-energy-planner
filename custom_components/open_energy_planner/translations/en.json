@@ -99,6 +99,7 @@
           "scheduled": "Scheduled",
           "requested": "Requested",
           "start_not_confirmed": "Start not confirmed",
+          "execution_observed": "Manual activity detected. Cancel pending task",
           "running": "Running",
           "completed": "Completed",
           "deadline_not_achievable": "Deadline not achievable",

@@ -3,7 +3,7 @@
 import hashlib
 from datetime import date, time, timedelta
 from functools import partial
-from itertools import pairwise
+from itertools import accumulate, pairwise
 from math import isfinite
 
 import voluptuous as vol
@@ -25,7 +25,9 @@ from .subentries import add_grouped_entities, retire_empty_groups
 MAX_CYCLE_HISTORY_HOURS = 12
 FINE_STATISTIC_MINUTES = 5
 MAX_CYCLE_READING_GAP_SECONDS = 900
-MAX_PROFILE_PHASES = 48
+FINE_PROFILE_SECONDS = 5 * 60
+MAX_PROFILE_PHASES = MAX_CYCLE_HISTORY_HOURS * 3600 // FINE_PROFILE_SECONDS
+MAX_IRREGULAR_PROFILE_PHASES = 2048
 MAX_CYCLE_POWER_W = 20000
 MAX_CORRELATION_LENGTH = 64
 PROFILE_INTERVAL_HOURS = 0.25
@@ -38,10 +40,97 @@ TASK_STATUSES = (
     "requested",
     "start_not_confirmed",
     "running",
+    "execution_observed",
     "completed",
     "deadline_not_achievable",
     "forecast_not_ready",
 )
+
+
+def profile_phase_seconds(profile):
+    """Admit measured five-minute and legacy estimated quarter-hour phases only."""
+    seconds = profile.get("phase_seconds", int(PROFILE_INTERVAL_HOURS * 3600))
+    if type(seconds) is not int or seconds not in (
+        FINE_PROFILE_SECONDS,
+        int(PROFILE_INTERVAL_HOURS * 3600),
+    ):
+        raise ValueError("Invalid cycle phase duration")
+    return seconds
+
+
+def profile_phase_limit(profile):
+    """Keep explicit irregular and legacy uniform phase counts within their separate wire contracts."""
+    return (
+        MAX_IRREGULAR_PROFILE_PHASES
+        if profile.get("phase_durations_seconds") is not None
+        else MAX_PROFILE_PHASES
+    )
+
+
+def profile_duration(profile):
+    """Validate declared phase duration and optional partial ending, preserving legacy profiles."""
+    if profile.get("phase_durations_seconds") is not None:
+        durations = profile["phase_durations_seconds"]
+        if (
+            not isinstance(durations, (list, tuple))
+            or len(durations) != len(profile["power_w"])
+            or not 1 <= len(durations) <= profile_phase_limit(profile)
+            or any(
+                type(value) not in (int, float) or not isfinite(value) or value < 1e-6
+                for value in durations
+            )
+            or not 900 <= round(sum(durations), 6) <= MAX_CYCLE_HISTORY_HOURS * 3600
+            or profile.get("measured_duration_seconds") is not None
+        ):
+            raise ValueError("Invalid measured cycle duration")
+        return round(sum(durations), 6)
+    phase_seconds = profile_phase_seconds(profile)
+    full = len(profile["power_w"]) * phase_seconds
+    if full > MAX_CYCLE_HISTORY_HOURS * 3600:
+        raise ValueError("Invalid measured cycle duration")
+    measured = profile.get("measured_duration_seconds")
+    if measured is None:
+        return full
+    if (
+        type(measured) not in (int, float)
+        or not isfinite(measured)
+        or not full - phase_seconds < measured <= full
+    ):
+        raise ValueError("Invalid measured cycle duration")
+    return measured
+
+
+def profile_energy(profile):
+    """Integrate admitted phase durations for the read-only cycle-energy sensor."""
+    duration, phase_seconds = profile_duration(profile), profile_phase_seconds(profile)
+    if profile.get("phase_durations_seconds") is not None:
+        return (
+            sum(
+                power * (right - left)
+                for power, (left, right) in zip(
+                    profile["power_w"],
+                    pairwise(
+                        (
+                            0,
+                            *(
+                                round(value, 6)
+                                for value in accumulate(profile["phase_durations_seconds"])
+                            ),
+                        )
+                    ),
+                )
+            )
+            / 3600
+            / WATTS_PER_KILOWATT
+        )
+    return (
+        sum(
+            power * min(phase_seconds, duration - index * phase_seconds)
+            for index, power in enumerate(profile["power_w"])
+        )
+        / 3600
+        / WATTS_PER_KILOWATT
+    )
 
 
 def consumer_identity(entity):
@@ -236,9 +325,9 @@ def register_services(hass):
 
 def receive(coordinator, value):
     """Validate optional task projection and emit request/expiry events once per state transition."""
-    from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
+    from .wire_limits import MAX_APPLIANCE_RESPONSE_BYTES, validate_projection_size
 
-    validate_projection_size(value, MAX_API_RESPONSE_BYTES)
+    validate_projection_size(value, MAX_APPLIANCE_RESPONSE_BYTES)
     if not isinstance(value, dict) or not isinstance(value.get("devices", []), list):
         raise TypeError("Invalid appliance projection")
     previous = getattr(coordinator, "appliances", {})
@@ -257,7 +346,7 @@ def receive(coordinator, value):
         if learned is not None and (
             not isinstance(learned, dict)
             or not isinstance(learned.get("power_w"), list)
-            or not 1 <= len(learned["power_w"]) <= MAX_PROFILE_PHASES
+            or not 1 <= len(learned["power_w"]) <= profile_phase_limit(learned)
             or any(
                 type(power) not in (int, float)
                 or not isfinite(power)
@@ -266,6 +355,8 @@ def receive(coordinator, value):
             )
         ):
             raise ValueError("Invalid average cycle profile")
+        if learned:
+            profile_duration(learned)
         if row.get("finish_date") is not None:
             date.fromisoformat(row["finish_date"])
         if (
@@ -288,7 +379,7 @@ def receive(coordinator, value):
             if frozen_profile is not None and (
                 not isinstance(frozen_profile, dict)
                 or not isinstance(frozen_profile.get("power_w"), list)
-                or not 1 <= len(frozen_profile["power_w"]) <= MAX_PROFILE_PHASES
+                or not 1 <= len(frozen_profile["power_w"]) <= profile_phase_limit(frozen_profile)
                 or any(
                     type(power) not in (int, float)
                     or not isfinite(power)
@@ -297,6 +388,8 @@ def receive(coordinator, value):
                 )
             ):
                 raise ValueError("Invalid accepted cycle profile")
+            if frozen_profile:
+                profile_duration(frozen_profile)
             timestamp(task["deadline"])
             if task.get("scheduled_start"):
                 timestamp(task["scheduled_start"])
@@ -466,11 +559,10 @@ class ApplianceSensor(ConsumerSensor):
             return timestamp(task["scheduled_start"]) if task.get("scheduled_start") else None
         learned = task.get("profile") or row.get("profile")
         if self.key == "cycle_duration":
-            return len(learned["power_w"]) * PROFILE_INTERVAL_HOURS * 60 if learned else None
+            return profile_duration(learned) / 60 if learned else None
         if self.key == "planned_completion":
             return (
-                timestamp(task["scheduled_start"])
-                + timedelta(hours=len(learned["power_w"]) * PROFILE_INTERVAL_HOURS)
+                timestamp(task["scheduled_start"]) + timedelta(seconds=profile_duration(learned))
                 if learned and task.get("scheduled_start")
                 else None
             )
@@ -483,13 +575,7 @@ class ApplianceSensor(ConsumerSensor):
                 and self.coordinator.projection.command is not None
                 else "idle"
             )
-        return (
-            sum((row.get("profile") or {}).get("power_w", []))
-            * PROFILE_INTERVAL_HOURS
-            / WATTS_PER_KILOWATT
-            if row.get("profile")
-            else None
-        )
+        return profile_energy(row["profile"]) if row.get("profile") else None
 
     @property
     def extra_state_attributes(self):

@@ -9,30 +9,7 @@ import pytest
 
 from open_energy_planner.appliances.cycles.learning import detect_cycles, manual_profile
 from open_energy_planner.appliances.cycles.service import ApplianceService
-
-NOW = datetime(2026, 10, 29, 12, tzinfo=UTC)
-ENTITY = "sensor.washer_energy"
-POWER = "sensor.washer_power"
-
-
-def readings(*, cycles=2):
-    """Each 75-minute cycle consumes .5 kWh, with a fifteen-minute zero-power pause.
-
-    Three five-minute bins at 1000 W, three at zero and nine at 333 1/3 W
-    total .25 + .25 = .5 kWh. Quiet brackets never enter the measured profile.
-    """
-    start, total, rows = NOW - timedelta(days=2), 10.0, []
-    powers = [0] * 12 + [1000] * 3 + [0] * 3 + [1000 / 3] * 9 + [0] * 12
-    for index, power in enumerate(powers * cycles):
-        total += power / 12000
-        rows.append(
-            {
-                "at": (start + timedelta(minutes=index * 5)).isoformat(),
-                "power_w": power,
-                "kwh": total,
-            }
-        )
-    return rows
+from tests.app.appliance.support import ENTITY, NOW, POWER, readings
 
 
 def test_detects_complete_energy_conserving_cycles_with_internal_pauses(service):
@@ -41,7 +18,8 @@ def test_detects_complete_energy_conserving_cycles_with_internal_pauses(service)
     row = service.document()["devices"][0]
     assert row["learning_status"] == "ready" and row["profile_kind"] == "Learned"
     assert row["profile"]["samples"] == 2
-    assert row["profile"]["power_w"] == pytest.approx([1000, 0, 1000 / 3, 1000 / 3, 1000 / 3])
+    assert row["profile"]["phase_seconds"] == 300
+    assert row["profile"]["power_w"] == pytest.approx([1000] * 3 + [0] * 3 + [1000 / 3] * 9)
     assert [cycle["energy_kwh"] for cycle in row["recent_cycles"]] == pytest.approx([0.5, 0.5])
     assert not row["shiftable"] and row["task"] is None
     service.learn_history(ENTITY, POWER, readings(), False, NOW)
@@ -82,7 +60,7 @@ def test_manual_fallback_survives_learning_and_accepted_tasks_stay_frozen(servic
     """A .8-kWh, 100-minute estimate survives two detected cycles and cannot change an accepted task."""
     service.set_manual_profile(ENTITY, 100, 0.8, service.revision)
     assert sum(service.state["devices"][ENTITY]["profile"]["power_w"]) / 4000 == pytest.approx(0.8)
-    service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    service.learn_history(ENTITY, POWER, readings(cycles=1)[:20], False, NOW)
     assert service.document()["devices"][0]["profile_kind"] == "Manual"
     service.configure(ENTITY, True)
     task = service.submit(ENTITY, "ready", NOW, NOW + timedelta(hours=4), NOW)

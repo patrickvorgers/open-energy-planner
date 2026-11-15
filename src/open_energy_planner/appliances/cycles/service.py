@@ -5,28 +5,28 @@ from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, time, timedelta
 from math import fsum
+from time import monotonic
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from open_energy_planner.appliances.cycles.learning import (
-    MAX_RECENT_CYCLES,
     MIN_COMPLETE_CYCLES,
     RECENCY_HALF_LIFE_DAYS,
+    SAMPLE_SECONDS,
     detect_cycles,
     history_evidence,
     manual_profile,
-    retained_weight,
 )
 from open_energy_planner.appliances.cycles.model import (
     CONFIRMATION_SECONDS,
     DURATION_ALLOWANCE_SECONDS,
-    PROFILE_STEP_SECONDS,
     ApplianceWork,
-    CycleProfile,
-    average_profiles,
     candidates,
     instant,
     learn_cycle,
+)
+from open_energy_planner.appliances.cycles.model import (
+    restore_profile as profile,
 )
 from open_energy_planner.appliances.sources import validate_membership
 from open_energy_planner.demand.calculation.model import EnergyTerm, digest
@@ -34,26 +34,27 @@ from open_energy_planner.installation.model import InstallationProblem, slice_in
 
 STATE_KEY = "appliance-state.json"
 PROGRESS_KEY = "appliance-progress.json"
-PROGRESS_FIELDS = ("learning_history", "history_import")
+PROGRESS_FIELDS = ("learning_history", "history_import", "fine_import", "raw_history")
 MAX_CORRELATION_LENGTH = 64
 MAX_CYCLE_OBSERVATIONS = 2048
 MAX_FEEDBACK_EVENTS = 1024
 MAX_TASK_WINDOW_DAYS = 7
 COMPONENT_FORECAST_MAX_AGE_MINUTES = 30
+MAX_REFINED_PLAN_INTERVALS = 8192
+MAX_PHASE_BOUNDARY_CHECKS = 8 * MAX_REFINED_PLAN_INTERVALS
+MAX_PROJECTED_IRREGULAR_PHASES = MAX_REFINED_PLAN_INTERVALS
+MAX_APPLIANCE_PROJECTION_BYTES = 4 * 1024 * 1024
+RAW_PROJECTION_RESERVE_BYTES = 512 * 1024
 OPEN_STATUSES = (
     "pending",
     "scheduled",
     "requested",
     "start_not_confirmed",
     "running",
+    "execution_observed",
     "deadline_not_achievable",
     "forecast_not_ready",
 )
-
-
-def profile(value):
-    """Restore an immutable validated average profile from its durable JSON record."""
-    return CycleProfile(tuple(value["power_w"]), value["samples"], value["evidence"])
 
 
 def separate_progress(state):
@@ -87,6 +88,8 @@ class ApplianceService:
             for entity, progress in documents.read(PROGRESS_KEY)["devices"].items():
                 self.state["devices"][entity].update(progress)
         self.issue = None
+        self._cycle_records = {}
+        self._phase_limited_entities = set()
 
     @property
     def revision(self):
@@ -105,6 +108,8 @@ class ApplianceService:
                             "finish_time_zone",
                             "learning_history",
                             "history_import",
+                            "fine_import",
+                            "raw_history",
                         )
                         and not key.startswith("hourly_")
                     }
@@ -133,7 +138,7 @@ class ApplianceService:
         immutable state versions or rewriting unchanged task/model pointers.
         Startup combines that document with the authoritative current state.
         """
-        if candidate == self.state:
+        if candidate == self.state and not extra:
             return
         archived, progress = separate_progress(candidate)
         previous, previous_progress = separate_progress(self.state)
@@ -178,8 +183,14 @@ class ApplianceService:
 
     def sync_sources(self):
         """Withdraw learned profiles after a sensor change, retaining manual estimates and archives."""
+        from .evidence import completion, refine
+
         data = deepcopy(self.state)
+        withdrawn = set()
         for entity, settings in data["devices"].items():
+            for field in ("fine_import", "observed_run", "raw_history"):
+                if settings.get(field, {}).get("power_entity") not in (None, self.source(entity)):
+                    settings.pop(field)
             progress = settings.get("history_import")
             if progress and progress.get("power_entity") != self.source(entity):
                 settings.pop("history_import", None)
@@ -194,16 +205,31 @@ class ApplianceService:
             if settings.get("learning_source") and settings["learning_source"] != self.source(
                 entity
             ):
+                withdrawn.add(entity)
+                for key in tuple(settings):
+                    if key.startswith("hourly_"):
+                        settings.pop(key)
                 settings.pop("learned_profile", None)
                 settings.pop("learning_source", None)
                 settings.pop("recent_cycles", None)
+                settings.pop("profile_sources", None)
                 settings.pop("last_detected_end", None)
                 settings.pop("learning_weight", None)
                 settings.pop("first_detected_start", None)
                 settings.pop("profile", None)
                 if settings.get("manual_profile"):
                     settings["profile"] = asdict(manual_profile(**settings["manual_profile"]))
+                explicit = [
+                    completion(record)
+                    for record in self.documents.iter_prefix("appliance-cycle-")
+                    if record["entity_id"] == entity
+                ]
+                if explicit:
+                    refine(settings, explicit)
         self.commit(data)
+        for pair in tuple(self._cycle_records):
+            if pair[0] in withdrawn:
+                self._cycle_records.pop(pair)
 
     def set_manual_profile(self, entity, duration_minutes, energy_kwh, expected_version):
         """Retain an explicit estimate without replacing a ready learned profile or accepted task."""
@@ -224,129 +250,337 @@ class ApplianceService:
             settings["profile"] = asdict(estimate)
         self.commit(data)
 
-    def weighted_prior(self, entity, power_entity, settings):
-        """Recover timestamp weights once from retained automatic-cycle evidence.
+    def collect_cycles(self, entity, power_entity, cycles, synthetic, *, hourly=False):
+        """Prepare immutable evidence without publishing cache or state before a successful commit.
 
-        Existing unweighted profiles remain usable until new evidence arrives.
-        Reconstruct their exact current-source sample set without dropping older
-        cycles or treating an aggregate as if every sample had the same age.
-
-        Returns:
-            Prior profile, recency weight at its latest cycle and earliest ISO
-            cycle start. With no learned profile, returns None, 0.0 and None.
-            Existing weighted models return their saved values. Legacy models
-            return an aggregate reconstructed from their current-source archives.
-
-        Raises:
-            ValueError: Archives cannot reproduce the saved sample count or
-                contain invalid cycle evidence. The stored profile is unchanged.
+        Archives are read once for each sensor pair. Fine and hourly observations
+        retain their original counters. The cache contains derived profiles only
+        in memory and is updated by the caller after its durable transaction.
         """
-        previous = settings.get("learned_profile")
-        if not previous:
-            return None, 0.0, None
-        if "learning_weight" in settings:
-            return profile(previous), settings["learning_weight"], settings["first_detected_start"]
-        records = [
-            record
-            for record in self.documents.iter_prefix("appliance-detected-")
-            if record["entity_id"] == entity
-            and record["power_entity"] == power_entity
-            and instant(record["completed_at"]) <= instant(settings["last_detected_end"])
-        ]
-        records.sort(key=lambda record: instant(record["completed_at"]))
-        records = records[-previous["samples"] :]
-        if len(records) != previous["samples"]:
-            raise ValueError("Archived cycle evidence is incomplete. Retained profile is unchanged")
-        aggregate, weight, last_end = None, 0.0, None
-        for record in records:
-            completed = instant(record["completed_at"])
-            learned = learn_cycle(
-                record["points"],
-                instant(record["started_at"]),
-                completed,
-                synthetic=record["synthetic"],
-            )
-            if last_end:
-                weight = retained_weight(weight, last_end, completed)
-            aggregate = average_profiles(aggregate, learned, previous_weight=weight)
-            weight, last_end = weight + 1, completed
-        return aggregate, weight, records[0]["started_at"]
+        from .evidence import completion, measured
 
-    def learn_history(self, entity, power_entity, rows, synthetic, now):
-        """Learn complete detected cycles once from the current Energy pair.
+        pair = (entity, power_entity)
+        if pair not in self._cycle_records:
+            restored = {
+                prefix + record["id"]: record
+                for prefix in ("appliance-detected-", "appliance-hourly-", "appliance-raw-")
+                for record in self.documents.iter_prefix(prefix)
+                if record["entity_id"] == entity
+                and record["power_entity"] == power_entity
+                and record.get("training_usable", True)
+            }
+            for record in self.documents.iter_prefix("appliance-cycle-"):
+                if record["entity_id"] == entity:
+                    explicit = completion(record)
+                    restored["appliance-cycle-" + explicit["id"]] = explicit
+            settings = self.state["devices"].get(entity, {})
+            saved = settings.get("profile", {})
+            if saved.get("evidence") != "manual" and saved.get("samples", 0) > len(restored):
+                raise ValueError(
+                    "Archived cycle evidence is incomplete. Retained profile is unchanged"
+                )
+            for field, is_hourly in (("learned_profile", False), ("hourly_profile", True)):
+                available = sum(
+                    (record.get("quality") == "hourly_estimate") == is_hourly
+                    for record in restored.values()
+                )
+                if settings.get(field, {}).get("samples", 0) > available:
+                    raise ValueError(
+                        "Archived cycle evidence is incomplete. Retained profile is unchanged"
+                    )
+            records = restored
+        else:
+            records = dict(self._cycle_records[pair])
+        extra = []
+        prefix = "appliance-hourly-" if hourly else "appliance-detected-"
+        for started, completed, points in cycles:
+            identity = digest([entity, power_entity, started.isoformat(), completed.isoformat()])
+            key = prefix + identity + ".json"
+            # Resolution is part of archive identity even when both time ranges agree.
+            record_key = prefix + identity
+            if record_key in records or self.documents.exists(key):
+                continue
+            body = {
+                "id": identity,
+                "entity_id": entity,
+                "power_entity": power_entity,
+                "started_at": started.isoformat(),
+                "completed_at": completed.isoformat(),
+                "points": points,
+                "synthetic": synthetic,
+                **({"quality": "hourly_estimate"} if hourly else {}),
+            }
+            cached = dict(body)
+            try:
+                learned = measured(cached)
+            except ValueError:
+                continue
+            if not hourly:
+                body["energy_kwh"] = learned.energy_kwh
+            records[record_key] = cached
+            extra.append((key, body))
+        changed = bool(extra) or pair not in self._cycle_records
+        return records, extra, changed
 
-        Two complete cycles admit the learned estimate. The manual fallback stays
-        archived and accepted tasks retain their frozen profile. Detection never
-        grants readiness or reports an execution outcome.
+    def learn_history(
+        self,
+        entity,
+        power_entity,
+        rows,
+        synthetic,
+        now,
+        *,
+        sample_seconds=SAMPLE_SECONDS,
+        processing_started=None,
+    ):
+        """Use the first complete cycle and refine all distinct source-bound observations.
+
+        Fine observations replace overlapping hourly estimates. Both raw views
+        stay archived, and accepted tasks keep their frozen profile. Historical
+        evidence never grants readiness or reports a physical execution outcome.
+
+        now is the explicit UTC operation-entry time. processing_started is its
+        process-local monotonic timestamp, captured before HTTP executor dispatch
+        or at direct-call entry. Only observation admission adds elapsed work.
         """
+        from .evidence import refine
+        from .learning import HOURLY_SAMPLE_SECONDS
+
+        processing_started = monotonic() if processing_started is None else processing_started
         self.member(entity)
         if type(synthetic) is not bool or not power_entity or power_entity != self.source(entity):
             raise ValueError("History must use the current Home Assistant Energy power sensor")
-        cycles = detect_cycles(rows, now)
+        activity = {}
+        cycles = detect_cycles(rows, now, sample_seconds=sample_seconds, activity=activity)
         self.sync_sources()
-        for started_at, completed_at, points in cycles:
-            cycle_id = digest(
-                [entity, power_entity, started_at.isoformat(), completed_at.isoformat()]
-            )
-            key = "appliance-detected-" + cycle_id + ".json"
-            if self.documents.exists(key):
-                continue
-            current = self.state["devices"].get(entity, {})
-            if current.get("last_detected_end") and started_at < instant(
-                current["last_detected_end"]
-            ):
-                continue
-            try:
-                learned = learn_cycle(points, started_at, completed_at, synthetic=synthetic)
-            except ValueError:
-                # Invalid counter resolution in one cycle must not block later valid evidence.
-                continue
-            energy_kwh = learned.energy_kwh
-            data = deepcopy(self.state)
-            settings = data["devices"].setdefault(entity, {"shiftable": False})
-            previous, weight, first_start = self.weighted_prior(entity, power_entity, settings)
-            if previous:
-                weight = retained_weight(
-                    weight, instant(settings["last_detected_end"]), completed_at
-                )
-            learned = average_profiles(previous, learned, previous_weight=weight)
-            settings["learning_weight"] = weight + 1
-            settings["first_detected_start"] = first_start or started_at.isoformat()
-            settings["learning_source"] = power_entity
-            settings["last_detected_end"] = completed_at.isoformat()
-            settings["learned_profile"] = asdict(learned)
-            record = {
-                "id": cycle_id,
-                "started_at": started_at.isoformat(),
-                "completed_at": completed_at.isoformat(),
-                "energy_kwh": energy_kwh,
-                "synthetic": synthetic,
-            }
-            settings["recent_cycles"] = [*settings.get("recent_cycles", []), record][
-                -MAX_RECENT_CYCLES:
-            ]
-            if learned.samples >= MIN_COMPLETE_CYCLES:
-                settings["profile"] = asdict(learned)
-            self.commit(
-                data,
-                extra=(
-                    (
-                        key,
-                        {
-                            **record,
-                            "entity_id": entity,
-                            "power_entity": power_entity,
-                            "points": points,
-                        },
-                    ),
-                ),
-            )
+        records, extra, changed = self.collect_cycles(
+            entity, power_entity, cycles, synthetic, hourly=sample_seconds == HOURLY_SAMPLE_SECONDS
+        )
         data = deepcopy(self.state)
-        summary = history_evidence(rows, len(cycles))
-        summary["power_entity"] = power_entity
-        summary["synthetic"] = synthetic
-        data["devices"].setdefault(entity, {"shiftable": False})["learning_history"] = summary
-        self.commit(data)
+        settings = data["devices"].setdefault(entity, {"shiftable": False})
+        if changed:
+            refine(settings, list(records.values()))
+        if sample_seconds == SAMPLE_SECONDS:
+            self.observe_history(
+                data,
+                entity,
+                rows,
+                cycles,
+                activity,
+                power_entity,
+                now,
+                processing_started=processing_started,
+            )
+        summary = history_evidence(rows, len(cycles), sample_seconds=sample_seconds)
+        summary["power_entity"], summary["synthetic"] = power_entity, synthetic
+        settings[
+            "hourly_history" if sample_seconds == HOURLY_SAMPLE_SECONDS else "learning_history"
+        ] = summary
+        self.commit(data, extra=extra)
+        self._cycle_records[(entity, power_entity)] = records
+
+    def observe_history(
+        self,
+        data,
+        entity,
+        rows,
+        cycles,
+        activity,
+        power_entity,
+        now,
+        *,
+        observed_until=None,
+        processing_started=None,
+    ):
+        """Admit running evidence at elapsed processing time before changing a task or its frozen observed profile."""
+        from .observed import observe
+
+        settings, task = data["devices"][entity], data["tasks"].get(entity)
+        if processing_started is not None:
+            now += timedelta(seconds=max(0, monotonic() - processing_started))
+        accepted_running = observe(
+            settings, rows, cycles, activity, power_entity, now, observed_until=observed_until
+        )
+        if accepted_running and task and task["status"] in OPEN_STATUSES:
+            if task.get("attempt") and task["attempt"]["status"] != "not_started":
+                settings["observed_run"]["profile"] = deepcopy(task["profile"])
+            if (
+                task["status"] == "execution_observed"
+                or not task.get("attempt")
+                or task["attempt"]["status"] not in ("started", "completed")
+            ):
+                task.update(status="execution_observed", scheduled_start=None, plan_id=None)
+
+    def learn_raw_history(self, body, now, *, processing_started=None):
+        """Atomically retain original Recorder frames, conserved cycles and bounded current curves.
+
+        Capture-age validation uses the explicit UTC operation-entry now. Running
+        observation admission additionally includes monotonic elapsed executor,
+        archive and refinement work. Expiring running evidence cannot discard
+        the accepted curve or conserved training history. Direct callers start
+        timing here unless the HTTP owner supplied processing_started.
+        """
+        import json
+
+        from .evidence import refine
+        from .model import MAX_PROFILE_STEPS, MAX_VARIABLE_PROFILE_STEPS
+        from .raw import MAX_RAW_BODY_BYTES, analyze
+
+        processing_started = monotonic() if processing_started is None else processing_started
+        entity, power_entity = body["entity_id"], body["power_entity"]
+        self.member(entity)
+        if not power_entity or power_entity != self.source(entity):
+            raise ValueError("History must use the current Home Assistant Energy power sensor")
+        if len(json.dumps(body, allow_nan=False).encode()) > MAX_RAW_BODY_BYTES:
+            raise ValueError("Raw appliance history exceeds bounded response size")
+        end = instant(body["end"])
+        if not end <= now or now - end > timedelta(seconds=2 * SAMPLE_SECONDS):
+            raise ValueError("Raw appliance history capture is stale or future dated")
+        result = analyze(body)
+        self.sync_sources()
+        records, _, changed = self.collect_cycles(entity, power_entity, (), body["synthetic"])
+        data = deepcopy(self.state)
+        settings = data["devices"].setdefault(entity, {"shiftable": False})
+        if changed:
+            refine(settings, list(records.values()))
+        extra = []
+        frame = "appliance-state-history-" + digest(body) + ".json"
+        for cycle in result["runs"]:
+            identity = digest(
+                [
+                    entity,
+                    power_entity,
+                    cycle["started_at"],
+                    cycle["completed_at"],
+                    asdict(cycle["profile"]) if cycle["profile"] else None,
+                ]
+            )
+            key = "appliance-raw-" + identity + ".json"
+            if self.documents.exists(key):
+                retained = self.documents.read(key)
+                if not retained["training_usable"]:
+                    result["status"] = retained.get("rejection", "unverified")
+                continue
+            record = {
+                "id": identity,
+                "entity_id": entity,
+                "power_entity": power_entity,
+                "started_at": cycle["started_at"],
+                "completed_at": cycle["completed_at"],
+                "quality": "recorder_state",
+                "synthetic": body["synthetic"],
+                "history_ref": frame,
+                "training_usable": cycle["profile"] is not None,
+                "profile": asdict(cycle["profile"]) if cycle["profile"] else None,
+                "points": [
+                    row
+                    for row in result["power_curve"]
+                    if instant(cycle["started_at"])
+                    <= instant(row["at"])
+                    <= instant(cycle["completed_at"])
+                ],
+            }
+            candidate_records = {**records, "appliance-raw-" + identity: dict(record)}
+            if record["training_usable"]:
+                candidate = deepcopy(settings)
+                try:
+                    refine(candidate, list(candidate_records.values()))
+                    projected = {**data["devices"], entity: candidate}
+                    active = {row["entity_id"] for row in self.consumers.selected}
+                    projected_phases = sum(
+                        len(value["power_w"])
+                        for identity, device in projected.items()
+                        if identity in active
+                        for value in (
+                            device.get("profile"),
+                            device.get("learned_profile"),
+                            device.get("observed_run", {}).get("profile"),
+                        )
+                        if value and value.get("phase_durations_seconds") is not None
+                    ) + sum(
+                        len(task["profile"]["power_w"])
+                        for identity, task in data["tasks"].items()
+                        if identity in active
+                        and task["profile"].get("phase_durations_seconds") is not None
+                    )
+                    if projected_phases > MAX_PROJECTED_IRREGULAR_PHASES:
+                        raise ValueError("Cycle profile exceeds bounded phase complexity")
+                    projected_bytes = len(
+                        json.dumps(
+                            self._projection({**data, "devices": projected}), allow_nan=False
+                        ).encode()
+                    )
+                    if (
+                        projected_bytes
+                        > MAX_APPLIANCE_PROJECTION_BYTES - RAW_PROJECTION_RESERVE_BYTES
+                    ):
+                        raise ValueError("Cycle profile exceeds bounded phase complexity")
+                    if (
+                        len(candidate.get("learned_profile", {}).get("power_w", ()))
+                        > MAX_VARIABLE_PROFILE_STEPS - MAX_PROFILE_STEPS
+                    ):
+                        raise ValueError("Cycle profile exceeds bounded phase complexity")
+                except ValueError as error:
+                    if str(error) != "Cycle profile exceeds bounded phase complexity":
+                        raise
+                    record["training_usable"] = False
+                    record["rejection"] = "complexity_limited"
+                    result["status"] = "complexity_limited"
+                else:
+                    records, settings = candidate_records, candidate
+                    data["devices"][entity] = settings
+            extra.append((key, record))
+        if extra:
+            extra.insert(0, (frame, body))
+        settings["raw_history"] = {
+            "power_entity": power_entity,
+            "start": body["start"],
+            "end": body["end"],
+            "limited": body["limited"],
+            "synthetic": body["synthetic"],
+            "status": result["status"],
+            "power_curve": result["power_curve"],
+            "energy_curve": result["energy_curve"],
+            "cycle_started_at": result["running"]["started_at"]
+            if result["running"]
+            else result["runs"][-1]["started_at"]
+            if result["runs"]
+            else None,
+            "cycle_completed_at": result["runs"][-1]["completed_at"] if result["runs"] else None,
+        }
+        if result["running"]:
+            settings["raw_history"]["cycle_completed_at"] = None
+        settings["raw_history"]["curve_revision"] = digest(settings["raw_history"])
+        observed_until = instant(
+            result["running"]["observed_until"] if result["running"] else result["observed_until"]
+        )
+        self.observe_history(
+            data,
+            entity,
+            [],
+            [
+                (instant(cycle["started_at"]), instant(cycle["completed_at"]), ())
+                for cycle in result["cycles"]
+            ],
+            {"running": result["running"], "quiet": result["quiet"]},
+            power_entity,
+            now,
+            observed_until=observed_until,
+            processing_started=processing_started,
+        )
+        self.commit(data, extra=extra)
+        self._cycle_records[(entity, power_entity)] = records
+
+    def observed(self, entity):
+        """Return unresolved source-bound measured running evidence, independently of task feedback."""
+        run = self.state["devices"].get(entity, {}).get("observed_run")
+        return (
+            run
+            if run
+            and run["status"] not in ("complete", "idle")
+            and run["power_entity"] == self.source(entity)
+            else None
+        )
 
     def set_deadline(self, entity, deadline, now):
         """Persist a dashboard's draft deadline without submitting or changing an accepted task."""
@@ -432,18 +666,23 @@ class ApplianceService:
             if self.documents.read(key) != body:
                 raise ValueError("Completed cycle identity reused with different evidence")
             return
+        from .evidence import completion, refine
+
         learned = learn_cycle(points, started_at, completed_at, synthetic=synthetic)
+        self.sync_sources()
+        power_entity = self.source(entity)
+        records, _, _ = self.collect_cycles(entity, power_entity, (), synthetic)
+        explicit = completion(body)
+        explicit["_profile"] = learned
+        records["appliance-cycle-" + explicit["id"]] = explicit
         data = deepcopy(self.state)
         settings = data["devices"].setdefault(entity, {"shiftable": False})
-        previous = settings.get("profile")
-        old = (
-            profile(previous)
-            if previous and previous["evidence"] in ("measured", "synthetic")
-            else None
-        )
-        learned = average_profiles(old, learned)
-        settings["profile"] = asdict(learned)
+        refine(settings, list(records.values()))
         self.commit(data, extra=((key, body),))
+        for pair in tuple(self._cycle_records):
+            if pair[0] == entity:
+                self._cycle_records.pop(pair)
+        self._cycle_records[(entity, power_entity)] = records
 
     def submit(self, entity, request_id, ready_at, deadline, now):
         """Create one idempotent runnable task only on explicit readiness, never historical usage timing."""
@@ -473,6 +712,10 @@ class ApplianceService:
             or deadline - now > timedelta(days=MAX_TASK_WINDOW_DAYS)
         ):
             raise ValueError("Finish-before deadline must be in the next seven days")
+        if self.observed(entity):
+            raise ValueError(
+                "Appliance activity is unresolved. Wait for quiet measurements before submitting readiness"
+            )
         old = self.state["tasks"].get(entity)
         if old and old["status"] in OPEN_STATUSES:
             raise ValueError("This appliance already has an unresolved task")
@@ -530,10 +773,18 @@ class ApplianceService:
             validate_components,
         )
 
+        from .observed import work as observed_work
+
         problem = snapshot.problem
         self.issue = None
+        self._phase_limited_entities = set()
         works, task_windows, entities = [], [], set(excluded_entities)
+        origins_by_entity = {}
         for entity, task in self.state["tasks"].items():
+            if task["status"] == "execution_observed" or (
+                self.observed(entity) and not task["attempt"]
+            ):
+                continue
             if task["status"] not in OPEN_STATUSES:
                 continue
             try:
@@ -541,11 +792,15 @@ class ApplianceService:
             except ValueError:
                 continue
             attempt = task["attempt"]
-            fixed = (
-                instant(attempt.get("started_at") or attempt["start"])
-                if attempt and attempt["status"] != "not_started"
-                else None
+            run = self.observed(entity)
+            observed = (
+                observed_work(entity, run, now) if run and run["status"] == "observed" else None
             )
+            fixed = None
+            if attempt and attempt["status"] != "not_started":
+                fixed = instant(attempt.get("started_at") or attempt["start"])
+                if not attempt.get("started_at") and observed:
+                    fixed = observed.fixed_start
             work = ApplianceWork(
                 task["id"],
                 entity,
@@ -556,6 +811,7 @@ class ApplianceService:
             )
             starts = candidates(work, problem.intervals)
             if starts:
+                origins_by_entity[entity] = starts
                 works.append(work)
                 entities.add(entity)
                 task_windows.append(
@@ -565,8 +821,119 @@ class ApplianceService:
                         max(starts) + timedelta(seconds=work.profile.duration_seconds),
                     )
                 )
+        for entity in self.state["devices"]:
+            if entity in entities:
+                continue
+            run = self.observed(entity)
+            if not run or run["status"] != "observed":
+                continue
+            try:
+                self.member(entity)
+            except ValueError:
+                continue
+            observed = observed_work(entity, run, now)
+            if observed:
+                origins_by_entity[entity] = (observed.fixed_start,)
+                works.append(observed)
+                entities.add(entity)
+                task_windows.append((observed, observed.fixed_start, observed.deadline))
         if not works and not entities and not self.consumers.selected:
             return replace(snapshot, appliance_revision=self.revision)
+        horizon_seconds = sum(step.duration_h for step in problem.intervals) * 3600
+        remaining_edges = (
+            MAX_REFINED_PLAN_INTERVALS
+            - len(problem.intervals)
+            - int(horizon_seconds / SAMPLE_SECONDS)
+        )
+        remaining_checks = MAX_PHASE_BOUNDARY_CHECKS
+        admitted = []
+        uniform_boundaries = set()
+        parent_boundaries = {
+            boundary
+            for step in problem.intervals
+            for boundary in (step.start, step.start + timedelta(hours=step.duration_h))
+        }
+
+        def uniform_phase_boundaries(work, step):
+            """Yield the existing absolute grid plus actual fixed or partial phase edges within one parent interval."""
+            end = step.start + timedelta(hours=step.duration_h)
+            phase_seconds = work.profile.phase_seconds
+            boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds
+            while boundary < end.timestamp():
+                yield datetime.fromtimestamp(boundary, step.start.tzinfo)
+                boundary += phase_seconds
+            if work.fixed_start:
+                for offset in work.profile.phase_boundaries:
+                    boundary = work.fixed_start + timedelta(seconds=offset)
+                    if step.start < boundary < end:
+                        yield boundary
+            elif work.profile.duration_seconds % phase_seconds:
+                remainder = work.profile.duration_seconds % phase_seconds
+                boundary = int(step.start.timestamp()) // phase_seconds * phase_seconds + remainder
+                if boundary <= step.start.timestamp():
+                    boundary += phase_seconds
+                while boundary < end.timestamp():
+                    yield datetime.fromtimestamp(boundary, step.start.tzinfo)
+                    boundary += phase_seconds
+
+        for work, first, last in task_windows:
+            if work.profile.phase_durations_seconds is not None:
+                edge_count = len(work.profile.power_w) + 1
+                origin_count = len(origins_by_entity[work.entity_id])
+                checks = (
+                    edge_count
+                    * origin_count
+                    * sum(
+                        step.start < last and step.start + timedelta(hours=step.duration_h) > first
+                        for step in problem.intervals
+                    )
+                )
+                if edge_count * origin_count > remaining_edges or checks > remaining_checks:
+                    self._phase_limited_entities.add(work.entity_id)
+                    if work.entity_id not in excluded_entities:
+                        entities.discard(work.entity_id)
+                    continue
+                remaining_edges -= edge_count * origin_count
+                remaining_checks -= checks
+            else:
+                additions, checks, extra_edges = set(), 0, 0
+                fits = True
+                for step in problem.intervals:
+                    if step.start >= last or step.start + timedelta(hours=step.duration_h) <= first:
+                        continue
+                    for boundary in uniform_phase_boundaries(work, step):
+                        checks += 1
+                        if checks > remaining_checks:
+                            fits = False
+                            break
+                        if boundary not in uniform_boundaries and boundary not in additions:
+                            additions.add(boundary)
+                            if (
+                                boundary not in parent_boundaries
+                                and boundary.timestamp() % SAMPLE_SECONDS
+                            ):
+                                extra_edges += 1
+                            if (
+                                extra_edges > remaining_edges
+                                or len(uniform_boundaries) + len(additions)
+                                > MAX_REFINED_PLAN_INTERVALS
+                            ):
+                                fits = False
+                                break
+                    if not fits:
+                        break
+                remaining_checks -= min(checks, remaining_checks)
+                if not fits:
+                    self._phase_limited_entities.add(work.entity_id)
+                    if work.entity_id not in excluded_entities:
+                        entities.discard(work.entity_id)
+                    continue
+                remaining_edges -= extra_edges
+                uniform_boundaries.update(additions)
+            admitted.append((work, first, last))
+        task_windows = admitted
+        uniform_boundaries = sorted(uniform_boundaries)
+        works = [work for work in works if work.entity_id not in self._phase_limited_entities]
         result = self.consumers.result or {}
         forecasts = {row["entity_id"]: row["forecast"] for row in result.get("devices", [])}
         if (
@@ -684,23 +1051,23 @@ class ApplianceService:
                         )
                     ]
                 )
+                boundaries.update(
+                    uniform_boundaries[
+                        bisect_right(uniform_boundaries, step.start) : bisect_left(
+                            uniform_boundaries, end
+                        )
+                    ]
+                )
                 for work, first, last in task_windows:
                     if end <= first or step.start >= last:
                         continue
-                    boundary = (
-                        int(step.start.timestamp()) // PROFILE_STEP_SECONDS + 1
-                    ) * PROFILE_STEP_SECONDS
-                    while boundary < end.timestamp():
-                        boundaries.add(step.start.fromtimestamp(boundary, step.start.tzinfo))
-                        boundary += PROFILE_STEP_SECONDS
-                    if work.fixed_start:
-                        boundaries.update(
-                            work.fixed_start + timedelta(seconds=index * PROFILE_STEP_SECONDS)
-                            for index in range(len(work.profile.power_w) + 1)
-                            if step.start
-                            < work.fixed_start + timedelta(seconds=index * PROFILE_STEP_SECONDS)
-                            < end
-                        )
+                    if work.profile.phase_durations_seconds is not None:
+                        for origin in origins_by_entity[work.entity_id]:
+                            for offset in work.profile.phase_boundaries:
+                                instant_boundary = origin + timedelta(seconds=offset)
+                                if step.start < instant_boundary < end:
+                                    boundaries.add(instant_boundary)
+                        continue
                 from itertools import pairwise
 
                 for left, right in pairwise(sorted(boundaries)):
@@ -712,6 +1079,10 @@ class ApplianceService:
                     )
                     intervals.append(part)
                     parents.append(parent_index)
+                    if len(intervals) > MAX_REFINED_PLAN_INTERVALS:
+                        raise ValueError(
+                            "Appliance phase refinement exceeds bounded planning complexity"
+                        )
             windows = tuple(
                 (part.start, part.start + timedelta(hours=part.duration_h)) for part in intervals
             )
@@ -761,6 +1132,8 @@ class ApplianceService:
         data = deepcopy(self.state)
         rows = {row["task_id"]: row for row in document.get("appliance_schedule", [])}
         for task in data["tasks"].values():
+            if task["status"] == "execution_observed" or self.observed(task["entity_id"]):
+                continue
             if task["status"] not in OPEN_STATUSES:
                 continue
             row = rows.get(task["id"])
@@ -774,7 +1147,9 @@ class ApplianceService:
                 )
             else:
                 task.update(
-                    status="forecast_not_ready" if self.issue else "deadline_not_achievable",
+                    status="forecast_not_ready"
+                    if self.issue or task["entity_id"] in self._phase_limited_entities
+                    else "deadline_not_achievable",
                     scheduled_start=None,
                     plan_id=None,
                 )
@@ -793,8 +1168,15 @@ class ApplianceService:
                 and now >= instant(attempt["expires_at"])
             ):
                 attempt["status"] = "unknown"
-                task["status"] = "start_not_confirmed"
-            if task["status"] != "scheduled" or not enabled or not plan or self.issue:
+                if task["status"] != "execution_observed":
+                    task["status"] = "start_not_confirmed"
+            if (
+                self.observed(entity)
+                or task["status"] != "scheduled"
+                or not enabled
+                or not plan
+                or self.issue
+            ):
                 continue
             try:
                 self.member(entity)
@@ -835,7 +1217,8 @@ class ApplianceService:
             raise ValueError("Start request expired, superseded, paused or already claimed")
         expires_at = min(instant(plan["valid_until"]), instant(attempt["expires_at"]))
         if (
-            task["status"] == "cancelled"
+            task["status"] in ("cancelled", "execution_observed")
+            or self.observed(entity)
             or self.issue
             or not enabled
             or task["plan_id"] != plan["plan_id"]
@@ -949,8 +1332,8 @@ class ApplianceService:
             changed["status"] = "completed"
         else:
             changed.update(status="pending", scheduled_start=None, plan_id=None)
-        if task["status"] == "cancelled":
-            changed["status"] = "cancelled"
+        if task["status"] in ("cancelled", "execution_observed"):
+            changed["status"] = task["status"]
         if historical:
             with self.documents.transaction():
                 self.documents.write(
@@ -961,26 +1344,47 @@ class ApplianceService:
             self.commit(data)
         return changed
 
-    def document(self, now=None, enabled=False, plan=None):
+    def document(self, now=None, enabled=False, plan=None, *, raw_entity=None):
         """Expose current work and learned profile evidence. Archived transitions remain in the database."""
+        return self._projection(self.state, now, enabled, plan, raw_entity=raw_entity)
+
+    def _projection(self, state, now=None, enabled=False, plan=None, *, raw_entity=None):
+        """Keep ordinary all-device reads small and bind full raw detail to one explicitly selected entity."""
         from .history import request as history_request
 
         names = {row["entity_id"]: row["name"] for row in self.consumers.options}
         active = {row["entity_id"] for row in self.consumers.selected}
         devices = []
-        for entity, settings in self.state["devices"].items():
-            if entity not in active:
+        for entity, settings in state["devices"].items():
+            if entity not in active or raw_entity is not None and entity != raw_entity:
                 continue
-            task = self.state["tasks"].get(entity)
+            projection = settings
+            if settings.get("raw_history", {}).get("power_entity") not in (
+                None,
+                self.source(entity),
+            ):
+                projection = {key: value for key, value in settings.items() if key != "raw_history"}
+            elif entity != raw_entity and settings.get("raw_history"):
+                projection = {
+                    **settings,
+                    "raw_history": {
+                        key: value
+                        for key, value in settings["raw_history"].items()
+                        if key not in ("power_curve", "energy_curve")
+                    },
+                }
+            task = state["tasks"].get(entity)
             attempt = task["attempt"] if task else None
             request = None
             if (
                 not self.issue
+                and not self.observed(entity)
                 and now
                 and enabled
                 and plan
                 and attempt
                 and attempt["status"] == "requested"
+                and task["status"] != "execution_observed"
                 and task["plan_id"] == plan["plan_id"]
                 and now < min(instant(attempt["expires_at"]), instant(plan["valid_until"]))
             ):
@@ -993,9 +1397,13 @@ class ApplianceService:
                 {
                     "entity_id": entity,
                     "name": names.get(entity, entity),
-                    **settings,
+                    **projection,
                     "power_entity": self.source(entity),
+                    "planning_issue": "This cycle cannot currently be scheduled. Its measured curve is retained and ordinary consumption forecasts remain in use."
+                    if entity in self._phase_limited_entities
+                    else None,
                     "history_request": history_request(settings),
+                    "fine_history_request": history_request(settings, resolution="5minute"),
                     "learning_half_life_days": RECENCY_HALF_LIFE_DAYS
                     if "learning_weight" in settings or "hourly_weight" in settings
                     else None,

@@ -157,9 +157,76 @@ def test_decoded_projection_bound_rejects_unbounded_callers():
         validate_projection_size({"padding": "x" * 262145}, 262144)
 
 
+def test_forty_fine_cycle_profiles_use_the_bounded_complete_projection_budget():
+    """Forty twelve-hour five-minute profiles survive HTTP and native validation without losing phase detail."""
+    import json
+
+    from aiohttp import ClientSession, web
+    from aiohttp.test_utils import TestServer
+
+    from custom_components.open_energy_planner.appliances import receive
+    from custom_components.open_energy_planner.client import LocalClient
+    from custom_components.open_energy_planner.const import BUILD_INFO
+
+    async def scenario():
+        """Transport a realistic large typed document through both resource boundaries using isolated HA."""
+        profile = {
+            "power_w": [1000 + index / 7 for index in range(144)],
+            "phase_seconds": 300,
+            "samples": 1,
+            "evidence": "synthetic",
+        }
+        devices = [
+            {
+                "entity_id": f"sensor.example_energy_{index}",
+                "shiftable": False,
+                "profile": profile,
+                "learned_profile": profile,
+                "observed_run": {"profile": profile},
+                "request": None,
+                "task": None,
+            }
+            for index in range(40)
+        ]
+        body = {"devices": devices, "revision": "synthetic-fine-cycle-models", "issue": None}
+        assert 262144 < len(json.dumps(body).encode()) < 4194304
+
+        async def respond(_request):
+            """Return the complete synthetic projection with the required release identity."""
+            return web.json_response(
+                body,
+                headers={
+                    "X-OEP-Release": BUILD_INFO["version"],
+                    "X-OEP-Build": BUILD_INFO["build"] or "",
+                },
+            )
+
+        application = web.Application()
+        application.router.add_get("/v1/appliances", respond)
+        async with running_chain(fixture_devices=False) as (_, entry, _, _):
+            async with TestServer(application) as server, ClientSession() as session:
+                client = LocalClient(session, str(server.make_url("/")), "synthetic-token")
+                value = await client.request("GET", "/v1/appliances")
+            coordinator = entry.runtime_data
+            coordinator.consumer_forecasts = {
+                "options": [{"entity_id": row["entity_id"]} for row in devices]
+            }
+            receive(coordinator, value)
+            assert coordinator.appliances == body
+            assert len(coordinator.appliances["devices"]) == 40
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "path,byte_limit",
-    [("/v1/ev", 262144), ("/v1/snapshot", 4194304), ("/v1/ha/catalogue", 4194304)],
+    [
+        ("/v1/ev", 262144),
+        ("/v1/snapshot", 4194304),
+        ("/v1/ha/catalogue", 4194304),
+        ("/v1/appliances", 4194304),
+        ("/v1/appliances/history", 4194304),
+    ],
 )
 @pytest.mark.parametrize("framing", ["declared", "chunked"])
 def test_http_resource_limits_remain_enforced_for_large_projections(path, byte_limit, framing):
@@ -191,7 +258,10 @@ def test_http_resource_limits_remain_enforced_for_large_projections(path, byte_l
         async with TestServer(application) as server, ClientSession() as session:
             client = LocalClient(session, str(server.make_url("/")), "synthetic-token")
             with pytest.raises(ValueError, match="App response exceeds size limit"):
-                await client.request("POST" if path == "/v1/ha/catalogue" else "GET", path)
+                await client.request(
+                    "POST" if path in ("/v1/ha/catalogue", "/v1/appliances/history") else "GET",
+                    path,
+                )
 
     asyncio.run(scenario())
 

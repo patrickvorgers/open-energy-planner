@@ -14,38 +14,9 @@ from open_energy_planner.appliances.cycles.learning import (
     hourly_profile,
     retained_weight,
 )
-from open_energy_planner.appliances.cycles.model import CycleProfile, average_profiles, instant
+from open_energy_planner.appliances.cycles.model import CycleProfile, average_profiles
 from open_energy_planner.appliances.cycles.service import ApplianceService
-from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
-
-
-def hourly_rows(start, powers):
-    """Pair hourly mean W with cumulative kWh at interval end, starting from a negative origin."""
-    total, rows = -50.0, []
-    for index, power in enumerate(powers):
-        total += power / 1000
-        rows.append(
-            {"at": (start + timedelta(hours=index)).isoformat(), "power_w": power, "kwh": total}
-        )
-    return rows
-
-
-def begin(service, start, end):
-    """Initialize the same source-bound range used by the Recorder transport."""
-    history.scan(service, ENTITY, POWER, "processing", start.isoformat(), end.isoformat(), NOW)
-
-
-def upload(service, rows):
-    """Send only the currently requested core with the detector's independent thirteen-hour overlap."""
-    pending = service.document()["devices"][0]["history_request"]
-    first, last = instant(pending["start"]), instant(pending["end"])
-    bounded = [
-        row
-        for row in rows
-        if first - timedelta(hours=13) <= instant(row["at"]) < last + timedelta(hours=1)
-    ]
-    history.batch(service, ENTITY, POWER, bounded, False, **pending, now=NOW)
-    return pending
+from tests.app.appliance.support import ENTITY, NOW, POWER, begin, hourly_rows, readings, upload
 
 
 def test_ninety_days_halves_prior_weight_without_changing_raw_count_or_energy():
@@ -131,7 +102,7 @@ def test_numeric_sensor_faults_do_not_block_later_fine_cycles(service, field, va
     service.learn_history(ENTITY, POWER, rows, False, NOW)
     row = service.document()["devices"][0]
     assert row["learned_profile"]["samples"] == 2
-    assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.5)
+    assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
     assert row["learning_history"]["expected_intervals"] == 117
     assert row["learning_history"]["usable_intervals"] == (115 if field == "power_w" else 114)
     assert rows[13][field] is value
@@ -192,8 +163,8 @@ def test_checkpoint_restart_overlap_and_empty_hours_never_duplicate_coverage(ser
     first = deepcopy(service.state)
     assert service.document()["devices"][0]["history_import"]["cursor"] == pending["end"]
     assert service.document()["devices"][0]["hourly_profile"]["samples"] == 1
-    assert "profile" not in service.document()["devices"][0]
-    assert service.revision == revision
+    assert service.document()["devices"][0]["profile"]["samples"] == 1
+    assert service.revision != revision
     history.batch(service, ENTITY, POWER, [], False, **pending, now=NOW)
     assert service.state == first
     restored = ApplianceService(service.documents, service.consumers)
@@ -273,7 +244,7 @@ def test_legacy_automatic_evidence_reconstructs_weights_before_next_run(service)
     row = service.document()["devices"][0]
     assert row["profile"]["samples"] == 3
     assert 2.9 < row["learning_weight"] < 3
-    assert sum(row["profile"]["power_w"]) / 4000 == pytest.approx(0.5)
+    assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
 
 
 def test_usable_coverage_counts_missing_core_hours_and_not_overlap():

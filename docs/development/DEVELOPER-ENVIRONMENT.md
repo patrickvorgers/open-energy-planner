@@ -112,7 +112,7 @@ Their Energy power links come from the same fixture. Bootstrap supplies explicit
 simulated five-minute inputs to the normal automatic detector, rather than inserting
 learned profiles. Dishwasher and washing machine have two complete cycles, yielding
 105/135-minute detected active spans and 0.83/0.92 kWh. The simulator's final idle
-quarter is excluded. Dryer has one cycle plus a manual 180-minute, 1.40-kWh fallback.
+quarter is excluded. Dryer has one cycle supplying a provisional learned profile and a saved manual 180-minute, 1.40-kWh fallback.
 The selected heat-pump source has no Energy power link and demonstrates that message.
 These bootstrap inputs are not claimed to be prior Recorder measurements, historical
 predictions or model-quality results. See [automatic appliance learning](APPLIANCE-LEARNING.md).

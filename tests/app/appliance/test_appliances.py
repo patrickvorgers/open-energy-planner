@@ -637,14 +637,15 @@ def test_split_deadline_fields_are_order_independent_and_resolve_european_dst(ta
 
 def test_learned_duration_keeps_longest_cycle_while_averaging_power(tasks):
     """120- and 150-minute .83/.855-kWh cycles average to .8425 kWh. A later 15-minute cycle must not shorten the retained horizon."""
-    extended = points()
+    later = START + timedelta(days=1)
+    extended = points(later)
     extended.append(
-        {"at": (START + timedelta(minutes=135)).isoformat(), "kwh": extended[-1]["kwh"] + 0.025}
+        {"at": (later + timedelta(minutes=135)).isoformat(), "kwh": extended[-1]["kwh"] + 0.025}
     )
     extended.append(
-        {"at": (START + timedelta(minutes=150)).isoformat(), "kwh": extended[-1]["kwh"]}
+        {"at": (later + timedelta(minutes=150)).isoformat(), "kwh": extended[-1]["kwh"]}
     )
-    tasks.record_cycle(ENTITY, "longer-cycle", START, START + timedelta(minutes=150), extended)
+    tasks.record_cycle(ENTITY, "longer-cycle", later, later + timedelta(minutes=150), extended)
     learned = tasks.state["devices"][ENTITY]["profile"]
     assert len(learned["power_w"]) * 15 == 150
     assert learned["samples"] == 2
@@ -653,11 +654,11 @@ def test_learned_duration_keeps_longest_cycle_while_averaging_power(tasks):
     tasks.record_cycle(
         ENTITY,
         "shorter-cycle",
-        START,
-        START + timedelta(minutes=15),
+        START + timedelta(days=2),
+        START + timedelta(days=2, minutes=15),
         [
-            {"at": START.isoformat(), "kwh": 10},
-            {"at": (START + timedelta(minutes=15)).isoformat(), "kwh": 10.5},
+            {"at": (START + timedelta(days=2)).isoformat(), "kwh": 10},
+            {"at": (START + timedelta(days=2, minutes=15)).isoformat(), "kwh": 10.5},
         ],
     )
     learned = tasks.state["devices"][ENTITY]["profile"]

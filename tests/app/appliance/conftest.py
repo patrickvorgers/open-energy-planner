@@ -6,7 +6,7 @@ from open_energy_planner.appliances.cycles.service import ApplianceService
 from open_energy_planner.appliances.forecasting import ConsumerForecasts
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
-from tests.app.appliance.test_appliance_learning import ENTITY, POWER
+from tests.app.appliance.support import ENTITY, POWER
 
 
 @pytest.fixture

@@ -4,6 +4,7 @@ import json
 
 MAX_SNAPSHOT_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_API_RESPONSE_BYTES = 256 * 1024
+MAX_APPLIANCE_RESPONSE_BYTES = MAX_SNAPSHOT_RESPONSE_BYTES
 
 
 def validate_projection_size(value, maximum_bytes):
