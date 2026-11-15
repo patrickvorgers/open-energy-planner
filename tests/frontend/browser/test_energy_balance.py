@@ -363,7 +363,9 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
         "-3.2",
         "-6.4",
         "-2.4",
+        "-16",
     ]
+    expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "-16"])
     plot_bounds = canvas.bounding_box()
     legend_bounds = page.locator("#plan-chart-legend").bounding_box()
     assert legend_bounds["y"] >= plot_bounds["y"] + plot_bounds["height"]
@@ -377,6 +379,24 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     assert popup_bounds["x"] >= 0
     assert popup_bounds["x"] + popup_bounds["width"] <= page.viewport_size["width"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    # Hiding the 4-kW household demand must not change the independently specified 16-kW total.
+    page.evaluate("""() => {
+        const chart = Chart.getChart(document.getElementById('plan-chart'));
+        const index = chart.data.datasets.findIndex(dataset => dataset.label === 'Household demand: AC');
+        chart.setDatasetVisibility(index, false);
+        chart.tooltip.setActiveElements([{datasetIndex: 0, index: 0}], {x: 0, y: 0});
+        chart.update('none');
+    }""")
+    expect(popup.locator("tr").filter(has_text="Household demand: AC")).to_have_count(0)
+    expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "-16"])
+    # A missing hidden flow remains unknown rather than being summed as zero.
+    page.evaluate("""() => {
+        const chart = Chart.getChart(document.getElementById('plan-chart'));
+        chart.data.datasets.find(dataset => dataset.label === 'Household demand: AC').data[0].y = null;
+        chart.update('none');
+        chart.options.plugins.tooltip.external({chart, tooltip: chart.tooltip});
+    }""")
+    expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "-"])
     page.evaluate("""() => {
         const chart = Chart.getChart(document.getElementById('plan-chart'));
         const datasetIndex = chart.data.datasets.findIndex(dataset => dataset.yAxisID === 'soc');
