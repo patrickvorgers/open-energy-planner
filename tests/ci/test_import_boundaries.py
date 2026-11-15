@@ -37,16 +37,18 @@ def modules(path):
 
 
 def forbidden_integration_imports(relative_path, source):
-    """Allow only the native Recorder adapter's exact read-query constructor import."""
+    """Allow only exact native Recorder read-constructor and query-failure imports in their owners."""
     for node in ast.walk(ast.parse(source)):
         if (
-            relative_path == "solar_feedback.py"
-            and isinstance(node, ast.ImportFrom)
+            isinstance(node, ast.ImportFrom)
             and node.level == 0
-            and node.module == "sqlalchemy"
             and len(node.names) == 1
-            and node.names[0].name == "select"
             and node.names[0].asname is None
+            and (relative_path, node.module, node.names[0].name)
+            in (
+                ("solar_feedback.py", "sqlalchemy", "select"),
+                ("appliance_raw_history.py", "sqlalchemy.exc", "SQLAlchemyError"),
+            )
         ):
             continue
         for target in import_targets(node):
@@ -81,7 +83,7 @@ def test_app_does_not_import_home_assistant_or_integration():
 
 
 def test_integration_does_not_import_app_solver_or_orm():
-    """Keep app/solver/ORM ownership out of the adapter, except its exact native Recorder read import."""
+    """Keep app/solver/ORM ownership out of the adapter, apart from exact native Recorder read/failure types."""
     integration = ROOT / "custom_components/open_energy_planner"
     for path in integration.rglob("*.py"):
         assert not list(
@@ -95,6 +97,19 @@ def test_integration_does_not_import_app_solver_or_orm():
     "relative_path,source,allowed",
     [
         ("solar_feedback.py", "from sqlalchemy import select", True),
+        ("appliance_raw_history.py", "from sqlalchemy.exc import SQLAlchemyError", True),
+        ("appliance_raw_history.py", "import sqlalchemy.exc", False),
+        ("appliance_raw_history.py", "from sqlalchemy.exc import SQLAlchemyError as error", False),
+        (
+            "appliance_raw_history.py",
+            "from sqlalchemy.exc import SQLAlchemyError, OperationalError",
+            False,
+        ),
+        ("appliance_raw_history.py", "from sqlalchemy import select", False),
+        ("appliance_raw_history.py", "from sqlalchemy import create_engine", False),
+        ("appliance_raw_history.py", "from sqlalchemy.orm import Session", False),
+        ("nested/appliance_raw_history.py", "from sqlalchemy.exc import SQLAlchemyError", False),
+        ("history.py", "from sqlalchemy.exc import SQLAlchemyError", False),
         ("solar_feedback.py", "import sqlalchemy", False),
         ("solar_feedback.py", "from sqlalchemy import select, create_engine", False),
         ("solar_feedback.py", "from sqlalchemy.orm import Session", False),
