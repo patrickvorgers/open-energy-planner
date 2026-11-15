@@ -99,11 +99,7 @@ jobs:
         run: python -m script.ci.scope_report
       - name: Release unused hosted-runner SDK storage
         if: steps.scope.outputs.documentation_only != 'true'
-        run: |
-          # This job uses Python and Docker; unused mobile/.NET SDKs crowd out the private Supervisor engine.
-          df -h /
-          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          df -h /
+        run: python -m script.ci.check_runner_storage
       - name: Enable shared build and container image storage
         uses: ./.github/actions/shared-image-storage
       - name: Set up cached image builder
@@ -263,7 +259,7 @@ jobs:
           path: .local/ci-prepared
       - name: Release storage for actual Supervisor acceptance
         if: matrix.lane == 'supervisor'
-        run: sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+        run: python -m script.ci.check_runner_storage
       - name: Enable shared image storage before loading
         uses: ./.github/actions/shared-image-storage
         if: matrix.lane != 'supervisor'
