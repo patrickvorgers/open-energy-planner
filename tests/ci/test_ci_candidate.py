@@ -106,6 +106,24 @@ class Evidence:
     def post(self, path, payload):
         """The fixture's completed review has no unresolved discussions."""
         assert path == "graphql"
+        if "reviewDecision" in payload["query"]:
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "state": "OPEN",
+                            "headRefOid": HEAD,
+                            "baseRefOid": BASE,
+                            "reviewDecision": None,
+                            "latestOpinionatedReviews": {
+                                "totalCount": 0,
+                                "nodes": [],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            },
+                        }
+                    }
+                }
+            }
         return {
             "data": {
                 "repository": {

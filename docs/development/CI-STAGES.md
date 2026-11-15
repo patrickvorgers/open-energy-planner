@@ -435,6 +435,82 @@ the operator evaluated and addressed all findings, including outside-diff
 comments without a resolution flag. Inspect them again before merging. Historical
 resolved comments are allowed. A completed current-head review is always required, including when it produces no comments.
 
+### Formal change requests and individual recovery
+
+Before choosing Ready and again immediately before merge, inspect formal review
+states separately from provider completion and resolved discussions. Run
+**Formal review state (trusted main)** from `main` with the frozen PR number,
+head SHA and base SHA. It reads every page of GitHub's effective formal reviews,
+current-head prerequisites, substantive provider completion and resolved threads.
+It rechecks the live revision and formal objections after those reads. Its summary
+is a read-only snapshot, not finding-disposition, candidate or merge evidence.
+An unavailable API, incomplete review inventory or changed revision fails the check.
+The workflow uses trusted main code with read-only permissions and never
+executes contributor code, dismisses reviews, creates approvals or requests CI.
+
+Candidate admission independently rejects every effective `CHANGES_REQUESTED`
+review, including still-active older bot reviews and human requests. It uses
+GitHub's `latestOpinionatedReviews` for all reviewers, including non-writers,
+with stable actor identities. A later formal `APPROVED` from the same reviewer
+can supersede that reviewer's earlier change request. An objection from another
+reviewer remains blocking. The gate does not demand dismissal of an already
+superseded request. Missing or ambiguous reviewer identity fails closed.
+A later `COMMENTED`
+review, a clean publication, green checks and resolved threads do not retract a
+formal change request. The Dependabot provider exception does not exempt formal
+objections. Fresh review requests remain available under the existing preflight
+conditions so an old objection cannot prevent the independent reassessment
+needed to address it.
+
+The orchestrator's `complete` phase describes provider completion only. When
+formal clearance is blocked or unavailable, its status tells the operator to
+keep Draft and use individual recovery. It never grants dismissal authority.
+
+When a bot leaves an obsolete formal change request, a repository operator with
+GitHub review-dismissal permission must handle that exact review individually:
+
+1. Keep the PR in Draft. Preserve the original review ID, author identity,
+   original commit, full review body and every associated inline and outside-diff
+   finding. Confirm that it belongs to the actual provider bot, not a human or
+   an account with a similar name. Unknown identity blocks dismissal.
+2. Evaluate every earlier finding against the frozen current head and base.
+   Preserve each disposition, reasoning, correction and verification or justified
+   decline in the PR discussion. Resolve threads only after substantive replies.
+   Include findings without a resolution flag. A clean new publication alone
+   does not prove any of these dispositions.
+3. Obtain substantive independent review of the current head after including
+   the current base. Inspect actual file coverage and exclusions. Missing or
+   uncertain relevant coverage blocks recovery. Preserve the provider check and
+   complete publication alongside the frozen identities and disposition record.
+4. Recheck head, base, original review, provider identity, current independent
+   evidence and all discussions immediately before the operator action. If any
+   changed, evidence is incomplete or the API is unavailable, stop and reassess.
+   Never dismiss a human request or a current substantive objection through this
+   recovery procedure. Seek its reviewer's substantive resolution instead.
+5. Use GitHub's dismissal action for that one obsolete bot review. Write a
+   concrete reason linking its original findings, the complete disposition
+   record, current independent coverage and exact head/base. Retain the original
+   review and GitHub's dismissal audit trail. Never dismiss all bot reviews or
+   fabricate an approval. Provider completion and Ready do not authorize dismissal.
+6. Read back that exact review as `DISMISSED`, recheck the complete formal
+   history and frozen head/base, and retain the result. On an uncertain response,
+   inspect live state before any retry. An already dismissed review needs no
+   further mutation. A new objection or revision requires fresh assessment.
+   Rerun the read-only gate before Ready and again before merge.
+
+The operator action is deliberately not automated. GitHub supplies no atomic
+lock covering review state, head and base across a dismissal or merge. Detectable
+drift blocks the gates. The operator must perform the immediate readback and
+final merge checks, retaining the existing expected-head merge guard and
+candidate/main proof. A passed earlier snapshot is never a reusable authorization
+to ignore a later objection or to dismiss a review.
+
+If someone chooses Ready too early, candidate admission fails before image builds
+while a formal objection remains. Return the PR to Draft, complete the individual
+recovery and obtain a passing current snapshot. Then make a fresh Ready transition
+to request one candidate. Do not bypass the gate, retry heavy CI or dismiss reviews
+merely to clear the failure. Trusted gate changes take effect after merge to main.
+
 Keep the candidate frozen. A new commit cancels the obsolete candidate through
 the trusted readiness workflow, returns the PR to Draft and runs cheap
 checks again. Follow the final-review procedure above rather than requesting
@@ -1349,6 +1425,12 @@ Selected performance runs still use newly generated inputs and fresh stores.
 Record benchmark conditions, native query plans and separate generation/insertion/query timings in CI artifacts. Local fixture timings do not establish full-CI savings. The workflow generates fresh stores and does not restore physical database snapshots.
 
 ## Merge and release evidence
+
+Immediately before the expected-head guarded merge, rerun the
+[formal review-state check](#formal-change-requests-and-individual-recovery)
+and inspect all current findings on the frozen head/base. A formal objection
+submitted after candidate admission still blocks merge, even if CI succeeded.
+This is an operator merge procedure, not server-enforced branch protection.
 
 Require an actual successful `Quality and integration (AMD64)` result for the
 latest requested PR candidate, its base-selected route and intended base,

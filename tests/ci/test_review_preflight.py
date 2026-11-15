@@ -155,6 +155,42 @@ def test_final_command_requires_no_separate_codex_review_or_provider_write():
     assert all(method in {"GET", "QUERY"} for method, _ in client.calls)
 
 
+def test_old_formal_change_request_does_not_prevent_fresh_review():
+    """A dispositioned old objection must allow the fresh review needed for individual recovery."""
+    client = Evidence()
+    query = client.post
+
+    def old_formal_objection(path, payload):
+        """Keep discussions resolved while exposing an undismissed historical bot review."""
+        response = query(path, payload)
+        response["data"]["repository"]["pullRequest"].update(
+            state="OPEN",
+            headRefOid=HEAD,
+            baseRefOid=BASE,
+            reviewDecision="CHANGES_REQUESTED",
+            latestOpinionatedReviews={
+                "totalCount": 1,
+                "nodes": [
+                    {
+                        "databaseId": 17,
+                        "state": "CHANGES_REQUESTED",
+                        "author": {
+                            "__typename": "Bot",
+                            "id": "synthetic-bot",
+                            "login": "synthetic-reviewer",
+                        },
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            },
+        )
+        return response
+
+    client.post = old_formal_objection
+    assert "No review has been requested." in run(client)
+    assert client.current["draft"] is True
+
+
 def test_exactly_150_changed_files_include_binary_deleted_and_renamed_files():
     """All changed file types count, and the final 50 files are read from the second page."""
     client = Evidence(150)

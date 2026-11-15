@@ -190,6 +190,24 @@ class GitHubEvidence:
                     }
                 }
             }
+        if "reviewDecision" in payload["query"]:
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "state": "OPEN",
+                            "headRefOid": self.current["head"]["sha"],
+                            "baseRefOid": self.current["base"]["sha"],
+                            "reviewDecision": None,
+                            "latestOpinionatedReviews": {
+                                "totalCount": 0,
+                                "nodes": [],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            },
+                        }
+                    }
+                }
+            }
         assert "reviewThreads" in payload["query"]
         return {
             "data": {
@@ -250,6 +268,57 @@ class GitHubEvidence:
                 },
             }
         )
+
+
+def test_old_formal_objection_allows_fresh_provider_review_but_keeps_ready_blocked():
+    """The controller obtains fresh coverage without treating completion as review dismissal authority."""
+    client = GitHubEvidence()
+    query = client.post
+
+    def old_formal_objection(path, payload):
+        """Expose an outstanding bot review while preserving existing comment publication."""
+        if "reviewDecision" in payload["query"]:
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "state": "OPEN",
+                            "headRefOid": HEAD,
+                            "baseRefOid": BASE,
+                            "reviewDecision": "CHANGES_REQUESTED",
+                            "latestOpinionatedReviews": {
+                                "totalCount": 1,
+                                "nodes": [
+                                    {
+                                        "databaseId": 17,
+                                        "state": "CHANGES_REQUESTED",
+                                        "author": {
+                                            "__typename": "Bot",
+                                            "id": "synthetic-bot",
+                                            "login": "synthetic-reviewer",
+                                        },
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            },
+                        }
+                    }
+                }
+            }
+        return query(path, payload)
+
+    client.post = old_formal_objection
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    client.kody_result()
+    client.run()
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    assert client.state()["phase"] == "complete"
+    assert "formal review clearance is blocked" in client.state()["message"]
+    assert "Keep Draft" in client.state()["message"]
+    assert client.current["draft"] is True
+    assert not any("dismissPullRequestReview" in str(call) for call in client.calls)
 
 
 def test_no_explicit_command_means_no_provider_request():
