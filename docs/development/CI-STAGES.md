@@ -471,7 +471,20 @@ and head so the operator can compare both before merging.
 All candidate, main, manual and release jobs use GitHub-hosted Ubuntu runners.
 Contributors need no personal runner, runner preference label or availability
 credential. PR authors and labels cannot select personal hardware. The repository
-does not ship runner registration, workspace repair or host cleanup tooling.
+does not ship self-hosted runner registration or workspace repair tooling.
+
+Before preparing non-documentation images and before actual Supervisor acceptance,
+`script.ci.check_runner_storage` checks the hosted runner's root filesystem. With
+at least 50 GB free, it skips SDK cleanup. GB means 1,000,000,000 bytes. Below that
+threshold, it removes only the unused Android, .NET and GHC SDK directories already
+provided by the hosted image. It measures free space again and stops the job if
+cleanup fails or less than 50 GB remains. Logs show the measured space and decision.
+The helper rejects local, self-hosted and non-Linux environments.
+
+The threshold provides starting headroom. It is not a measured upper bound on
+build or test disk usage. Each hosted job has a fresh runner, so its temporary
+files do not accumulate across jobs. GitHub still disposes of the runner after
+the job. External artifact and cache retention are unchanged.
 
 During development, run Quick and affected regression tests locally. Execute the
 complete selected suite set once through the reviewed candidate workflow.
@@ -1073,6 +1086,11 @@ available, and cancellation never counts as successful suite completion.
 The final quality job runs only after every selected machine succeeds. It rejects
 missing or extra machines, foreign source/attempt identities, incorrect suite
 ownership, missing or unexpected reports and inconsistent executed counts.
+Preparation derives the report download path from the selected machine matrix.
+The downloader places one matching artifact directly in that path, so a single
+machine uses its named `ci-reports-<machine>` directory. Multiple machines use
+the common parent and receive separate named directories. The join requires the
+same per-machine layout in both cases and retains all completeness checks.
 It then writes and verifies the existing whole-profile completion record. Package
 creation happens once after this join. The existing quality check name, ordered
 source-tree markers and matched bundle/report identities remain the merge and

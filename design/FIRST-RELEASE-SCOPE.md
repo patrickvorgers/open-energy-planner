@@ -41,7 +41,7 @@ follow-on agreement and does not rewrite the agreed first-release boundary.
 - Physical brand/protocol drivers, automation generation, physical safety enforcement and phase-by-phase electrical protection in the planner.
 - Multiple grid connections in one installation and planned flexible loads such as EVs or heat pumps in this first release.
 - Supplier-controlled trading, arbitrary executable contract scripts and a promise to support every European contract or tax system.
-- Local market-price model training, mandatory DAO/DAP services, and user-selectable internal solver components.
+- Local market-price model training, mandatory installation of separate forecasting applications, and user-selectable internal solver components.
 - Dynamic strategy-switching automations, general nonzero grid power targets, and historical reoptimization of original plans.
 - Compatibility matrices across different app/integration releases or older HA releases. Full ARM parity without native/practical validation.
 - A second maintained production solver adapter, custom general modelling language, or speculative performance machinery without measured benefit.
