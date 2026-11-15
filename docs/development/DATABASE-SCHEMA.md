@@ -789,7 +789,16 @@ usable capacity, measured/target SoC and physical power/control limits.
 EV evidence also freezes the SoC source entity, optional device timestamp
 attribute, original sample/report timestamps and the versioned delivered-power
 loss curve. It also retains the labelled SoC estimate, recognition decision and
-session energy checkpoint used for that plan. `problem.reserve_checkpoints` preserves the original stationary
+session energy checkpoint used for that plan. The `recognition` record preserves
+`vehicle_id`, `origin`, `candidates` and `session_id`, plus `captured_at` and
+`inputs` for every allowed vehicle, including excluded candidates. Each input
+contains `vehicle_id` and `connected`, `charging`, `home` records. Each signal
+record has nullable `source_entity` and nullable `observation`. A present
+observation contains boolean `value`, original aware `observed_at`, `reported_at`
+and `timestamp_kind`. No coordinates, location names or provider attributes are
+stored. These detached inputs share the original plan identity and transfer with
+it, without a new table or schema converter.
+`problem.reserve_checkpoints` preserves the original stationary
 reserve-priority boundaries when EV stop events refine billing intervals.
 `expected_flows[].ev` stores `session_id`, AC `ac_kwh`, useful `stored_kwh` and
 active `power_w` for that billing segment. `steps[].devices` has EV commands with

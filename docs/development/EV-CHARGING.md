@@ -173,7 +173,11 @@ at its average measured power to battery energy. This is an approximation when
 charging power varies inside a reporting gap. Planned energy is never credited.
 Unchanged and missing counter captures preserve the meter's original baseline
 time, independently of repeated app captures. The HA packet carries the meter's
-observation time separately from capture time. Counter
+observation time separately from capture time.
+An explicit unchanged meter observation at or after both the attribution boundary
+and genuine SoC sample can replace an older unusable baseline. Capture time alone
+cannot prove this. Already attributable sparse-counter baselines stay unchanged.
+Counter
 resets, impossible jumps, source changes and reconnects start a new baseline
 without inventing energy. A later genuine SoC sample resets preceding credit.
 A delayed sample still permits an entire following meter interval whose
@@ -385,6 +389,13 @@ records and global revision/pointer commit atomically. See the
 [EV database dictionary](DATABASE-SCHEMA.md#ev-document-extension) for replay.
 No separate database/configuration file is created. Fresh HA telemetry
 is mandatory after app restart. Credentials remain outside these documents.
+
+Original plans freeze the recognition decision and the connected, charging and
+Home boolean observations for every allowed car, including excluded candidates.
+Each signal keeps its configured source entity, original observation/report times
+and timestamp provenance. Missing signals remain unknown. Later live reports or
+configuration edits cannot change this archived explanation. Coordinates, location
+names and provider attributes are not part of this bounded record.
 
 SoC reports retain separate sample/report timestamps and timestamp provenance.
 The app accepts up to five seconds of future clock skew between hosts. The

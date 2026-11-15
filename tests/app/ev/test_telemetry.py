@@ -199,3 +199,54 @@ def test_stale_meter_baseline_cannot_credit_pre_attribution_energy(transition):
     telemetry = update_telemetry(telemetry, state, report)
     assert telemetry["vehicles"][CAR]["stored_kwh"] == pytest.approx(3.68)
     assert update_telemetry(telemetry, state, report) == telemetry
+
+
+@pytest.mark.parametrize("boundary", ["attribution", "soc_anchor"])
+@pytest.mark.parametrize(
+    "observation", ["explicit", "missing", "unavailable", "regressed", "before_boundary"]
+)
+def test_equal_meter_sample_can_establish_an_attributable_baseline(boundary, observation):
+    """Only an explicit post-boundary 100-kWh sample proves the following 2.3-kWh charge."""
+    state, report, telemetry = example()
+    stale = (NOW - timedelta(minutes=1)).isoformat()
+    telemetry["sessions"][POINT]["energy_at"] = stale
+    if boundary == "soc_anchor":
+        telemetry["sessions"][POINT]["attributed_at"] = (NOW - timedelta(minutes=2)).isoformat()
+    report["at"] = (NOW + timedelta(minutes=1)).isoformat()
+    if observation != "missing":
+        report["points"][0]["energy_observed_at"] = {
+            "explicit": report["at"],
+            "unavailable": report["at"],
+            "regressed": (NOW - timedelta(minutes=2)).isoformat(),
+            "before_boundary": stale,
+        }[observation]
+    if observation == "unavailable":
+        report["points"][0]["energy_kwh"] = None
+    telemetry = update_telemetry(telemetry, state, report)
+    assert telemetry["sessions"][POINT]["energy_at"] == (
+        report["at"] if observation == "explicit" else stale
+    )
+    assert telemetry["vehicles"][CAR]["stored_kwh"] == 0
+    assert update_telemetry(telemetry, state, report) == telemetry
+    report["at"] = (NOW + timedelta(minutes=61)).isoformat()
+    report["points"][0].update(energy_kwh=102.3, energy_observed_at=report["at"])
+    telemetry = update_telemetry(telemetry, state, report)
+    assert telemetry["vehicles"][CAR]["stored_kwh"] == pytest.approx(
+        1.84 if observation == "explicit" else 0
+    )
+    assert update_telemetry(telemetry, state, report) == telemetry
+
+
+def test_explicit_equal_samples_preserve_an_already_attributable_sparse_baseline():
+    """Explicit unchanged samples cannot shorten the valid minute carrying 0.183333 AC kWh."""
+    state, report, telemetry = example()
+    for seconds in (5, 30, 55):
+        report["at"] = (NOW + timedelta(seconds=seconds)).isoformat()
+        report["points"][0]["energy_observed_at"] = report["at"]
+        telemetry = update_telemetry(telemetry, state, report)
+        assert telemetry["sessions"][POINT]["energy_at"] == NOW.isoformat()
+    report["at"] = (NOW + timedelta(seconds=60)).isoformat()
+    report["points"][0].update(energy_kwh=100 + 11 / 60, energy_observed_at=report["at"])
+    telemetry = update_telemetry(telemetry, state, report)
+    assert telemetry["vehicles"][CAR]["stored_kwh"] == pytest.approx(0.165)
+    assert update_telemetry(telemetry, state, report) == telemetry

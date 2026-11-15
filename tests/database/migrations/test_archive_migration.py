@@ -1305,3 +1305,43 @@ def test_ev_request_versions_and_global_intent_revisions_transfer_without_source
     retained = reconstruct_requests(restored.documents, archived)
     assert retained[body["request_id"]]["status"] == "planned"
     assert retained[body["request_id"]]["target_soc"] == 65
+
+
+def test_ev_recognition_plan_transfers_and_replays_without_source(route):
+    """Every backend route preserves actual prepared recognition evidence and solver inputs after source shutdown."""
+    from types import SimpleNamespace
+
+    from open_energy_planner.appliances.ev.service import EVService
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from open_energy_planner.savings.forecast import comparison
+    from open_energy_planner.savings.scenarios import scenario
+    from tests.app.ev.support.devices import CAR, POINT, catalogue
+    from tests.database.support.ev import expected_recognition_inputs, recognition_plan
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    SqlPlanRepository(root / "target", engine=target)
+    consumers = ConsumerForecasts(SqlDocuments(source, "demand"))
+    consumers.sync(catalogue())
+    service = EVService(
+        SqlDocuments(source, "planning"), consumers, SimpleNamespace(state={"devices": {}})
+    )
+    snapshot, plan = recognition_plan(service)
+    original.state["plan"] = plan
+    original.save()
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = SqlPlanRepository(root / "target", engine=target)
+    copied = restored.get_plan(plan["plan_id"])
+    assert copied == plan
+    recognition = copied["input_snapshot"]["ev_evidence"][0]["recognition"]
+    assert recognition["vehicle_id"] == CAR
+    assert recognition["candidates"] == [CAR]
+    assert recognition["inputs"] == expected_recognition_inputs()
+    assert copied["input_snapshot"]["ev_evidence"][0]["work"]["point_id"] == POINT
+    reference = comparison(copied)
+    assert scenario(copied, reference, without_battery=True) == scenario(
+        plan, reference, without_battery=True
+    )
+    assert snapshot.problem.ev_work[0].required_kwh == 18

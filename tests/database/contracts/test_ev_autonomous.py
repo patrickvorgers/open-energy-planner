@@ -12,6 +12,39 @@ from tests.database.support import ev as ev_support
 ev_service = ev_support.ev_service
 
 
+def test_plan_archive_freezes_all_recognition_signals_before_live_and_config_edits(
+    ev_service, tmp_path
+):
+    """A stored real plan explains both the selected car and excluded car after later inputs change."""
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+
+    snapshot, plan = ev_support.recognition_plan(ev_service)
+    repository = SqlPlanRepository(tmp_path, engine=ev_service.documents.engine)
+    repository.state["plan"] = plan
+    repository.save()
+    original_id = plan["plan_id"]
+    later = NOW + timedelta(seconds=10)
+    ev_service.receive(observations(ev_service, later), later, "Europe/Amsterdam")
+    ev_service.configure(settings(), catalogue(), later)
+    recognition = repository.get_plan(original_id)["input_snapshot"]["ev_evidence"][0][
+        "recognition"
+    ]
+    assert recognition["vehicle_id"] == CAR
+    assert recognition["origin"] == "vehicle_status"
+    assert recognition["candidates"] == [CAR]
+    assert recognition["session_id"] == "00000000-0000-4000-8000-000000000005"
+    assert recognition["captured_at"] == "2026-10-26T12:00:00+00:00"
+    assert recognition["inputs"] == ev_support.expected_recognition_inputs()
+    assert snapshot.ev_evidence[0]["recognition"] == recognition
+    plan["input_snapshot"]["ev_evidence"][0]["recognition"]["inputs"][0]["home"]["observation"][
+        "value"
+    ] = False
+    assert (
+        repository.get_plan(original_id)["input_snapshot"]["ev_evidence"][0]["recognition"]
+        == recognition
+    )
+
+
 def single_car(service):
     """Allow one car without requiring optional vehicle provider signals."""
     configuration = settings()

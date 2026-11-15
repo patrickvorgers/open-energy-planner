@@ -165,6 +165,12 @@ def update_telemetry(previous, state, report):
             )
             if current_energy is None or current_energy == previous_energy:
                 checkpoint["energy_at"] = baseline_at
+                if current_energy is not None and point.get("energy_observed_at") and evidence:
+                    credit_from = max(
+                        instant(checkpoint["attributed_at"]), instant(evidence["observed_at"])
+                    )
+                    if instant(baseline_at) < credit_from <= instant(meter_at):
+                        checkpoint["energy_at"] = meter_at
             if current_energy is None:
                 checkpoint.update(
                     energy_kwh=previous_energy,

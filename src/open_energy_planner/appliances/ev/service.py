@@ -20,7 +20,7 @@ from open_energy_planner.appliances.ev.notifications import (
     EXECUTION_DEVIATION_ADVICE,
     forecast_boundary_issue,
 )
-from open_energy_planner.appliances.ev.recognition import recognize
+from open_energy_planner.appliances.ev.recognition import recognition_evidence, recognize
 from open_energy_planner.appliances.ev.requests import (
     REQUEST_HISTORY_PAGE_SIZE,
     active_request,
@@ -553,7 +553,7 @@ class EVService:
                         if point["id"] == work.point_id
                     ),
                     "soc_reading": deepcopy(self.vehicle_readings(now)[work.vehicle_id]),
-                    "recognition": deepcopy(self.state["assignments"].get(work.point_id)),
+                    "recognition": recognition_evidence(self.state, self.report, work.point_id),
                     "energy_checkpoint": deepcopy(self.telemetry["sessions"].get(work.point_id)),
                     "soc_source": {
                         field: next(

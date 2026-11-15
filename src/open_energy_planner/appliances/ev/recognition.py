@@ -1,6 +1,7 @@
 """Resolve session-local vehicle candidates without operating equipment or guessing a tie."""
 
 from collections import Counter
+from copy import deepcopy
 from datetime import timedelta
 from enum import StrEnum
 
@@ -10,6 +11,39 @@ from open_energy_planner.appliances.ev.requests import active_request
 STATUS_MAX_AGE_SECONDS = 300
 POWER_MARGIN_W = 200
 POWER_MARGIN_FRACTION = 0.1
+
+
+def recognition_evidence(state, report, point_id):
+    """Freeze bounded signal provenance for every allowed car, including excluded candidates.
+
+    Configuration changes clear assignments and accepted reports share that
+    configuration version. Copy only the boolean status contract and source IDs,
+    never provider attributes or location details.
+    """
+    point = next(row for row in state["points"] if row["id"] == point_id)
+    cars = {row["id"]: row for row in state["vehicles"]}
+    readings = {row["id"]: row for row in report["vehicles"]}
+    return {
+        **deepcopy(state["assignments"][point_id]),
+        "captured_at": report["at"],
+        "inputs": [
+            {
+                "vehicle_id": vehicle_id,
+                **{
+                    field: {
+                        "source_entity": cars[vehicle_id].get(source),
+                        "observation": deepcopy(readings[vehicle_id].get(field)),
+                    }
+                    for field, source in (
+                        ("connected", "connected_entity"),
+                        ("charging", "charging_entity"),
+                        ("home", "location_entity"),
+                    )
+                },
+            }
+            for vehicle_id in point["vehicle_ids"]
+        ],
+    }
 
 
 class RecognitionReason(StrEnum):
