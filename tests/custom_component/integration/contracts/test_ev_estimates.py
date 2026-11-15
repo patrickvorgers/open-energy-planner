@@ -5,8 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("homeassistant")
-
 from custom_components.open_energy_planner import ev
 from tests.app.ev.support.devices import settings
 
