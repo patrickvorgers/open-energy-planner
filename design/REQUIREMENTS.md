@@ -698,15 +698,15 @@ The Price rule and Export bonus information buttons provide keyboard-accessible,
 
 ## 20. EV charging: confirmed
 
-- EV-01: Support several explicitly identified vehicles sharing charge points and several points in one installation.
+- EV-01: Support several automatically recognized vehicles sharing charge points and several points in one installation. Do not ask the user which car is connected at runtime.
 - EV-02: Each vehicle has its own HA SoC source, usable capacity, maximum AC power, target SoC and departure.
 - EV-03: Each point has its own Energy consumer, measured power, connected source, power limits and measuring, on/off or variable-power capability.
-- EV-04: Reuse HA metadata. Never guess the car.
-- EV-05: Schedule connected identified cars only for an explicit active charging request, jointly with PV, storage and other devices. Configuration, history and reconnection must never create requests.
-- EV-06: Create, edit and cancel one complete request per vehicle with a target and departure in the HA timezone. Saved defaults only prefill it. Requests are one-off unless the user explicitly selects repeat weekdays. Retain terminal history. Cancellation stops repetition.
+- EV-04: Reuse HA metadata and optional per-car plug, charging and Home/Away signals. Recognize one allowed car automatically. For shared chargers combine current evidence, compatible maximum power and planned expectation. Low power never identifies the smaller car. Label inferred identity and leave unresolved conflicts unknown. Keep recognition bound to its physical connection nonce and prevent duplicate concurrent ownership. Do not collect coordinates.
+- EV-05: Schedule connected recognized cars with an active charging request, jointly with PV, storage and other devices. A recognized controllable arrival without one creates a one-off request from defaults. Configuration and historical demand alone never create requests. Polling and app restart cannot recreate a cancelled or completed request on the same connection.
+- EV-06: Create, edit and cancel one complete request per vehicle with a target and departure in the HA timezone. Saved defaults supply manual and automatic arrival requests. Requests are one-off unless the user explicitly selects repeat weekdays. Retain terminal history. Cancellation stops repetition.
 - EV-07: Native virtual controls and device-targeted automation actions use the same app-owned request lifecycle without extra helpers. Retried creation never revives a terminal request.
 - EV-08: Missing or ambiguous evidence withholds authorization.
-- EV-09: Recalculate remaining need using actual SoC.
+- EV-09: Recalculate remaining need from the last genuine SoC regardless of age, adding only attributable measured same-session charging energy with documented losses. Preserve original sample time and estimation provenance across restart. Repeated publication alone does not refresh the anchor. New genuine samples correct the estimate. Gaps, resets, source changes and reconnects never invent energy. Label unknown driving since the anchor. No known SoC means no estimate. Retained SoC never revives stale physical connection permission.
 - EV-10: No V2G. Physical actions remain user-owned HA automations.
 - EV-11: If service is limited, maximize achievable useful charge before the configured economic strategy and expose predicted SoC/shortfall. Keep hard physical limits.
 - EV-12: Use documented power-dependent default loss assumptions, without a mandatory user loss field.
