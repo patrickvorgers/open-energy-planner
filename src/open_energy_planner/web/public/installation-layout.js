@@ -171,7 +171,6 @@ export class InstallationLayout {
         const canEdit = this.area === 5 ? priceControls.length > 0 : this.area === 4 ? this.controls.get(find("strategy")) === false : this.ready && [0, 1, 2].includes(this.area);
         const wizardArea = this.wizard && this.area < 4;
         find("installation-heading").textContent = this.wizard ? "Set up Open Energy Planner" : "Installation settings";
-        find("installation-intro").textContent = this.wizard ? "Connect your Energy dashboard and confirm your installation." : "Your connection, energy sources and planning preferences.";
         document.body.classList.toggle("installation-readonly", !this.editing);
         find("installation-toolbar").hidden = wizardArea;
         find("installation-area").closest("label").hidden = this.wizard;
