@@ -89,7 +89,7 @@ remain DC inputs. Solver decisions, costs and original archived plans are unchan
 The series together should balance around zero before hidden series and the
 0.1-kW appliance display rounding.
 
-Pop-ups show positive **Total production** and **Total consumption** values, independently summed from every original flow, including hidden or filtered legend items. Totals include grid, solar, battery, device and conversion flows rather than household demand alone. Missing flow evidence makes its total unavailable. Interval totals use kW and daily totals use kWh.
+Pop-ups show positive **Total production** and negative **Total consumption** values, independently summed from every original flow, including hidden or filtered legend items. Totals include grid, solar, battery, device and conversion flows rather than household demand alone. Missing flow evidence makes its total unavailable. Interval totals use kW and daily totals use kWh.
 
 Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 

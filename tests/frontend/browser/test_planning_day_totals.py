@@ -101,7 +101,7 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         totals = tooltip.locator(".chart-tooltip-total .chart-tooltip-value").all_text_contents()
         assert len(totals) == 2
         assert float(totals[0].replace(",", "")) == pytest.approx(
-            float(totals[1].replace(",", "")), abs=0.001
+            -float(totals[1].replace(",", "")), abs=0.001
         )
         heading.press("Escape")
         legend = page.locator("#" + identity + "-legend")
@@ -303,9 +303,9 @@ def test_interval_totals_include_filtered_appliances_in_each_scenario(app_page):
             const chart = Chart.getChart(document.getElementById(id));
             const bars = chart.data.datasets.filter(dataset => dataset.type === 'bar');
             return {point: chart.getDatasetMeta(0).data[0].getCenterPoint(),
-                totals: ['Production', 'Consumption'].map(group => Math.abs(bars
+                totals: ['Production', 'Consumption'].map(group => bars
                     .filter(dataset => dataset.tooltipGroup === group)
-                    .reduce((sum, dataset) => sum + dataset.data[0].y, 0))),
+                    .reduce((sum, dataset) => sum + dataset.data[0].y, 0)),
                 hidden: bars.some(dataset => dataset.data[0].y !== 0 && !chart.isDatasetVisible(chart.data.datasets.indexOf(dataset)))};
         }""",
             identity,

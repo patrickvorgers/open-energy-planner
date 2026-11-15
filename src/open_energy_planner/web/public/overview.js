@@ -162,7 +162,7 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
         }
         const flows = totalItems.filter(item => item.dataset.tooltipGroup === name);
         if (flows.length) {
-            const total = flows.every(item => Number.isFinite(item.parsed.y)) ? Math.abs(flows.reduce((sum, item) => sum + item.parsed.y, 0)) : null;
+            const total = flows.every(item => Number.isFinite(item.parsed.y)) ? flows.reduce((sum, item) => sum + item.parsed.y, 0) : null;
             const line = document.createElement("tr"), label = document.createElement("td"), value = document.createElement("td"), unit = document.createElement("td");
             line.className = "chart-tooltip-total";
             label.textContent = `Total ${name.toLowerCase()}`;
@@ -174,7 +174,7 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     }
     node.append(sections);
     const notes = [...(interval ? balanceNotes(interval.raw, instance.canvas.id, when) : tooltip.afterBody)];
-    if (totalItems.length) notes.push("Totals include all flows, including hidden series. Both totals are shown as positive values.");
+    if (totalItems.length) notes.push("Totals include all flows, including hidden series. Supply is positive. Use is negative.");
     if (notes.length) {
         const explanation = document.createElement("p"); explanation.className = "chart-tooltip-explanation";
         explanation.textContent = notes.join("\n"); node.append(explanation);

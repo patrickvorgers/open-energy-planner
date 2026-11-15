@@ -363,9 +363,9 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
         "-3.2",
         "-6.4",
         "-2.4",
-        "16",
+        "-16",
     ]
-    expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "16"])
+    expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "-16"])
     plot_bounds = canvas.bounding_box()
     legend_bounds = page.locator("#plan-chart-legend").bounding_box()
     assert legend_bounds["y"] >= plot_bounds["y"] + plot_bounds["height"]
@@ -388,7 +388,7 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
         chart.update('none');
     }""")
     expect(popup.locator("tr").filter(has_text="Household demand: AC")).to_have_count(0)
-    expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "16"])
+    expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "-16"])
     # A missing hidden flow remains unknown rather than being summed as zero.
     page.evaluate("""() => {
         const chart = Chart.getChart(document.getElementById('plan-chart'));
