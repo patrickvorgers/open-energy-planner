@@ -145,18 +145,13 @@ retention/sales and settlement of multiple independently specified valid choices
 The production HTTP app tests verify per-battery evidence and aggregate inventory
 totals in published plans. Existing solver regression expectations stay unchanged.
 
-## Design rationale and alternative approaches
+## Design rationale
 
-These are comparisons, not copied implementations or tests:
-
-| Project | Observed approach | Difference from OEP |
-|---|---|---|
-| [DAO, revision 5443930](https://github.com/corneel27/day-ahead/blob/54439303304680469ae9ddd6a836bfbc6045a55c/dao/prog/day_ahead.py#L3353) | Values the initial/final inventory difference using a mean price and battery/converter discharge efficiencies. The non-netting branch uses the mean export price. | OEP uses a bounded useful volume and one automatically derived use-weighted rate. It does not copy DAO's netting functionality. |
-| [EMHASS, revision 82c380c](https://github.com/davidusb-geek/emhass/blob/82c380cef56ee6f039b6f0ca37b5a57125721abf/src/emhass/optimization.py#L7294) | Uses an end-SoC target with deviation penalties. A positive optional reward factor values excess terminal energy using the final import-price slot. | OEP does not require a final-SoC target and allows economically preferable current sales. |
-| [HAEO battery documentation](https://haeo.io/latest/user-guide/elements/battery/#salvage-value) | Exposes a configured salvage value per final stored kWh, default zero. | OEP derives its estimate automatically instead of asking the user to maintain a rate. |
-
-The simpler published approaches influenced OEP's choice of one bounded average
-instead of an hour-ranked marginal-value curve. No superiority claim follows.
+OEP values a bounded useful volume with one automatically derived use-weighted
+rate. This keeps the model simpler than an hour-ranked marginal-value curve.
+Automatic valuation avoids a mandatory final state-of-charge target or a
+user-maintained terminal-energy rate. It still allows economically preferable
+current sales. These choices do not establish forecast accuracy.
 
 ## Forecast-source comparison and unresolved accuracy
 
