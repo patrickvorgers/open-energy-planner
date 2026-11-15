@@ -2,6 +2,7 @@ import "./chart_theme.js";
 import {confirmAction} from "./confirmation.js";
 import {money, percentage, when, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
 import {profileMetrics} from "./appliance-profile.js";
+import {renderRawHistory} from "./appliance-raw-profile.js";
 import {bindSettingsActions} from "./settings-actions.js";
 import {identity} from "./identity.js";
 import {pollApplianceEvidence} from "./appliance-evidence.js";
@@ -11,6 +12,8 @@ const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = (id) => document.getElementById(id);
 let token = "", chart, energyChart, current, consumers, renderedProfile;
 let evidenceRefreshing = false;
+let rawLoadingKey;
+let rawLoaded;
 const READ_TIMEOUT_MILLISECONDS = 30000;
 /** Bound authenticated GETs through response decoding. Preserve write acknowledgement and HTTP status handling. */
 async function api(path, body, method = body ? "POST" : "GET") {
@@ -31,16 +34,35 @@ function node(tag, text) { const item = document.createElement(tag); if (text !=
  * With no eligible device, destroy both charts and clear their references.
  */
 function profile() {
-    if (!current.devices.length) { chart?.destroy(); energyChart?.destroy(); chart = energyChart = renderedProfile = null; return; }
+    if (!current.devices.length) { chart?.destroy(); energyChart?.destroy(); chart = energyChart = renderedProfile = null; renderRawHistory(null); return; }
     const device = current.devices.find((item) => item.entity_id === find("profile-device").value), learned = device?.profile;
-    const metrics = learned ? profileMetrics(learned) : null, powers = metrics?.powerW || [], labels = powers.map((_, index) => `${index * metrics.phaseMinutes}–${Math.min((index + 1) * metrics.phaseMinutes, metrics.minutes)} min`);
+    if (rawLoaded?.entity_id === device?.entity_id && rawLoaded?.power_entity === device?.power_entity && rawLoaded?.raw_history?.curve_revision === device?.raw_history?.curve_revision) device.raw_history = rawLoaded.raw_history;
+    renderRawHistory(device);
+    if (device?.raw_history && !device.raw_history.power_curve) {
+        const key = JSON.stringify([device.entity_id, device.raw_history.curve_revision]);
+        if (rawLoadingKey !== key) {
+            rawLoadingKey = key;
+            api(`v1/appliances?raw_entity=${encodeURIComponent(device.entity_id)}`).then(data => {
+                const detail = data.devices.find(item => item.entity_id === device.entity_id);
+                const retained = current.devices.find(item => item.entity_id === device.entity_id);
+                if (data.revision === current.revision && find("profile-device").value === device.entity_id && retained?.power_entity === detail?.power_entity && retained?.raw_history?.curve_revision === detail?.raw_history?.curve_revision) {
+                    rawLoaded = detail;
+                    retained.raw_history = detail.raw_history;
+                    renderRawHistory(retained);
+                }
+            }).catch(() => { if (find("profile-device").value === device.entity_id) find("recorded-cycle-status").textContent = "Recorded state details unavailable. The learned profile is retained."; })
+                .finally(() => { if (rawLoadingKey === key) rawLoadingKey = null; });
+        }
+    }
+    const metrics = learned ? profileMetrics(learned) : null, powers = metrics?.powerW || [], labels = metrics?.labels || powers.map((_, index) => `${index * metrics.phaseMinutes}–${Math.min((index + 1) * metrics.phaseMinutes, metrics.minutes)} min`);
     const profileKey = JSON.stringify([device?.entity_id, learned]);
     find("cycle-charts").hidden = !learned;
     if (profileKey !== renderedProfile) {
         chart?.destroy(); energyChart?.destroy(); chart = energyChart = null;
         if (learned) {
-            chart = new Chart(find("cycle-chart"), {type: "line", data: {labels, datasets: [{label: "Power (W)", data: powers, backgroundColor: "#e69f00", borderColor: "#e69f00", stepped: true, pointRadius: 2, fill: false}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: "AC power (W)"}}}}});
-            energyChart = new Chart(find("cycle-energy-chart"), {type: "bar", data: {labels, datasets: [{label: "Energy (kWh)", data: profileMetrics(learned).phaseEnergy, backgroundColor: "#e69f00"}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: `Energy per ${metrics.phaseMinutes}-minute interval (kWh)`}}}}});
+            const timedPower = metrics.variable ? [...powers.map((y, index) => ({x: metrics.edgesMinutes[index], y})), {x: metrics.minutes, y: powers.at(-1)}] : powers;
+            chart = new Chart(find("cycle-chart"), {type: "line", data: {labels, datasets: [{label: "Power (W)", data: timedPower, backgroundColor: "#e69f00", borderColor: "#e69f00", stepped: true, pointRadius: 2, fill: false}]}, options: {responsive: true, maintainAspectRatio: false, scales: {...(metrics.variable ? {x: {type: "linear", title: {display: true, text: "Elapsed minutes"}}} : {}), y: {beginAtZero: false, min: 0, title: {display: true, text: "AC power (W)"}}}}});
+            energyChart = new Chart(find("cycle-energy-chart"), {type: "bar", data: {labels, datasets: [{label: "Energy (kWh)", data: metrics.phaseEnergy, backgroundColor: "#e69f00"}]}, options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: false, min: 0, title: {display: true, text: metrics.variable ? "Energy per actual phase (kWh)" : `Energy per ${metrics.phaseMinutes}-minute interval (kWh)`}}}}});
         }
         renderedProfile = profileKey;
     }
@@ -69,6 +91,8 @@ function profile() {
         addFact("Usable fine intervals", `${recent.usable_intervals} of ${recent.expected_intervals}: ${percentage(recent.expected_intervals ? 100 * recent.usable_intervals / recent.expected_intervals : null)}`);
     }
     history.append(evidenceCard);
+    if (metrics?.variable) history.append(node("p", "Recorded state timing: This learned profile preserves actual irregular phase durations. It does not imply a fixed measurement frequency."));
+    if (device?.planning_issue) history.append(node("p", device.planning_issue));
     if (learned && learned.evidence !== "manual" && learned.samples === 1) history.append(node("p", "Provisional profile: One complete cycle. Further cycles refine this estimate."));
     const run = device?.observed_run;
     if (run && !["complete", "idle"].includes(run.status)) history.append(node("p", `Measured activity: ${run.status === "observed" ? "Cycle in progress" : "Execution uncertain"}: Started ${when(run.started_at)}: ${money(run.energy_kwh)} kWh measured. Pending starts are blocked. This is separate from execution confirmation.`));
@@ -94,7 +118,7 @@ function profile() {
 function followedDevices(data) {
     const specialized = new Set([...consumers.charging_meters, ...consumers.thermal_meters]);
     const selected = new Set(consumers.selected.map(item => item.entity_id));
-    return data.devices.filter(device => (device.shiftable || device.profile || device.recent_cycles?.length || device.history_import || device.learning_history) && selected.has(device.entity_id) && !specialized.has(device.entity_id));
+    return data.devices.filter(device => (device.shiftable || device.profile || device.recent_cycles?.length || device.history_import || device.learning_history || device.raw_history) && selected.has(device.entity_id) && !specialized.has(device.entity_id));
 }
 /** Preserve the selected profile and selector focus when only read-only evidence changes. */
 function showProfiles() {

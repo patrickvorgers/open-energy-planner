@@ -91,12 +91,23 @@ PUBLIC_VALIDATION_MESSAGES = (
 def register(app, service, repository, live, lock, ev, thermal):
     """Serialize readiness, measurements and execution events with plan admission."""
 
-    async def state(_request):
+    async def state(request):
         """Return durable task/profile evidence and only current, unclaimed start requests."""
         async with lock:
+            raw_entity = request.query.get("raw_entity")
+            if raw_entity is not None:
+                try:
+                    service.member(raw_entity)
+                except ValueError:
+                    raise web.HTTPBadRequest(
+                        text="Select this consumer in Appliances settings first"
+                    ) from None
             return web.json_response(
                 service.document(
-                    datetime.now(UTC), repository.state["enabled"], repository.state["plan"]
+                    datetime.now(UTC),
+                    repository.state["enabled"],
+                    repository.state["plan"],
+                    raw_entity=raw_entity,
                 )
             )
 
@@ -140,6 +151,19 @@ def register(app, service, repository, live, lock, ev, thermal):
                         ),
                         {},
                     )
+                elif operation == "raw_history" and set(body) == {
+                    "entity_id",
+                    "power_entity",
+                    "start",
+                    "end",
+                    "energy_states",
+                    "power_states",
+                    "energy_reported_at",
+                    "power_reported_at",
+                    "limited",
+                    "synthetic",
+                }:
+                    function, arguments, keywords = service.learn_raw_history, (body, now), {}
                 elif operation == "history_scan" and set(body) - {"resolution"} == {
                     "entity_id",
                     "power_entity",

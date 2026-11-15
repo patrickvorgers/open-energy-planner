@@ -3,7 +3,7 @@
 import hashlib
 from datetime import date, time, timedelta
 from functools import partial
-from itertools import pairwise
+from itertools import accumulate, pairwise
 from math import isfinite
 
 import voluptuous as vol
@@ -59,6 +59,21 @@ def profile_phase_seconds(profile):
 
 def profile_duration(profile):
     """Validate declared phase duration and optional partial ending, preserving legacy profiles."""
+    if profile.get("phase_durations_seconds") is not None:
+        durations = profile["phase_durations_seconds"]
+        if (
+            not isinstance(durations, (list, tuple))
+            or len(durations) != len(profile["power_w"])
+            or not 1 <= len(durations) <= 2048
+            or any(
+                type(value) not in (int, float) or not isfinite(value) or value < 1e-6
+                for value in durations
+            )
+            or not 900 <= round(sum(durations), 6) <= MAX_CYCLE_HISTORY_HOURS * 3600
+            or profile.get("measured_duration_seconds") is not None
+        ):
+            raise ValueError("Invalid measured cycle duration")
+        return round(sum(durations), 6)
     phase_seconds = profile_phase_seconds(profile)
     full = len(profile["power_w"]) * phase_seconds
     if full > MAX_CYCLE_HISTORY_HOURS * 3600:
@@ -78,6 +93,26 @@ def profile_duration(profile):
 def profile_energy(profile):
     """Integrate admitted phase durations for the read-only cycle-energy sensor."""
     duration, phase_seconds = profile_duration(profile), profile_phase_seconds(profile)
+    if profile.get("phase_durations_seconds") is not None:
+        return (
+            sum(
+                power * (right - left)
+                for power, (left, right) in zip(
+                    profile["power_w"],
+                    pairwise(
+                        (
+                            0,
+                            *(
+                                round(value, 6)
+                                for value in accumulate(profile["phase_durations_seconds"])
+                            ),
+                        )
+                    ),
+                )
+            )
+            / 3600
+            / WATTS_PER_KILOWATT
+        )
     return (
         sum(
             power * min(phase_seconds, duration - index * phase_seconds)

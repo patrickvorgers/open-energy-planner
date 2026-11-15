@@ -187,6 +187,22 @@ async def process(coordinator):
                         period,
                         entity,
                     )
+            raw_key = (*key, "raw_states")
+            if raw_key not in attempts or now >= attempts[raw_key]:
+                from .appliance_raw_history import capture as capture_raw
+
+                attempts[raw_key] = now + timedelta(seconds=REFRESH_SECONDS)
+                try:
+                    raw = await capture_raw(coordinator, entity, power, synthetic)
+                    if raw is not None and not coordinator.closed:
+                        await coordinator.client.request("POST", "/v1/appliances/raw_history", raw)
+                except (AuthenticationError, ReleaseMismatchError):
+                    raise
+                except (ClientError, OSError, ValueError, RuntimeError):
+                    _LOGGER.debug(
+                        "Raw appliance state history unavailable for %s. Retaining statistics and continuing historical scan",
+                        entity,
+                    )
             pending = await historical(coordinator, device, entity, power, synthetic, now)
             attempts[key] = now + timedelta(seconds=RETRY_SECONDS if pending else REFRESH_SECONDS)
         except (AuthenticationError, ReleaseMismatchError):

@@ -12,7 +12,7 @@ from ..optimization.domain import Battery, Interval
 
 def appliance_schedule(plan, *, immediate=False):
     """Project the same acknowledged cycles at their frozen or immediate reference starts."""
-    from open_energy_planner.appliances.cycles.model import PROFILE_STEP_SECONDS, CycleProfile
+    from open_energy_planner.appliances.cycles.model import restore_profile
 
     data = plan["input_snapshot"]["problem"]
     intervals = data["intervals"]
@@ -21,13 +21,7 @@ def appliance_schedule(plan, *, immediate=False):
     for work in data.get("appliances", ()):
         if not immediate and work["task_id"] not in schedules:
             continue
-        cycle = CycleProfile(
-            tuple(work["profile"]["power_w"]),
-            work["profile"]["samples"],
-            work["profile"]["evidence"],
-            work["profile"].get("measured_duration_seconds"),
-            work["profile"].get("phase_seconds", PROFILE_STEP_SECONDS),
-        )
+        cycle = restore_profile(work["profile"])
         start = (
             datetime.fromisoformat(work["fixed_start"])
             if work.get("fixed_start")

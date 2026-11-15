@@ -30,6 +30,55 @@ ROUTES = [
 ]
 
 
+def test_raw_state_profile_original_frame_and_frozen_task_transfer_without_source(route):
+    """Every real backend route retains exact irregular phases, original Recorder provenance and accepted work."""
+    from open_energy_planner.appliances.cycles.model import instant
+    from open_energy_planner.appliances.cycles.service import ApplianceService, profile
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from tests.app.appliance.raw_support import raw_trace
+    from tests.app.appliance.support import ENTITY, POWER
+
+    (source, target), root = route
+    repository = SqlPlanRepository(root / "source", engine=source)
+    consumers = ConsumerForecasts(SqlDocuments(source, "demand"))
+    consumers.sync(
+        {
+            "entities": [{"entity_id": ENTITY, "name": "Recorded washer"}],
+            "suggestions": {
+                "consumers": [{"entity_id": ENTITY, "upstream": None, "power_entity": POWER}]
+            },
+        }
+    )
+    consumers.save([{"entity_id": ENTITY, "weather_sensitive": False}], consumers.version)
+    service = ApplianceService(SqlDocuments(source, "planning"), consumers)
+    body = raw_trace()
+    now = instant(body["end"])
+    service.learn_raw_history(body, now)
+    service.configure(ENTITY, True)
+    task = service.submit(ENTITY, "raw-frozen", now, now + timedelta(hours=4), now)
+    frozen = json.loads(json.dumps(task["profile"]))
+    expected = json.loads(json.dumps(service.document()))
+    [original] = list(service.documents.iter_prefix("appliance-raw-"))
+    frame = service.documents.read(original["history_ref"])
+    migrate_archive(source, target, overwrite_target=True)
+    repository.close()
+    source.dispose()
+    restored_consumers = ConsumerForecasts(SqlDocuments(target, "demand"))
+    restored_consumers.options = consumers.options
+    restored = ApplianceService(SqlDocuments(target, "planning"), restored_consumers)
+    assert restored.document() == expected
+    restored.learn_history(ENTITY, POWER, [], False, now)
+    restored.learn_raw_history(body, now)
+    assert restored.state["devices"][ENTITY]["profile"]["samples"] == 1
+    retained = profile(restored.state["devices"][ENTITY]["profile"])
+    assert retained.phase_boundaries == pytest.approx((0, 600.3, 620.3, 1800))
+    assert retained.energy_kwh == pytest.approx(23 / 45)
+    assert retained.power_w == (1000, 3000, 1000)
+    assert restored.state["tasks"][ENTITY]["profile"] == frozen
+    assert restored.documents.read(original["history_ref"]) == frame == body
+    assert list(restored.documents.iter_prefix("appliance-raw-")) == [original]
+
+
 def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     """Every backend route retains raw cycles, fine checkpoints, frozen tasks and distinct observed activity."""
     from open_energy_planner.appliances.cycles import history

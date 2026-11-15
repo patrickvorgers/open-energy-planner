@@ -566,6 +566,19 @@ sources and quarter-varying simulated energy meters with matching native
 five-minute/hourly Recorder history. Do not resample real source data to invent
 quarter variability or reset original plan archives.
 
+The selected appliance Energy/power pair can additionally supply bounded original
+Recorder states for recent cycles. Preserve irregular event timestamps, original
+unit provenance, actual power peaks and independently conserved counter energy.
+Do not invent a regular measurement cadence, interpolate missing counter anchors
+or scale measured peaks to force agreement. Unverified curves remain visible
+with the previously usable statistical profile retained. Complete conserved runs
+refine durable profiles. Partial runs only refine existing observed activity and
+remaining forecasts, without training, execution feedback or new start rights.
+Original evidence and learned phases survive restart and backend transfer.
+Bound actual native query rows, outstanding executor work, response bytes, phase
+union and planning expansion. Over-budget detail must not block unrelated
+appliances or alter already accepted task profiles.
+
 
 Contract configuration implementation: the app-owned [Contract page](../docs/development/CONTRACT-PRICES.md#contract-page) edits dated import/export formulas and separate bonus versions, previews negative/zero/positive prices, reports measured remaining budgets and confirms missing baselines using HA meter provenance. Current database revisions drive source selection and background revaluation. Original plans and expectations remain immutable. No supplier-origin exclusions or tax/subscription engine were added.
 

@@ -13,6 +13,7 @@ from .model import (
     average_profiles,
     instant,
     learn_cycle,
+    restore_profile,
 )
 
 
@@ -28,6 +29,9 @@ def completion(record):
 def measured(record):
     """Restore a profile from the original counters, retaining its actual source resolution."""
     if "_profile" in record:
+        return record["_profile"]
+    if record.get("quality") == "recorder_state":
+        record["_profile"] = restore_profile(record["profile"])
         return record["_profile"]
     function = hourly_profile if record.get("quality") == "hourly_estimate" else learn_cycle
     arguments = {} if function is hourly_profile else {"synthetic": record["synthetic"]}
@@ -73,6 +77,7 @@ def distinct_ranges(records):
             result[-1] = max(
                 (result[-1], record),
                 key=lambda item: (
+                    item.get("quality") == "recorder_state",
                     len(item["points"]),
                     item.get("quality") == "explicit_completion",
                     instant(item["completed_at"]),
@@ -151,6 +156,7 @@ def refine(settings, records):
             "synthetic" if any(record["synthetic"] for record in distinct) else "measured",
             fine_profile.measured_duration_seconds,
             fine_profile.phase_seconds,
+            fine_profile.phase_durations_seconds,
         )
     previous = settings.get("profile", {})
     if fine_profile or (
@@ -170,6 +176,8 @@ def refine(settings, records):
             "synthetic": record["synthetic"],
             "resolution": "hour"
             if record.get("quality") == "hourly_estimate"
+            else "state_events"
+            if record.get("quality") == "recorder_state"
             else "5minute"
             if measured(record).phase_seconds == FINE_PROFILE_SECONDS
             else "15minute",

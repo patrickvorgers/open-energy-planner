@@ -21,10 +21,12 @@ from open_energy_planner.appliances.cycles.model import (
     DURATION_ALLOWANCE_SECONDS,
     PROFILE_STEP_SECONDS,
     ApplianceWork,
-    CycleProfile,
     candidates,
     instant,
     learn_cycle,
+)
+from open_energy_planner.appliances.cycles.model import (
+    restore_profile as profile,
 )
 from open_energy_planner.appliances.sources import validate_membership
 from open_energy_planner.demand.calculation.model import EnergyTerm, digest
@@ -32,12 +34,17 @@ from open_energy_planner.installation.model import InstallationProblem, slice_in
 
 STATE_KEY = "appliance-state.json"
 PROGRESS_KEY = "appliance-progress.json"
-PROGRESS_FIELDS = ("learning_history", "history_import", "fine_import")
+PROGRESS_FIELDS = ("learning_history", "history_import", "fine_import", "raw_history")
 MAX_CORRELATION_LENGTH = 64
 MAX_CYCLE_OBSERVATIONS = 2048
 MAX_FEEDBACK_EVENTS = 1024
 MAX_TASK_WINDOW_DAYS = 7
 COMPONENT_FORECAST_MAX_AGE_MINUTES = 30
+MAX_REFINED_PLAN_INTERVALS = 8192
+MAX_PHASE_BOUNDARY_CHECKS = 8 * MAX_REFINED_PLAN_INTERVALS
+MAX_PROJECTED_IRREGULAR_PHASES = MAX_REFINED_PLAN_INTERVALS
+MAX_APPLIANCE_PROJECTION_BYTES = 4 * 1024 * 1024
+RAW_PROJECTION_RESERVE_BYTES = 512 * 1024
 OPEN_STATUSES = (
     "pending",
     "scheduled",
@@ -48,17 +55,6 @@ OPEN_STATUSES = (
     "deadline_not_achievable",
     "forecast_not_ready",
 )
-
-
-def profile(value):
-    """Restore an immutable validated average profile from its durable JSON record."""
-    return CycleProfile(
-        tuple(value["power_w"]),
-        value["samples"],
-        value["evidence"],
-        value.get("measured_duration_seconds"),
-        value.get("phase_seconds", PROFILE_STEP_SECONDS),
-    )
 
 
 def separate_progress(state):
@@ -93,6 +89,7 @@ class ApplianceService:
                 self.state["devices"][entity].update(progress)
         self.issue = None
         self._cycle_records = {}
+        self._phase_limited_entities = set()
 
     @property
     def revision(self):
@@ -112,6 +109,7 @@ class ApplianceService:
                             "learning_history",
                             "history_import",
                             "fine_import",
+                            "raw_history",
                         )
                         and not key.startswith("hourly_")
                     }
@@ -190,7 +188,7 @@ class ApplianceService:
         data = deepcopy(self.state)
         withdrawn = set()
         for entity, settings in data["devices"].items():
-            for field in ("fine_import", "observed_run"):
+            for field in ("fine_import", "observed_run", "raw_history"):
                 if settings.get(field, {}).get("power_entity") not in (None, self.source(entity)):
                     settings.pop(field)
             progress = settings.get("history_import")
@@ -265,9 +263,11 @@ class ApplianceService:
         if pair not in self._cycle_records:
             restored = {
                 prefix + record["id"]: record
-                for prefix in ("appliance-detected-", "appliance-hourly-")
+                for prefix in ("appliance-detected-", "appliance-hourly-", "appliance-raw-")
                 for record in self.documents.iter_prefix(prefix)
-                if record["entity_id"] == entity and record["power_entity"] == power_entity
+                if record["entity_id"] == entity
+                and record["power_entity"] == power_entity
+                and record.get("training_usable", True)
             }
             for record in self.documents.iter_prefix("appliance-cycle-"):
                 if record["entity_id"] == entity:
@@ -339,7 +339,6 @@ class ApplianceService:
             raise ValueError("History must use the current Home Assistant Energy power sensor")
         activity = {}
         cycles = detect_cycles(rows, now, sample_seconds=sample_seconds, activity=activity)
-        running = activity.get("running")
         self.sync_sources()
         records, extra, changed = self.collect_cycles(
             entity, power_entity, cycles, synthetic, hourly=sample_seconds == HOURLY_SAMPLE_SECONDS
@@ -349,24 +348,181 @@ class ApplianceService:
         if changed:
             refine(settings, list(records.values()))
         if sample_seconds == SAMPLE_SECONDS:
-            from .observed import observe
-
-            task = data["tasks"].get(entity)
-            observe(settings, rows, cycles, activity, power_entity, now)
-            if running and task and task["status"] in OPEN_STATUSES:
-                if task.get("attempt") and task["attempt"]["status"] != "not_started":
-                    settings["observed_run"]["profile"] = deepcopy(task["profile"])
-                if (
-                    task["status"] == "execution_observed"
-                    or not task.get("attempt")
-                    or task["attempt"]["status"] not in ("started", "completed")
-                ):
-                    task.update(status="execution_observed", scheduled_start=None, plan_id=None)
+            self.observe_history(data, entity, rows, cycles, activity, power_entity, now)
         summary = history_evidence(rows, len(cycles), sample_seconds=sample_seconds)
         summary["power_entity"], summary["synthetic"] = power_entity, synthetic
         settings[
             "hourly_history" if sample_seconds == HOURLY_SAMPLE_SECONDS else "learning_history"
         ] = summary
+        self.commit(data, extra=extra)
+        self._cycle_records[(entity, power_entity)] = records
+
+    def observe_history(
+        self, data, entity, rows, cycles, activity, power_entity, now, *, observed_until=None
+    ):
+        """Share physical-observation interception across statistics and original state evidence."""
+        from .observed import observe
+
+        settings, task = data["devices"][entity], data["tasks"].get(entity)
+        observe(settings, rows, cycles, activity, power_entity, now, observed_until=observed_until)
+        if activity.get("running") and task and task["status"] in OPEN_STATUSES:
+            if task.get("attempt") and task["attempt"]["status"] != "not_started":
+                settings["observed_run"]["profile"] = deepcopy(task["profile"])
+            if (
+                task["status"] == "execution_observed"
+                or not task.get("attempt")
+                or task["attempt"]["status"] not in ("started", "completed")
+            ):
+                task.update(status="execution_observed", scheduled_start=None, plan_id=None)
+
+    def learn_raw_history(self, body, now):
+        """Atomically retain original Recorder frames, conserved cycles and bounded current curves."""
+        import json
+
+        from .evidence import refine
+        from .model import MAX_PROFILE_STEPS, MAX_VARIABLE_PROFILE_STEPS
+        from .raw import analyze
+
+        entity, power_entity = body["entity_id"], body["power_entity"]
+        self.member(entity)
+        if not power_entity or power_entity != self.source(entity):
+            raise ValueError("History must use the current Home Assistant Energy power sensor")
+        if len(json.dumps(body, allow_nan=False).encode()) > 512 * 1024:
+            raise ValueError("Raw appliance history exceeds bounded response size")
+        end = instant(body["end"])
+        if not end <= now or now - end > timedelta(seconds=2 * SAMPLE_SECONDS):
+            raise ValueError("Raw appliance history capture is stale or future dated")
+        result = analyze(body)
+        self.sync_sources()
+        records, _, changed = self.collect_cycles(entity, power_entity, (), body["synthetic"])
+        data = deepcopy(self.state)
+        settings = data["devices"].setdefault(entity, {"shiftable": False})
+        if changed:
+            refine(settings, list(records.values()))
+        extra = []
+        frame = "appliance-state-history-" + digest(body) + ".json"
+        for cycle in result["runs"]:
+            identity = digest(
+                [
+                    entity,
+                    power_entity,
+                    cycle["started_at"],
+                    cycle["completed_at"],
+                    asdict(cycle["profile"]) if cycle["profile"] else None,
+                ]
+            )
+            key = "appliance-raw-" + identity + ".json"
+            if self.documents.exists(key):
+                retained = self.documents.read(key)
+                if not retained["training_usable"]:
+                    result["status"] = retained.get("rejection", "unverified")
+                continue
+            record = {
+                "id": identity,
+                "entity_id": entity,
+                "power_entity": power_entity,
+                "started_at": cycle["started_at"],
+                "completed_at": cycle["completed_at"],
+                "quality": "recorder_state",
+                "synthetic": body["synthetic"],
+                "history_ref": frame,
+                "training_usable": cycle["profile"] is not None,
+                "profile": asdict(cycle["profile"]) if cycle["profile"] else None,
+                "points": [
+                    row
+                    for row in result["power_curve"]
+                    if instant(cycle["started_at"])
+                    <= instant(row["at"])
+                    <= instant(cycle["completed_at"])
+                ],
+            }
+            candidate_records = {**records, "appliance-raw-" + identity: dict(record)}
+            if record["training_usable"]:
+                candidate = deepcopy(settings)
+                try:
+                    refine(candidate, list(candidate_records.values()))
+                    projected = {**data["devices"], entity: candidate}
+                    active = {row["entity_id"] for row in self.consumers.selected}
+                    projected_phases = sum(
+                        len(value["power_w"])
+                        for identity, device in projected.items()
+                        if identity in active
+                        for value in (
+                            device.get("profile"),
+                            device.get("learned_profile"),
+                            device.get("observed_run", {}).get("profile"),
+                        )
+                        if value and value.get("phase_durations_seconds") is not None
+                    ) + sum(
+                        len(task["profile"]["power_w"])
+                        for identity, task in data["tasks"].items()
+                        if identity in active
+                        and task["profile"].get("phase_durations_seconds") is not None
+                    )
+                    if projected_phases > MAX_PROJECTED_IRREGULAR_PHASES:
+                        raise ValueError("Cycle profile exceeds bounded phase complexity")
+                    projected_bytes = len(
+                        json.dumps(
+                            self._projection({**data, "devices": projected}), allow_nan=False
+                        ).encode()
+                    )
+                    if (
+                        projected_bytes
+                        > MAX_APPLIANCE_PROJECTION_BYTES - RAW_PROJECTION_RESERVE_BYTES
+                    ):
+                        raise ValueError("Cycle profile exceeds bounded phase complexity")
+                    if (
+                        len(candidate.get("learned_profile", {}).get("power_w", ()))
+                        > MAX_VARIABLE_PROFILE_STEPS - MAX_PROFILE_STEPS
+                    ):
+                        raise ValueError("Cycle profile exceeds bounded phase complexity")
+                except ValueError as error:
+                    if str(error) != "Cycle profile exceeds bounded phase complexity":
+                        raise
+                    record["training_usable"] = False
+                    record["rejection"] = "complexity_limited"
+                    result["status"] = "complexity_limited"
+                else:
+                    records, settings = candidate_records, candidate
+                    data["devices"][entity] = settings
+            extra.append((key, record))
+        if extra:
+            extra.insert(0, (frame, body))
+        settings["raw_history"] = {
+            "power_entity": power_entity,
+            "start": body["start"],
+            "end": body["end"],
+            "limited": body["limited"],
+            "synthetic": body["synthetic"],
+            "status": result["status"],
+            "power_curve": result["power_curve"],
+            "energy_curve": result["energy_curve"],
+            "cycle_started_at": result["running"]["started_at"]
+            if result["running"]
+            else result["runs"][-1]["started_at"]
+            if result["runs"]
+            else None,
+            "cycle_completed_at": result["runs"][-1]["completed_at"] if result["runs"] else None,
+        }
+        if result["running"]:
+            settings["raw_history"]["cycle_completed_at"] = None
+        settings["raw_history"]["curve_revision"] = digest(settings["raw_history"])
+        observed_until = instant(
+            result["running"]["observed_until"] if result["running"] else result["observed_until"]
+        )
+        self.observe_history(
+            data,
+            entity,
+            [],
+            [
+                (instant(cycle["started_at"]), instant(cycle["completed_at"]), ())
+                for cycle in result["cycles"]
+            ],
+            {"running": result["running"], "quiet": result["quiet"]},
+            power_entity,
+            now,
+            observed_until=observed_until,
+        )
         self.commit(data, extra=extra)
         self._cycle_records[(entity, power_entity)] = records
 
@@ -576,6 +732,7 @@ class ApplianceService:
 
         problem = snapshot.problem
         self.issue = None
+        self._phase_limited_entities = set()
         works, task_windows, entities = [], [], set(excluded_entities)
         for entity, task in self.state["tasks"].items():
             if task["status"] == "execution_observed" or (
@@ -634,6 +791,43 @@ class ApplianceService:
                 task_windows.append((observed, observed.fixed_start, observed.deadline))
         if not works and not entities and not self.consumers.selected:
             return replace(snapshot, appliance_revision=self.revision)
+        horizon_seconds = sum(step.duration_h for step in problem.intervals) * 3600
+        remaining_edges = (
+            MAX_REFINED_PLAN_INTERVALS
+            - len(problem.intervals)
+            - int(horizon_seconds / SAMPLE_SECONDS)
+        )
+        remaining_checks = MAX_PHASE_BOUNDARY_CHECKS
+        admitted = []
+        for work, first, last in task_windows:
+            if work.profile.phase_durations_seconds is not None:
+                edge_count = len(work.profile.power_w) + 1
+                origin_count = (
+                    1
+                    if work.fixed_start
+                    else max(
+                        1,
+                        int(
+                            ((last - first).total_seconds() - work.profile.duration_seconds)
+                            / PROFILE_STEP_SECONDS
+                        )
+                        + 1,
+                    )
+                )
+                checks = edge_count * sum(
+                    step.start < last and step.start + timedelta(hours=step.duration_h) > first
+                    for step in problem.intervals
+                )
+                if edge_count * origin_count > remaining_edges or checks > remaining_checks:
+                    self._phase_limited_entities.add(work.entity_id)
+                    if work.entity_id not in excluded_entities:
+                        entities.discard(work.entity_id)
+                    continue
+                remaining_edges -= edge_count * origin_count
+                remaining_checks -= checks
+            admitted.append((work, first, last))
+        task_windows = admitted
+        works = [work for work in works if work.entity_id not in self._phase_limited_entities]
         result = self.consumers.result or {}
         forecasts = {row["entity_id"]: row["forecast"] for row in result.get("devices", [])}
         if (
@@ -754,6 +948,23 @@ class ApplianceService:
                 for work, first, last in task_windows:
                     if end <= first or step.start >= last:
                         continue
+                    if work.profile.phase_durations_seconds is not None:
+                        for offset in work.profile.phase_boundaries:
+                            if work.fixed_start:
+                                instant_boundary = work.fixed_start + timedelta(seconds=offset)
+                                if step.start < instant_boundary < end:
+                                    boundaries.add(instant_boundary)
+                            else:
+                                stamp = (
+                                    int((step.start.timestamp() - offset) // PROFILE_STEP_SECONDS)
+                                    + 1
+                                ) * PROFILE_STEP_SECONDS + offset
+                                while stamp < end.timestamp():
+                                    boundaries.add(
+                                        step.start.fromtimestamp(stamp, step.start.tzinfo)
+                                    )
+                                    stamp += PROFILE_STEP_SECONDS
+                        continue
                     phase_seconds = work.profile.phase_seconds
                     boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds
                     while boundary < end.timestamp():
@@ -793,6 +1004,10 @@ class ApplianceService:
                     )
                     intervals.append(part)
                     parents.append(parent_index)
+                    if len(intervals) > MAX_REFINED_PLAN_INTERVALS:
+                        raise ValueError(
+                            "Appliance phase refinement exceeds bounded planning complexity"
+                        )
             windows = tuple(
                 (part.start, part.start + timedelta(hours=part.duration_h)) for part in intervals
             )
@@ -857,7 +1072,9 @@ class ApplianceService:
                 )
             else:
                 task.update(
-                    status="forecast_not_ready" if self.issue else "deadline_not_achievable",
+                    status="forecast_not_ready"
+                    if self.issue or task["entity_id"] in self._phase_limited_entities
+                    else "deadline_not_achievable",
                     scheduled_start=None,
                     plan_id=None,
                 )
@@ -1052,17 +1269,36 @@ class ApplianceService:
             self.commit(data)
         return changed
 
-    def document(self, now=None, enabled=False, plan=None):
+    def document(self, now=None, enabled=False, plan=None, *, raw_entity=None):
         """Expose current work and learned profile evidence. Archived transitions remain in the database."""
+        return self._projection(self.state, now, enabled, plan, raw_entity=raw_entity)
+
+    def _projection(self, state, now=None, enabled=False, plan=None, *, raw_entity=None):
+        """Keep ordinary all-device reads small and bind full raw detail to one explicitly selected entity."""
         from .history import request as history_request
 
         names = {row["entity_id"]: row["name"] for row in self.consumers.options}
         active = {row["entity_id"] for row in self.consumers.selected}
         devices = []
-        for entity, settings in self.state["devices"].items():
-            if entity not in active:
+        for entity, settings in state["devices"].items():
+            if entity not in active or raw_entity is not None and entity != raw_entity:
                 continue
-            task = self.state["tasks"].get(entity)
+            projection = settings
+            if settings.get("raw_history", {}).get("power_entity") not in (
+                None,
+                self.source(entity),
+            ):
+                projection = {key: value for key, value in settings.items() if key != "raw_history"}
+            elif entity != raw_entity and settings.get("raw_history"):
+                projection = {
+                    **settings,
+                    "raw_history": {
+                        key: value
+                        for key, value in settings["raw_history"].items()
+                        if key not in ("power_curve", "energy_curve")
+                    },
+                }
+            task = state["tasks"].get(entity)
             attempt = task["attempt"] if task else None
             request = None
             if (
@@ -1086,8 +1322,11 @@ class ApplianceService:
                 {
                     "entity_id": entity,
                     "name": names.get(entity, entity),
-                    **settings,
+                    **projection,
                     "power_entity": self.source(entity),
+                    "planning_issue": "This cycle cannot currently be scheduled. Its measured curve is retained and ordinary consumption forecasts remain in use."
+                    if entity in self._phase_limited_entities
+                    else None,
                     "history_request": history_request(settings),
                     "fine_history_request": history_request(settings, resolution="5minute"),
                     "learning_half_life_days": RECENCY_HALF_LIFE_DAYS

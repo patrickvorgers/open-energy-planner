@@ -27,6 +27,7 @@ PEER_ROUTES = {
     ("POST", "/v1/appliances/history_scan"),
     ("POST", "/v1/appliances/hourly_history"),
     ("POST", "/v1/appliances/fine_history"),
+    ("POST", "/v1/appliances/raw_history"),
     ("POST", "/v1/appliances/claim"),
     ("POST", "/v1/appliances/feedback"),
     ("POST", "/v1/ev/observations"),

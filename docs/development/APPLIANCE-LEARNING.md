@@ -129,7 +129,76 @@ Unchanged uploads and empty batches reuse the current reconstructed model while
 still processing observations and coverage. Reconstruction runs after restart,
 source changes or new cycle evidence. Failed commits do not publish a new cache.
 
-Both cycle charts always display five-minute intervals. Hourly estimates are spread uniformly across their twelve display intervals. Average power stays flat within an hour and each energy bar contains one twelfth of that hour's kWh. Legacy quarter-hour profiles are similarly spread uniformly for display. These are explicitly labelled estimates. Actual five-minute observations retain their phase detail in the model and charts. Regridding preserves total energy and never relabels estimated detail as measured. Planning start choices remain UTC quarters, while task windows preserve finer measured power peaks.
+## Original Recorder states
+
+The same independent history worker also reads the selected Energy meter and
+power sensor through HA's native row-limited Recorder API. It requests at most
+2,049 original states per sensor, including one overflow witness, and never
+paginates around this limit. The recent window is at most fourteen hours. It is
+not a raw-history backfill. Five-minute and hourly statistics remain available
+when raw retention, coverage or sensor precision is insufficient.
+
+Original state strings, per-event units and original timestamps are retained.
+Attribute-only changes, including unit changes, remain visible. Power uses HA's
+zero-order state-hold semantics until the next recorded event. This does not
+claim that a sensor measured at a constant frequency. Unknown/unavailable states
+and invalid quantities break coverage. A carry-in state keeps its original time
+and is never turned into a fresh sample. Extending a held state to the capture
+boundary additionally requires a matching current HA state with a genuine report
+no more than ten minutes old. A limited tail can establish a cycle only when its
+complete quiet predecessor, run and closing quiet are inside the available tail.
+
+The query awaiter has a twenty-second timeout. The actual Recorder executor
+future remains owned and shielded after timeout or cancellation. Another raw
+read is not queued until that physical query has ended. Closing the integration
+cannot publish its late result. The app rechecks current source ownership on
+upload, so an old pair cannot publish after relinking.
+
+Power and the energy counter can report at different times. OEP integrates the
+actual held power phases across original bracketing counter anchors, including
+their measured quiet flanks, and independently checks the counter delta. It does
+not interpolate counter endpoints, create extra counter points or scale a
+measured peak to force agreement. The existing numerical energy tolerance is
+used. Missing coverage, resets and disagreement retain the original visible
+curve but do not create a new training or planning profile. Coarsely quantized
+real sensors can therefore show useful raw detail while the previously usable
+statistical profile remains selected.
+
+A conserved complete raw cycle retains its actual irregular phase durations and
+peaks. It supersedes overlapping statistical views without counting a second
+cycle. Original frames and all accepted/rejected raw views remain in the active
+database and survive restart and cross-backend transfer. A running partial cycle
+is not a training sample. When its counter-covered portion is consistent and
+fresh, the existing observed-run owner can refine its measured start and remaining
+forecast. Authenticated execution feedback and frozen accepted tasks remain
+separate.
+
+Irregular profiles have at most 2,048 phases. Their averaging boundary union is
+admitted before integration. Over-budget views keep their curve and original
+archive while retaining the last usable profile. Planning also admits each
+irregular task before expanding phase boundaries, with a fixed 8,192-interval
+budget and 65,536 boundary-check budget. A task that exceeds those bounds remains
+unavailable for scheduling with its original frozen profile intact. Its ordinary
+consumption forecast and unrelated appliance planning remain usable.
+
+Active irregular effective, learned, observed and frozen task profiles share an
+8,192-phase projection budget. Training admission also reserves 512 KiB within
+the existing 4 MiB appliance response limit. Ordinary appliance reads include
+raw-history summaries without curves. `GET /v1/appliances?raw_entity=<energy entity>`
+returns only that selected appliance and its original curves. Unselected energy
+entities are rejected. The UI loads this detail on selection and reuses it until
+the source or `curve_revision` changes. Late responses must still match the
+selected energy entity, power source, model revision and curve revision.
+
+Statistical cycle charts display five-minute intervals. Hourly estimates are
+spread uniformly across their twelve display intervals. Average power stays flat
+within an hour and each energy bar contains one twelfth of that hour's kWh. Legacy
+quarter-hour profiles are similarly spread uniformly for display. These are
+explicitly labelled estimates. Irregular learned profiles instead use their
+actual phase boundaries. Separate recorded-power and counter charts plot original
+event timestamps, gaps and state holds. They do not pretend a learned average is
+the current measured curve. Planning start choices remain UTC quarters, while
+task windows preserve actual phase peaks.
 
 Energy > Appliances shows source-bound progress, usable coverage, detected cycles,
 provisional profiles and measured activity. Settings retains the short planning

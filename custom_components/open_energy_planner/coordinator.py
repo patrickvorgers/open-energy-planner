@@ -63,6 +63,7 @@ class PlanCoordinator:
         self.appliances = {}
         self.appliance_history_attempts = {}
         self.appliance_history_task = None
+        self.appliance_raw_history_future = None
         self.appliance_history_cancel = None
         self.solar_feedback_task = None
         self.solar_feedback_attempts = {}
