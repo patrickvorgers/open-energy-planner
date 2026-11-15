@@ -566,6 +566,8 @@ sources and quarter-varying simulated energy meters with matching native
 five-minute/hourly Recorder history. Do not resample real source data to invent
 quarter variability or reset original plan archives.
 
+### Original appliance Recorder evidence
+
 The selected appliance Energy/power pair can additionally supply bounded original
 Recorder states for recent cycles. Preserve irregular event timestamps, original
 unit provenance, actual power peaks and independently conserved counter energy.

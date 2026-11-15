@@ -16,6 +16,7 @@ from .model import (
 )
 
 MAX_RAW_STATES = 2049
+MAX_RAW_BODY_BYTES = 512 * 1024
 MAX_RAW_WINDOW_SECONDS = (MAX_CYCLE_HOURS + 2) * 3600
 
 
@@ -102,7 +103,8 @@ def analyze(body):
             return False
         anchors = counters[left : right + 1]
         if any(value is None for _, value in anchors) or any(
-            b[1] < a[1] for a, b in pairwise(anchors)
+            later_counter[1] < earlier_counter[1]
+            for earlier_counter, later_counter in pairwise(anchors)
         ):
             return False
         measured = anchors[-1][1] - anchors[0][1]

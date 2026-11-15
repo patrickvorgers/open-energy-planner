@@ -153,6 +153,10 @@ future remains owned and shielded after timeout or cancellation. Another raw
 read is not queued until that physical query has ended. Closing the integration
 cannot publish its late result. The app rechecks current source ownership on
 upload, so an old pair cannot publish after relinking.
+Recorder SQL failures make only the raw capture unavailable. Statistical scanning
+and other appliances continue, and the existing refresh cadence retries the read.
+The raw upload route accepts at most 512 KiB, independently of the ordinary
+256 KiB app request limit. Oversized wire bodies are rejected before decoding.
 
 Power and the energy counter can report at different times. OEP integrates the
 actual held power phases across original bracketing counter anchors, including
@@ -172,6 +176,10 @@ is not a training sample. When its counter-covered portion is consistent and
 fresh, the existing observed-run owner can refine its measured start and remaining
 forecast. Authenticated execution feedback and frozen accepted tasks remain
 separate.
+Freshness is measured from the actual counter-covered observation to the current
+app time, including upload delay. Only newly accepted running evidence can
+intercept readiness. Dropped or replayed evidence cannot change a task, including
+after a newer quiet observation has closed its run.
 
 Irregular profiles have at most 2,048 phases. Their averaging boundary union is
 admitted before integration. Over-budget views keep their curve and original
@@ -180,6 +188,8 @@ irregular task before expanding phase boundaries, with a fixed 8,192-interval
 budget and 65,536 boundary-check budget. A task that exceeds those bounds remains
 unavailable for scheduling with its original frozen profile intact. Its ordinary
 consumption forecast and unrelated appliance planning remain usable.
+Admission and expansion use the same feasible task starts. Phase translations
+outside the ready/deadline window do not consume the planning budget.
 
 Active irregular effective, learned, observed and frozen task profiles share an
 8,192-phase projection budget. Training admission also reserves 512 KiB within

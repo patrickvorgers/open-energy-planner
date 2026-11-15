@@ -19,7 +19,6 @@ from open_energy_planner.appliances.cycles.learning import (
 from open_energy_planner.appliances.cycles.model import (
     CONFIRMATION_SECONDS,
     DURATION_ALLOWANCE_SECONDS,
-    PROFILE_STEP_SECONDS,
     ApplianceWork,
     candidates,
     instant,
@@ -364,8 +363,10 @@ class ApplianceService:
         from .observed import observe
 
         settings, task = data["devices"][entity], data["tasks"].get(entity)
-        observe(settings, rows, cycles, activity, power_entity, now, observed_until=observed_until)
-        if activity.get("running") and task and task["status"] in OPEN_STATUSES:
+        accepted_running = observe(
+            settings, rows, cycles, activity, power_entity, now, observed_until=observed_until
+        )
+        if accepted_running and task and task["status"] in OPEN_STATUSES:
             if task.get("attempt") and task["attempt"]["status"] != "not_started":
                 settings["observed_run"]["profile"] = deepcopy(task["profile"])
             if (
@@ -381,13 +382,13 @@ class ApplianceService:
 
         from .evidence import refine
         from .model import MAX_PROFILE_STEPS, MAX_VARIABLE_PROFILE_STEPS
-        from .raw import analyze
+        from .raw import MAX_RAW_BODY_BYTES, analyze
 
         entity, power_entity = body["entity_id"], body["power_entity"]
         self.member(entity)
         if not power_entity or power_entity != self.source(entity):
             raise ValueError("History must use the current Home Assistant Energy power sensor")
-        if len(json.dumps(body, allow_nan=False).encode()) > 512 * 1024:
+        if len(json.dumps(body, allow_nan=False).encode()) > MAX_RAW_BODY_BYTES:
             raise ValueError("Raw appliance history exceeds bounded response size")
         end = instant(body["end"])
         if not end <= now or now - end > timedelta(seconds=2 * SAMPLE_SECONDS):
@@ -734,6 +735,7 @@ class ApplianceService:
         self.issue = None
         self._phase_limited_entities = set()
         works, task_windows, entities = [], [], set(excluded_entities)
+        origins_by_entity = {}
         for entity, task in self.state["tasks"].items():
             if task["status"] == "execution_observed" or (
                 self.observed(entity) and not task["attempt"]
@@ -765,6 +767,7 @@ class ApplianceService:
             )
             starts = candidates(work, problem.intervals)
             if starts:
+                origins_by_entity[entity] = starts
                 works.append(work)
                 entities.add(entity)
                 task_windows.append(
@@ -786,6 +789,7 @@ class ApplianceService:
                 continue
             observed = observed_work(entity, run, now)
             if observed:
+                origins_by_entity[entity] = (observed.fixed_start,)
                 works.append(observed)
                 entities.add(entity)
                 task_windows.append((observed, observed.fixed_start, observed.deadline))
@@ -802,21 +806,14 @@ class ApplianceService:
         for work, first, last in task_windows:
             if work.profile.phase_durations_seconds is not None:
                 edge_count = len(work.profile.power_w) + 1
-                origin_count = (
-                    1
-                    if work.fixed_start
-                    else max(
-                        1,
-                        int(
-                            ((last - first).total_seconds() - work.profile.duration_seconds)
-                            / PROFILE_STEP_SECONDS
-                        )
-                        + 1,
+                origin_count = len(origins_by_entity[work.entity_id])
+                checks = (
+                    edge_count
+                    * origin_count
+                    * sum(
+                        step.start < last and step.start + timedelta(hours=step.duration_h) > first
+                        for step in problem.intervals
                     )
-                )
-                checks = edge_count * sum(
-                    step.start < last and step.start + timedelta(hours=step.duration_h) > first
-                    for step in problem.intervals
                 )
                 if edge_count * origin_count > remaining_edges or checks > remaining_checks:
                     self._phase_limited_entities.add(work.entity_id)
@@ -949,21 +946,11 @@ class ApplianceService:
                     if end <= first or step.start >= last:
                         continue
                     if work.profile.phase_durations_seconds is not None:
-                        for offset in work.profile.phase_boundaries:
-                            if work.fixed_start:
-                                instant_boundary = work.fixed_start + timedelta(seconds=offset)
+                        for origin in origins_by_entity[work.entity_id]:
+                            for offset in work.profile.phase_boundaries:
+                                instant_boundary = origin + timedelta(seconds=offset)
                                 if step.start < instant_boundary < end:
                                     boundaries.add(instant_boundary)
-                            else:
-                                stamp = (
-                                    int((step.start.timestamp() - offset) // PROFILE_STEP_SECONDS)
-                                    + 1
-                                ) * PROFILE_STEP_SECONDS + offset
-                                while stamp < end.timestamp():
-                                    boundaries.add(
-                                        step.start.fromtimestamp(stamp, step.start.tzinfo)
-                                    )
-                                    stamp += PROFILE_STEP_SECONDS
                         continue
                     phase_seconds = work.profile.phase_seconds
                     boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds

@@ -8,6 +8,7 @@ from aiohttp import web
 from open_energy_planner.appliances.cycles import history as historical
 from open_energy_planner.appliances.cycles.learning import HOURLY_SAMPLE_SECONDS, SAMPLE_SECONDS
 from open_energy_planner.appliances.cycles.model import instant
+from open_energy_planner.appliances.cycles.raw import MAX_RAW_BODY_BYTES
 from open_energy_planner.appliances.sources import SOURCE_ALREADY_ASSIGNED
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
 from open_energy_planner.storage.writes import complete_write
@@ -114,10 +115,15 @@ def register(app, service, repository, live, lock, ev, thermal):
     async def mutate(request):
         """Validate exact operation schemas and finish each durable mutation before refreshing planning."""
         try:
-            body = await request.json()
+            operation = request.match_info["operation"]
+            reader = (
+                request.clone(client_max_size=MAX_RAW_BODY_BYTES)
+                if operation == "raw_history"
+                else request
+            )
+            body = await reader.json()
             if not isinstance(body, dict):
                 raise TypeError("An appliance operation must be an object")
-            operation = request.match_info["operation"]
             async with lock:
                 now = datetime.now(UTC)
                 previous_revision = service.revision

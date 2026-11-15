@@ -27,6 +27,7 @@ FINE_STATISTIC_MINUTES = 5
 MAX_CYCLE_READING_GAP_SECONDS = 900
 FINE_PROFILE_SECONDS = 5 * 60
 MAX_PROFILE_PHASES = MAX_CYCLE_HISTORY_HOURS * 3600 // FINE_PROFILE_SECONDS
+MAX_IRREGULAR_PROFILE_PHASES = 2048
 MAX_CYCLE_POWER_W = 20000
 MAX_CORRELATION_LENGTH = 64
 PROFILE_INTERVAL_HOURS = 0.25
@@ -57,6 +58,15 @@ def profile_phase_seconds(profile):
     return seconds
 
 
+def profile_phase_limit(profile):
+    """Keep explicit irregular and legacy uniform phase counts within their separate wire contracts."""
+    return (
+        MAX_IRREGULAR_PROFILE_PHASES
+        if profile.get("phase_durations_seconds") is not None
+        else MAX_PROFILE_PHASES
+    )
+
+
 def profile_duration(profile):
     """Validate declared phase duration and optional partial ending, preserving legacy profiles."""
     if profile.get("phase_durations_seconds") is not None:
@@ -64,7 +74,7 @@ def profile_duration(profile):
         if (
             not isinstance(durations, (list, tuple))
             or len(durations) != len(profile["power_w"])
-            or not 1 <= len(durations) <= 2048
+            or not 1 <= len(durations) <= profile_phase_limit(profile)
             or any(
                 type(value) not in (int, float) or not isfinite(value) or value < 1e-6
                 for value in durations
@@ -336,7 +346,7 @@ def receive(coordinator, value):
         if learned is not None and (
             not isinstance(learned, dict)
             or not isinstance(learned.get("power_w"), list)
-            or not 1 <= len(learned["power_w"]) <= MAX_PROFILE_PHASES
+            or not 1 <= len(learned["power_w"]) <= profile_phase_limit(learned)
             or any(
                 type(power) not in (int, float)
                 or not isfinite(power)
@@ -369,7 +379,7 @@ def receive(coordinator, value):
             if frozen_profile is not None and (
                 not isinstance(frozen_profile, dict)
                 or not isinstance(frozen_profile.get("power_w"), list)
-                or not 1 <= len(frozen_profile["power_w"]) <= MAX_PROFILE_PHASES
+                or not 1 <= len(frozen_profile["power_w"]) <= profile_phase_limit(frozen_profile)
                 or any(
                     type(power) not in (int, float)
                     or not isfinite(power)

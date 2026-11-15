@@ -2,16 +2,19 @@
 
 import asyncio
 import json
+import logging
 from datetime import timedelta
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import get_last_state_changes
 from homeassistant.util import dt as dt_util
+from sqlalchemy.exc import SQLAlchemyError
 
 MAX_RAW_STATES = 2048
 MAX_RAW_BYTES = 512 * 1024
 RAW_WINDOW_HOURS = 14
 RAW_QUERY_TIMEOUT_SECONDS = 20
+_LOGGER = logging.getLogger(__name__)
 
 
 def consume(future):
@@ -61,6 +64,11 @@ async def capture(coordinator, entity, power_entity, synthetic):
     try:
         result = await asyncio.wait_for(asyncio.shield(future), RAW_QUERY_TIMEOUT_SECONDS)
     except TimeoutError:
+        return None
+    except SQLAlchemyError:
+        _LOGGER.debug(
+            "Raw appliance Recorder query unavailable. Retaining statistics and continuing historical scan. Retrying on the next history refresh"
+        )
         return None
     if coordinator.closed:
         return None

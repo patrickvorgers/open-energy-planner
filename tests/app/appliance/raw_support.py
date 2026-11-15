@@ -40,3 +40,20 @@ def raw_trace(*, completed=True, conflict=False):
         "limited": False,
         "synthetic": True,
     }
+
+
+def dense_raw_trace():
+    """Retain frequent genuine quiet-state reports without changing the 3-kW pulse or 23/45-kWh cycle."""
+    body = raw_trace()
+    first = NOW - timedelta(hours=2, minutes=30)
+    for field, value, unit in (("power_states", 0, "W"), ("energy_states", 10, "kWh")):
+        body[field].extend(
+            {
+                "at": (first + timedelta(seconds=index)).isoformat(),
+                "state": f"{value:.45f}",
+                "unit": unit,
+            }
+            for index in range(1, 1750)
+        )
+        body[field].sort(key=lambda row: row["at"])
+    return body

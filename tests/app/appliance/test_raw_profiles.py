@@ -32,6 +32,63 @@ def test_average_irregular_cycles_uses_actual_phase_boundaries():
     assert CycleProfile((1000,)).energy_kwh == pytest.approx(0.25)
 
 
+def test_dense_profile_expands_only_its_three_feasible_origins(service):
+    """A 1,900-phase half-hour task with three starts needs 5,703 edges, not translations across every horizon quarter."""
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+    from tests.app.appliance.support import ENTITY
+
+    shape = CycleProfile((1000, 3000) * 950, phase_durations_seconds=(0.5,) * 1899 + (850.5,))
+    assert shape.energy_kwh == pytest.approx(89 / 72)
+    data = deepcopy(service.state)
+    data["devices"][ENTITY] = {"shiftable": True, "profile": asdict(shape)}
+    service.commit(data)
+    service.submit(
+        ENTITY, "three-origins", NOW + timedelta(minutes=15), NOW + timedelta(minutes=80), NOW
+    )
+    frozen = deepcopy(service.state["tasks"][ENTITY]["profile"])
+    residual = {
+        "issued_at": NOW.isoformat(),
+        "steps": [{"start": NOW.isoformat(), "duration_h": 2, "kwh": 0.4}],
+    }
+    forecast = {
+        "issued_at": NOW.isoformat(),
+        "steps": [{"start": NOW.isoformat(), "duration_h": 2, "kwh": 89 / 72}],
+    }
+    service.consumers.result = {
+        "residual_baseline": residual,
+        "devices": [{"entity_id": ENTITY, "forecast": forecast, "baseline_forecast": forecast}],
+    }
+    problem = InstallationProblem(
+        tuple(
+            Interval(NOW + timedelta(hours=index), 1, 0.2, 0, (0.4 + 89 / 72) / 2)
+            for index in range(2)
+        ),
+        (),
+        (),
+        (),
+        5000,
+        5000,
+    )
+    snapshot = InputSnapshot(
+        "snapshot", "configuration", NOW, "measurement", "forecast", "prices", problem
+    )
+    prepared = service.prepare(snapshot, SimpleNamespace(), NOW)
+    assert service.issue is None
+    [work] = prepared.problem.appliances
+    assert work.profile == shape
+    assert 5000 < len(prepared.problem.intervals) < 8192
+    assert service.state["tasks"][ENTITY]["profile"] == frozen
+    # The 65-minute ready/deadline window removes 65/120 of the two-hour expected cycle energy.
+    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(
+        0.4 + 89 / 72 * 55 / 120
+    )
+
+
 def test_dense_raw_task_keeps_other_appliance_and_household_forecasts_usable(service):
     """A dense immutable raw task cannot exhaust the whole planning path or erase another appliance."""
     from copy import deepcopy
