@@ -177,19 +177,29 @@ fresh, the existing observed-run owner can refine its measured start and remaini
 forecast. Authenticated execution feedback and frozen accepted tasks remain
 separate.
 Freshness is measured from the actual counter-covered observation to the current
-app time, including upload delay. Only newly accepted running evidence can
+app time, including upload delay and monotonic elapsed executor, archive and
+refinement time. The route captures its UTC entry time inside the acquired lock
+and starts elapsed timing before executor dispatch. Direct learning calls start
+elapsed timing at entry. Capture admission remains anchored to that UTC entry
+time, so expiring running evidence does not discard its curve or usable training
+history. Only newly accepted running evidence can
 intercept readiness. Dropped or replayed evidence cannot change a task, including
 after a newer quiet observation has closed its run.
 
 Irregular profiles have at most 2,048 phases. Their averaging boundary union is
 admitted before integration. Over-budget views keep their curve and original
 archive while retaining the last usable profile. Planning also admits each
-irregular task before expanding phase boundaries, with a fixed 8,192-interval
+task before expanding phase boundaries, with a fixed 8,192-interval
 budget and 65,536 boundary-check budget. A task that exceeds those bounds remains
 unavailable for scheduling with its original frozen profile intact. Its ordinary
 consumption forecast and unrelated appliance planning remain usable.
 Admission and expansion use the same feasible task starts. Phase translations
 outside the ready/deadline window do not consume the planning budget.
+Uniform, partial-ending and fixed-start profiles share one deduplicated admitted
+boundary set. The existing shared five-minute grid reserve is charged once, and
+additional actual boundaries are admitted within the remaining edge and work
+budgets. Construction stops at those bounds. Excess detail excludes only its
+appliance from scheduling, retaining its frozen profile and ordinary forecast.
 
 Active irregular effective, learned, observed and frozen task profiles share an
 8,192-phase projection budget. Training admission also reserves 512 KiB within

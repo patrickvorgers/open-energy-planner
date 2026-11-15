@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, time, timedelta
 from math import fsum
+from time import monotonic
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -322,17 +323,30 @@ class ApplianceService:
         return records, extra, changed
 
     def learn_history(
-        self, entity, power_entity, rows, synthetic, now, *, sample_seconds=SAMPLE_SECONDS
+        self,
+        entity,
+        power_entity,
+        rows,
+        synthetic,
+        now,
+        *,
+        sample_seconds=SAMPLE_SECONDS,
+        processing_started=None,
     ):
         """Use the first complete cycle and refine all distinct source-bound observations.
 
         Fine observations replace overlapping hourly estimates. Both raw views
         stay archived, and accepted tasks keep their frozen profile. Historical
         evidence never grants readiness or reports a physical execution outcome.
+
+        now is the explicit UTC operation-entry time. processing_started is its
+        process-local monotonic timestamp, captured before HTTP executor dispatch
+        or at direct-call entry. Only observation admission adds elapsed work.
         """
         from .evidence import refine
         from .learning import HOURLY_SAMPLE_SECONDS
 
+        processing_started = monotonic() if processing_started is None else processing_started
         self.member(entity)
         if type(synthetic) is not bool or not power_entity or power_entity != self.source(entity):
             raise ValueError("History must use the current Home Assistant Energy power sensor")
@@ -347,7 +361,16 @@ class ApplianceService:
         if changed:
             refine(settings, list(records.values()))
         if sample_seconds == SAMPLE_SECONDS:
-            self.observe_history(data, entity, rows, cycles, activity, power_entity, now)
+            self.observe_history(
+                data,
+                entity,
+                rows,
+                cycles,
+                activity,
+                power_entity,
+                now,
+                processing_started=processing_started,
+            )
         summary = history_evidence(rows, len(cycles), sample_seconds=sample_seconds)
         summary["power_entity"], summary["synthetic"] = power_entity, synthetic
         settings[
@@ -357,12 +380,24 @@ class ApplianceService:
         self._cycle_records[(entity, power_entity)] = records
 
     def observe_history(
-        self, data, entity, rows, cycles, activity, power_entity, now, *, observed_until=None
+        self,
+        data,
+        entity,
+        rows,
+        cycles,
+        activity,
+        power_entity,
+        now,
+        *,
+        observed_until=None,
+        processing_started=None,
     ):
-        """Share physical-observation interception across statistics and original state evidence."""
+        """Admit running evidence at elapsed processing time before changing a task or its frozen observed profile."""
         from .observed import observe
 
         settings, task = data["devices"][entity], data["tasks"].get(entity)
+        if processing_started is not None:
+            now += timedelta(seconds=max(0, monotonic() - processing_started))
         accepted_running = observe(
             settings, rows, cycles, activity, power_entity, now, observed_until=observed_until
         )
@@ -376,14 +411,22 @@ class ApplianceService:
             ):
                 task.update(status="execution_observed", scheduled_start=None, plan_id=None)
 
-    def learn_raw_history(self, body, now):
-        """Atomically retain original Recorder frames, conserved cycles and bounded current curves."""
+    def learn_raw_history(self, body, now, *, processing_started=None):
+        """Atomically retain original Recorder frames, conserved cycles and bounded current curves.
+
+        Capture-age validation uses the explicit UTC operation-entry now. Running
+        observation admission additionally includes monotonic elapsed executor,
+        archive and refinement work. Expiring running evidence cannot discard
+        the accepted curve or conserved training history. Direct callers start
+        timing here unless the HTTP owner supplied processing_started.
+        """
         import json
 
         from .evidence import refine
         from .model import MAX_PROFILE_STEPS, MAX_VARIABLE_PROFILE_STEPS
         from .raw import MAX_RAW_BODY_BYTES, analyze
 
+        processing_started = monotonic() if processing_started is None else processing_started
         entity, power_entity = body["entity_id"], body["power_entity"]
         self.member(entity)
         if not power_entity or power_entity != self.source(entity):
@@ -523,6 +566,7 @@ class ApplianceService:
             power_entity,
             now,
             observed_until=observed_until,
+            processing_started=processing_started,
         )
         self.commit(data, extra=extra)
         self._cycle_records[(entity, power_entity)] = records
@@ -803,6 +847,35 @@ class ApplianceService:
         )
         remaining_checks = MAX_PHASE_BOUNDARY_CHECKS
         admitted = []
+        uniform_boundaries = set()
+        parent_boundaries = {
+            boundary
+            for step in problem.intervals
+            for boundary in (step.start, step.start + timedelta(hours=step.duration_h))
+        }
+
+        def uniform_phase_boundaries(work, step):
+            """Yield the existing absolute grid plus actual fixed or partial phase edges within one parent interval."""
+            end = step.start + timedelta(hours=step.duration_h)
+            phase_seconds = work.profile.phase_seconds
+            boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds
+            while boundary < end.timestamp():
+                yield datetime.fromtimestamp(boundary, step.start.tzinfo)
+                boundary += phase_seconds
+            if work.fixed_start:
+                for offset in work.profile.phase_boundaries:
+                    boundary = work.fixed_start + timedelta(seconds=offset)
+                    if step.start < boundary < end:
+                        yield boundary
+            elif work.profile.duration_seconds % phase_seconds:
+                remainder = work.profile.duration_seconds % phase_seconds
+                boundary = int(step.start.timestamp()) // phase_seconds * phase_seconds + remainder
+                if boundary <= step.start.timestamp():
+                    boundary += phase_seconds
+                while boundary < end.timestamp():
+                    yield datetime.fromtimestamp(boundary, step.start.tzinfo)
+                    boundary += phase_seconds
+
         for work, first, last in task_windows:
             if work.profile.phase_durations_seconds is not None:
                 edge_count = len(work.profile.power_w) + 1
@@ -822,8 +895,44 @@ class ApplianceService:
                     continue
                 remaining_edges -= edge_count * origin_count
                 remaining_checks -= checks
+            else:
+                additions, checks, extra_edges = set(), 0, 0
+                fits = True
+                for step in problem.intervals:
+                    if step.start >= last or step.start + timedelta(hours=step.duration_h) <= first:
+                        continue
+                    for boundary in uniform_phase_boundaries(work, step):
+                        checks += 1
+                        if checks > remaining_checks:
+                            fits = False
+                            break
+                        if boundary not in uniform_boundaries and boundary not in additions:
+                            additions.add(boundary)
+                            if (
+                                boundary not in parent_boundaries
+                                and boundary.timestamp() % SAMPLE_SECONDS
+                            ):
+                                extra_edges += 1
+                            if (
+                                extra_edges > remaining_edges
+                                or len(uniform_boundaries) + len(additions)
+                                > MAX_REFINED_PLAN_INTERVALS
+                            ):
+                                fits = False
+                                break
+                    if not fits:
+                        break
+                remaining_checks -= min(checks, remaining_checks)
+                if not fits:
+                    self._phase_limited_entities.add(work.entity_id)
+                    if work.entity_id not in excluded_entities:
+                        entities.discard(work.entity_id)
+                    continue
+                remaining_edges -= extra_edges
+                uniform_boundaries.update(additions)
             admitted.append((work, first, last))
         task_windows = admitted
+        uniform_boundaries = sorted(uniform_boundaries)
         works = [work for work in works if work.entity_id not in self._phase_limited_entities]
         result = self.consumers.result or {}
         forecasts = {row["entity_id"]: row["forecast"] for row in result.get("devices", [])}
@@ -942,6 +1051,13 @@ class ApplianceService:
                         )
                     ]
                 )
+                boundaries.update(
+                    uniform_boundaries[
+                        bisect_right(uniform_boundaries, step.start) : bisect_left(
+                            uniform_boundaries, end
+                        )
+                    ]
+                )
                 for work, first, last in task_windows:
                     if end <= first or step.start >= last:
                         continue
@@ -952,34 +1068,6 @@ class ApplianceService:
                                 if step.start < instant_boundary < end:
                                     boundaries.add(instant_boundary)
                         continue
-                    phase_seconds = work.profile.phase_seconds
-                    boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds
-                    while boundary < end.timestamp():
-                        boundaries.add(step.start.fromtimestamp(boundary, step.start.tzinfo))
-                        boundary += phase_seconds
-                    if work.fixed_start:
-                        actual_end = work.fixed_start + timedelta(
-                            seconds=work.profile.duration_seconds
-                        )
-                        if step.start < actual_end < end:
-                            boundaries.add(actual_end)
-                        boundaries.update(
-                            work.fixed_start + timedelta(seconds=index * phase_seconds)
-                            for index in range(len(work.profile.power_w) + 1)
-                            if step.start
-                            < work.fixed_start + timedelta(seconds=index * phase_seconds)
-                            < end
-                        )
-                    elif work.profile.duration_seconds % phase_seconds:
-                        remainder = work.profile.duration_seconds % phase_seconds
-                        boundary = (
-                            int(step.start.timestamp()) // phase_seconds * phase_seconds + remainder
-                        )
-                        if boundary <= step.start.timestamp():
-                            boundary += phase_seconds
-                        while boundary < end.timestamp():
-                            boundaries.add(step.start.fromtimestamp(boundary, step.start.tzinfo))
-                            boundary += phase_seconds
                 from itertools import pairwise
 
                 for left, right in pairwise(sorted(boundaries)):

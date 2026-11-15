@@ -1,7 +1,9 @@
 """Only newly accepted, currently fresh physical observations may intercept readiness."""
 
+import asyncio
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +12,7 @@ from tests.app.appliance.raw_support import raw_trace
 from tests.app.appliance.support import ENTITY, NOW, POWER, readings, running_readings
 
 
-@pytest.mark.parametrize("age,accepted", [(0, True), (600, True), (601, False)])
+@pytest.mark.parametrize("age,accepted", [(-1, False), (0, True), (600, True), (601, False)])
 @pytest.mark.parametrize("raw", [False, True])
 def test_shared_observer_controls_task_interception_at_actual_age(service, age, accepted, raw):
     """Both caller forms use one actual observation age, including the exact ten-minute boundary."""
@@ -153,3 +155,145 @@ def test_public_history_callers_reject_running_replay_after_quiet(service, raw):
         service.learn_history(ENTITY, POWER, running_readings(), False, closed)
     assert service.state["tasks"][ENTITY] == original
     assert service.state["devices"][ENTITY]["observed_run"]["status"] == "idle"
+
+
+@pytest.mark.parametrize("raw", [False, True])
+@pytest.mark.parametrize("processing_seconds,accepted", [(301, True), (302, False)])
+def test_processing_time_counts_before_running_evidence_intercepts_readiness(
+    service, monkeypatch, raw, processing_seconds, accepted
+):
+    """Evidence aged 299 seconds at entry remains admissible at 600 seconds, but not at 601 after archive work."""
+    from open_energy_planner.appliances.cycles import service as service_module
+
+    body = raw_trace(completed=False)
+    observed = instant(body["end"]) if raw else NOW
+    service.learn_history(ENTITY, POWER, readings(cycles=1), False, observed)
+    service.configure(ENTITY, True)
+    service.submit(ENTITY, "processing-age", observed, observed + timedelta(hours=4), observed)
+    original = deepcopy(service.state["tasks"][ENTITY])
+    service._cycle_records.clear()
+    elapsed = [0]
+    monkeypatch.setattr(service_module, "monotonic", lambda: elapsed[0], raising=False)
+    collect = service.collect_cycles
+
+    def slow_archive(*arguments, **keywords):
+        """Perform the real cold archive restoration, then advance processing time without sleeping."""
+        result = collect(*arguments, **keywords)
+        elapsed[0] = processing_seconds
+        return result
+
+    monkeypatch.setattr(service, "collect_cycles", slow_archive)
+    if raw:
+        service.learn_raw_history(body, observed + timedelta(seconds=299))
+        assert service.state["devices"][ENTITY]["raw_history"]["power_curve"]
+    else:
+        service.learn_history(
+            ENTITY, POWER, running_readings(), False, observed + timedelta(seconds=299)
+        )
+    assert (service.state["tasks"][ENTITY]["status"] == "execution_observed") is accepted
+    assert service.state["tasks"][ENTITY]["profile"] == original["profile"]
+    if not accepted:
+        assert service.state["tasks"][ENTITY] == original
+        assert "observed_run" not in service.state["devices"][ENTITY]
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_http_observation_age_includes_executor_queue_delay(service, monkeypatch, raw):
+    """The HTTP owner starts elapsed time before executor dispatch, so queued evidence cannot latch readiness."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from open_energy_planner.appliances.cycles import api as api_module
+    from open_energy_planner.appliances.cycles import service as service_module
+
+    body = raw_trace(completed=False)
+    observed = instant(body["end"]) if raw else NOW
+    service.learn_history(ENTITY, POWER, readings(cycles=1), False, observed)
+    service.configure(ENTITY, True)
+    service.submit(ENTITY, "queued", observed, observed + timedelta(hours=4), observed)
+    original = deepcopy(service.state["tasks"][ENTITY])
+    elapsed = [0]
+
+    class EntryTime(datetime):
+        """Keep the independent UTC operation timestamp stable while processing time advances."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Capture once inside the acquired route lock, independently of the executor's start."""
+            return observed + timedelta(seconds=299)
+
+    complete = api_module.complete_write
+
+    async def queued_write(save, *arguments):
+        """Advance a controlled monotonic clock before the real executor invokes the domain writer."""
+        elapsed[0] = 302
+        return await complete(save, *arguments)
+
+    monkeypatch.setattr(api_module, "datetime", EntryTime)
+    monkeypatch.setattr(api_module, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(service_module, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(api_module, "complete_write", queued_write)
+
+    async def scenario():
+        """Dispatch the real HTTP operation through its lock and off-thread write owner."""
+        application = web.Application()
+        api_module.register(
+            application,
+            service,
+            SimpleNamespace(state={"enabled": False, "plan": None}),
+            None,
+            asyncio.Lock(),
+            SimpleNamespace(state={"points": []}),
+            SimpleNamespace(state={"stores": []}),
+        )
+        payload = (
+            body
+            if raw
+            else {
+                "entity_id": ENTITY,
+                "power_entity": POWER,
+                "rows": running_readings(),
+                "synthetic": False,
+            }
+        )
+        async with TestClient(TestServer(application)) as client:
+            response = await client.post(
+                "/v1/appliances/" + ("raw_history" if raw else "history"), json=payload
+            )
+            assert response.status == 200
+        assert service.state["tasks"][ENTITY] == original
+        assert "observed_run" not in service.state["devices"][ENTITY]
+        if raw:
+            assert service.state["devices"][ENTITY]["raw_history"]["power_curve"]
+
+    asyncio.run(scenario())
+
+
+def test_processing_age_does_not_discard_conserved_raw_training_or_original_frame(
+    service, monkeypatch
+):
+    """Capture admission stays at UTC entry even when archive work later makes live running evidence stale."""
+    from open_energy_planner.appliances.cycles import service as service_module
+    from open_energy_planner.appliances.cycles.service import ApplianceService, profile
+
+    body = raw_trace()
+    elapsed = [0]
+    collect = service.collect_cycles
+
+    def slow_archive(*arguments, **keywords):
+        """Read actual stored evidence and then simulate fifteen minutes of elapsed processing."""
+        result = collect(*arguments, **keywords)
+        elapsed[0] = 901
+        return result
+
+    monkeypatch.setattr(service_module, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(service, "collect_cycles", slow_archive)
+    service.learn_raw_history(body, instant(body["end"]))
+    restored = ApplianceService(service.documents, service.consumers)
+    assert profile(restored.state["devices"][ENTITY]["profile"]).energy_kwh == pytest.approx(
+        23 / 45
+    )
+    assert restored.state["devices"][ENTITY]["profile"]["samples"] == 1
+    assert restored.state["devices"][ENTITY]["raw_history"]["power_curve"]
+    [record] = list(restored.documents.iter_prefix("appliance-raw-"))
+    assert restored.documents.read(record["history_ref"]) == body

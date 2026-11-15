@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
+from time import monotonic
 
 from aiohttp import web
 
@@ -126,6 +127,7 @@ def register(app, service, repository, live, lock, ev, thermal):
                 raise TypeError("An appliance operation must be an object")
             async with lock:
                 now = datetime.now(UTC)
+                processing_started = monotonic()
                 previous_revision = service.revision
                 if operation == "device" and set(body) in (
                     {"entity_id", "shiftable"},
@@ -336,6 +338,8 @@ def register(app, service, repository, live, lock, ev, thermal):
                     )
                 else:
                     raise ValueError("Unsupported appliance operation or fields")
+                if operation in ("history", "raw_history"):
+                    keywords["processing_started"] = processing_started
                 result = []
 
                 def apply():
