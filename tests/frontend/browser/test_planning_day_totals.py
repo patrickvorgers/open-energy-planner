@@ -98,12 +98,19 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         expect(tooltip).to_contain_text("Partial day. Totals cover only the shown planned period.")
         base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
         expect(base).to_have_text("-1.26")
+        totals = tooltip.locator(".chart-tooltip-total .chart-tooltip-value").all_text_contents()
+        assert len(totals) == 2
+        assert float(totals[0].replace(",", "")) == pytest.approx(
+            float(totals[1].replace(",", "")), abs=0.001
+        )
         heading.press("Escape")
         legend = page.locator("#" + identity + "-legend")
         legend.get_by_role("checkbox", name="Grid import: AC", exact=True).uncheck()
         heading = card.get_by_role("button", name="Energy totals for", exact=False).first
         heading.focus()
         expect(tooltip.locator("tr").filter(has_text="Grid import: AC")).to_have_count(0)
+        expect(tooltip.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(totals)
+        expect(tooltip).to_contain_text("Totals include all flows, including hidden series.")
         heading.press("Escape")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
@@ -276,3 +283,46 @@ def test_daily_energy_keeps_missing_evidence_distinct_from_zero(app_site, browse
             assert energy is None
         else:
             assert energy == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
+def test_interval_totals_include_filtered_appliances_in_each_scenario(app_page):
+    """All three scenarios show full-precision power totals despite filtered appliance rows."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
+        page.locator("#" + identity).scroll_into_view_if_needed()
+        # Inspect a real quarter bar, retaining devices below the legend threshold.
+        canvas = page.locator("#" + identity)
+        quarter = page.evaluate(
+            """id => {
+            const chart = Chart.getChart(document.getElementById(id));
+            const bars = chart.data.datasets.filter(dataset => dataset.type === 'bar');
+            return {point: chart.getDatasetMeta(0).data[0].getCenterPoint(),
+                totals: ['Production', 'Consumption'].map(group => Math.abs(bars
+                    .filter(dataset => dataset.tooltipGroup === group)
+                    .reduce((sum, dataset) => sum + dataset.data[0].y, 0))),
+                hidden: bars.some(dataset => dataset.data[0].y !== 0 && !chart.isDatasetVisible(chart.data.datasets.indexOf(dataset)))};
+        }""",
+            identity,
+        )
+        assert quarter["hidden"]
+        canvas.hover(position={"x": quarter["point"]["x"], "y": quarter["point"]["y"]})
+        tooltip = page.locator("#" + identity + "-tooltip")
+        expect(tooltip).to_be_visible()
+        assert [
+            float(value.replace(",", ""))
+            for value in tooltip.locator(
+                ".chart-tooltip-total .chart-tooltip-value"
+            ).all_text_contents()
+        ] == pytest.approx(quarter["totals"], abs=0.00051)
+        expect(tooltip.locator(".chart-tooltip-total .chart-tooltip-unit")).to_have_text(
+            ["kW", "kW"]
+        )
+        directory = Path("results/ci/planning-tooltip-totals")
+        directory.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(directory / f"{identity}-{page.viewport_size['width']}.png"))

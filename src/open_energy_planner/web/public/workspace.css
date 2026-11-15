@@ -279,6 +279,7 @@
 .chart-tooltip-balance .chart-tooltip-value { width:64px; }
 .chart-tooltip-balance .chart-tooltip-unit { width:24px; }
 
+.chart-tooltip-total td { border-top:1px solid #ffffff40; font-weight:600; padding-top:6px; }
 .chart-tooltip-balance table { table-layout:fixed; }
 .chart-tooltip-balance td:first-child { white-space:normal; }
 

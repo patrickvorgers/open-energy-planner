@@ -87,7 +87,11 @@ their local DC solar and AC input/output boundaries. Available solar forecasts
 remain DC inputs. Solver decisions, costs and original archived plans are unchanged.
 
 The series together should balance around zero before hidden series and the
-0.1-kW appliance display rounding. Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
+0.1-kW appliance display rounding.
+
+Pop-ups show positive **Total production** and **Total consumption** values, independently summed from every original flow, including hidden or filtered legend items. Totals include grid, solar, battery, device and conversion flows rather than household demand alone. Missing flow evidence makes its total unavailable. Interval totals use kW and daily totals use kWh.
+
+Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
 Use **Next 6 hours**, **Next 24 hours** or **Full period**. Day bands and date labels identify calendar boundaries in the installation timezone. The legend sits below the full-width chart, with aligned columns on wider screens and compact wrapping on phones. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
 
@@ -96,7 +100,8 @@ You can also focus the date with the keyboard or tap it on a phone. Press Escape
 or tap the date again to close the summary. Each visible energy flow is integrated
 over its actual duration and shown in kWh. Supply remains positive and use
 negative, matching the chart. Battery percentages are not added together.
-Hidden series are omitted. Missing or inconsistent interval evidence produces
+Hidden series are omitted from the individual rows but remain in the production
+and consumption totals. Missing or inconsistent interval evidence produces
 an unavailable total rather than a fabricated zero.
 
 The summary follows the selected chart range. A partial day explicitly states
