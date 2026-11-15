@@ -187,7 +187,11 @@ intercept readiness. Dropped or replayed evidence cannot change a task, includin
 after a newer quiet observation has closed its run.
 
 Irregular profiles have at most 2,048 phases. Their averaging boundary union is
-admitted before integration. Over-budget views keep their curve and original
+admitted before averaging. Source phase indices advance along that union once,
+preserving weighted power and energy at actual boundaries. A shorter source
+contributes zero after its end. Work grows with the source phases and admitted
+union, without repeatedly integrating whole traces. Over-budget views keep their
+curve and original
 archive while retaining the last usable profile. Planning also admits each
 task before expanding phase boundaries, with a fixed 8,192-interval
 budget and 65,536 boundary-check budget. A task that exceeds those bounds remains
@@ -219,6 +223,12 @@ actual phase boundaries. Separate recorded-power and counter charts plot origina
 event timestamps, gaps and state holds. They do not pretend a learned average is
 the current measured curve. Planning start choices remain UTC quarters, while
 task windows preserve actual phase peaks.
+An empty recorded source is explicitly unavailable and has no empty chart. The
+other source remains visible when it contains real states, and the learned profile
+is retained. A summary awaiting selected detail is shown as loading instead.
+Unknown values inside a nonempty source remain visible gaps, never invented zeroes.
+The joint status cannot claim agreement or completion when either source is
+empty, even if accompanying status metadata says the cycle was complete.
 
 Energy > Appliances shows source-bound progress, usable coverage, detected cycles,
 provisional profiles and measured activity. Settings retains the short planning

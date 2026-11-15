@@ -202,7 +202,13 @@ def candidates(work, intervals):
 
 
 def average_profiles(previous, learned, *, previous_weight=None):
-    """Average at the coarser source resolution, preserving weighted energy and longest duration."""
+    """Average weighted cycle means with actual irregular or coarser uniform timing.
+
+    An admitted irregular boundary union is swept with advancing source indices.
+    Each output interval lies within one constant-power phase per source, with
+    zero contribution after a shorter source ends. This preserves weighted AC
+    energy and the longest duration without repeatedly integrating whole traces.
+    """
     if previous is None:
         return learned
     weight = previous.samples if previous_weight is None else previous_weight
@@ -211,31 +217,39 @@ def average_profiles(previous, learned, *, previous_weight=None):
     duration = max(previous.duration_seconds, learned.duration_seconds)
     phase_seconds = max(previous.phase_seconds, learned.phase_seconds)
     if previous.phase_durations_seconds is not None or learned.phase_durations_seconds is not None:
+        previous_boundaries, learned_boundaries = (
+            previous.phase_boundaries,
+            learned.phase_boundaries,
+        )
         boundaries = []
-        for boundary in merge(previous.phase_boundaries, learned.phase_boundaries):
+        for boundary in merge(previous_boundaries, learned_boundaries):
             if not boundaries or boundary != boundaries[-1]:
                 boundaries.append(boundary)
                 if len(boundaries) - 1 > MAX_VARIABLE_PROFILE_STEPS:
                     raise ValueError("Cycle profile exceeds bounded phase complexity")
-        origin = datetime(2000, 1, 1)
-        powers = tuple(
-            (
-                previous.energy(
-                    origin, origin + timedelta(seconds=left), origin + timedelta(seconds=right)
-                )
-                * weight
-                + learned.energy(
-                    origin, origin + timedelta(seconds=left), origin + timedelta(seconds=right)
-                )
+        previous_index, learned_index = 0, 0
+        powers = []
+        for left in boundaries[:-1]:
+            while (
+                previous_index + 1 < len(previous_boundaries)
+                and previous_boundaries[previous_index + 1] <= left
+            ):
+                previous_index += 1
+            while (
+                learned_index + 1 < len(learned_boundaries)
+                and learned_boundaries[learned_index + 1] <= left
+            ):
+                learned_index += 1
+            # Every union interval lies within one phase per source. Exhausted sources contribute zero.
+            previous_power = (
+                previous.power_w[previous_index] if previous_index < len(previous.power_w) else 0
             )
-            * SECONDS_PER_HOUR
-            * WATTS_PER_KW
-            / (weight + 1)
-            / (right - left)
-            for left, right in pairwise(boundaries)
-        )
+            learned_power = (
+                learned.power_w[learned_index] if learned_index < len(learned.power_w) else 0
+            )
+            powers.append((previous_power * weight + learned_power) / (weight + 1))
         return CycleProfile(
-            powers,
+            tuple(powers),
             previous.samples + 1,
             "synthetic" if "synthetic" in (previous.evidence, learned.evidence) else "measured",
             phase_durations_seconds=tuple(right - left for left, right in pairwise(boundaries)),

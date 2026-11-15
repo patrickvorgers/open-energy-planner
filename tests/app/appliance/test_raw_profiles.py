@@ -32,6 +32,72 @@ def test_average_irregular_cycles_uses_actual_phase_boundaries():
     assert CycleProfile((1000,)).energy_kwh == pytest.approx(0.25)
 
 
+def test_admitted_large_irregular_average_visits_source_edges_linearly(record_testsuite_property):
+    """Two admitted 900-phase traces retain 13/32 kWh without repeatedly visiting their source edges."""
+    reads = [0]
+
+    class CountedPowers(tuple):
+        """Count actual phase values consumed by iteration or indexed access, independently of execution time."""
+
+        def __iter__(self):
+            """Record each source phase read by an integration scan."""
+            for value in super().__iter__():
+                reads[0] += 1
+                yield value
+
+        def __getitem__(self, index):
+            """Record source phase access during a boundary sweep."""
+            value = super().__getitem__(index)
+            reads[0] += len(value) if isinstance(value, tuple) else 1
+            return value
+
+    previous = CycleProfile(
+        CountedPowers((1000, 3000) * 450), samples=7, phase_durations_seconds=(1,) * 900
+    )
+    learned = CycleProfile(
+        CountedPowers((500,) * 900),
+        evidence="synthetic",
+        phase_durations_seconds=(0.5,) + (1,) * 898 + (1.5,),
+    )
+    reads[0] = 0
+    result = average_profiles(previous, learned, previous_weight=3)
+    record_testsuite_property("large_irregular_source_power_reads", reads[0])
+    assert reads[0] <= 6 * (len(previous.power_w) + len(learned.power_w))
+    assert result.samples == 8 and result.evidence == "synthetic"
+    assert result.power_w[:4] == pytest.approx((875, 875, 2375, 2375))
+    assert result.energy_kwh == pytest.approx(13 / 32)
+    assert result.duration_seconds == 900
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_mixed_irregular_average_pads_shorter_source_without_changing_weighted_energy(reverse):
+    """A partial uniform 1/2-kWh run and shorter irregular 3/8-kWh run average to11/24 kWh in either order."""
+    longer = CycleProfile((1000, 2000), samples=4, measured_duration_seconds=1350)
+    shorter = CycleProfile(
+        (3000, 0), samples=4, evidence="synthetic", phase_durations_seconds=(450, 450)
+    )
+    result = average_profiles(
+        shorter if reverse else longer,
+        longer if reverse else shorter,
+        previous_weight=0.5 if reverse else 2,
+    )
+    assert result.samples == 5 and result.evidence == "synthetic"
+    assert result.phase_boundaries == (0, 450, 900, 1350)
+    assert result.power_w == pytest.approx((5000 / 3, 2000 / 3, 4000 / 3))
+    assert result.energy_kwh == pytest.approx(11 / 24)
+
+
+def test_zero_retained_weight_preserves_new_shape_with_zero_tail():
+    """Zero retained weight gives the new shorter curve plus explicit zero power through the retained longer duration."""
+    previous = CycleProfile((1000, 2000), samples=4, measured_duration_seconds=1350)
+    learned = CycleProfile((3000, 0), phase_durations_seconds=(450, 450))
+    result = average_profiles(previous, learned, previous_weight=0)
+    assert result.power_w == (3000, 0, 0)
+    assert result.phase_durations_seconds == (450, 450, 450)
+    assert result.samples == 5 and result.evidence == "measured"
+    assert result.energy_kwh == pytest.approx(3 / 8)
+
+
 def test_dense_profile_expands_only_its_three_feasible_origins(service):
     """A 1,900-phase half-hour task with three starts needs 5,703 edges, not translations across every horizon quarter."""
     from copy import deepcopy
