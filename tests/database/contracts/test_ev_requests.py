@@ -146,7 +146,7 @@ def test_removed_vehicle_cancels_repeat_and_retains_history_after_restart(ev_ser
 def test_completion_uses_available_capture_without_retiming_old_sample_provenance(
     ev_service, timestamp_kind, capture
 ):
-    """Current available SoC can complete despite old provenance. Expired, unknown or unassigned evidence cannot."""
+    """Retained SoC can complete a recognized session. An expired transport report cannot."""
     configuration = settings()
     if timestamp_kind == "device_sample":
         configuration["vehicles"][0]["soc_timestamp_attribute"] = "sample_time"
@@ -177,7 +177,7 @@ def test_completion_uses_available_capture_without_retiming_old_sample_provenanc
     else:
         ev_service.receive(report, now, "Europe/Amsterdam")
     assert ev_service.state["requests"][request_id]["status"] == (
-        "completed" if capture == "current" else "planned"
+        "planned" if capture == "expired" else "completed"
     )
     if capture in ("current", "different_session"):
         assert ev_service.report["vehicles"][0]["observed_at"] == old_sample

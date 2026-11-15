@@ -9,6 +9,33 @@ from custom_components.open_energy_planner.catalogue_discovery import CatalogueD
 from tests.custom_component.support.chain import configure_energy, running_chain
 
 
+def test_vehicle_tracker_chooser_and_events_exclude_private_location():
+    """Discover tracker names without location values and ignore ordinary location changes."""
+
+    async def scenario():
+        """Exercise actual HA source capture and event admission with synthetic coordinates."""
+        async with running_chain(live=True) as (hass, *_):
+            identity = "device_tracker.synthetic_car"
+            attributes = {"friendly_name": "Synthetic car", "latitude": 12.345, "longitude": 67.89}
+            hass.states.async_set(identity, "home", attributes)
+            choices = await catalogue.source_choices(hass, "ev")
+            projected = next(row for row in choices["entities"] if row["entity_id"] == identity)
+            assert projected["name"] == "Synthetic car"
+            assert not {"latitude", "longitude", "state", "attributes"} & projected.keys()
+            discovery = CatalogueDiscovery(hass)
+            discovery.configure([identity])
+            await discovery.start()
+            try:
+                discovery.acknowledge(await discovery.capture())
+                hass.states.async_set(identity, "away", {**attributes, "latitude": 23.456})
+                await hass.async_block_till_done()
+                assert await discovery.capture() is None
+            finally:
+                discovery.close()
+
+    asyncio.run(scenario())
+
+
 def test_measurement_burst_does_not_read_metadata_or_publish_catalogue(monkeypatch):
     """A thousand value-only updates do no metadata capture, while one changed unit reads one entity."""
 

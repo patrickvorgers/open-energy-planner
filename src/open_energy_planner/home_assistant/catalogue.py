@@ -128,9 +128,11 @@ class HACatalogue:
                 "integration_id" in entity and not entity["integration_id"].strip()
             ):
                 raise ValueError("Invalid setup entity metadata")
-            if not entity["entity_id"].startswith(("sensor.", "binary_sensor.", "water_heater.")):
+            if not entity["entity_id"].startswith(
+                ("sensor.", "binary_sensor.", "water_heater.", "device_tracker.")
+            ):
                 raise ValueError(
-                    "Only sensor, binary sensor and water heater metadata is supported"
+                    "Only sensor, binary sensor, device tracker and water heater metadata is supported"
                 )
         hints = body["suggestions"]
         if not isinstance(hints, dict) or set(hints) - {

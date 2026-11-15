@@ -101,7 +101,7 @@ Energy, then refresh sources here. A missing power link must be configured there
 before saving. Refresh adopts the configured power link without discarding your
 other edits. To use another Energy device, remove the charge point and add the
 intended device. Historical evidence remains retained. The physical connection sensor and
-vehicle assignment are never inferred. Use **Find connection sensor** to search
+vehicle recognition are separate. Use **Find connection sensor** to search
 compatible sensors and helpers across integrations by device name, sensor name
 or entity ID. Refresh updates the Energy list without discarding edits.
 A removed meter remains visible as unavailable until it is restored in Energy.
@@ -132,7 +132,25 @@ explaining the retained history. **Cancel** or Escape keeps the configuration
 unchanged. Confirming removal stages it in the editor. Choose **Save settings**
 to apply it, or **Cancel** in the editor to restore the saved configuration.
 
-A connected plug proves presence, not vehicle identity. Explicitly identify the connected vehicle through the supported Home Assistant control or an automation that genuinely knows it. A previous session's assignment does not authorize a later connection.
+A single allowed vehicle is recognized automatically when plugged in. For several
+cars, optionally choose each car's **Vehicle plugged in**, **Vehicle charging**
+and **Vehicle location** sources. The app combines fresh signals, planned
+expectation and maximum charging power. Location is optional. Exact coordinates
+are not sent. A low charging rate does not identify a smaller car. If evidence
+cannot distinguish cars, recognition waits and checks automatically as readings
+change. The app does not ask you which car is connected.
+
+A recognized arrival without a planned request automatically uses the saved
+target and next default departure. Cancellation remains effective for that
+connection, including after restarting the app.
+
+If SoC updates stop, the last known measurement remains usable regardless of its
+age. Measured charging energy for that car increases the estimate with estimated
+charging losses. **Estimated SoC** shows the original measurement time. Driving
+since that measurement is unknown, so an old value can overstate the charge and
+stop planning too early. A new real SoC measurement corrects it automatically.
+Meter resets and unproved energy jumps never add invented charge. A car that has
+never supplied a SoC remains unavailable for planning.
 
 Under **Energy > EV charging**, choose **Plan charging request** for the vehicle.
 OEP prefills its saved target SoC and next departure. Change either value for this
@@ -156,12 +174,13 @@ A request is one-off unless you enable **Repeat on selected weekdays** and selec
 its days. Selecting every day means daily repetition. Each occurrence uses the
 same target and HA-local departure time. Completion or expiry creates at most
 one following occurrence. Cancelling the current request also stops its repeating
-schedule. Configuration, refresh, restart and plugging in never create a request.
+schedule. Configuration alone never creates a request. A recognized arrival can
+create one automatic request, while refresh and restart preserve its outcome.
 
 Home Assistant's timezone applies. Nonexistent spring-forward times are rejected
 for manual departures. Repeating departures skip that occurrence. The autumn
 repeated hour has one scheduled occurrence. The planner recalculates energy from
-current measured SoC and reports any shortfall. V2G is not supported.
+the latest measured or estimated SoC and reports any shortfall. V2G is not supported.
 
 See [EV charging contracts](../development/EV-CHARGING.md) for supported capability modes, losses, session identity and the automation blueprint.
 
@@ -176,7 +195,7 @@ those defaults. Native target/date/time controls edit that request. The
 `open_energy_planner.ev_schedule` and `ev_cancel` actions support automations,
 including explicit weekday repetition. See the developer contract for fields.
 
-A fresh connection report, explicit vehicle assignment and available SoC are
+A fresh connection report, recognized vehicle and last-known or measured SoC are
 required for a charging request. Without them, no EV charging is planned. OEP
 does not predict the next arrival or invent a charging request from history.
 Physical charging still belongs to your Home Assistant automation. Another

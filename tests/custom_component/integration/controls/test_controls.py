@@ -193,7 +193,7 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
             )
             await coordinator.sync()
             await hass.async_block_till_done()
-            assert hass.states.get(car_select).state == "Unknown"
+            assert hass.states.get(car_select).state == "Test car B"
             assert hass.states.get(car_select).attributes["options"] == [
                 "Unknown",
                 "Test car A",
@@ -207,9 +207,9 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
             await hass.async_block_till_done()
             await coordinator.sync()
             await hass.async_block_till_done()
-            assert hass.states.get(car_select).state == "Unknown"
             car_a = f"Shared car ({fixture['cars'][0]['soc']})"
             car_b = f"Shared car ({fixture['cars'][1]['soc']})"
+            assert hass.states.get(car_select).state == car_b
             assert car_a != car_b
             assert hass.states.get(car_select).attributes["options"] == ["Unknown", car_a, car_b]
             await hass.services.async_call(

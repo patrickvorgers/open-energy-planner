@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, time, timedelta
+from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.appliances.cycles.model import instant
@@ -19,6 +20,7 @@ from open_energy_planner.appliances.ev.notifications import (
     EXECUTION_DEVIATION_ADVICE,
     forecast_boundary_issue,
 )
+from open_energy_planner.appliances.ev.recognition import recognition_evidence, recognize
 from open_energy_planner.appliances.ev.requests import (
     REQUEST_HISTORY_PAGE_SIZE,
     active_request,
@@ -27,6 +29,13 @@ from open_energy_planner.appliances.ev.requests import (
     departure,
     request_document,
     save_request,
+)
+from open_energy_planner.appliances.ev.telemetry import (
+    TELEMETRY_KEY,
+    configure_telemetry,
+    empty_telemetry,
+    update_telemetry,
+    vehicle_estimates,
 )
 from open_energy_planner.core.units import FULL_SOC_PERCENT
 from open_energy_planner.demand.calculation.model import digest
@@ -45,7 +54,7 @@ EV_POWER_DEVIATION_SECONDS = 60
 
 
 class EVService:
-    """Own configuration and intent. Telemetry is deliberately unavailable after app restart."""
+    """Retain intent and labelled SoC estimates while requiring fresh physical connection evidence."""
 
     def __init__(self, documents, consumers, appliances):
         """Restore intent without promoting retained SoC or old vehicle assignments to live facts."""
@@ -65,14 +74,22 @@ class EVService:
             {record["id"]: record for record in documents.iter_prefix(REQUEST_CURRENT_PREFIX)}
         )
         self.report = None
+        self.telemetry = (
+            documents.read(TELEMETRY_KEY) if documents.exists(TELEMETRY_KEY) else empty_telemetry()
+        )
         self.issue = None
         self.power_deviations = {}
 
-    def commit(self, state, selected=None):
-        """Archive changed requests and optional forecast membership in one database transaction."""
+    def commit(self, state, selected=None, telemetry=None):
+        """Commit intent and current telemetry atomically without archiving every sensor refresh."""
         if state == self.state:
-            if selected is not None and tuple(selected) != self.consumers.selected:
-                self.consumers.save(tuple(selected), self.consumers.version)
+            with self.documents.transaction():
+                if selected is not None and tuple(selected) != self.consumers.selected:
+                    self.consumers.save(tuple(selected), self.consumers.version)
+                if telemetry is not None and telemetry != self.telemetry:
+                    self.documents.write(TELEMETRY_KEY, telemetry)
+            if telemetry is not None:
+                self.telemetry = telemetry
             return
         changed = {
             request_id: record
@@ -107,8 +124,12 @@ class EVService:
                 self.documents.write(REQUEST_CURRENT_PREFIX + request_id + ".json", record)
             self.documents.write("ev-state-" + revision + ".json", snapshot)
             self.documents.write(STATE_KEY, snapshot)
+            if telemetry is not None and telemetry != self.telemetry:
+                self.documents.write(TELEMETRY_KEY, telemetry)
         self.state = state
         self.archive_revision = revision
+        if telemetry is not None:
+            self.telemetry = telemetry
 
     @property
     def revision(self):
@@ -117,7 +138,11 @@ class EVService:
             {key: row[key] for key in ("id", "session_id", "connected")}
             for row in (self.report or {}).get("points", [])
         ]
-        current = {key: self.state[key] for key in ("vehicles", "points", "assignments")}
+        current = {key: self.state[key] for key in ("vehicles", "points")}
+        current["assignments"] = {
+            point_id: {key: assigned[key] for key in ("vehicle_id", "session_id")}
+            for point_id, assigned in self.state["assignments"].items()
+        }
         current["requests"] = {
             vehicle_id: self.state["requests"][request_id]
             for vehicle_id, request_id in self.state["active_requests"].items()
@@ -145,7 +170,8 @@ class EVService:
             and selected == self.consumers.selected
         ):
             selected = None
-        self.commit(state, selected)
+        telemetry = configure_telemetry(self.telemetry, self.state, state)
+        self.commit(state, selected, telemetry)
         self.report = None
         self.power_deviations.clear()
         self.issue = None
@@ -174,7 +200,12 @@ class EVService:
             expected = {row["id"] for row in self.state[kind]}
             if not isinstance(rows, list) or len(rows) != len(expected):
                 raise ValueError("EV report membership mismatch")
-            if any(not isinstance(row, dict) or set(row) != fields for row in rows):
+            optional = (
+                {"connected", "charging", "home", "source_timestamp_attribute"}
+                if kind == "vehicles"
+                else {"energy_kwh", "energy_observed_at"}
+            )
+            if any(not isinstance(row, dict) or set(row) - optional != fields for row in rows):
                 raise ValueError("Invalid EV reading fields")
             if {row["id"] for row in rows} != expected:
                 raise ValueError("EV reading identity mismatch")
@@ -184,13 +215,26 @@ class EVService:
                 observed = instant(row["observed_at"])
                 reported = instant(row["reported_at"])
                 configured = next(car for car in self.state["vehicles"] if car["id"] == row["id"])
+                attribute = row.get(
+                    "source_timestamp_attribute", configured.get("soc_timestamp_attribute")
+                )
                 kinds = (
                     ("device_sample",)
                     if configured.get("soc_timestamp_attribute")
-                    else ("ha_report", "ha_state")
+                    else ("device_sample", "ha_report", "ha_state")
                 )
                 if (
                     row["timestamp_kind"] not in kinds
+                    or (
+                        row["timestamp_kind"] == "device_sample"
+                        and (
+                            not isinstance(attribute, str)
+                            or not attribute
+                            or len(attribute) > 64
+                            or not attribute.isprintable()
+                            or configured.get("soc_timestamp_attribute") not in (None, attribute)
+                        )
+                    )
                     or observed > at + timedelta(seconds=CLOCK_SKEW_SECONDS)
                     or reported > at + timedelta(seconds=CLOCK_SKEW_SECONDS)
                 ):
@@ -198,17 +242,88 @@ class EVService:
                         "Vehicle SoC provenance is invalid or its timestamp is in the future"
                     )
             elif any(
-                row[key] is not None for key in ("observed_at", "reported_at", "timestamp_kind")
+                row.get(key) is not None
+                for key in (
+                    "observed_at",
+                    "reported_at",
+                    "timestamp_kind",
+                    "source_timestamp_attribute",
+                )
             ):
                 raise ValueError("Unknown SoC cannot have a claimed measurement timestamp")
+            for field in ("connected", "charging", "home"):
+                status = row.get(field)
+                if status is None:
+                    continue
+                if (
+                    not isinstance(status, dict)
+                    or set(status) != {"value", "observed_at", "reported_at", "timestamp_kind"}
+                    or type(status["value"]) is not bool
+                    or status["timestamp_kind"] not in ("device_sample", "ha_report", "ha_state")
+                    or instant(status["observed_at"]) > at + timedelta(seconds=CLOCK_SKEW_SECONDS)
+                    or instant(status["reported_at"]) > at + timedelta(seconds=CLOCK_SKEW_SECONDS)
+                    or not next(
+                        car for car in self.state["vehicles"] if car["id"] == row["id"]
+                    ).get(
+                        {
+                            "connected": "connected_entity",
+                            "charging": "charging_entity",
+                            "home": "location_entity",
+                        }[field]
+                    )
+                ):
+                    raise ValueError("Invalid vehicle recognition evidence")
         for row in body["points"]:
             identity(row["session_id"])
             if row["connected"] is not None and type(row["connected"]) is not bool:
                 raise ValueError("Connection must be explicitly true, false or unknown")
             if row["power_w"] is not None:
                 number(row["power_w"], 0, MAX_EV_POWER_W)
+            if row.get("energy_kwh") is not None:
+                number(row["energy_kwh"], 0, float("inf"))
+            if row.get("energy_observed_at") is not None and (
+                row.get("energy_kwh") is None
+                or instant(row["energy_observed_at"]) > at + timedelta(seconds=CLOCK_SKEW_SECONDS)
+            ):
+                raise ValueError("Invalid EV meter provenance")
+        state = deepcopy(self.state)
+        completion_state = {**state, "assignments": recognize(state, body, at)}
+        state["assignments"] = recognize(state, body, now)
+        telemetry = update_telemetry(self.telemetry, state, body)
+        completion_report = deepcopy(body)
+        estimates = vehicle_estimates(telemetry, state["vehicles"], now)
+        for vehicle in completion_report["vehicles"]:
+            vehicle["soc"] = estimates.get(vehicle["id"], {}).get("soc")
+            vehicle["soc_basis"] = estimates.get(vehicle["id"], {}).get("basis")
+        for point_id, assignment in completion_state["assignments"].items():
+            vehicle_id = assignment.get("vehicle_id")
+            request = active_request(completion_state, vehicle_id)
+            if request and instant(request["ready_at"]) <= at < instant(request["departure"]):
+                telemetry["sessions"][point_id]["request_ids"][vehicle_id] = request["id"]
+        current_assignments = state["assignments"]
+        state = advance_requests(completion_state, completion_report, now, timezone)
+        state["assignments"] = current_assignments
+        if timezone:
+            for point in state["points"]:
+                session = telemetry["sessions"][point["id"]]
+                vehicle_id = session["vehicle_id"]
+                if not vehicle_id or point["control"] == "read_only":
+                    continue
+                request = active_request(state, vehicle_id)
+                if request is None and session["request_ids"].get(vehicle_id):
+                    continue
+                request_id = (
+                    request["id"]
+                    if request
+                    else str(uuid5(UUID(session["session_id"]), vehicle_id))
+                )
+                if request is None:
+                    state = save_request(
+                        state, {"request_id": request_id, "vehicle_id": vehicle_id}, now, timezone
+                    )
+                session["request_ids"][vehicle_id] = request_id
+        self.commit(advance_requests(state, completion_report, now, timezone), telemetry=telemetry)
         self.report = deepcopy(body)
-        self.commit(advance_requests(self.state, self.report, now, timezone))
 
     @property
     def configuration_version(self):
@@ -330,15 +445,8 @@ class EVService:
         return self.report["points"]
 
     def vehicle_readings(self, now):
-        """Return available SoC only while its integration report is current, preserving original sensor times."""
-        if (
-            not self.report
-            or not -CLOCK_SKEW_SECONDS
-            <= (now - instant(self.report["at"])).total_seconds()
-            < REPORT_MAX_AGE_SECONDS
-        ):
-            return {}
-        return {row["id"]: row for row in self.report["vehicles"] if row["soc"] is not None}
+        """Return labelled last-known estimates. Fresh session evidence is independently required by work."""
+        return vehicle_estimates(self.telemetry, self.state["vehicles"], now)
 
     def energy_source_available(self, point):
         """Require the saved measurement pair to match current authoritative Energy configuration."""
@@ -445,6 +553,8 @@ class EVService:
                         if point["id"] == work.point_id
                     ),
                     "soc_reading": deepcopy(self.vehicle_readings(now)[work.vehicle_id]),
+                    "recognition": recognition_evidence(self.state, self.report, work.point_id),
+                    "energy_checkpoint": deepcopy(self.telemetry["sessions"].get(work.point_id)),
                     "soc_source": {
                         field: next(
                             car for car in self.state["vehicles"] if car["id"] == work.vehicle_id
@@ -558,6 +668,12 @@ class EVService:
                 and assigned.get("session_id") == actual.get("session_id")
                 else None
             )
+            session_request = self.state["requests"].get(
+                self.telemetry["sessions"]
+                .get(point["id"], {})
+                .get("request_ids", {})
+                .get(vehicle_id)
+            )
             status = (
                 "energy_source_unavailable"
                 if not self.energy_source_available(point)
@@ -571,6 +687,10 @@ class EVService:
                 if not vehicle_id
                 else "measurement_only"
                 if point["control"] == "read_only"
+                else "request_finished"
+                if active_request(self.state, vehicle_id) is None
+                and session_request
+                and session_request["status"] != "planned"
                 else "request_missing"
                 if active_request(self.state, vehicle_id) is None
                 else "ready"
@@ -583,6 +703,13 @@ class EVService:
                     "name": names.get(point["energy_entity"], "Charge point"),
                     "actual": actual,
                     "vehicle_id": vehicle_id,
+                    "session_request_status": session_request["status"]
+                    if session_request
+                    else None,
+                    "recognition": assigned,
+                    "energy_issue": self.telemetry["sessions"]
+                    .get(point["id"], {})
+                    .get("energy_issue"),
                     "status": status,
                     "execution_issue": (
                         EXECUTION_DEVIATION_ADVICE if usable and point["id"] in confirmed else None

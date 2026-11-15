@@ -67,6 +67,7 @@ def request_document(request):
         "updated_at",
         "previous_request_id",
         "continued_by",
+        "completion_soc_basis",
     )
     return {
         **{field: request[field] for field in fields if field in request},
@@ -206,6 +207,10 @@ def advance_requests(state, report, now, timezone=None):
             status=RequestStatus.COMPLETED if completed else RequestStatus.EXPIRED,
             updated_at=(captured_at if completed else now).isoformat(),
         )
+        if completed:
+            request["completion_soc_basis"] = readings.get(vehicle_id, {}).get(
+                "soc_basis", "measured"
+            )
         updated["active_requests"].pop(vehicle_id, None)
         if request["repeat_weekdays"]:
             zone = timezone or request["timezone"]

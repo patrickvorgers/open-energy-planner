@@ -15,6 +15,9 @@ from open_energy_planner.storage.writes import complete_write
 
 # Only these reviewed owned literals may cross the public error boundary.
 PUBLIC_VALIDATION_MESSAGES = (
+    "Invalid vehicle recognition evidence",
+    "Invalid EV meter provenance",
+    "Select an available vehicle recognition source",
     "Charging request belongs to a different vehicle",
     "Invalid charging request fields",
     "Charging request ID was already used",

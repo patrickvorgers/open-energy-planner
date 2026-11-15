@@ -263,6 +263,9 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     page.wait_for_function(
         "() => window.overviewReads.some(record=>record.armed&&record.kind!==window.stalledOverviewKind&&record.completed)"
     )
+    if stalled == "savings":
+        # Finish Planning's independent simulation read before timing out Savings.
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
     page.clock.fast_forward(5100)
     page.wait_for_function("() => window.overviewReads.some(record=>record.aborted)", timeout=1500)
     expect(page.locator("#overview-status" if stalled == "plan" else "#coverage")).to_contain_text(

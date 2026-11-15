@@ -9,6 +9,60 @@ from tests.frontend.browser.helpers import TOKEN, discover
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
+def test_vehicle_recognition_sources_are_scoped_and_saved_as_optional_fields(app_page):
+    """Unique sources prefill a draft for this car and survive save without collecting location."""
+    page, url = app_page
+    body = discover(page, url)
+    for entity_id, kind, unit in (
+        ("sensor.synthetic_family_soc", "battery", "%"),
+        ("binary_sensor.synthetic_family_plug", "plug", ""),
+        ("binary_sensor.synthetic_family_charging", "battery_charging", ""),
+        ("device_tracker.synthetic_family_location", "", ""),
+    ):
+        body["entities"].append(
+            {
+                "entity_id": entity_id,
+                "device_id": "family-car",
+                "device_name": "Family car",
+                "name": kind or "Vehicle location",
+                "unit": unit,
+                "device_class": kind,
+                "state_class": "",
+                "integration_id": "family-account",
+                "integration_name": "Family account",
+            }
+        )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    choose_integration(page, "family-account")
+    expect(page.get_by_label("Vehicle plugged in", exact=True)).to_have_value(
+        "binary_sensor.synthetic_family_plug"
+    )
+    expect(page.get_by_label("Vehicle charging", exact=True)).to_have_value(
+        "binary_sensor.synthetic_family_charging"
+    )
+    expect(page.get_by_label("Vehicle location", exact=True)).to_have_value(
+        "device_tracker.synthetic_family_location"
+    )
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    Path("results/ci").mkdir(parents=True, exist_ok=True)
+    page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
+    page.screenshot(
+        path=f"results/ci/ev-recognition-settings-{page.viewport_size['width']}.png", full_page=True
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert saved["connected_entity"] == "binary_sensor.synthetic_family_plug"
+    assert saved["charging_entity"] == "binary_sensor.synthetic_family_charging"
+    assert saved["location_entity"] == "device_tracker.synthetic_family_location"
+
+
 def test_selecting_matching_device_retains_current_soc_source_and_saves(app_page):
     """A sensor selected after rendering remains selected when its own device is chosen."""
     page, url = app_page
@@ -143,6 +197,54 @@ def choose_integration(page, integration):
     page.get_by_role("combobox", name="Home Assistant integration", exact=True).select_option(
         integration
     )
+
+
+def test_unowned_soc_source_does_not_adopt_unrelated_recognition_sources(app_page):
+    """Missing device and integration identity never means two unrelated sources share a car."""
+    page, url = app_page
+    body = discover(page, url)
+    for entity_id, unit, kind in (
+        ("sensor.synthetic_unowned_soc", "%", "battery"),
+        ("binary_sensor.synthetic_unrelated_plug", "", "plug"),
+        ("binary_sensor.synthetic_unrelated_charging", "", "battery_charging"),
+        ("device_tracker.synthetic_unrelated_location", "", ""),
+    ):
+        body["entities"].append(
+            {
+                "entity_id": entity_id,
+                "name": "Unowned test source",
+                "device_id": "",
+                "unit": unit,
+                "device_class": kind,
+                "state_class": "",
+            }
+        )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    choose_integration(page, "other")
+    page.get_by_label("Vehicle state of charge", exact=True).select_option(
+        "sensor.synthetic_unowned_soc"
+    )
+    for label in ("Vehicle plugged in", "Vehicle charging", "Vehicle location"):
+        control = page.get_by_label(label, exact=True)
+        expect(control).to_have_value("")
+        expect(control.locator("option")).to_have_count(1)
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
+    page.screenshot(
+        path=f"results/ci/ev-unowned-sources-{page.viewport_size['width']}.png", full_page=True
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    vehicle = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert vehicle["connected_entity"] is None
+    assert vehicle["charging_entity"] is None
+    assert vehicle["location_entity"] is None
 
 
 def test_large_catalogue_tail_vehicle_is_selectable_and_saved(app_page):
