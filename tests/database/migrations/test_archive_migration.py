@@ -1263,7 +1263,7 @@ def test_ev_request_versions_and_global_intent_revisions_transfer_without_source
 
     from open_energy_planner.appliances.ev.service import EVService
     from open_energy_planner.appliances.forecasting import ConsumerForecasts
-    from tests.app.ev.support.devices import CAR, NOW, catalogue, settings
+    from tests.app.ev.support.devices import CAR, NOW, catalogue, observations, settings
     from tests.database.support.ev import reconstruct_requests
 
     (source, target), root = route
@@ -1277,17 +1277,71 @@ def test_ev_request_versions_and_global_intent_revisions_transfer_without_source
     body = {"request_id": str(uuid4()), "vehicle_id": CAR, "target_soc": 65}
     service.save_request(body, NOW, "Europe/Amsterdam")
     archived = service.documents.read("ev-state.json")
+    first = observations(service)
+    first["points"][0]["energy_kwh"] = 100
+    service.receive(first, NOW, "Europe/Amsterdam")
+    later = NOW + timedelta(hours=1)
+    charged = observations(service, later, soc=None)
+    charged["points"][0].update(energy_kwh=102.3, energy_observed_at=later.isoformat())
+    service.receive(charged, later, "Europe/Amsterdam")
+    assert service.vehicle_readings(later)[CAR]["stored_kwh"] == pytest.approx(1.84)
     request = service.document(NOW, "Europe/Amsterdam")["vehicles"][0]["charging_request"]
-    service.cancel_request(request["id"], request["version"], NOW, CAR)
+    service.cancel_request(request["id"], request["version"], later, CAR)
+    retained_telemetry = deepcopy(service.telemetry)
     migrate_archive(source, target, overwrite_target=True)
     original.close()
     source.dispose()
     restored_consumers = ConsumerForecasts(SqlDocuments(target, "demand"))
     restored_consumers.options = consumers.options
     restored = EVService(SqlDocuments(target, "planning"), restored_consumers, appliances)
+    assert restored.telemetry == retained_telemetry
+    assert restored.vehicle_readings(later)[CAR]["soc"] == pytest.approx(50 + 1.84 / 60 * 100)
     restored.save_request(body, NOW + timedelta(days=1), "Europe/Amsterdam")
+    captured_at = later + timedelta(seconds=5)
+    charged["at"] = captured_at.isoformat()
+    restored.receive(charged, captured_at, "Europe/Amsterdam")
     assert restored.state["active_requests"] == {}
     assert restored.request_history(catalogue())["requests"][0]["status"] == "cancelled"
     retained = reconstruct_requests(restored.documents, archived)
     assert retained[body["request_id"]]["status"] == "planned"
     assert retained[body["request_id"]]["target_soc"] == 65
+
+
+def test_ev_recognition_plan_transfers_and_replays_without_source(route):
+    """Every backend route preserves actual prepared recognition evidence and solver inputs after source shutdown."""
+    from types import SimpleNamespace
+
+    from open_energy_planner.appliances.ev.service import EVService
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from open_energy_planner.savings.forecast import comparison
+    from open_energy_planner.savings.scenarios import scenario
+    from tests.app.ev.support.devices import CAR, POINT, catalogue
+    from tests.database.support.ev import expected_recognition_inputs, recognition_plan
+
+    (source, target), root = route
+    original = SqlPlanRepository(root / "source", engine=source)
+    SqlPlanRepository(root / "target", engine=target)
+    consumers = ConsumerForecasts(SqlDocuments(source, "demand"))
+    consumers.sync(catalogue())
+    service = EVService(
+        SqlDocuments(source, "planning"), consumers, SimpleNamespace(state={"devices": {}})
+    )
+    snapshot, plan = recognition_plan(service)
+    original.state["plan"] = plan
+    original.save()
+    migrate_archive(source, target, overwrite_target=True)
+    original.close()
+    source.dispose()
+    restored = SqlPlanRepository(root / "target", engine=target)
+    copied = restored.get_plan(plan["plan_id"])
+    assert copied == plan
+    recognition = copied["input_snapshot"]["ev_evidence"][0]["recognition"]
+    assert recognition["vehicle_id"] == CAR
+    assert recognition["candidates"] == [CAR]
+    assert recognition["inputs"] == expected_recognition_inputs()
+    assert copied["input_snapshot"]["ev_evidence"][0]["work"]["point_id"] == POINT
+    reference = comparison(copied)
+    assert scenario(copied, reference, without_battery=True) == scenario(
+        plan, reference, without_battery=True
+    )
+    assert snapshot.problem.ev_work[0].required_kwh == 18

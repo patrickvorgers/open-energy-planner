@@ -23,7 +23,7 @@ from . import catalogue
 from .const import DOMAIN
 from .setup_history import setup_history
 
-SOURCE_DOMAINS = ("sensor", "binary_sensor", "water_heater")
+SOURCE_DOMAINS = ("sensor", "binary_sensor", "water_heater", "device_tracker")
 ENERGY_MANAGER_KEY = f"{DOMAIN}.catalogue_energy_manager"
 ENERGY_CHANGED = f"{DOMAIN}.catalogue_energy_changed"
 METADATA_ATTRIBUTES = ("friendly_name", "unit_of_measurement", "device_class", "state_class")

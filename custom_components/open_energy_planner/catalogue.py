@@ -391,6 +391,7 @@ async def setup_catalogue(hass, selected=None, *, include_history=True):
             *hass.states.async_all("sensor"),
             *hass.states.async_all("binary_sensor"),
             *hass.states.async_all("water_heater"),
+            *hass.states.async_all("device_tracker"),
         ]
         if selected is None
         else [state for identity in selected if (state := hass.states.get(identity)) is not None]
@@ -401,7 +402,7 @@ async def setup_catalogue(hass, selected=None, *, include_history=True):
         State(entity_id, STATE_UNKNOWN)
         for entity_id in (preferred_entities(suggestions) if selected is None else selected)
         - present
-        if entity_id.startswith(("sensor.", "binary_sensor.", "water_heater."))
+        if entity_id.startswith(("sensor.", "binary_sensor.", "water_heater.", "device_tracker."))
     )
     entities = [
         metadata
@@ -426,7 +427,11 @@ async def source_choices(hass, scope):
     """Capture a complete finite chooser scope without retaining unrelated metadata or reading history."""
     if scope not in ("ev", "thermal"):
         raise ValueError("Unsupported source choice scope")
-    domains = ("sensor", "binary_sensor") if scope == "ev" else ("sensor", "water_heater")
+    domains = (
+        ("sensor", "binary_sensor", "device_tracker")
+        if scope == "ev"
+        else ("sensor", "water_heater")
+    )
     identities = set()
     for domain in domains:
         for state in hass.states.async_all(domain):

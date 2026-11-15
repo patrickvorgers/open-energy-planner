@@ -268,7 +268,12 @@ belongs to the charge point. These are separate virtual devices.
 
 **State of charge**
 
-Accepted current car measurement in percent, or unknown without usable evidence. **Use:** Compare actual SoC with the requested target. It is not the desired SoC setting.
+The best available measured or estimated car charge in percent. The last genuine
+measurement remains available when old or temporarily unavailable. `basis`,
+`measured_soc`, `observed_at`, `stored_kwh` and `estimate_updated_at` explain the
+source. Driving since the measurement is unknown. A newer real sample corrects
+the estimate. Unknown means no usable anchor has ever been received. **Use:**
+Compare available charge with the target while checking its age and basis.
 
 **Usable battery capacity**
 
@@ -335,6 +340,8 @@ Configured minimum active charging power in W. **Use:** Interpret the nonzero op
 | `measurement_only` | The charge point is configured read-only. |
 | `ready` | The app has the required planning evidence. This alone does not mean charging is requested. |
 | `soc_or_limits_unavailable` | Required vehicle SoC or charging-limit evidence is unavailable. |
+| `request_missing` | No planned charging request exists. |
+| `request_finished` | This connection's charging request completed, expired or was cancelled. Polling will not recreate it. |
 
 EV sensors remain available while their device exists and the coordinator is not
 closed. Missing measurements or schedules are therefore commonly `unknown`, while

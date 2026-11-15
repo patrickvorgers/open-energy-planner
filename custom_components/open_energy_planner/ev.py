@@ -1,6 +1,6 @@
 """HA-only EV readings, session identity and native virtual-device reconciliation."""
 
-from datetime import time
+from datetime import UTC, datetime, time
 from math import isfinite
 from uuid import uuid4
 
@@ -19,6 +19,51 @@ from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
 
 MAX_EV_POWER_W = 100000
 MAX_EV_CAPACITY_KWH = 1000
+SAMPLE_TIME_ATTRIBUTES = ("Last updated", "sampled_at", "sample_time", "last_updated")
+
+
+def sample_attribute(state, explicit=None, *, location=False):
+    """Prefer an explicit or available original sample key over HA republication time."""
+    if explicit:
+        return explicit
+    keys = ("position_updated_at", *SAMPLE_TIME_ATTRIBUTES) if location else SAMPLE_TIME_ATTRIBUTES
+    return next((key for key in keys if state and key in state.attributes), None)
+
+
+def vehicle_status(hass, entity_id, now, *, location=False):
+    """Return only a timestamped boolean, never GPS coordinates, zone names or provider payloads."""
+    state = hass.states.get(entity_id) if entity_id else None
+    if state is None or state.state in ("unknown", "unavailable"):
+        return None
+    value = state.state == "home" if location else {"on": True, "off": False}.get(state.state)
+    if value is None:
+        return None
+    attribute = sample_attribute(state, location=location)
+    reported = getattr(state, "last_reported", state.last_updated)
+    try:
+        observed = datetime.fromisoformat(state.attributes[attribute]) if attribute else reported
+        if observed.utcoffset() is None or reported.utcoffset() is None:
+            return None
+        observed = observed.astimezone(UTC)
+        if observed > now or reported > now:
+            return None
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return {
+        "value": value,
+        "observed_at": observed.isoformat(),
+        "reported_at": reported.isoformat(),
+        "timestamp_kind": "device_sample" if attribute else "ha_report",
+    }
+
+
+def energy_reading(hass, point, now):
+    """Read the selected cumulative AC meter, preserving missing or reset values for app admission."""
+    binding = SourceBinding("ev.energy." + point["id"], point["energy_entity"], Quantity.ENERGY)
+    result = HomeAssistantMeasurementSource(hass.states).read((binding,), now)
+    return result.readings[0] if result.ready and result.readings else None
+
+
 DAYS_PER_WEEK = 7
 
 
@@ -39,7 +84,9 @@ def soc_reading(hass, vehicle, now):
         "ev.soc." + vehicle["id"],
         vehicle["soc_entity"],
         Quantity.SOC,
-        timestamp_attribute=vehicle.get("soc_timestamp_attribute"),
+        timestamp_attribute=sample_attribute(
+            hass.states.get(vehicle["soc_entity"]), vehicle.get("soc_timestamp_attribute")
+        ),
     )
     result = HomeAssistantMeasurementSource(hass.states).read((binding,), now)
     return result.readings[0] if result.ready and result.readings else None
@@ -92,6 +139,17 @@ def capture(coordinator, projection, now):
                 "observed_at": measured.observed_at.isoformat() if measured else None,
                 "reported_at": measured.reported_at.isoformat() if measured else None,
                 "timestamp_kind": measured.timestamp_kind if measured else None,
+                "source_timestamp_attribute": sample_attribute(
+                    coordinator.hass.states.get(vehicle["soc_entity"]),
+                    vehicle.get("soc_timestamp_attribute"),
+                )
+                if measured
+                else None,
+                "connected": vehicle_status(coordinator.hass, vehicle.get("connected_entity"), now),
+                "charging": vehicle_status(coordinator.hass, vehicle.get("charging_entity"), now),
+                "home": vehicle_status(
+                    coordinator.hass, vehicle.get("location_entity"), now, location=True
+                ),
             }
         )
     for point in projection.get("points", []):
@@ -102,8 +160,15 @@ def capture(coordinator, projection, now):
             previous = {"session_id": str(uuid4()), "connected": connected}
             coordinator.ev_sessions[point["id"]] = previous
         measured = power_reading(coordinator.hass, point, now)
+        energy = energy_reading(coordinator.hass, point, now)
         points.append(
-            {"id": point["id"], **previous, "power_w": measured.value if measured else None}
+            {
+                "id": point["id"],
+                **previous,
+                "power_w": measured.value if measured else None,
+                "energy_kwh": energy.value if energy else None,
+                "energy_observed_at": energy.observed_at.isoformat() if energy else None,
+            }
         )
     return {
         "configuration_version": projection["configuration_version"],
@@ -154,6 +219,35 @@ def receive(value):
                 ):
                     raise ValueError("Invalid EV source entity")
             if kind == "vehicles":
+                actual = row.get("actual")
+                if actual is not None:
+                    if (
+                        not isinstance(actual, dict)
+                        or actual.get("source_entity") != row["soc_entity"]
+                        or actual.get("basis")
+                        not in ("measured", "last_known", "estimated_from_meter")
+                        or any(
+                            type(actual.get(field)) not in (int, float)
+                            or not isfinite(actual[field])
+                            or not 0 <= actual[field] <= FULL_SOC_PERCENT
+                            for field in ("soc", "measured_soc")
+                        )
+                    ):
+                        raise ValueError("Invalid EV SoC estimate")
+                    timestamp(actual.get("observed_at"))
+                    timestamp(actual.get("estimate_updated_at"))
+                for field, domain in (
+                    ("connected_entity", "binary_sensor."),
+                    ("charging_entity", "binary_sensor."),
+                    ("location_entity", "device_tracker."),
+                ):
+                    source = row.get(field)
+                    if source is not None and (
+                        not isinstance(source, str)
+                        or not source.startswith(domain)
+                        or len(source) > 127
+                    ):
+                        raise ValueError("Invalid EV recognition source")
                 request = row.get("charging_request")
                 if request is not None:
                     if (
@@ -248,6 +342,34 @@ def receive(value):
     return value
 
 
+def soc_evidence(hass, vehicle, now):
+    """Use the app estimate unless a genuinely newer local sample supersedes its real anchor."""
+    measured = soc_reading(hass, vehicle, now)
+    actual = vehicle.get("actual")
+    if measured and (
+        not actual
+        or (
+            measured.observed_at >= timestamp(actual["observed_at"])
+            and (
+                measured.value != actual["measured_soc"]
+                or (
+                    measured.timestamp_kind == "device_sample"
+                    and measured.observed_at > timestamp(actual["observed_at"])
+                )
+            )
+        )
+    ):
+        return {
+            "soc": measured.value,
+            "basis": "measured",
+            "measured_soc": measured.value,
+            "observed_at": measured.observed_at.isoformat(),
+            "stored_kwh": 0,
+            "estimate_updated_at": measured.observed_at.isoformat(),
+        }
+    return actual or {}
+
+
 def command(coordinator, point):
     """Gate a current plan by the same car/session and current local SoC/connection, including outages."""
     projection = coordinator.projection
@@ -292,8 +414,8 @@ def command(coordinator, point):
         or document.get("ev_context", {}).get("revision") != coordinator.ev.get("revision")
     ):
         return None
-    measured = soc_reading(coordinator.hass, vehicle, dt_util.utcnow())
-    if measured is None or measured.value >= request["target_soc"]:
+    soc = soc_evidence(coordinator.hass, vehicle, now).get("soc")
+    if soc is None or soc >= request["target_soc"]:
         return None
     if point["control"] == "read_only" or target.power_w > min(
         point["maximum_w"], vehicle["maximum_w"]
