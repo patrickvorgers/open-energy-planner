@@ -5,6 +5,33 @@ toolbar. Existing operational pages and charts retain their layout. The shared
 SaveBar owns saved state, write locks and retained failure messages. These pages
 change its presentation rather than replacing the persistence boundary.
 
+## Page headings and contextual help
+
+Functional page headings contain the page icon and one descriptive H1 title.
+Omit slogans, promotional eyebrows and generic sentences that repeat the title.
+Keep page actions, configuration context, warnings and live status available.
+Apply the same rule to direct pages, embedded workspaces, Home Assistant ingress
+and the initial installation wizard.
+
+Place instructions, explanations and limitations beside the section, chart,
+value or action they explain. Keep safety and physical-control responsibilities
+with the relevant controls. Do not move a removed introduction into a generic
+paragraph immediately below the heading. Remove it when existing local help
+already explains the task. Use a short page-wide explanation only when it
+prevents a misunderstanding that applies to the whole page and has no more
+specific owner.
+
+For example, Planning and Savings retain only their icons and page titles at
+the top. Expected versus measured results stay explained at their charts and
+amounts. Charging sessions explain that Home Assistant controls the physical
+charge points. Appliance readiness explains complete-cycle scheduling beside
+the readiness forms.
+
+Verify the title and icon on desktop and mobile, including navigation between
+Planning and Savings. Check that moved help remains in the relevant block and
+that refresh, configuration actions, warning/status messages and wizard progress
+still work. Keep screenshots of the changed interface in the PR.
+
 ## Interface wording
 
 ### Date presentation
