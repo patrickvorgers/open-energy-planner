@@ -109,9 +109,7 @@ def refine(settings, records):
     their consumption a second time. Manual estimates remain until fine evidence
     is available. Existing explicitly recorded profiles remain usable.
     """
-    fine = distinct_ranges(
-        [record for record in records if record.get("quality") != "hourly_estimate"]
-    )
+    fine = [record for record in records if record.get("quality") != "hourly_estimate"]
     coarse = distinct_ranges(
         [record for record in records if record.get("quality") == "hourly_estimate"]
     )
@@ -123,6 +121,7 @@ def refine(settings, records):
             if record.get("observation_coverage") is True
             or record.get("quality") == "explicit_completion"
         ]
+    fine = distinct_ranges(fine)
     fine_starts = [instant(record["started_at"]) for record in fine]
 
     def overlaps_fine(record):

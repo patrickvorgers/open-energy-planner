@@ -189,7 +189,9 @@ status and do not refine a model. Previously accepted profiles remain usable.
 
 An admitted followed profile takes precedence over provisional statistical
 shapes and energies. Later historical statistics cannot distort its measured
-power. Distinct explicitly completed cycles retain their existing independent
+power. Authority is selected before reconciling overlapping views, so a denser
+legacy raw view cannot displace followed evidence or join two distinct followed
+runs. Distinct explicitly completed cycles retain their existing independent
 contributions. Legacy accepted raw profiles are retained without retrospectively
 claiming that their report coverage was followed. A new observed view supersedes
 overlapping statistical views without counting a second
