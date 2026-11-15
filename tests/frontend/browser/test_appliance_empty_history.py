@@ -98,6 +98,7 @@ def test_empty_state_sources_keep_other_curve_and_profile_visible(
     pending = []
 
     def hold_raw_detail(route):
+        """Retain the intercepted request before acknowledging it in the browser."""
         pending.append(route)
         page.evaluate("window.rawDetailHeldAfter = performance.now() - window.rawDetailRequestedAt")
 
