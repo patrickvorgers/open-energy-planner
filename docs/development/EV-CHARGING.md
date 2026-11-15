@@ -77,7 +77,10 @@ catalogue is temporary memory. This adds no storage format or migration layer.
 Device, type and account filters remain editor state, never saved source identities.
 Each vehicle links its own percentage SoC sensor, usable capacity
 in kWh and maximum AC power in W. Capacity is usable energy, not gross pack size.
-It also has default target SoC and departure clock, used only to prefill an explicitly created request.
+It also has default target SoC and departure clock, used for manual requests and
+automatic requests on recognized arrivals. Optional per-car plugged-in, charging
+and location sources improve recognition. Location contributes only Home/Away
+and original sample time. Coordinates and zone names are never sent to the app.
 
 Each point links its Energy Dashboard consumption meter, measured AC power and
 vehicle-connected binary sensor. Its minimum/maximum active power and capability
@@ -99,19 +102,33 @@ Assistant. Saved intent and historical evidence remain available.
 
 ## Identity and departures
 
-A connected sensor proves presence, not identity. OEP never chooses the first car,
-even if only one is allowed. Select **Connected vehicle** on the virtual point,
-manually or using a HA automation that reliably knows the car. The selection is
-bound to that connection nonce. Disconnect, unknown connection or an integration
-restart creates a new nonce. An old assignment never authorizes another session.
-Missing identity/SoC and ambiguous assignment block EV scheduling. Measurement-only
-points remain ordinary measured household consumption.
+A connected sensor proves presence. The app resolves identity from configured
+allowed cars, fresh per-car plug/charging/Home signals, physically compatible
+power limits, the same connection's retained identity and a unique planned
+request. One allowed car needs no optional sources. Low power never identifies
+the smaller car. Power above a car's maximum plus the larger of 200 W or 10%
+excludes it. Signals older than five minutes are unknown. Fresh unplugged or
+Away signals exclude a candidate. A unique positive plug/charging signal takes
+precedence over retained or planned expectation. Missing signals do not erase
+the same session's identity. Competing unresolved candidates remain unknown
+without asking the user. Concurrent points cannot own the same car.
+
+Every identity is bound to a physical connection nonce. Disconnect, unknown
+connection or an integration restart creates a new nonce. Old assignments do
+not transfer to it. A unique planned request may infer the expected car on the
+new nonce and is labelled as an expectation. Manual native assignment remains
+available as an override, but is not required for autonomous recognition.
+Measurement-only points never create automatic charging requests.
 
 Native vehicle buttons are **Plan charging request** and **Cancel charging request**.
 The former creates a one-off request from defaults. Target, departure date and
 time controls edit an existing request and are unavailable without one.
-A connected, identified car still requires an explicit request before planning.
-Each new plan recalculates useful energy in kWh from measured SoC:
+A connected, recognized car without an active request gets one automatic
+one-off request from its saved target and next HA-local departure. The stable
+request identity derives from the session nonce and car. Its session checkpoint
+prevents polling or app restart from recreating a cancelled or completed request.
+An existing request is reused. Each plan recalculates useful energy from the
+best available labelled SoC:
 
 `max(0, request.target_soc - actual_soc) / 100 * usable_capacity_kwh`
 
@@ -125,8 +142,38 @@ Cancelling requires that version and `vehicle_id`. Reusing a cancelled creation
 ID never revives it. An exact UUID and creation-fingerprint retry also remains
 unchanged after vehicle removal. New requests and edits still require a configured
 vehicle. All outcomes remain in history. Removing a vehicle cancels
-its active request and retains history. No defaults, historical demand, startup,
-refresh or connection event implicitly creates a request.
+its active request and retains history. Defaults and historical demand alone
+never create work. Automatic arrival requests require fresh recognized physical
+connection evidence and the installation timezone.
+
+### Last-known SoC and measured charging energy
+
+The app retains the last genuine SoC anchor in the active database even when it
+is years old or the source is temporarily unavailable. An original provider
+sample attribute takes precedence over HA republication time. Explicit configured
+attributes take precedence over autodetection of `Last updated`, `sampled_at`,
+`sample_time` and `last_updated`. Trackers also recognize `position_updated_at`.
+An unchanged value with only a new HA report time does not reset the anchor.
+A changed value or newer original device sample replaces it.
+
+Only cumulative AC meter deltas attributable to the same car, source and session
+increase the estimate. The existing AC charging-loss curve converts the delta
+at its average measured power to battery energy. This is an approximation when
+charging power varies inside a reporting gap. Planned energy is never credited.
+Missing counter captures preserve the baseline within the same session. Counter
+resets, impossible jumps, source changes and reconnects start a new baseline
+without inventing energy. A later genuine SoC sample resets accumulated credit
+and starts a new meter baseline. Reassignment withdraws that session's earlier
+credit from the previous car. Values are capped at 100%.
+
+The UI and HA SoC entity expose the original value/time and estimation basis.
+Driving since the anchor is unknown and cannot be subtracted without a real
+measurement. This can overstate available charge or mark a target reached too
+early. A fresh real sample corrects the estimate. No SoC is invented when the
+car has never supplied one. Restart retains anchors and meter checkpoints but
+cannot revive an expired physical connection report. HA command admission keeps
+the local connection nonce, valid request window, plan and revision checks. A
+genuinely newer local SoC may supersede the app anchor before the next sync.
 
 `repeat_weekdays` is optional and defaults to `[]`, meaning one-off.
 Values are distinct integers, Monday `0` through Sunday `6`. Each completed or
@@ -326,7 +373,8 @@ An optional **SoC timestamp attribute** preserves the original device-sample
 timestamp as provenance. Without that attribute, the original HA report time is
 labelled `ha_report`. Neither timestamp proves that the vehicle is communicating.
 A valid current capture is not rejected solely because its sample timestamp is
-old. Expired captures are unavailable, including in native sensors.
+old. Expired captures withdraw physical-session readiness. Retained SoC remains
+available as a labelled estimate, including in native sensors.
 A local connection listener
 rotates nonces independently of HTTP, including off/on transitions between polls.
 

@@ -704,18 +704,34 @@ four-backend transfer includes all of these documents. See
 ### EV document extension
 
 The existing `planning` namespace stores the `ev-state.json` current pointer
-and immutable `ev-state-<sha256>.json` global intent revisions. Each contains
+and the bounded mutable `ev-telemetry.json` pointer. Telemetry contains `vehicles`
+keyed by vehicle UUID and `sessions` keyed by point UUID. Vehicle evidence stores
+`source_entity`, original `observed_at`, `reported_at`, `timestamp_kind`, optional
+`source_timestamp_attribute`, `measured_soc` in percent, estimated battery-side
+`stored_kwh` and `estimate_updated_at`. Session checkpoints store `session_id`,
+nullable `vehicle_id`, `energy_entity`, nullable cumulative AC `energy_kwh`,
+capture `at`, battery-side `credited_kwh`, nullable `request_id` and nullable
+`energy_issue`. Missing meter captures preserve the previous baseline time/value.
+Configuration replacement discards session checkpoints and retains vehicle
+anchors only when their SoC source identity is unchanged. Removed cars are pruned.
+Telemetry and changed intent/request documents commit atomically. Sensor-only
+refreshes update this pointer without creating immutable intent history.
+Cross-backend transfer includes it through the existing document table.
+
+The same namespace stores immutable `ev-state-<sha256>.json` global intent revisions. Each contains
 `vehicles`, `points`, `assignments`, `active_requests` and only the active
 `requests`. Vehicle records contain opaque ID, HA percentage-SoC entity,
 usable `capacity_kwh`, AC `maximum_w`, default `target_soc` and local default
-`departure_time`. Point records contain opaque ID, Energy `energy_entity`, AC
+`departure_time`, optional `soc_timestamp_attribute` and nullable recognition
+bindings `connected_entity`, `charging_entity` and `location_entity`. Point records contain opaque ID, Energy `energy_entity`, AC
 `power_entity`, binary `connected_entity`, active `minimum_w`/`maximum_w`,
 `control` capability and allowed `vehicle_ids`. Current scheduling requires the
 point's meter/power pair to match Home Assistant Energy. Retained archives may
 contain a former pair and are never rewritten to match current Energy.
 `minimum_w` is the variable-control lower bound. On/off work uses the lower
 vehicle/point maximum as its fixed active rate. Assignments link point IDs to
-explicit vehicle IDs and connection `session_id` nonces. They are intent, not
+vehicle IDs and connection `session_id` nonces, plus automatic recognition
+`origin` and compatible vehicle UUID `candidates`. They are decisions, not
 fresh measurements. Restart requires new HA readings and connection identity.
 
 Each request has a current `ev-request-current-<uuid>.json` record and immutable
@@ -726,7 +742,8 @@ target percentage `target_soc`, aware `departure`, `ready_at`, `created_at` and
 `completed`, `expired` or `cancelled`). Repeated occurrences link through
 `previous_request_id` and `continued_by`. `active_requests` maps a vehicle ID to
 its single planned request ID. Edit versions are hashes of the complete saved
-record. Even a no-op edit requires the current version. Explicit create UUID
+record. Completion records also retain `completion_soc_basis` to distinguish
+measured, last-known and meter-derived completion. Even a no-op edit requires the current version. Explicit create UUID
 retries and already-cancelled retries remain idempotent. An edited future
 occurrence cannot move `ready_at` before its existing lower bound, and its
 `departure` must remain strictly later than readiness.
@@ -739,7 +756,8 @@ version of each ID. Resolve each version through its immutable request document.
 The embedded active records preserve the exact intent at that revision without
 copying every terminal request into every later snapshot. Runtime restart loads
 the current global state and request current records. History survives vehicle
-removal. Repeated requests are explicit, never inferred from saved defaults.
+removal. Repetition requires explicit weekdays. Recognized arrivals can create
+one-off requests from saved defaults and bind their IDs in session telemetry.
 
 Changed request versions, their current records, the bounded global revision and
 its current pointer commit in one SQLAlchemy transaction. Any failure rolls back
@@ -754,7 +772,8 @@ Original plan JSON adds `input_snapshot.ev_revision`, `ev_evidence` and typed
 usable capacity, measured/target SoC and physical power/control limits.
 EV evidence also freezes the SoC source entity, optional device timestamp
 attribute, original sample/report timestamps and the versioned delivered-power
-loss curve. `problem.reserve_checkpoints` preserves the original stationary
+loss curve. It also retains the labelled SoC estimate, recognition decision and
+session energy checkpoint used for that plan. `problem.reserve_checkpoints` preserves the original stationary
 reserve-priority boundaries when EV stop events refine billing intervals.
 `expected_flows[].ev` stores `session_id`, AC `ac_kwh`, useful `stored_kwh` and
 active `power_w` for that billing segment. `steps[].devices` has EV commands with

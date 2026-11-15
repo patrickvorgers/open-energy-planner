@@ -9,6 +9,59 @@ from tests.frontend.browser.helpers import TOKEN, discover
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
 
 
+def test_vehicle_recognition_sources_are_scoped_and_saved_as_optional_fields(app_page):
+    """Unique sources prefill a draft for this car and survive save without collecting location."""
+    page, url = app_page
+    body = discover(page, url)
+    for entity_id, kind, unit in (
+        ("sensor.synthetic_family_soc", "battery", "%"),
+        ("binary_sensor.synthetic_family_plug", "plug", ""),
+        ("binary_sensor.synthetic_family_charging", "battery_charging", ""),
+        ("device_tracker.synthetic_family_location", "", ""),
+    ):
+        body["entities"].append(
+            {
+                "entity_id": entity_id,
+                "device_id": "family-car",
+                "device_name": "Family car",
+                "name": kind or "Vehicle location",
+                "unit": unit,
+                "device_class": kind,
+                "state_class": "",
+                "integration_id": "family-account",
+                "integration_name": "Family account",
+            }
+        )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    choose_integration(page, "family-account")
+    expect(page.get_by_label("Vehicle plugged in", exact=True)).to_have_value(
+        "binary_sensor.synthetic_family_plug"
+    )
+    expect(page.get_by_label("Vehicle charging", exact=True)).to_have_value(
+        "binary_sensor.synthetic_family_charging"
+    )
+    expect(page.get_by_label("Vehicle location", exact=True)).to_have_value(
+        "device_tracker.synthetic_family_location"
+    )
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    Path("results/ci").mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=f"results/ci/ev-recognition-settings-{page.viewport_size['width']}.png", full_page=True
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert saved["connected_entity"] == "binary_sensor.synthetic_family_plug"
+    assert saved["charging_entity"] == "binary_sensor.synthetic_family_charging"
+    assert saved["location_entity"] == "device_tracker.synthetic_family_location"
+
+
 def test_selecting_matching_device_retains_current_soc_source_and_saves(app_page):
     """A sensor selected after rendering remains selected when its own device is chosen."""
     page, url = app_page

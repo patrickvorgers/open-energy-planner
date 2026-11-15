@@ -44,7 +44,12 @@ def configuration(body, catalogue, consumers, appliances, previous_points):
         raise TypeError("Expected vehicle and charge-point lists")
     vehicles, points = [], []
     for row in body["vehicles"]:
-        if not isinstance(row, dict) or set(row) - {"soc_timestamp_attribute"} != {
+        if not isinstance(row, dict) or set(row) - {
+            "soc_timestamp_attribute",
+            "connected_entity",
+            "charging_entity",
+            "location_entity",
+        } != {
             "id",
             "soc_entity",
             "capacity_kwh",
@@ -70,11 +75,21 @@ def configuration(body, catalogue, consumers, appliances, previous_points):
             not isinstance(attribute, str)
             or not attribute
             or len(attribute) > 64
-            or not attribute.replace("_", "").isalnum()
-            or not attribute.isascii()
+            or attribute.strip() != attribute
+            or not attribute.isprintable()
         ):
             raise ValueError("Invalid SoC sample timestamp attribute")
-        vehicles.append({**row, "soc_timestamp_attribute": attribute})
+        optional = {}
+        for field, domain in (
+            ("connected_entity", "binary_sensor"),
+            ("charging_entity", "binary_sensor"),
+            ("location_entity", "device_tracker"),
+        ):
+            source_id = row.get(field)
+            if source_id is not None and entity(source_id, domain) not in metadata:
+                raise ValueError("Select an available vehicle recognition source")
+            optional[field] = source_id
+        vehicles.append({**row, **optional, "soc_timestamp_attribute": attribute})
     vehicle_ids = {row["id"] for row in vehicles}
     if len(vehicle_ids) != len(vehicles) or len({row["soc_entity"] for row in vehicles}) != len(
         vehicles

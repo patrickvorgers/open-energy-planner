@@ -15,7 +15,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 from .entity import PlannerEntity
-from .ev import command, power_reading, soc_reading
+from .ev import command, power_reading, soc_evidence
 from .protocol import timestamp
 
 LABELS = {
@@ -49,6 +49,7 @@ EV_STATUSES = (
     "ready",
     "soc_or_limits_unavailable",
     "request_missing",
+    "request_finished",
 )
 
 
@@ -289,8 +290,11 @@ class EVSensor(EVEntity, SensorEntity):
         if self.key in ("status", "control"):
             return row.get(self.key)
         if self.key == "actual_soc":
-            measured = soc_reading(self.coordinator.hass, row, dt_util.utcnow()) if row else None
-            return measured.value if measured else None
+            return (
+                soc_evidence(self.coordinator.hass, row, dt_util.utcnow()).get("soc")
+                if row
+                else None
+            )
         if self.key == "actual_power":
             measured = power_reading(self.coordinator.hass, row, dt_util.utcnow()) if row else None
             return measured.value if measured else None
@@ -302,6 +306,22 @@ class EVSensor(EVEntity, SensorEntity):
             request = row.get("charging_request")
             return timestamp(request["departure"]) if request else None
         return row.get(self.key)
+
+    @property
+    def extra_state_attributes(self):
+        """Keep the SoC estimate's original measurement and limitations visible in HA."""
+        row = self.row()
+        actual = (
+            soc_evidence(self.coordinator.hass, row, dt_util.utcnow())
+            if row and self.key == "actual_soc"
+            else None
+        )
+        if not actual:
+            return None
+        return {
+            key: actual.get(key)
+            for key in ("basis", "measured_soc", "observed_at", "stored_kwh", "estimate_updated_at")
+        }
 
 
 class EVCharging(EVEntity, BinarySensorEntity):

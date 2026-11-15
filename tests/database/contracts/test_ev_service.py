@@ -387,8 +387,8 @@ def test_reconnect_and_restart_never_reuse_a_previous_vehicle_assignment(service
         service.assign(POINT, CAR, SESSION, later)
 
 
-def test_soc_updates_are_soft_but_missing_readings_and_identity_changes_are_hard(service):
-    """Normal SoC progress changes remaining kWh without starving publication. Missing evidence revokes eligibility."""
+def test_soc_updates_and_temporarily_missing_soc_preserve_identified_work(service):
+    """Progress updates remaining kWh. Missing SoC retains the real anchor and fresh session requirement."""
     service.receive(observations(service), NOW)
     service.assign(POINT, CAR, SESSION, NOW)
     revision = service.hard_revision(NOW, "Europe/Amsterdam")
@@ -398,8 +398,9 @@ def test_soc_updates_are_soft_but_missing_readings_and_identity_changes_are_hard
     assert service.work(later, "Europe/Amsterdam")[0].required_kwh == 12
     later += timedelta(seconds=5)
     service.receive(observations(service, later, soc=None), later)
-    assert service.hard_revision(later, "Europe/Amsterdam") != revision
-    assert service.work(later, "Europe/Amsterdam") == ()
+    assert service.hard_revision(later, "Europe/Amsterdam") == revision
+    assert service.work(later, "Europe/Amsterdam")[0].required_kwh == 12
+    assert service.work(later + timedelta(minutes=2), "Europe/Amsterdam") == ()
 
 
 def test_measurement_only_and_expired_reports_never_authorize_charging(service):
@@ -462,7 +463,8 @@ def test_small_ha_clock_skew_is_fresh_but_never_extends_maximum_report_age(servi
     assert service.vehicle_readings(NOW)
     assert service.live(ahead + timedelta(seconds=119))
     assert service.live(ahead + timedelta(seconds=120)) == []
-    assert service.vehicle_readings(ahead + timedelta(seconds=120)) == {}
+    assert service.vehicle_readings(ahead + timedelta(seconds=120))[CAR]["soc"] == 50
+    assert service.work(ahead + timedelta(seconds=120), "Europe/Amsterdam") == ()
     before = deepcopy(service.report)
     with pytest.raises(ValueError, match="future"):
         service.receive(observations(service, NOW + timedelta(seconds=6)), NOW)
@@ -485,11 +487,11 @@ def test_removing_energy_consumer_withdraws_ev_work_without_deleting_history(ser
     assert service.state == before
 
 
-def test_expired_readings_are_not_exposed_as_current_soc(service):
-    """After two minutes without a new report, neither connection readiness nor measured SoC remains current."""
+def test_expired_connection_does_not_erase_retained_soc(service):
+    """An outage withdraws connection readiness while preserving labelled last-known SoC."""
     service.receive(observations(service), NOW)
-    data = service.document(NOW + timedelta(minutes=2), "Europe/Amsterdam")
-    assert all(vehicle["actual"] is None for vehicle in data["vehicles"])
+    data = service.document(NOW + timedelta(minutes=6), "Europe/Amsterdam")
+    assert all(vehicle["actual"]["basis"] == "last_known" for vehicle in data["vehicles"])
     assert data["points"][0]["status"] == "telemetry_unavailable"
 
 
@@ -526,7 +528,7 @@ def test_current_ev_capture_retains_old_sample_metadata_without_rejecting_availa
     service.receive(report, NOW)
     assert service.report["vehicles"][0]["observed_at"] == (NOW - timedelta(hours=2)).isoformat()
     assert service.vehicle_readings(NOW)
-    assert not service.vehicle_readings(NOW + timedelta(minutes=2))
+    assert service.vehicle_readings(NOW + timedelta(minutes=2))[CAR]["basis"] == "last_known"
 
 
 def test_daily_departure_obeys_dst_without_creating_two_fallback_departures():

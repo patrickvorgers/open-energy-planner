@@ -71,12 +71,38 @@ function renderSessions() {
         const card = node("article"); card.className = "chart-card";
         card.append(node("h3", point.name), node("p", point.status.replaceAll("_", " ").replace(/^./, letter => letter.toUpperCase())));
         const car = current.vehicles.find(vehicle => vehicle.id === point.vehicle_id), request = car?.charging_request;
-        card.append(node("p", car ? `${car.name}: Measured SoC: ${percentage(car.actual?.soc)}${request ? `: Target: ${percentage(request.target_soc)}: Ready by: ${when(request.departure)}` : ": No planned charging request"}` : "No identified connected vehicle."));
+        card.append(node("p", car ? `${car.name}: ${socLabel(car)}${request ? `: Target: ${percentage(request.target_soc)}: Ready by: ${when(request.departure)}` : ": No planned charging request"}` : "Waiting for distinguishing vehicle evidence. Recognition is checked automatically as sensor data changes."));
+        if (car) appendSocEvidence(card, car);
+        if (point.status === "request_finished") card.append(node("p", `This connection's charging request is ${point.session_request_status}. It will not restart automatically on this connection.`));
+        const recognition = {
+            manual: "Explicit assignment for this connection",
+            retained_session: "Retained for this connection",
+            only_allowed_vehicle: "Only allowed vehicle",
+            vehicle_status: "Vehicle sensor evidence",
+            remaining_candidate: "Other vehicles excluded by current evidence",
+            planned_expectation: "Expected vehicle from the planned request. Identity is inferred",
+        }[point.recognition?.origin];
+        if (recognition) card.append(node("p", `Vehicle recognition: ${recognition}.`));
+        if (point.energy_issue) card.append(node("p", "Charging energy continuity could not be confirmed. The last known SoC estimate is retained without inventing missing energy."));
         if (point.schedule) card.append(node("p", `Predicted departure SoC: ${percentage(point.schedule.predicted_soc)}: Energy shortfall: ${point.schedule.shortfall_kwh.toFixed(2)} kWh: This is a plan, not confirmed physical charging.`));
         if (point.execution_issue) card.append(node("p", point.execution_issue));
         find("sessions").append(card);
     }
     if (!current.points.length) find("sessions").append(node("p", "No configured charge points."));
+}
+/** Label estimated charge separately from an actual source reading. */
+function socLabel(vehicle) {
+    const label = vehicle.actual?.basis && vehicle.actual.basis !== "measured" ? "Estimated SoC" : "Measured SoC";
+    return `${label}: ${percentage(vehicle.actual?.soc)}`;
+}
+/** Show the original anchor and the unavoidable uncertainty about unobserved driving. */
+function appendSocEvidence(card, vehicle) {
+    const evidence = vehicle.actual;
+    if (!evidence || !evidence.basis || evidence.basis === "measured") return;
+    card.append(node("p", `Last measured SoC: ${percentage(evidence.measured_soc)}: Measured at: ${when(evidence.observed_at)}.`));
+    card.append(node("p", evidence.basis === "estimated_from_meter"
+        ? "Includes measured charging energy with estimated charging losses. Driving since the last SoC measurement is not known. A new measurement corrects the estimate."
+        : "Uses the last known SoC. Driving since that measurement is not known. A new measurement corrects the estimate."));
 }
 /** Open one complete draft with a stable retry identity. */
 function edit(vehicle) {
@@ -149,7 +175,7 @@ function renderControls() {
     find("vehicle-controls").replaceChildren();
     for (const vehicle of current.vehicles) {
         const card = node("article"); card.className = "chart-card"; card.dataset.vehicle = vehicle.id;
-        card.append(node("h3", vehicle.name), node("p", `Measured SoC: ${percentage(vehicle.actual?.soc)}`));
+        card.append(node("h3", vehicle.name), node("p", socLabel(vehicle))); appendSocEvidence(card, vehicle);
         const request = vehicle.charging_request, draft = drafts.get(vehicle.id);
         if (draft) requestForm(card, vehicle, draft);
         else if (request) {
@@ -190,7 +216,7 @@ function load(replace = false) {
         if (requested !== generation) return;
         const data = await api("v1/ev"); if (requested !== generation) return;
         current = data; useHomeAssistantTimezone(current.timezone); find("connect").hidden = true;
-        find("status").textContent = current.issue || "Connected: Only explicit requests for identified connected vehicles can be planned.";
+        find("status").textContent = current.issue || "Connected. Recognized arrivals use the saved charging target and departure automatically.";
         renderSessions(); renderControls(); await loadHistory(null, requested);
     })().catch(error => { if (requested === generation) throw error; }).finally(() => {
         if (loading === owner) { loading = null; find("refresh-evidence").disabled = busy; }

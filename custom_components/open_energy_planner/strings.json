@@ -12,7 +12,8 @@
           "measurement_only": "Measurement only",
           "ready": "Ready",
           "soc_or_limits_unavailable": "SoC or limits unavailable",
-          "request_missing": "No planned charging request"
+          "request_missing": "No planned charging request",
+          "request_finished": "Session charging request finished"
         }
       },
       "ev_control": {
