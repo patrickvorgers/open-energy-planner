@@ -85,15 +85,31 @@ def test_empty_state_sources_keep_other_curve_and_profile_visible(
         degraded["power_states"][2]["state"] = "unavailable"
         degraded["energy_states"][2]["state"] = "unknown"
     assert page.request.post(url + "/v1/appliances/raw_history", headers=headers, data=degraded).ok
+    page.add_init_script("""(() => {
+        const original = window.fetch.bind(window);
+        window.fetch = async (input, options) => {
+            if (String(input).includes('v1/appliances?raw_entity=')) {
+                window.rawDetailRequestedAt = performance.now();
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            return original(input, options);
+        };
+    })();""")
     pending = []
-    page.route("**/v1/appliances?raw_entity=*", lambda route: pending.append(route))
+
+    def hold_raw_detail(route):
+        pending.append(route)
+        page.evaluate("window.rawDetailHeldAfter = performance.now() - window.rawDetailRequestedAt")
+
+    page.route("**/v1/appliances?raw_entity=*", hold_raw_detail)
     page.goto(url + "/appliances")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#recorded-cycle-status")).to_have_text("Loading recorded state details…")
     expect(page.locator("#recorded-power-unavailable")).to_be_hidden()
     expect(page.locator("#recorded-energy-unavailable")).to_be_hidden()
-    page.wait_for_timeout(100)
+    page.wait_for_function("() => window.rawDetailHeldAfter !== undefined", timeout=5000)
+    assert page.evaluate("window.rawDetailHeldAfter") > 100
     assert len(pending) == 1
     selected = pending.pop()
     if claimed_complete:
