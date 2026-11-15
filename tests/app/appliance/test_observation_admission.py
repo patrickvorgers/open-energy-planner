@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from open_energy_planner.appliances.cycles.model import instant
-from tests.app.appliance.raw_support import raw_trace
+from tests.app.appliance.raw_support import raw_trace, start_observing
 from tests.app.appliance.support import ENTITY, NOW, POWER, readings, running_readings
 
 
@@ -124,6 +124,7 @@ def test_public_history_callers_reject_running_replay_after_quiet(service, raw):
     observed = instant(body["end"]) if raw else NOW
     closed = observed + timedelta(minutes=5)
     if raw:
+        start_observing(service, body)
         service.learn_raw_history(body, observed)
         quiet_start = observed - timedelta(minutes=30)
         quiet = {
@@ -171,6 +172,8 @@ def test_processing_time_counts_before_running_evidence_intercepts_readiness(
     service.configure(ENTITY, True)
     service.submit(ENTITY, "processing-age", observed, observed + timedelta(hours=4), observed)
     original = deepcopy(service.state["tasks"][ENTITY])
+    if raw:
+        start_observing(service, body)
     service._cycle_records.clear()
     elapsed = [0]
     monkeypatch.setattr(service_module, "monotonic", lambda: elapsed[0], raising=False)
@@ -277,6 +280,7 @@ def test_processing_age_does_not_discard_conserved_raw_training_or_original_fram
     from open_energy_planner.appliances.cycles.service import ApplianceService, profile
 
     body = raw_trace()
+    start_observing(service, body)
     elapsed = [0]
     collect = service.collect_cycles
 

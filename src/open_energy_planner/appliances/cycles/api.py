@@ -159,7 +159,7 @@ def register(app, service, repository, live, lock, ev, thermal):
                         ),
                         {},
                     )
-                elif operation == "raw_history" and set(body) == {
+                elif operation == "raw_history" and set(body) - {"observer_session"} == {
                     "entity_id",
                     "power_entity",
                     "start",

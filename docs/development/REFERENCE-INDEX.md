@@ -96,6 +96,6 @@ The [user appliance guide](../users/appliances.md) explains where to configure e
 | [Logging](LOGGING.md) | Severity, safe context, timestamps and deduplication |
 | [Code documentation](CODE-DOCUMENTATION.md) | Useful docstrings, independent scenario explanations and guide maintenance |
 | [Documentation site](DOCUMENTATION-SITE.md) | Canonical Markdown, screenshots, local build and single Pages publication |
-| [EMS comparison](EMS-FEATURE-COMPARISON.md) | Research and adoption criteria, not a support claim for another project |
+| [Feature decisions](EMS-FEATURE-COMPARISON.md) | OEP configuration decisions and criteria for extensions |
 
 For operating the database, use [Data storage and preservation](../users/data-storage.md). For reporting an issue, use [user troubleshooting](../users/troubleshooting.md) and the repository's [security policy](../../SECURITY.md).

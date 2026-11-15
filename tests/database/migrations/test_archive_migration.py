@@ -35,7 +35,7 @@ def test_raw_state_profile_original_frame_and_frozen_task_transfer_without_sourc
     from open_energy_planner.appliances.cycles.model import instant
     from open_energy_planner.appliances.cycles.service import ApplianceService, profile
     from open_energy_planner.appliances.forecasting import ConsumerForecasts
-    from tests.app.appliance.raw_support import raw_trace
+    from tests.app.appliance.raw_support import raw_trace, start_observing
     from tests.app.appliance.support import ENTITY, POWER
 
     (source, target), root = route
@@ -53,6 +53,7 @@ def test_raw_state_profile_original_frame_and_frozen_task_transfer_without_sourc
     service = ApplianceService(SqlDocuments(source, "planning"), consumers)
     body = raw_trace()
     now = instant(body["end"])
+    start_observing(service, body)
     service.learn_raw_history(body, now)
     service.configure(ENTITY, True)
     task = service.submit(ENTITY, "raw-frozen", now, now + timedelta(hours=4), now)

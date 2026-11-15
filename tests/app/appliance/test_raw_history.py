@@ -8,7 +8,7 @@ import pytest
 from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.cycles.raw import analyze
 from open_energy_planner.appliances.cycles.service import ApplianceService, profile
-from tests.app.appliance.raw_support import raw_trace
+from tests.app.appliance.raw_support import follow_raw_trace, raw_trace, start_observing
 from tests.app.appliance.support import ENTITY, POWER
 
 
@@ -62,6 +62,7 @@ def test_limited_tail_cannot_invent_missing_quiet_predecessor():
 def test_raw_profile_and_original_frame_survive_restart_without_retraining(service):
     """The exact irregular learned profile and original frame survive restart, empty statistics and retry."""
     body = raw_trace()
+    start_observing(service, body)
     service.learn_raw_history(body, instant(body["end"]))
     learned = service.state["devices"][ENTITY]["profile"]
     assert profile(learned).energy_kwh == pytest.approx(23 / 45)
@@ -108,6 +109,7 @@ def test_raw_refines_same_five_minute_cycle_without_adding_a_second_sample(servi
         )
     service.learn_history(ENTITY, POWER, rows, False, instant(body["end"]))
     assert len(list(service.documents.iter_prefix("appliance-detected-"))) == 1
+    start_observing(service, body)
     service.learn_raw_history(body, instant(body["end"]))
     assert service.state["devices"][ENTITY]["profile"]["samples"] == 1
     assert max(service.state["devices"][ENTITY]["profile"]["power_w"]) == 3000
@@ -135,6 +137,7 @@ def test_partial_raw_run_intercepts_readiness_and_completion_never_rewrites_froz
         start - timedelta(hours=1),
     )
     frozen = deepcopy(task["profile"])
+    start_observing(service, body)
     service.learn_raw_history(body, now)
     assert service.state["devices"][ENTITY]["profile"]["samples"] == 1
     run = service.observed(ENTITY)
@@ -147,7 +150,7 @@ def test_partial_raw_run_intercepts_readiness_and_completion_never_rewrites_froz
     assert service.state["tasks"][ENTITY]["attempt"] is None
     assert service.state["tasks"][ENTITY]["events"] == []
     complete = raw_trace()
-    service.learn_raw_history(complete, instant(complete["end"]))
+    follow_raw_trace(service, complete)
     assert service.state["devices"][ENTITY]["observed_run"]["status"] == "complete"
     assert service.state["tasks"][ENTITY]["profile"] == frozen
     assert service.state["tasks"][ENTITY]["status"] == "execution_observed"
@@ -156,6 +159,7 @@ def test_partial_raw_run_intercepts_readiness_and_completion_never_rewrites_froz
 def test_failed_raw_commit_rolls_back_originals_model_and_cache_then_retries(service, monkeypatch):
     """Failure after frame insertion leaves neither orphan raw evidence nor a published derived cache."""
     body = raw_trace()
+    start_observing(service, body)
     previous, cached, write = (
         deepcopy(service.state),
         deepcopy(service._cycle_records),
@@ -182,6 +186,7 @@ def test_failed_raw_commit_rolls_back_originals_model_and_cache_then_retries(ser
 def test_raw_missing_retention_keeps_model_and_old_source_cannot_publish_late_result(service):
     """Absent raw states retain the last usable model, while changed sensor ownership rejects a late old read."""
     body = raw_trace()
+    start_observing(service, body)
     service.learn_raw_history(body, instant(body["end"]))
     previous = profile(service.state["devices"][ENTITY]["profile"])
     empty = {**body, "power_states": [], "energy_states": []}
@@ -207,6 +212,7 @@ def test_union_complexity_rejection_retains_profile_curve_and_does_not_poison_ne
     body = raw_trace()
     service.learn_history(ENTITY, POWER, readings(cycles=1), False, instant(body["end"]))
     previous = profile(service.state["devices"][ENTITY]["profile"])
+    start_observing(service, body)
     monkeypatch.setattr(model, "MAX_VARIABLE_PROFILE_STEPS", 4)
     service.learn_raw_history(body, instant(body["end"]))
     assert profile(service.state["devices"][ENTITY]["profile"]) == previous
@@ -312,6 +318,7 @@ def test_global_phase_budget_counts_retained_models_and_frozen_tasks(service):
     service.commit(data)
     service.submit(ENTITY, "frozen-dense", NOW, NOW + timedelta(hours=4), NOW)
     frozen = deepcopy(service.state["tasks"][ENTITY]["profile"])
+    start_observing(service, body)
     service.learn_raw_history(body, instant(body["end"]))
     assert service.state["devices"][ENTITY]["raw_history"]["status"] == "complexity_limited"
     assert service.state["tasks"][ENTITY]["profile"] == frozen

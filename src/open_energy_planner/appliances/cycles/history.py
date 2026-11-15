@@ -197,6 +197,7 @@ def batch(
         ],
         synthetic,
         hourly=resolution == "hour",
+        rows=rows if resolution == "5minute" else None,
     )
     data = deepcopy(service.state)
     target = data["devices"][entity]

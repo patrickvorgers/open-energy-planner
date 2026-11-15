@@ -297,7 +297,7 @@ Import costs, export revenue and bonus income are separate financial components.
 - HORIZON-02: Published prices override forecast prices. Retain interval provenance.
   Compose a provider-neutral UTC quarter-hour price timeline, retaining published/forecast kind, native resolution and original source versions. Repeat an hourly source price across four quarters without interpolation or fabricated precision. Preserve partial horizon edges and genuine source boundaries. New published prices replace predictions in new planning inputs. Original historical plans retain their original inputs. Hourly forecast repetition is not quarter-hour prediction detail.
 - HORIZON-03: No local market-price model training in the first release. Local demand/PV learning remains included.
-- HORIZON-04: No required DAO/DAP forecasting service.
+- HORIZON-04: No requirement to install or operate a separate forecasting application.
 - HORIZON-05: Internally chosen replaceable source. No normal API-address entry.
 - HORIZON-06: If the extra forecast is missing, use available published prices and explicitly show `Shortened horizon`. Missing prices are not zero.
 - HORIZON-07: Include terminal stored-energy value so the horizon boundary alone does not empty batteries.
@@ -439,17 +439,13 @@ Open: supported database/driver versions, snapshot cadence, backup consistency/r
 
 ## 15. Research and evidence boundaries
 
-The [device-settings proposal](DEVICE-SETTINGS-PROPOSAL.md), based on DAO/HAEO research on 18 October, is not a new set of confirmed fields/defaults. Accepted decisions prevail.
+The [device-settings proposal](DEVICE-SETTINGS-PROPOSAL.md) is not a new set of confirmed fields/defaults. Accepted decisions prevail.
 
 | Subject | Finding and limitation |
 |---|---|
 | HA solar forecasts | Energy exposes linked series, without guaranteed issue time, uncertainty, full horizon or original historic forecasts |
 | HA Energy configuration | Useful links, with optional/version-dependent fields. Presence alone is not full device knowledge |
 | HA references | `search/related` finds known references. An empty result does not prove absence of consumers |
-| DAO 2026.10.0.rc1 horizon | External forecasts and hourly steps extend beyond published prices, correcting the earlier 2026.9.1 finding |
-| DAO historic costs/savings | Investigated reporting reads hourly HA statistics by SQL, combines own `values`, HA data and sometimes `prognoses`. Consolidation can copy grid flows to `values`. `calc_saving_cost()` compares with/without a battery by removing its net contribution and valuing both exchanges. This differs from our same-battery self-consumption reference |
-| DAO plan storage | Investigated path stores series in `prognoses`. `DBmanagerObj.savedata()` updates by variable/time. This is not immutable full-plan version storage. The finding does not deny other logs/images |
-| HAEO | Supplied series may be extended by pattern repetition, which is not an independent market forecast |
 | EpexPredictor | BSD-3-Clause local candidate. Optional ENTSO-E key, with own Dutch load-forecast input disabled in investigated code. No demonstrated quality difference with/without key. Not selected after choosing an external first-release forecast |
 | Energy Price Forecast EU | External candidate with limited private free access and separate product/business terms. HA-client MIT does not license the model/API data |
 | Forecast quality | Published project metrics are not directly comparable. No winner or local training/physical validation was established by that research |
@@ -457,7 +453,7 @@ The [device-settings proposal](DEVICE-SETTINGS-PROPOSAL.md), based on DAO/HAEO r
 Primary research references are mutable, not pinned implementation versions:
 
 - [HA Energy API](https://github.com/home-assistant/core/blob/dev/homeassistant/components/energy/websocket_api.py), [solar types](https://github.com/home-assistant/core/blob/dev/homeassistant/components/energy/types.py), [reference search](https://github.com/home-assistant/core/blob/dev/homeassistant/components/search/__init__.py).
-- [DAO pricing](https://github.com/corneel27/day-ahead/blob/2026.10.0.rc1/dao/prog/config/models/pricing.py), [planner](https://github.com/corneel27/day-ahead/blob/2026.10.0.rc1/dao/prog/day_ahead.py), [HAEO forecasts](https://haeo.io/latest/user-guide/forecasts-and-sensors/), [EpexPredictor](https://github.com/b3nn0/EpexPredictor).
+- [EpexPredictor](https://github.com/b3nn0/EpexPredictor).
 - [Energy Price Forecast EU private access](https://energypriceforecast.eu/en/private-pro/), [business access](https://energypriceforecast.eu/en/api-for-business/), [quality](https://energypriceforecast.eu/en/forecast-quality/).
 - [Zonneplan](https://www.zonneplan.nl/energie/zonnepanelen), [NextEnergy](https://www.nextenergy.nl/zonnebonus).
 
@@ -476,7 +472,7 @@ Solar forecasting, startup profiles, historic counter initialization, permanent 
 - DEV-01: Python for calculation module/integration. Browser technology remains an implementation choice.
 - DEV-02: VS Code with automatic Dev Container provisioning, following HA's low-step onboarding. Open repository, reopen in container, automatic setup, documented run/debug/test tasks. Document host prerequisites such as Docker/extension.
 - DEV-02a: The isolated Supervisor lab provisions usable simulated appliance examples through ordinary app APIs and shipped HA blueprints. Include weather-sensitive heat-pump forecasting, synthetic quarter-resolution dishwasher/laundry profiles, two cars sharing two charge points, an electric boiler and the documented Zonneplan bonus example. Enable OEP's HA sidebar entry once. Preserve custom configuration, history, tasks, user edits and later removals. Do not submit tasks, invent model-quality evidence or control physical equipment during bootstrap.
-- DEV-03: Install pinned runtimes/system/project/test dependencies, relevant editor extensions and required UI-test browsers through one repeatable setup entry point. Repeating preserves local developer config/data. Review version changes. Python follows supported HA/solver compatibility, not DAO by default.
+- DEV-03: Install pinned runtimes/system/project/test dependencies, relevant editor extensions and required UI-test browsers through one repeatable setup entry point. Repeating preserves local developer config/data. Review version changes. Python follows supported HA/solver compatibility.
 - DEV-04: Separate local HA test installation with app/integration, example configuration and simulated measurements/devices. Choose Core/Supervisor test arrangements during implementation. No production credentials or automatic physical control.
 - DEV-05: Ruff lint/format and supplementary CodeRabbit review. External activation is separate from the requirements decision.
 - DEV-06: Meaningful pytest coverage by default for planner, contracts, sources/forecasts, storage/reconstruction, communications and entities, including boundaries/faults and bug regressions derived from requirements.
@@ -486,7 +482,7 @@ Solar forecasting, startup profiles, historic counter initialization, permanent 
 - DEV-09: Ruff, format, pytest and applicable Playwright must pass for the exact merged change. Repository rules should block missing/failing required checks. CodeRabbit neither replaces them nor independently permits merging. Private account plan limitations must be explicit, not claimed as enforced protection.
 - DEV-10: Automatically check balances/hard SoC/power/grid/shared-inverter/AC/DC limits with known small solutions and varied loss/negative-price/bonus cases. Feasibility does not prove economic optimality. Test both where provable.
 - DEV-11: Separate predesigned pytest planner/solver scenarios from unit/integration/UI tests. Record fixed inputs, initial states, setup/rules/horizon, expected status and independently justified outcomes. This is mandatory regression coverage.
-- DEV-21: Begin with cheap-charge/expensive-discharge, negative prices, a capped bonus and energy retained beyond the horizon. Research DAO/HAEO/EMHASS for coverage inspiration only. Never copy their scenarios, code, fixtures or expected outputs exactly. Design independent inputs/oracles. Trace device/loss/limit/route/counter/time/error/status coverage. A snapshot/structure pass, skip or absent oracle is not proven scenario coverage. See [scenarios](PLANNER-SCENARIOS.md) and [coverage](TEST-COVERAGE.md).
+- DEV-21: Begin with cheap-charge/expensive-discharge, negative prices, a capped bonus and energy retained beyond the horizon. Derive coverage from OEP's requirements. Design independent inputs and expected outcomes. Trace device/loss/limit/route/counter/time/error/status coverage. A snapshot/structure pass, skip or absent oracle is not proven scenario coverage. See [scenarios](PLANNER-SCENARIOS.md) and [coverage](TEST-COVERAGE.md).
 - DEV-22: Keep device, route, inverter, contract, factory, extraction and validation responsibilities modular. Preserve independent scenario expectations. Test component/scenario isolation, binding ownership, independent finance, solver statuses, faults and timeouts. The maintained app has no Pyomo dependency. Emulation does not establish native ARM support.
 - DEV-23: Measure input preparation, build, transfer/update, extraction, validation and total time where separable. Honestly label combined measurements. Performance claims need repeated representative cold/warm runs, sample count, p95/max, memory/status/gap. Small trials set no production budget. Cross-platform comparisons test validity/cost within justified tolerances. Exact schedules only if unique.
 - DEV-24: Retain one selected production solver adapter and independent numerical oracles. Store comparative experiment results in their PR or CI artifacts. Do not maintain an alternative runtime merely to retain comparison history.
@@ -524,11 +520,9 @@ Solar forecasting, startup profiles, historic counter initialization, permanent 
 
 Distribution references checked 17 October: [HACS requirements](https://www.hacs.dev/docs/publish/integration/), [app repository](https://contributors.home-assistant.io/apps/guides/repository/). HACS does not install Supervisor apps.
 
-DAO research, 17 October: its inspected Dev Container runs `script/setup` → `scripts/setup_environment.py`, preparing Linux venv, app/tests, dependency integrity, built assets and separate preview config without overwriting existing edits. This is an onboarding reference, not a DAO dependency or requirement to copy its stack. Its later developer web page launches VS Code. Actual provisioning remains local.
+References: [HA developer environment](https://contributors.home-assistant.io/core/development/environment/), [app testing](https://contributors.home-assistant.io/apps/guides/testing/).
 
-References: [HA developer environment](https://contributors.home-assistant.io/core/development/environment/), [app testing](https://contributors.home-assistant.io/apps/guides/testing/), [DAO Dev Container](https://github.com/corneel27/day-ahead/blob/main/.devcontainer/devcontainer.json), [setup](https://github.com/corneel27/day-ahead/blob/main/script/setup), [provisioning](https://github.com/corneel27/day-ahead/blob/main/scripts/setup_environment.py).
-
-- UI-19: Use a responsive workspace with clear Planning, Savings and Installation settings navigation. Interactive locally served time charts show energy, prices, battery state and expected commands, with keyboard-accessible inspection, toggles and shared time windows. Keep forecast, original advice, recorded results and simulated reference explicit. See [chart research and design](../docs/development/EMS-VISUALIZATION.md). One Price inputs graph shows the original prices saved with the selected plan, including historical plans. Only when no plan is available, show an explicitly labelled preview from cached market prices and saved dated contract/bonus rules, independently of measured bonus-volume history. Show potential total export rates before the volume cap, with exact price/time eligibility and explicit unknown coverage. New prices and contract changes never overwrite the selected plan's archived prices. Preserve plan prices and their source classification. Daylight bonus eligibility uses whole minutes, rounding sunrise up and sunset down. Preserve old plan evidence and prevent false chart gaps at its precise boundaries.
+- UI-19: Use a responsive workspace with clear Planning, Savings and Installation settings navigation. Interactive locally served time charts show energy, prices, battery state and expected commands, with keyboard-accessible inspection, toggles and shared time windows. Keep forecast, original advice, recorded results and simulated reference explicit. See [chart design](../docs/development/EMS-VISUALIZATION.md). One Price inputs graph shows the original prices saved with the selected plan, including historical plans. Only when no plan is available, show an explicitly labelled preview from cached market prices and saved dated contract/bonus rules, independently of measured bonus-volume history. Show potential total export rates before the volume cap, with exact price/time eligibility and explicit unknown coverage. New prices and contract changes never overwrite the selected plan's archived prices. Preserve plan prices and their source classification. Daylight bonus eligibility uses whole minutes, rounding sunrise up and sunset down. Preserve old plan evidence and prevent false chart gaps at its precise boundaries.
 
 ### Reference and input visualization clarification
 
@@ -576,6 +570,15 @@ or scale measured peaks to force agreement. Unverified curves remain visible
 with the previously usable statistical profile retained. Complete conserved runs
 refine durable profiles. Partial runs only refine existing observed activity and
 remaining forecasts, without training, execution feedback or new start rights.
+Admit raw refinement only for cycles continuously followed by OEP, including quiet
+boundaries. Use actual power report timestamps, including unchanged values.
+More than ten minutes between reports or captures, a changed HA observer session
+or an app restart interrupts coverage. Persist the evidence without treating
+restart gaps as observed time. Historical Recorder holds alone cannot establish
+heartbeat continuity. Preserve good admitted profiles when new evidence fails.
+Bootstrap with hourly and five-minute statistics. Use mean power for provisional
+five-minute shape and counter energy for its total, avoiding coarse counter-step
+peaks. A followed profile is not distorted by later provisional statistics.
 Original evidence and learned phases survive restart and backend transfer.
 Bound actual native query rows, outstanding executor work, response bytes, phase
 union and planning expansion. Over-budget detail must not block unrelated

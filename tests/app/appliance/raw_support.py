@@ -25,6 +25,7 @@ def raw_trace(*, completed=True, conflict=False):
     if conflict:
         counters = [(at, 10 + (value - 10) * 2) for at, value in counters]
     return {
+        "observer_session": "synthetic-live-observer",
         "entity_id": ENTITY,
         "power_entity": POWER,
         "start": stamp(-1800),
@@ -57,3 +58,49 @@ def dense_raw_trace():
         )
         body[field].sort(key=lambda row: row["at"])
     return body
+
+
+def raw_captures(body):
+    """Yield successive real-time frames with unchanged-value report heartbeats and original state times."""
+    from copy import deepcopy
+
+    from open_energy_planner.appliances.cycles.model import instant
+
+    first, end = instant(body["start"]), instant(body["end"])
+    first = max(first, instant(body["power_states"][0]["at"]))
+    captured = first
+    while captured <= end:
+        frame = deepcopy(body)
+        frame["observer_session"] = body.get("observer_session", "synthetic-live-observer")
+        frame["start"] = min(instant(body["start"]), captured - timedelta(seconds=1)).isoformat()
+        frame["end"] = captured.isoformat()
+        for field in ("power_states", "energy_states"):
+            frame[field] = [row for row in frame[field] if instant(row["at"]) <= captured]
+        frame["power_reported_at"] = captured.isoformat()
+        frame["energy_reported_at"] = captured.isoformat()
+        yield frame
+        if captured == end:
+            break
+        captured = min(captured + timedelta(minutes=5), end)
+
+
+def follow_raw_trace(service, body, *, restart_at=None, gap_at=None):
+    """Replay live captures with optional observer loss, preserving actual service admission and storage."""
+    from open_energy_planner.appliances.cycles.model import instant
+    from open_energy_planner.appliances.cycles.service import ApplianceService
+
+    for frame in raw_captures(body):
+        captured = instant(frame["end"])
+        if captured == restart_at:
+            service = ApplianceService(service.documents, service.consumers)
+        if gap_at is None or not gap_at[0] <= captured < gap_at[1]:
+            service.learn_raw_history(frame, captured)
+    return service
+
+
+def start_observing(service, body):
+    """Observe all preceding captures so a test can exercise admission of its final real frame."""
+    from open_energy_planner.appliances.cycles.model import instant
+
+    preceding = {**body, "end": (instant(body["end"]) - timedelta(minutes=5)).isoformat()}
+    return follow_raw_trace(service, preceding)
