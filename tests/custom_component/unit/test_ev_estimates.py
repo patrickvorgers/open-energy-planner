@@ -62,6 +62,26 @@ def test_vehicle_status_keeps_original_time_without_private_location():
     }
 
 
+def test_capture_preserves_meter_observation_time(monkeypatch):
+    """A current HA packet retains a one-minute-old meter observation instead of retiming it."""
+    observed = NOW - timedelta(minutes=1)
+    monkeypatch.setattr(
+        ev, "energy_reading", lambda *_args: SimpleNamespace(value=100, observed_at=observed)
+    )
+    monkeypatch.setattr(ev, "power_reading", lambda *_args: SimpleNamespace(value=0))
+    coordinator = SimpleNamespace(
+        hass=SimpleNamespace(
+            states=SimpleNamespace(get=lambda _entity: SimpleNamespace(state="on"))
+        ),
+        ev_sessions={},
+    )
+    point = {"id": "point", "connected_entity": "binary_sensor.synthetic_plug"}
+    captured = ev.capture(coordinator, {"configuration_version": "version", "points": [point]}, NOW)
+    assert captured["points"][0]["energy_kwh"] == 100
+    assert captured["points"][0]["energy_observed_at"] == observed.isoformat()
+    assert captured["at"] == NOW.isoformat()
+
+
 @pytest.mark.parametrize(
     "field, value",
     [

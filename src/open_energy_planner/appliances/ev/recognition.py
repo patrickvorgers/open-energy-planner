@@ -83,7 +83,7 @@ def recognize(state, report, now):
         reason = RecognitionReason.AMBIGUOUS if candidates else RecognitionReason.CONFLICT
         if len(positive) == 1:
             vehicle_id, reason = positive[0], RecognitionReason.SIGNAL
-        elif retained and (not positive or retained in positive):
+        elif retained and not positive:
             vehicle_id, reason = retained, previous.get("origin", RecognitionReason.MANUAL)
         elif len(candidates) == 1:
             vehicle_id = candidates[0]

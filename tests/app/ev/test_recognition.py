@@ -87,3 +87,14 @@ def test_two_connected_points_cannot_both_claim_the_same_car():
     report["points"].append({**report["points"][0], "id": OTHER_POINT, "session_id": "other"})
     assigned = recognize(state, report, NOW)
     assert all(row["vehicle_id"] is None for row in assigned.values())
+
+
+def test_retained_identity_cannot_resolve_competing_fresh_positive_signals():
+    """Two plugged cars remain ambiguous even when one was previously assigned."""
+    state, report = example()
+    state["assignments"][POINT] = {"vehicle_id": CAR, "session_id": SESSION}
+    for vehicle in report["vehicles"]:
+        vehicle["connected"] = signal(True)
+    assigned = recognize(state, report, NOW)[POINT]
+    assert assigned["vehicle_id"] is None
+    assert assigned["origin"] == "ambiguous"

@@ -199,6 +199,54 @@ def choose_integration(page, integration):
     )
 
 
+def test_unowned_soc_source_does_not_adopt_unrelated_recognition_sources(app_page):
+    """Missing device and integration identity never means two unrelated sources share a car."""
+    page, url = app_page
+    body = discover(page, url)
+    for entity_id, unit, kind in (
+        ("sensor.synthetic_unowned_soc", "%", "battery"),
+        ("binary_sensor.synthetic_unrelated_plug", "", "plug"),
+        ("binary_sensor.synthetic_unrelated_charging", "", "battery_charging"),
+        ("device_tracker.synthetic_unrelated_location", "", ""),
+    ):
+        body["entities"].append(
+            {
+                "entity_id": entity_id,
+                "name": "Unowned test source",
+                "device_id": "",
+                "unit": unit,
+                "device_class": kind,
+                "state_class": "",
+            }
+        )
+    headers = {"Authorization": "Bearer " + TOKEN}
+    assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
+    page.goto(url + "/appliance-settings/ev")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    add_ev_appliance(page, "vehicle")
+    choose_integration(page, "other")
+    page.get_by_label("Vehicle state of charge", exact=True).select_option(
+        "sensor.synthetic_unowned_soc"
+    )
+    for label in ("Vehicle plugged in", "Vehicle charging", "Vehicle location"):
+        control = page.get_by_label(label, exact=True)
+        expect(control).to_have_value("")
+        expect(control.locator("option")).to_have_count(1)
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
+    page.screenshot(
+        path=f"results/ci/ev-unowned-sources-{page.viewport_size['width']}.png", full_page=True
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    vehicle = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert vehicle["connected_entity"] is None
+    assert vehicle["charging_entity"] is None
+    assert vehicle["location_entity"] is None
+
+
 def test_large_catalogue_tail_vehicle_is_selectable_and_saved(app_page):
     """A vehicle beyond 2,000 ordinary sources remains selectable on desktop and mobile."""
     import json

@@ -32,6 +32,7 @@ from open_energy_planner.appliances.ev.requests import (
 )
 from open_energy_planner.appliances.ev.telemetry import (
     TELEMETRY_KEY,
+    configure_telemetry,
     empty_telemetry,
     update_telemetry,
     vehicle_estimates,
@@ -169,14 +170,7 @@ class EVService:
             and selected == self.consumers.selected
         ):
             selected = None
-        telemetry = deepcopy(self.telemetry)
-        telemetry["sessions"] = {}
-        telemetry["vehicles"] = {
-            car["id"]: telemetry["vehicles"][car["id"]]
-            for car in checked["vehicles"]
-            if car["id"] in telemetry["vehicles"]
-            and telemetry["vehicles"][car["id"]]["source_entity"] == car["soc_entity"]
-        }
+        telemetry = configure_telemetry(self.telemetry, self.state, state)
         self.commit(state, selected, telemetry)
         self.report = None
         self.power_deviations.clear()
@@ -209,7 +203,7 @@ class EVService:
             optional = (
                 {"connected", "charging", "home", "source_timestamp_attribute"}
                 if kind == "vehicles"
-                else {"energy_kwh"}
+                else {"energy_kwh", "energy_observed_at"}
             )
             if any(not isinstance(row, dict) or set(row) - optional != fields for row in rows):
                 raise ValueError("Invalid EV reading fields")
@@ -287,16 +281,26 @@ class EVService:
                 number(row["power_w"], 0, MAX_EV_POWER_W)
             if row.get("energy_kwh") is not None:
                 number(row["energy_kwh"], 0, float("inf"))
+            if row.get("energy_observed_at") is not None and (
+                row.get("energy_kwh") is None
+                or instant(row["energy_observed_at"]) > at + timedelta(seconds=CLOCK_SKEW_SECONDS)
+            ):
+                raise ValueError("Invalid EV meter provenance")
         state = deepcopy(self.state)
+        state = advance_requests(
+            state, {"at": body["at"], "vehicles": [], "points": []}, now, timezone
+        )
         state["assignments"] = recognize(state, body, now)
         telemetry = update_telemetry(self.telemetry, state, body)
         if timezone:
             for point in state["points"]:
                 session = telemetry["sessions"][point["id"]]
                 vehicle_id = session["vehicle_id"]
-                if not vehicle_id or session["request_id"] or point["control"] == "read_only":
+                if not vehicle_id or point["control"] == "read_only":
                     continue
                 request = active_request(state, vehicle_id)
+                if request is None and session["request_ids"].get(vehicle_id):
+                    continue
                 request_id = (
                     request["id"]
                     if request
@@ -306,7 +310,7 @@ class EVService:
                     state = save_request(
                         state, {"request_id": request_id, "vehicle_id": vehicle_id}, now, timezone
                     )
-                session["request_id"] = request_id
+                session["request_ids"][vehicle_id] = request_id
         completion_report = deepcopy(body)
         estimates = vehicle_estimates(telemetry, state["vehicles"], now)
         for vehicle in completion_report["vehicles"]:
@@ -659,7 +663,10 @@ class EVService:
                 else None
             )
             session_request = self.state["requests"].get(
-                self.telemetry["sessions"].get(point["id"], {}).get("request_id")
+                self.telemetry["sessions"]
+                .get(point["id"], {})
+                .get("request_ids", {})
+                .get(vehicle_id)
             )
             status = (
                 "energy_source_unavailable"

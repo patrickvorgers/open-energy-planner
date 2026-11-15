@@ -17,10 +17,52 @@ def empty_telemetry():
     return {"vehicles": {}, "sessions": {}}
 
 
+def configure_telemetry(previous, before, after):
+    """Keep same-source physical-session facts when editing unrelated vehicle preferences."""
+    updated = deepcopy(previous)
+    cars = {car["id"]: car for car in after["vehicles"]}
+    unchanged = {
+        car["id"]
+        for car in before["vehicles"]
+        if car["id"] in cars and car["soc_entity"] == cars[car["id"]]["soc_entity"]
+    }
+    updated["vehicles"] = {
+        vehicle_id: evidence
+        for vehicle_id, evidence in updated["vehicles"].items()
+        if vehicle_id in unchanged and evidence["source_entity"] == cars[vehicle_id]["soc_entity"]
+    }
+    old_points = {point["id"]: point for point in before["points"]}
+    updated["sessions"] = {
+        point["id"]: updated["sessions"][point["id"]]
+        for point in after["points"]
+        if point["id"] in updated["sessions"]
+        and point["id"] in old_points
+        and point["connected_entity"] == old_points[point["id"]]["connected_entity"]
+    }
+    for session in updated["sessions"].values():
+        session["request_ids"] = {
+            vehicle_id: request_id
+            for vehicle_id, request_id in session["request_ids"].items()
+            if vehicle_id in cars
+        }
+        if session["vehicle_id"] not in unchanged:
+            session["vehicle_id"] = None
+        if session["credited_vehicle_id"] not in unchanged:
+            session.update(credited_vehicle_id=None, credited_kwh=0.0)
+    for point in after["points"]:
+        session = updated["sessions"].get(point["id"])
+        if session and any(
+            point[field] != old_points[point["id"]][field]
+            for field in ("energy_entity", "power_entity")
+        ):
+            session.update(energy_entity=point["energy_entity"], energy_kwh=None)
+    return updated
+
+
 def update_telemetry(previous, state, report):
     """Apply each real sample or meter delta once, never a plan's predicted energy.
 
-    New real SoC replaces the estimate and establishes a new meter baseline.
+    New real SoC replaces the estimate. Only whole meter intervals after that sample count.
     An unchanged value with only a newer HA publication time is not a new sample.
     Counter resets, source changes and new connection nonces establish baselines
     instead of attributing an unproved delta to a vehicle. The original sample
@@ -73,56 +115,72 @@ def update_telemetry(previous, state, report):
             else None
         )
         same_session = previous_session.get("session_id") == point["session_id"]
-        old_vehicle = previous_session.get("vehicle_id")
-        if same_session and old_vehicle and old_vehicle != vehicle_id:
+        old_vehicle = previous_session.get("credited_vehicle_id") if same_session else None
+        credited = previous_session.get("credited_kwh", 0.0) if same_session else 0.0
+        if old_vehicle in new_samples:
+            credited = 0.0
+        if old_vehicle and vehicle_id and old_vehicle != vehicle_id:
             old_evidence = updated["vehicles"].get(old_vehicle)
-            if old_evidence and old_vehicle not in new_samples:
+            if old_evidence:
                 old_evidence["stored_kwh"] = max(
                     0.0,
-                    old_evidence["stored_kwh"] - previous_session.get("credited_kwh", 0.0),
+                    old_evidence["stored_kwh"] - credited,
                 )
+            credited = 0.0
+        meter_at = point.get("energy_observed_at") or report["at"]
         checkpoint = {
             "session_id": point["session_id"],
             "vehicle_id": vehicle_id,
             "energy_entity": configured[point["id"]]["energy_entity"],
             "energy_kwh": point.get("energy_kwh"),
+            "energy_at": meter_at,
             "at": report["at"],
-            "credited_kwh": 0.0,
-            "request_id": previous_session.get("request_id")
-            if same_session and old_vehicle == vehicle_id
-            else None,
+            "credited_vehicle_id": vehicle_id or old_vehicle,
+            "credited_kwh": credited,
+            "request_ids": deepcopy(previous_session["request_ids"]) if same_session else {},
             "energy_issue": None,
         }
         evidence = updated["vehicles"].get(vehicle_id)
         continuous = (
             same_session
-            and old_vehicle == vehicle_id
+            and vehicle_id is not None
+            and previous_session.get("vehicle_id") == vehicle_id
             and previous_session.get("energy_entity") == checkpoint["energy_entity"]
-            and vehicle_id not in new_samples
         )
         if continuous:
-            checkpoint["credited_kwh"] = previous_session.get("credited_kwh", 0.0)
+            baseline_at = previous_session["energy_at"]
             current_energy, previous_energy = (
                 point.get("energy_kwh"),
                 previous_session.get("energy_kwh"),
             )
+            if current_energy is None or current_energy == previous_energy:
+                checkpoint["energy_at"] = baseline_at
             if current_energy is None:
                 checkpoint.update(
                     energy_kwh=previous_energy,
-                    at=previous_session["at"],
                     energy_issue="meter_unavailable",
                 )
             elif previous_energy is not None and evidence:
                 delta = current_energy - previous_energy
-                hours = (instant(report["at"]) - instant(previous_session["at"])).total_seconds()
+                hours = (instant(meter_at) - instant(baseline_at)).total_seconds()
                 hours /= SECONDS_PER_HOUR
                 maximum = min(configured[point["id"]]["maximum_w"], cars[vehicle_id]["maximum_w"])
                 limit = maximum * hours / WATTS_PER_KW
-                if delta < 0:
+                if hours < 0:
+                    checkpoint.update(
+                        energy_kwh=previous_energy,
+                        energy_at=baseline_at,
+                        energy_issue="meter_discontinuity",
+                    )
+                elif delta < 0:
                     checkpoint["energy_issue"] = "meter_reset"
                 elif delta > limit * (1 + POWER_TOLERANCE_FRACTION) + ENERGY_TOLERANCE_KWH:
                     checkpoint["energy_issue"] = "meter_discontinuity"
-                elif delta > 0 and hours > 0:
+                elif (
+                    delta > 0
+                    and hours > 0
+                    and instant(baseline_at) >= instant(evidence["observed_at"])
+                ):
                     average_w = min(maximum, delta * WATTS_PER_KW / hours)
                     useful = delta * delivered_power(average_w) / average_w
                     evidence["stored_kwh"] += useful

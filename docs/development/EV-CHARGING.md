@@ -52,8 +52,9 @@ Missing power links require correction in Home Assistant Energy before Save.
 Refresh adopts that authoritative power binding while retaining other drafts.
 The configuration boundary rejects missing links and manual power overrides.
 Changing or removing the Energy power link withdraws scheduling eligibility until
-the measurement pair is confirmed again. Physical connection and vehicle identity are
-never inferred. Refresh also rereads current Energy consumer options without
+the measurement pair is confirmed again. Physical connection is never inferred.
+Vehicle recognition follows the [identity rules](#identity-and-departures).
+Refresh also rereads current Energy consumer options without
 replacing the configuration draft or saved version. Missing Energy meters remain
 visible as unavailable and server-side membership validation rejects them.
 
@@ -110,7 +111,8 @@ the smaller car. Power above a car's maximum plus the larger of 200 W or 10%
 excludes it. Signals older than five minutes are unknown. Fresh unplugged or
 Away signals exclude a candidate. A unique positive plug/charging signal takes
 precedence over retained or planned expectation. Missing signals do not erase
-the same session's identity. Competing unresolved candidates remain unknown
+the same session's identity. Multiple fresh positive candidates remain unknown,
+even when one was previously assigned. Competing unresolved candidates remain unknown
 without asking the user. Concurrent points cannot own the same car.
 
 Every identity is bound to a physical connection nonce. Disconnect, unknown
@@ -126,8 +128,11 @@ time controls edit an existing request and are unavailable without one.
 A connected, recognized car without an active request gets one automatic
 one-off request from its saved target and next HA-local departure. The stable
 request identity derives from the session nonce and car. Its session checkpoint
-prevents polling or app restart from recreating a cancelled or completed request.
-An existing request is reused. Each plan recalculates useful energy from the
+prevents polling, temporary recognition loss, unrelated configuration edits or
+app restart from recreating a cancelled or completed request on that nonce.
+Guards are kept per car so another car can still receive its own request.
+Overdue requests expire before a new arrival chooses a request. A current
+request is reused, including an explicitly submitted replacement. Each plan recalculates useful energy from the
 best available labelled SoC:
 
 `max(0, request.target_soc - actual_soc) / 100 * usable_capacity_kwh`
@@ -160,11 +165,17 @@ Only cumulative AC meter deltas attributable to the same car, source and session
 increase the estimate. The existing AC charging-loss curve converts the delta
 at its average measured power to battery energy. This is an approximation when
 charging power varies inside a reporting gap. Planned energy is never credited.
-Missing counter captures preserve the baseline within the same session. Counter
+Unchanged and missing counter captures preserve the meter's original baseline
+time, independently of repeated app captures. The HA packet carries the meter's
+observation time separately from capture time. Counter
 resets, impossible jumps, source changes and reconnects start a new baseline
-without inventing energy. A later genuine SoC sample resets accumulated credit
-and starts a new meter baseline. Reassignment withdraws that session's earlier
-credit from the previous car. Values are capped at 100%.
+without inventing energy. A later genuine SoC sample resets preceding credit.
+A delayed sample still permits an entire following meter interval whose
+baseline is at or after the sample time. An interval straddling that time is
+not prorated. Unknown identity preserves proved credit but cannot authorize
+new attribution. Recovery starts from a new known baseline. A positively
+identified reassignment withdraws that session's earlier credit from the
+previous car. Values are capped at 100%.
 
 The UI and HA SoC entity expose the original value/time and estimation basis.
 Driving since the anchor is unknown and cannot be subtracted without a real

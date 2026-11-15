@@ -709,11 +709,22 @@ keyed by vehicle UUID and `sessions` keyed by point UUID. Vehicle evidence store
 `source_entity`, original `observed_at`, `reported_at`, `timestamp_kind`, optional
 `source_timestamp_attribute`, `measured_soc` in percent, estimated battery-side
 `stored_kwh` and `estimate_updated_at`. Session checkpoints store `session_id`,
-nullable `vehicle_id`, `energy_entity`, nullable cumulative AC `energy_kwh`,
-capture `at`, battery-side `credited_kwh`, nullable `request_id` and nullable
-`energy_issue`. Missing meter captures preserve the previous baseline time/value.
-Configuration replacement discards session checkpoints and retains vehicle
-anchors only when their SoC source identity is unchanged. Removed cars are pruned.
+nullable current `vehicle_id`, `energy_entity`, nullable cumulative AC `energy_kwh`,
+baseline observation `energy_at`, capture `at`, nullable historical
+`credited_vehicle_id`, battery-side `credited_kwh`, vehicle-to-request UUID map
+`request_ids` and nullable `energy_issue`. Unchanged or missing meter readings
+preserve the baseline time/value independently of later capture times. Current
+recognition may become unknown without undoing proved historical credit or
+terminal-request protection. A confirmed different car withdraws the old car's
+session credit. Genuine SoC samples reset preceding credit. Only whole meter
+intervals beginning at or after the anchor observation may add energy.
+Configuration edits retain session facts for the same point and physical
+connection source. Changed meter/power bindings clear the energy baseline.
+Request guards remain per vehicle and nonce, including across changed defaults,
+temporary ambiguity and restart. Replacing a SoC source clears its anchor, not
+its cancelled request's physical-session guard. Removed cars and points are
+pruned. A new physical nonce starts a new request map. Vehicle anchors are
+retained only when their SoC source identity is unchanged.
 Telemetry and changed intent/request documents commit atomically. Sensor-only
 refreshes update this pointer without creating immutable intent history.
 Cross-backend transfer includes it through the existing document table.

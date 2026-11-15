@@ -155,7 +155,7 @@ function isVehicleSoc(entity) { return entity.device_entry_type !== "service" &&
 function recognitionSources(card, row) {
     const source = current.catalogue.entities.find(entity => entity.entity_id === row.soc_entity);
     const candidates = current.catalogue.entities.filter(entity => source && (
-        source.device_id ? entity.device_id === source.device_id : entity.integration_id === source.integration_id
+        source.device_id ? entity.device_id === source.device_id : source.integration_id && entity.integration_id === source.integration_id
     ));
     card.append(node("h3", "Automatic vehicle recognition"));
     for (const [field, label, domain, deviceClass, help] of [

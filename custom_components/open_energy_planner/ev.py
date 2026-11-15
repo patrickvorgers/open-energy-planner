@@ -167,6 +167,7 @@ def capture(coordinator, projection, now):
                 **previous,
                 "power_w": measured.value if measured else None,
                 "energy_kwh": energy.value if energy else None,
+                "energy_observed_at": energy.observed_at.isoformat() if energy else None,
             }
         )
     return {
