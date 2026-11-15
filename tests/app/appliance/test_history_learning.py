@@ -14,38 +14,9 @@ from open_energy_planner.appliances.cycles.learning import (
     hourly_profile,
     retained_weight,
 )
-from open_energy_planner.appliances.cycles.model import CycleProfile, average_profiles, instant
+from open_energy_planner.appliances.cycles.model import CycleProfile, average_profiles
 from open_energy_planner.appliances.cycles.service import ApplianceService
-from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
-
-
-def hourly_rows(start, powers):
-    """Pair hourly mean W with cumulative kWh at interval end, starting from a negative origin."""
-    total, rows = -50.0, []
-    for index, power in enumerate(powers):
-        total += power / 1000
-        rows.append(
-            {"at": (start + timedelta(hours=index)).isoformat(), "power_w": power, "kwh": total}
-        )
-    return rows
-
-
-def begin(service, start, end):
-    """Initialize the same source-bound range used by the Recorder transport."""
-    history.scan(service, ENTITY, POWER, "processing", start.isoformat(), end.isoformat(), NOW)
-
-
-def upload(service, rows):
-    """Send only the currently requested core with the detector's independent thirteen-hour overlap."""
-    pending = service.document()["devices"][0]["history_request"]
-    first, last = instant(pending["start"]), instant(pending["end"])
-    bounded = [
-        row
-        for row in rows
-        if first - timedelta(hours=13) <= instant(row["at"]) < last + timedelta(hours=1)
-    ]
-    history.batch(service, ENTITY, POWER, bounded, False, **pending, now=NOW)
-    return pending
+from tests.app.appliance.support import ENTITY, NOW, POWER, begin, hourly_rows, readings, upload
 
 
 def test_ninety_days_halves_prior_weight_without_changing_raw_count_or_energy():

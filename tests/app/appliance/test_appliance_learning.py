@@ -9,30 +9,7 @@ import pytest
 
 from open_energy_planner.appliances.cycles.learning import detect_cycles, manual_profile
 from open_energy_planner.appliances.cycles.service import ApplianceService
-
-NOW = datetime(2026, 10, 29, 12, tzinfo=UTC)
-ENTITY = "sensor.washer_energy"
-POWER = "sensor.washer_power"
-
-
-def readings(*, cycles=2):
-    """Each 75-minute cycle consumes .5 kWh, with a fifteen-minute zero-power pause.
-
-    Three five-minute bins at 1000 W, three at zero and nine at 333 1/3 W
-    total .25 + .25 = .5 kWh. Quiet brackets never enter the measured profile.
-    """
-    start, total, rows = NOW - timedelta(days=2), 10.0, []
-    powers = [0] * 12 + [1000] * 3 + [0] * 3 + [1000 / 3] * 9 + [0] * 12
-    for index, power in enumerate(powers * cycles):
-        total += power / 12000
-        rows.append(
-            {
-                "at": (start + timedelta(minutes=index * 5)).isoformat(),
-                "power_w": power,
-                "kwh": total,
-            }
-        )
-    return rows
+from tests.app.appliance.support import ENTITY, NOW, POWER, readings
 
 
 def test_detects_complete_energy_conserving_cycles_with_internal_pauses(service):

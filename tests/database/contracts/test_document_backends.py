@@ -24,8 +24,8 @@ from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import (
     archive_engine,
 )
 from open_energy_planner.storage.counters import CounterStore
-from tests.app.appliance.test_appliance_learning import ENTITY, POWER, readings
-from tests.app.appliance.test_appliance_learning import NOW as LEARNING_NOW
+from tests.app.appliance.support import ENTITY, POWER, readings
+from tests.app.appliance.support import NOW as LEARNING_NOW
 from tests.app.contract.support.settings import settings
 from tests.app.contract.test_contract_bonuses import measured_inputs
 from tests.app.contract.test_contract_prices import NOW, contract, price_series
@@ -447,7 +447,7 @@ def test_hourly_learning_checkpoint_weight_archive_and_rollback(archive, monkeyp
     from open_energy_planner.appliances.cycles import history
     from open_energy_planner.appliances.cycles.service import ApplianceService
     from open_energy_planner.appliances.forecasting import ConsumerForecasts
-    from tests.app.appliance.test_history_learning import begin, hourly_rows, upload
+    from tests.app.appliance.support import begin, hourly_rows, upload
 
     engine, _root = archive
     consumers = ConsumerForecasts(SqlDocuments(engine, "demand"))
@@ -482,12 +482,14 @@ def test_hourly_learning_checkpoint_weight_archive_and_rollback(archive, monkeyp
     progress = reopened.documents.read("appliance-progress.json")["devices"][ENTITY]
     assert progress["history_import"]["cursor"] == (start + timedelta(days=7)).isoformat()
     assert progress["learning_history"]["usable_intervals"] == 0
-    assert ApplianceService(SqlDocuments(engine, "planning"), consumers).state == reopened.state
+    assert ApplianceService(SqlDocuments(engine, "planning"), consumers).state == json.loads(
+        json.dumps(reopened.state)
+    )
     previous, write = deepcopy(reopened.state), reopened.documents.write
 
     def fail_pointer(name, value):
-        """Reject the final state pointer inside the transaction rather than after publication."""
-        if name == "appliance-state.json":
+        """Reject the progress pointer that this empty checkpoint batch actually writes."""
+        if name == "appliance-progress.json":
             raise OSError("Fixture checkpoint outage")
         write(name, value)
 
@@ -495,7 +497,9 @@ def test_hourly_learning_checkpoint_weight_archive_and_rollback(archive, monkeyp
     with pytest.raises(OSError):
         upload(reopened, [])
     assert reopened.state == previous
-    assert ApplianceService(SqlDocuments(engine, "planning"), consumers).state == previous
+    assert ApplianceService(SqlDocuments(engine, "planning"), consumers).state == json.loads(
+        json.dumps(previous)
+    )
     monkeypatch.setattr(reopened.documents, "write", write)
     upload(reopened, [])
     final = ApplianceService(SqlDocuments(engine, "planning"), consumers).document()["devices"][0]

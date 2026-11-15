@@ -137,6 +137,16 @@ summary and manual fallback. Both pages refresh read-only evidence every ten
 seconds without discarding drafts or replacing unchanged charts. A newly learned
 model can reject a stale configuration save and preserves its draft for review.
 
+History activity distinguishes examined coverage from usable measurements. An
+empty or faulty core still advances its durable checkpoint, but reports a skipped
+learning result with no usable paired measurements. Replaying a committed core
+reports that it was already processed. Neither case clears an earlier failure
+episode. Only actual usable paired intervals under the existing history quality
+rules report successful recovery. A baseline alone, missing or invalid quantities,
+gaps, counter resets and measurements outside the requested core do not qualify.
+The same quality rule applies to recent fine and hourly uploads. Previously
+accepted profiles remain available.
+
 ## Manually started cycles
 
 A recent measured start with at least fifteen active minutes can identify an

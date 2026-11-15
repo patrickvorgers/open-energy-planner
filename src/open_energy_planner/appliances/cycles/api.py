@@ -353,13 +353,27 @@ def register(app, service, repository, live, lock, ev, thermal):
                             )
                             for frontier in ("cursor", "forward_cursor")
                         )
+                        usable = operation == "cycles"
+                        if operation != "cycles":
+                            settings = service.state["devices"][body["entity_id"]]
+                            if operation == "history":
+                                summary = settings[
+                                    "hourly_history"
+                                    if body.get("resolution", "5minute") == "hour"
+                                    else "learning_history"
+                                ]
+                            else:
+                                summary = settings[progress_field]["last_batch"]
+                            usable = accepted and summary["usable_intervals"] > 0
                         await events.finish(
                             activity,
-                            Outcome.COMPLETED if accepted else Outcome.SKIPPED,
+                            Outcome.COMPLETED if usable else Outcome.SKIPPED,
                             "Appliance history was processed. Detected cycles and usable profiles are shown in Appliance settings."
+                            if usable
+                            else "Appliance history was processed with no usable paired measurements. Retained profiles remain available."
                             if accepted
                             else "This appliance history batch was already processed.",
-                            usable=accepted,
+                            usable=usable,
                         )
                 else:
                     cancellation = await complete_write(apply)

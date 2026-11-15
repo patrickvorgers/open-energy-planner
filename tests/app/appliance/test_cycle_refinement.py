@@ -7,8 +7,17 @@ import pytest
 
 from open_energy_planner.appliances.cycles import history
 from open_energy_planner.appliances.cycles.service import ApplianceService
-from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
-from tests.app.appliance.test_history_learning import begin, hourly_rows, upload
+from tests.app.appliance.support import (
+    ENTITY,
+    NOW,
+    POWER,
+    begin,
+    complete_running_readings,
+    hourly_rows,
+    readings,
+    running_readings,
+    upload,
+)
 
 
 def test_first_complete_fine_cycle_is_usable_and_survives_restart(service):
@@ -152,24 +161,6 @@ def test_failed_evidence_commit_cannot_advance_profile_or_cache(service, monkeyp
     monkeypatch.setattr(service.documents, "write", original)
     service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
     assert service.document()["devices"][0]["profile"]["samples"] == 1
-
-
-def running_readings():
-    """Expose 45 minutes of the known 75-minute cycle, ending exactly at NOW."""
-    from open_energy_planner.appliances.cycles.model import instant
-
-    rows = readings(cycles=1)[:21]
-    offset = NOW - (instant(rows[-1]["at"]) + timedelta(minutes=5))
-    return [{**row, "at": (instant(row["at"]) + offset).isoformat()} for row in rows]
-
-
-def complete_running_readings():
-    """Return the full same run plus sixty quiet minutes, completing ninety minutes after NOW."""
-    from open_energy_planner.appliances.cycles.model import instant
-
-    rows = readings(cycles=1)
-    offset = instant(running_readings()[0]["at"]) - instant(rows[0]["at"])
-    return [{**row, "at": (instant(row["at"]) + offset).isoformat()} for row in rows]
 
 
 def test_observed_cycle_blocks_pending_start_without_forging_execution_feedback(service):

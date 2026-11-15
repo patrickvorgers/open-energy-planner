@@ -8,8 +8,15 @@ import pytest
 
 from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.cycles.service import ApplianceService, profile
-from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
-from tests.app.appliance.test_cycle_refinement import complete_running_readings, running_readings
+from tests.app.appliance.support import (
+    ENTITY,
+    NOW,
+    POWER,
+    complete_running_readings,
+    explicit_three_kwh,
+    readings,
+    running_readings,
+)
 
 
 def one_kwh_readings(*, cycles=1):
@@ -20,16 +27,6 @@ def one_kwh_readings(*, cycles=1):
         {**row, "power_w": row["power_w"] * 2, "kwh": origin + (row["kwh"] - origin) * 2}
         for row in rows
     ]
-
-
-def explicit_three_kwh(service, *, cycle_id="explicit-three"):
-    """Record a distinct one-hour, 3-kWh completed energy-counter run without claiming a power sensor."""
-    start = NOW - timedelta(days=1)
-    points = [
-        {"at": (start + timedelta(minutes=minute)).isoformat(), "kwh": minute / 20}
-        for minute in (0, 15, 30, 45, 60)
-    ]
-    service.record_cycle(ENTITY, cycle_id, start, start + timedelta(hours=1), points)
 
 
 def test_explicit_completion_remains_in_model_after_empty_refresh_restart_and_recovery(service):
@@ -316,7 +313,7 @@ def test_normally_confirmed_started_cycle_does_not_latch_as_intercepted(service)
 
 def test_explicit_profile_keeps_precedence_over_only_hourly_estimates(service):
     """A known explicit 3-kWh cycle supersedes coarse estimates, preserving the existing completed-cycle API contract."""
-    from tests.app.appliance.test_history_learning import hourly_rows
+    from tests.app.appliance.support import hourly_rows
 
     service.learn_history(
         ENTITY,
@@ -366,7 +363,7 @@ def test_explicit_only_source_stays_unbound_and_unchanged_refreshes_reuse_model(
     service, monkeypatch
 ):
     """Energy-only 3-kWh evidence survives power relinking without fabricated provenance or repeat rebuilding."""
-    from tests.app.appliance.test_history_resume import trace_refinement
+    from tests.app.appliance.support import trace_refinement
 
     explicit_three_kwh(service)
     calls = trace_refinement(monkeypatch)
@@ -401,7 +398,7 @@ def test_explicit_winning_overlap_does_not_inherit_discarded_automatic_power_own
 
 def test_explicit_reconstruction_keeps_retained_coarse_summary_source_bound(service):
     """Restored hourly aggregates keep their actual source even when a known explicit profile takes precedence."""
-    from tests.app.appliance.test_history_learning import hourly_rows
+    from tests.app.appliance.support import hourly_rows
 
     service.learn_history(
         ENTITY,

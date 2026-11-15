@@ -35,12 +35,15 @@ def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     from open_energy_planner.appliances.cycles import history
     from open_energy_planner.appliances.cycles.service import ApplianceService, profile
     from open_energy_planner.appliances.forecasting import ConsumerForecasts
-    from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
-    from tests.app.appliance.test_cycle_refinement import (
+    from tests.app.appliance.support import (
+        ENTITY,
+        NOW,
+        POWER,
         complete_running_readings,
+        explicit_three_kwh,
+        readings,
         running_readings,
     )
-    from tests.app.appliance.test_cycle_review_regressions import explicit_three_kwh
 
     (source, target), root = route
     original = SqlPlanRepository(root / "source", engine=source)
@@ -88,7 +91,7 @@ def test_cycle_refinement_and_running_evidence_transfer_without_source(route):
     service.feedback(
         ENTITY, task["id"], attempt["id"], "not_started", issued, later, cancelled=True
     )
-    from tests.app.appliance.test_history_resume import next_batch, start_fine
+    from tests.app.appliance.support import next_batch, start_fine
 
     resumed_at = NOW + timedelta(days=20)
     start_fine(service, NOW - timedelta(days=40), resumed_at, resumed_at)
@@ -570,8 +573,7 @@ def test_hourly_learning_resumes_after_cross_backend_transfer_without_source(rou
     """Every supported transfer preserves the actual hourly model, source-bound checkpoint and original cycle points."""
     from open_energy_planner.appliances.cycles.service import ApplianceService
     from open_energy_planner.appliances.forecasting import ConsumerForecasts
-    from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER
-    from tests.app.appliance.test_history_learning import begin, hourly_rows, upload
+    from tests.app.appliance.support import ENTITY, NOW, POWER, begin, hourly_rows, upload
 
     (source, target), root = route
     original = SqlPlanRepository(root / "source", engine=source)

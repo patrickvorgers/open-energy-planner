@@ -5,42 +5,21 @@ from datetime import timedelta
 
 import pytest
 
-from open_energy_planner.appliances.cycles import evidence, history
+from open_energy_planner.appliances.cycles import history
 from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.cycles.service import ApplianceService, profile
-from tests.app.appliance.test_appliance_learning import ENTITY, NOW, POWER, readings
-from tests.app.appliance.test_cycle_refinement import complete_running_readings, running_readings
-from tests.app.appliance.test_cycle_review_regressions import explicit_three_kwh
-
-
-def start_fine(service, start, end, now):
-    """Use the real source-bound scan admission contract."""
-    history.scan(
-        service,
-        ENTITY,
-        POWER,
-        "processing",
-        start.isoformat(),
-        end.isoformat(),
-        now,
-        resolution="5minute",
-    )
-
-
-def next_batch(service, rows, now, *, resolution="5minute"):
-    """Upload exactly the requested bounded range, retaining full detector overlap."""
-    pending = history.request(service.state["devices"][ENTITY], resolution=resolution)
-    assert pending is not None
-    assert instant(pending["end"]) - instant(pending["start"]) <= timedelta(days=7)
-    selected = [
-        row
-        for row in rows
-        if instant(pending["read_start"]) <= instant(row["at"]) < instant(pending["read_end"])
-    ]
-    history.batch(
-        service, ENTITY, POWER, selected, False, **pending, now=now, resolution=resolution
-    )
-    return pending
+from tests.app.appliance.support import (
+    ENTITY,
+    NOW,
+    POWER,
+    complete_running_readings,
+    explicit_three_kwh,
+    next_batch,
+    readings,
+    running_readings,
+    start_fine,
+    trace_refinement,
+)
 
 
 @pytest.mark.parametrize("completed", [False, True])
@@ -80,20 +59,6 @@ def test_fine_extension_after_twenty_day_outage_visits_gap_and_retains_old_curso
     assert profile(settings["profile"]).energy_kwh == pytest.approx(0.5)
     assert settings["fine_import"]["expected_intervals"] == 60 * 24 * 12
     assert len(list(service.documents.iter_prefix("appliance-detected-"))) == 1
-
-
-def trace_refinement(monkeypatch):
-    """Count actual model reconstruction while allowing the original numerical implementation to run."""
-    calls = []
-    original = evidence.refine
-
-    def tracked(settings, records):
-        """Record complete refinement invocations, including empty archive sets."""
-        calls.append(len(records))
-        return original(settings, records)
-
-    monkeypatch.setattr(evidence, "refine", tracked)
-    return calls
 
 
 def test_unchanged_recent_uploads_skip_refinement_but_still_process_observed_completion(
@@ -249,8 +214,8 @@ def test_return_to_previously_cached_source_rebuilds_withdrawn_profile(service, 
     assert len(calls) == 2
 
 
-def test_forward_batch_activity_reports_new_coverage_and_skips_only_exact_replay(service):
-    """Real HTTP activity marks a committed forward batch usable and its identical replay skipped."""
+def test_forward_batch_activity_reports_usable_coverage_and_skips_only_exact_replay(service):
+    """Real HTTP activity marks actual paired forward evidence usable and its identical replay skipped."""
     import asyncio
     from datetime import UTC, datetime
     from types import SimpleNamespace
@@ -283,10 +248,14 @@ def test_forward_batch_activity_reports_new_coverage_and_skips_only_exact_replay
             SimpleNamespace(state={"points": []}),
             SimpleNamespace(state={"stores": []}),
         )
+        core_start = instant(pending["start"])
         body = {
             "entity_id": ENTITY,
             "power_entity": POWER,
-            "rows": [],
+            "rows": [
+                {"at": (core_start - timedelta(minutes=5)).isoformat(), "power_w": 0, "kwh": 1},
+                {"at": core_start.isoformat(), "power_w": 0, "kwh": 1},
+            ],
             "synthetic": False,
             **pending,
         }
