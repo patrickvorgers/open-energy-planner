@@ -48,6 +48,7 @@ jobs:
       matrix_profile: ${{ steps.scope.outputs.matrix_profile }}
       tree: ${{ steps.source.outputs.tree }}
       matrix: ${{ steps.parallel.outputs.matrix }}
+      report_download_path: ${{ steps.parallel.outputs.report_download_path }}
     env:
       COMPOSE_PROJECT_NAME: oep-check-${{ github.run_id }}-${{ github.run_attempt }}
       DOCKER_BUILD_RECORD_UPLOAD: false
@@ -344,7 +345,7 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: ci-reports-*
-          path: .local/ci-lanes
+          path: ${{ needs.prepare.outputs.report_download_path }}
       - name: Documentation, Ruff and CI routing checks
         if: steps.scope.outputs.documentation_only == 'true'
         run: python -m script.ci.parallel_checks join --profile "$OEP_CI_PROFILE"

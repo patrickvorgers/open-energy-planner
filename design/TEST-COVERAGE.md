@@ -1,4 +1,4 @@
-# Test research and coverage plan: Open Energy Planner
+# Test coverage plan: Open Energy Planner
 
 ## Price forecast selection
 
@@ -27,48 +27,17 @@ Additional acceptance contracts:
 
 ## 1. Scope and provenance
 
-Use external tests as inspiration for coverage categories, never as fixtures or expected answers. All Open Energy Planner cases, parameters, arithmetic and assertions are independently designed. Do not translate or lightly rename another project's test case and call it original.
+All Open Energy Planner cases, parameters, arithmetic and assertions are
+independently designed from its requirements and physical and financial contracts.
+Expected outputs need an independent numerical argument or an explicit invariant.
+Stored solver output, snapshot equality and a finite objective alone do not prove
+economic correctness.
 
-This is a read-only review of selected source files and their assertions. External suites were not executed. Findings describe those files at the cited revision, not comprehensive coverage or quality rankings of those projects. No code or fixture data was imported.
-
-### DAO
-
-Reviewed main commit `810392a2cb4ebe76c684102cde24dd2b077e27c6`.
-
-| Observed category | What the reviewed tests check | Inspiration and limitation |
-|---|---|---|
-| Arbitrage, negative/flat prices and PV timing | Objective baselines plus selected charge/discharge windows. Some cases constrain activity | Use economic bounds and negative-price variants. Stored solver output alone is not an independent optimum. |
-| Battery limits and multiple batteries | Variable/SoC bounds and selected cross-battery direction restrictions | Test shared limits and heterogeneous batteries. A blanket prohibition on charging one battery while another discharges is DAO policy, not automatically our requirement. |
-| Availability, deadlines and partial first intervals | Selected scheduling outcomes, reasons and exclusivity checks | Reuse categories for time/availability coverage. Defer EV-specific functionality outside our first release. |
-| Scenario execution and baselines | Solver cases require opt-in. Missing objective baselines may be pending | Our required scenario gate must run and have independently justified expectations, not silently skip or bless unknown results. |
-
-Sources: [battery cases](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/scenarios/cases/battery.json), [price cases](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/scenarios/cases/price.json), [solar cases](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/scenarios/cases/solar.json), [assertions](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/scenarios/expectations.py), [pytest entry](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/tests/prog/test_scenarios.py), [baseline handling](https://github.com/corneel27/day-ahead/blob/810392a2cb4ebe76c684102cde24dd2b077e27c6/dao/prog/scenarios/baseline.py).
-
-### HAEO
-
-Reviewed main commit `ce90ac2e8fcbe3614d155fa251354b1a911f5b96`.
-
-| Observed category | What the reviewed tests check | Inspiration and limitation |
-|---|---|---|
-| Recorded scenarios | Successful optimization and snapshots of published HA outputs with a fixed clock | Useful integration regressions. Snapshot equality is not an independent proof of economic optimality. |
-| Battery and connection models | Expected numeric series, limits, efficiencies and remaining-energy valuation | Test measurement sides and route losses. HAEO soft-bound penalties must not replace our hard reserve rule. |
-| Network and route pricing | Cost application at the right measurement point, prohibited flows and no duplicate production | Test bonus provenance and AC/DC conversions, not only aggregate balances. |
-| Equivalent optima and model updates | Primary-cost preservation, selected order invariance and warm/cold comparisons | Test tie-breaks separately. Add warm-start tests only when model reuse is implemented. |
-| Benchmarks | Construction/update/solve measurements. Selected checks include a finite objective | Measure stages separately. Finite values do not establish correct outcomes. |
-
-Sources: [recorded scenario runner](https://github.com/hass-energy/haeo/blob/ce90ac2e8fcbe3614d155fa251354b1a911f5b96/tests/scenarios/test_scenarios.py), [battery model cases](https://github.com/hass-energy/haeo/blob/ce90ac2e8fcbe3614d155fa251354b1a911f5b96/custom_components/haeo/core/model/tests/test_data/battery.py), [connection cases](https://github.com/hass-energy/haeo/blob/ce90ac2e8fcbe3614d155fa251354b1a911f5b96/custom_components/haeo/core/model/tests/test_data/connection.py), [network assertions](https://github.com/hass-energy/haeo/blob/ce90ac2e8fcbe3614d155fa251354b1a911f5b96/custom_components/haeo/core/model/tests/test_network.py), [policy scenario](https://github.com/hass-energy/haeo/blob/ce90ac2e8fcbe3614d155fa251354b1a911f5b96/custom_components/haeo/core/model/tests/test_policy_scenario.py), [warm-start tests](https://github.com/hass-energy/haeo/blob/ce90ac2e8fcbe3614d155fa251354b1a911f5b96/custom_components/haeo/core/model/reactive/tests/test_warm_start.py), [benchmark runner](https://github.com/hass-energy/haeo/blob/ce90ac2e8fcbe3614d155fa251354b1a911f5b96/tests/scenarios/test_benchmark.py).
-
-### EMHASS
-
-Reviewed indexed `master` source, with some source views approximately two weeks old. No commit hash or latest test result was confirmed. Treat these observations as less reproducibly pinned than the DAO/HAEO references. Pin a revision before any future detailed comparison.
-
-Observed assertions include negative-price solver status, AC/hybrid route restrictions, disabled loads producing no consumption, and tie-break preferences preserving primary cost. Some reviewed tests check only output structure or allow an early return on non-optimal status. A test name about infeasibility does not itself prove infeasibility is asserted.
-
-Inspiration: guard against artificial energy sinks, forbidden exports through alternate routes, and auxiliary objectives changing the economic answer. Our expected-feasible cases must not pass by returning early on solver failure. Infeasibility cases must check the correct status.
-
-Source: [EMHASS optimization tests](https://github.com/davidusb-geek/emhass/blob/master/tests/test_optimization.py), especially the reviewed sections concerning [disabled loads](https://github.com/davidusb-geek/emhass/blob/master/tests/test_optimization.py#L8373), [AC/hybrid routes](https://github.com/davidusb-geek/emhass/blob/master/tests/test_optimization.py#L8512) and [cost-preserving preferences](https://github.com/davidusb-geek/emhass/blob/master/tests/test_optimization.py#L8304). Line links can drift on master. Do not infer that other tests do not cover those risks.
-
-No supplier-specific capped-bonus scenario was established in this selected review. Our bonus-cap coverage is independently derived from our own requirements, not evidence of a missing feature in another EMS.
+Required scenarios must execute. Expected-feasible cases must fail on solver
+failure rather than return early. Infeasibility cases must assert the intended
+status. Cover forbidden energy routes, artificial energy sinks and tie-breaks
+that preserve the primary objective. Bonus-cap scenarios follow OEP's own contract
+rules and independently specified arithmetic.
 
 ## 2. Coverage status terminology
 

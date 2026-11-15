@@ -12,17 +12,7 @@ One packaged HTML partial owns navigation across the page shells.
 The original plan selector never activates an old plan. Historical data is rendered
 from saved evidence without recalculating optimization or replacing measurements.
 
-## Chart selection and source research
-
-These references explain the information-design choices.
-No product code, artwork or scenario outcomes were copied.
-
-| Primary source | Relevant evidence | OEP decision |
-| --- | --- | --- |
-| [DAO wiki](https://github.com/corneel27/day-ahead/wiki) | Planning graph, detailed calculation view and browsing past optimizations | Keep original plan selection and inspect commands and interval evidence through a focused disclosure. |
-| [EMHASS battery example](https://emhass.readthedocs.io/en/latest/study_cases/basic_pv_battery.html) | Optimization results plus a distinct battery state-of-charge plot | Separate power, battery inventory and prices rather than mix units on an unreadable axis. |
-| [Victron Dynamic ESS](https://github.com/victronenergy/dynamic-ess#graphs) and [manual](https://www.victronenergy.com/live/drafts%3Adynamic_ess) | Recorded versus estimated/planned graphs. Prices alongside the energy schedule | Explicit forecast/recorded/reference labels and a separate advice-versus-realization view. |
-| [GBBOptimizer version history](https://gbboptimizer6.gbbsoft.pl/About) | Forecast-versus-actual load graph, battery forecast/energy-price graph, daily/monthly profit reporting | Show expected use and financial results in separate focused views. Keep inventory value distinct from cash. |
+## Chart selection
 
 Planning shows one installation energy balance with every battery's SoC,
 effective prices and net EMS/reference grid exchange. Separate battery-converter
@@ -129,12 +119,6 @@ matching the independent physical validator's per-flow allowance.
 Material negative physical energy is rejected. Archived numbers stay unchanged.
 The net grid comparison and financial charts are not conservation diagrams.
 They remain separate to avoid mixing the simulated reference with EMS flows.
-
-The supplied DAO example inspired signed stacks. [Victron's dashboard manual](https://www.victronenergy.com/media/pg/VRM_Portal_manual/en/dashboard.html)
-documents kWh production/consumption bars with a SoC line. The [GBBOptimizer chart-data contract](https://gbboptimizer.gbbsoft.pl/Manual?PageNo=19)
-separates AC/DC energy, charging, discharge and percentage state. [EMHASS's battery example](https://emhass.readthedocs.io/en/latest/study_cases/basic_pv_battery.html)
-distinguishes optimization results from battery SoC. These are design references.
-No implementation or image is copied.
 
 The Planning overview keeps costs and their breakdown beside each scenario.
 **Understand this plan** owns original assumptions and selected interval commands.

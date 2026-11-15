@@ -22,6 +22,7 @@ from script.ci.proof_git import checkout_tree
 
 LANES = ("native", "browser", "databases", "performance-queries", "supervisor")
 PREPARED = Path(".local/ci-prepared")
+LANE_REPORTS = Path(".local/ci-lanes")
 
 
 def lane_suites(profile):
@@ -114,7 +115,7 @@ def read_plan(profile):
 
 
 def export_images(profile):
-    """Save each already built image once, retaining aliases and its inspected Docker identity."""
+    """Save built images with exact identities and publish machine and report-transfer outputs."""
     PREPARED.mkdir(parents=True, exist_ok=True)
     plan = identity(profile)
     plan["lanes"] = {lane: sorted(suites) for lane, suites in lane_suites(profile).items()}
@@ -138,8 +139,13 @@ def export_images(profile):
     (PREPARED / "parallel-plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
     shutil.copytree("results/ci", PREPARED / "preflight", dirs_exist_ok=True)
     matrix = {"include": plan["machines"]}
+    report_download_path = LANE_REPORTS
+    # The downloader places a single matching artifact directly in its configured directory.
+    if len(plan["machines"]) == 1:
+        report_download_path /= f"ci-reports-{plan['machines'][0]['name']}"
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
         output.write("matrix=" + json.dumps(matrix) + "\n")
+        output.write("report_download_path=" + report_download_path.as_posix() + "\n")
 
 
 def load_images(profile, lane, *, browser_machine=None):
@@ -293,7 +299,7 @@ def main():
             parser.error("--browser-machine requires the browser lane")
         load_images(options.profile, options.lane, browser_machine=options.browser_machine)
     else:
-        join_reports(options.profile, Path(".local/ci-lanes"))
+        join_reports(options.profile, LANE_REPORTS)
 
 
 if __name__ == "__main__":

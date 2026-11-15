@@ -1086,6 +1086,11 @@ available, and cancellation never counts as successful suite completion.
 The final quality job runs only after every selected machine succeeds. It rejects
 missing or extra machines, foreign source/attempt identities, incorrect suite
 ownership, missing or unexpected reports and inconsistent executed counts.
+Preparation derives the report download path from the selected machine matrix.
+The downloader places one matching artifact directly in that path, so a single
+machine uses its named `ci-reports-<machine>` directory. Multiple machines use
+the common parent and receive separate named directories. The join requires the
+same per-machine layout in both cases and retains all completeness checks.
 It then writes and verifies the existing whole-profile completion record. Package
 creation happens once after this join. The existing quality check name, ordered
 source-tree markers and matched bundle/report identities remain the merge and
