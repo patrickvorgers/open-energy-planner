@@ -227,6 +227,24 @@ After any daily request, confirm the intended device and saved/requested state. 
 
 **Next:** [Read your plan](read-your-plan.md), or [understand evaluated savings](savings.md).
 
+## Cycle profile reliability
+
+Learning starts with hourly history and available five-minute statistics.
+Five-minute average power supplies the provisional shape, with the cycle's
+energy total taken from the energy counter. Coarse counter updates are not
+displayed as short power peaks.
+
+Original measurement times refine the profile only after the planner has
+continuously followed a complete cycle and its quiet boundaries. Reports may
+be at most ten minutes apart. Repeated reports of the same value count as fresh.
+A restart, an observation outage or stale reports interrupt this coverage.
+Old Recorder history alone cannot prove that identical reports kept arriving.
+
+A curve marked as not continuously followed remains available for inspection.
+It cannot replace an existing good profile. Accepted profiles remain stored
+after a restart. Once a followed profile is available, later provisional
+statistics cannot distort its measured shape or energy.
+
 ## Hand-started cycles
 
 When recent measurements show that you started a cycle yourself, its learned

@@ -350,7 +350,8 @@ def test_equal_hourly_and_fine_bounds_keep_both_archives_and_count_once_after_re
     assert row["profile_sources"] == {"hourly_cycles": 0, "fine_cycles": 1}
     [hourly] = list(restored.documents.iter_prefix("appliance-hourly-"))
     [measured] = list(restored.documents.iter_prefix("appliance-detected-"))
-    assert hourly["id"] == measured["id"]
+    assert hourly["started_at"] == measured["started_at"]
+    assert hourly["completed_at"] == measured["completed_at"]
 
 
 def test_coarse_energy_cannot_force_fine_timing_beyond_the_power_boundary(service):

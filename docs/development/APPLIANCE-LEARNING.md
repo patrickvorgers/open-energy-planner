@@ -38,8 +38,11 @@ null readings, counter resets and unfinished cycles break the candidate. Recorde
 have negative arbitrary origins. Only their increments determine cycle energy.
 A candidate with unusable energy resolution is skipped without blocking later
 valid cycles. Power
-finds boundaries. Cumulative energy supplies the actual kWh and native five-minute
-profile. The trailing quiet confirmation is not part of the profile.
+finds boundaries. Cumulative energy supplies the total kWh. Five-minute mean
+power supplies the provisional shape, normalized to that counter total. A coarse
+counter step therefore cannot create a fictitious five-minute heater peak.
+This normalized statistical estimate is distinct from original measured power.
+The trailing quiet confirmation is not part of the profile.
 
 The first complete cycle admits a usable provisional profile. Additional cycles
 refine it with the existing 90-day recency half-life. Aligned source phases are
@@ -169,7 +172,27 @@ real sensors can therefore show useful raw detail while the previously usable
 statistical profile remains selected.
 
 A conserved complete raw cycle retains its actual irregular phase durations and
-peaks. It supersedes overlapping statistical views without counting a second
+peaks only when OEP continuously followed its power reports. Each raw capture
+carries a live integration observer session and the matching HA `last_reported`
+timestamp. Identical values remain fresh when the integration reports them
+again. A changed-value timestamp is not used as a heartbeat.
+
+The app durably records bounded observation periods for the current sensor pair.
+Capture gaps and report gaps may be at most ten minutes, including exactly ten
+minutes. Missing, invalid, stale or future reports interrupt the period. A new
+integration session or the first new capture after an app restart starts a new
+period. Replays cannot bridge that restart. The entire cycle and its thirty-minute
+quiet flanks must fit within one period. Ordinary Recorder history cannot prove
+that unchanged reports were received and is never retrospectively labelled as
+continuously followed. Unfollowed curves remain inspectable with `not_observed`
+status and do not refine a model. Previously accepted profiles remain usable.
+
+An admitted followed profile takes precedence over provisional statistical
+shapes and energies. Later historical statistics cannot distort its measured
+power. Distinct explicitly completed cycles retain their existing independent
+contributions. Legacy accepted raw profiles are retained without retrospectively
+claiming that their report coverage was followed. A new observed view supersedes
+overlapping statistical views without counting a second
 cycle. Original frames and all accepted/rejected raw views remain in the active
 database and survive restart and cross-backend transfer. A running partial cycle
 is not a training sample. When its counter-covered portion is consistent and

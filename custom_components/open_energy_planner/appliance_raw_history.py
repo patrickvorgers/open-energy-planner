@@ -100,6 +100,7 @@ async def capture(coordinator, entity, power_entity, synthetic):
         return current.last_reported.isoformat()
 
     body = {
+        "observer_session": coordinator.appliance_observer_session,
         "entity_id": entity,
         "power_entity": power_entity,
         "start": start.isoformat(),

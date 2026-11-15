@@ -10,12 +10,12 @@ from aiohttp.test_utils import TestClient, TestServer
 from open_energy_planner.app import create_app
 from open_energy_planner.appliances.cycles.model import instant, restore_profile
 from open_energy_planner.runtime.maintenance import create_managed_app
-from tests.app.appliance.raw_support import dense_raw_trace
+from tests.app.appliance.raw_support import dense_raw_trace, raw_captures
 from tests.app.appliance.support import ENTITY, POWER
 from tests.ha_contract.support.metadata import setup_metadata
 
 
-def test_raw_import_uses_its_own_limit_through_production_gateway(tmp_path):
+def test_raw_import_uses_its_own_limit_through_production_gateway(tmp_path, monkeypatch):
     """A valid large frame and its exact peak survive the gateway, while oversized and ordinary reads stay bounded."""
 
     async def scenario():
@@ -67,6 +67,24 @@ def test_raw_import_uses_its_own_limit_through_production_gateway(tmp_path):
                     row["at"] = (instant(row["at"]) + offset).isoformat()
             wire = json.dumps(body).encode()
             assert 256 * 1024 < len(wire) < 512 * 1024
+            from open_energy_planner.appliances.cycles import api as api_module
+
+            clock = [instant(body["end"])]
+
+            class CaptureClock(datetime):
+                """Freeze only appliance HTTP admission at each simulated capture's actual delivery time."""
+
+                @classmethod
+                def now(cls, tz=None):
+                    """Keep historical replay synchronous without waiting ninety real minutes."""
+                    return clock[0].astimezone(tz)
+
+            monkeypatch.setattr(api_module, "datetime", CaptureClock)
+            for frame in raw_captures(body):
+                clock[0] = instant(frame["end"])
+                assert (
+                    await client.post("/v1/appliances/raw_history", headers=headers, json=frame)
+                ).status == 200
             response = await client.post("/v1/appliances/raw_history", headers=headers, data=wire)
             assert response.status == 200
             state = (await response.json())["appliances"]

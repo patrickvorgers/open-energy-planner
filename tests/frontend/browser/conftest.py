@@ -238,6 +238,18 @@ def app_site(request, savings_now):
                             "error": None,
                         },
                     )
+            if getattr(request, "param", None) in (
+                "appliance_followed",
+                "appliance_quality_observed",
+                "appliance_quality_statistics",
+            ):
+                from tests.frontend.browser.appliance_quality_fixture import seed
+
+                seed(
+                    Path(directory),
+                    representative=request.param != "appliance_followed",
+                    statistical=request.param == "appliance_quality_statistics",
+                )
             application = application_factory(
                 Path(directory),
                 TOKEN,

@@ -2,6 +2,7 @@
 
 from bisect import bisect_left
 from dataclasses import asdict
+from enum import StrEnum
 
 from open_energy_planner.demand.calculation.model import digest
 
@@ -17,6 +18,14 @@ from .model import (
 )
 
 
+class ProfileBasis(StrEnum):
+    """Identify the selected model's statistical, observed or explicit-completion provenance."""
+
+    STATISTICS = "statistics"
+    OBSERVED = "observed"
+    EXPLICIT = "explicit"
+
+
 def completion(record):
     """Normalize explicit energy-counter evidence without inventing a measured power sensor."""
     return {
@@ -30,7 +39,7 @@ def measured(record):
     """Restore a profile from the original counters, retaining its actual source resolution."""
     if "_profile" in record:
         return record["_profile"]
-    if record.get("quality") == "recorder_state":
+    if record.get("quality") in ("recorder_state", "five_minute_statistics"):
         record["_profile"] = restore_profile(record["profile"])
         return record["_profile"]
     function = hourly_profile if record.get("quality") == "hourly_estimate" else learn_cycle
@@ -80,6 +89,7 @@ def distinct_ranges(records):
                     item.get("quality") == "recorder_state",
                     len(item["points"]),
                     item.get("quality") == "explicit_completion",
+                    item.get("quality") == "five_minute_statistics",
                     instant(item["completed_at"]),
                 ),
             )
@@ -105,6 +115,14 @@ def refine(settings, records):
     coarse = distinct_ranges(
         [record for record in records if record.get("quality") == "hourly_estimate"]
     )
+    observed = [record for record in fine if record.get("observation_coverage") is True]
+    if observed:
+        fine = [
+            record
+            for record in fine
+            if record.get("observation_coverage") is True
+            or record.get("quality") == "explicit_completion"
+        ]
     fine_starts = [instant(record["started_at"]) for record in fine]
 
     def overlaps_fine(record):
@@ -114,7 +132,9 @@ def refine(settings, records):
             record["started_at"]
         )
 
-    distinct = fine + [record for record in coarse if not overlaps_fine(record)]
+    distinct = (
+        fine if observed else fine + [record for record in coarse if not overlaps_fine(record)]
+    )
     if fine and all(record.get("quality") == "explicit_completion" for record in fine):
         # An explicit completed profile takes precedence over coarse-only fallback learning.
         distinct = fine
@@ -167,6 +187,15 @@ def refine(settings, records):
         "hourly_cycles": len(distinct) - len(fine),
         "fine_cycles": len(fine),
     }
+    settings["profile_basis"] = (
+        ProfileBasis.OBSERVED
+        if observed
+        else ProfileBasis.EXPLICIT
+        if fine and all(record.get("quality") == "explicit_completion" for record in fine)
+        else ProfileBasis.STATISTICS
+    )
+    if not observed and any(record.get("quality") == "recorder_state" for record in fine):
+        settings.pop("profile_basis", None)
     settings["recent_cycles"] = [
         {
             "id": record["id"],

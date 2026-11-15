@@ -576,6 +576,15 @@ or scale measured peaks to force agreement. Unverified curves remain visible
 with the previously usable statistical profile retained. Complete conserved runs
 refine durable profiles. Partial runs only refine existing observed activity and
 remaining forecasts, without training, execution feedback or new start rights.
+Admit raw refinement only for cycles continuously followed by OEP, including quiet
+boundaries. Use actual power report timestamps, including unchanged values.
+More than ten minutes between reports or captures, a changed HA observer session
+or an app restart interrupts coverage. Persist the evidence without treating
+restart gaps as observed time. Historical Recorder holds alone cannot establish
+heartbeat continuity. Preserve good admitted profiles when new evidence fails.
+Bootstrap with hourly and five-minute statistics. Use mean power for provisional
+five-minute shape and counter energy for its total, avoiding coarse counter-step
+peaks. A followed profile is not distorted by later provisional statistics.
 Original evidence and learned phases survive restart and backend transfer.
 Bound actual native query rows, outstanding executor work, response bytes, phase
 union and planning expansion. Over-budget detail must not block unrelated

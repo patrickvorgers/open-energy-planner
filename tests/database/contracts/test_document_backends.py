@@ -440,6 +440,56 @@ def test_solar_import_forecast_and_accuracy_contracts_survive_restart(archive):
     assert captures[0]["models"]["pvwatts"] == [0.5] * 24
 
 
+def test_report_coverage_rollback_and_restart_do_not_bridge_a_live_cycle(archive, monkeypatch):
+    """Every backend retains observation coverage atomically without claiming observation during restart."""
+    from copy import deepcopy
+
+    from open_energy_planner.appliances.cycles.model import instant
+    from open_energy_planner.appliances.cycles.service import ApplianceService
+    from open_energy_planner.appliances.forecasting import ConsumerForecasts
+    from tests.app.appliance.raw_support import raw_captures, raw_trace
+
+    engine, _root = archive
+    consumers = ConsumerForecasts(SqlDocuments(engine, "demand"))
+    consumers.sync(
+        {
+            "entities": [{"entity_id": ENTITY, "name": "Synthetic washer"}],
+            "suggestions": {
+                "consumers": [{"entity_id": ENTITY, "power_entity": POWER, "upstream": None}]
+            },
+        }
+    )
+    consumers.save([{"entity_id": ENTITY, "weather_sensitive": False}], consumers.version)
+    service = ApplianceService(SqlDocuments(engine, "planning"), consumers)
+    frames = list(raw_captures(raw_trace()))
+    for frame in frames[:7]:
+        service.learn_raw_history(frame, instant(frame["end"]))
+    previous = deepcopy(service.state)
+    progress = service.documents.read("appliance-progress.json")
+    write = service.documents.write
+
+    def fail_progress(name, value):
+        """Reject the actual observation checkpoint inside the shared transaction."""
+        if name == "appliance-progress.json":
+            raise OSError("Synthetic observation checkpoint outage")
+        write(name, value)
+
+    monkeypatch.setattr(service.documents, "write", fail_progress)
+    with pytest.raises(OSError):
+        service.learn_raw_history(frames[7], instant(frames[7]["end"]))
+    assert service.state == previous
+    assert service.documents.read("appliance-progress.json") == progress
+    restored = ApplianceService(SqlDocuments(engine, "planning"), consumers)
+    # A replay after restart must not arm continuity for the next new capture.
+    restored.learn_raw_history(frames[6], instant(frames[6]["end"]))
+    for frame in frames[7:]:
+        restored.learn_raw_history(frame, instant(frame["end"]))
+    settings = restored.state["devices"][ENTITY]
+    assert "profile" not in settings
+    assert settings["raw_history"]["status"] == "not_observed"
+    assert settings["report_coverage"]["windows"][-1][0] == frames[7]["end"]
+
+
 def test_hourly_learning_checkpoint_weight_archive_and_rollback(archive, monkeypatch):
     """All real backends restore weighted estimates and atomically roll back failed batch checkpoints."""
     from copy import deepcopy

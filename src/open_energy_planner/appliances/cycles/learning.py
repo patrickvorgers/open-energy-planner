@@ -139,6 +139,26 @@ def manual_profile(duration_minutes, energy_kwh):
     return CycleProfile(powers, evidence="manual")
 
 
+def statistics_profile(rows, started, completed, points, *, synthetic=False):
+    """Distribute the cycle counter total using observed interval means, never counter-step spikes.
+
+    This is a provisional statistical estimate. Normalization conserves the
+    counter total without claiming the resulting phases are original readings.
+    """
+    powers = tuple(row["power_w"] for row in rows if started <= instant(row["at"]) < completed)
+    if len(powers) * SAMPLE_SECONDS != (completed - started).total_seconds():
+        raise ValueError("Statistics do not cover the complete cycle")
+    energy = points[-1]["kwh"] - points[0]["kwh"]
+    integrated = sum(powers) * SAMPLE_SECONDS / 3600000
+    if energy <= 0 or integrated <= 0:
+        raise ValueError("Cycle energy must be positive")
+    return CycleProfile(
+        tuple(power * energy / integrated for power in powers),
+        evidence="synthetic" if synthetic else "measured",
+        phase_seconds=SAMPLE_SECONDS,
+    )
+
+
 def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
     """Return complete ranges and cumulative kWh points, never fill missing samples.
 

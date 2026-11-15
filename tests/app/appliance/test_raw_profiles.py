@@ -277,10 +277,11 @@ def test_twenty_second_raw_peak_remains_in_physical_grid_limits_and_savings_repl
     from open_energy_planner.optimization.domain import Interval
     from open_energy_planner.planning import InputSnapshot
     from open_energy_planner.savings.context import appliance_schedule
-    from tests.app.appliance.raw_support import raw_trace
+    from tests.app.appliance.raw_support import raw_trace, start_observing
     from tests.app.appliance.support import ENTITY
 
     body = raw_trace()
+    start_observing(service, body)
     service.learn_raw_history(body, instant(body["end"]))
     service.configure(ENTITY, True)
     service.submit(ENTITY, "raw-ready", NOW, NOW + timedelta(hours=1), NOW)

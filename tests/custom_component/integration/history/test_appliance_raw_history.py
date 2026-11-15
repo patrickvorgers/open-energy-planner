@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
 from threading import Event
 from types import SimpleNamespace
 
@@ -22,9 +22,57 @@ from sqlalchemy.exc import OperationalError
 from custom_components.open_energy_planner import appliance_history, appliance_raw_history
 from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.cycles.raw import analyze
-from tests.app.appliance.raw_support import dense_raw_trace
+from tests.app.appliance.raw_support import dense_raw_trace, raw_captures
 from tests.app.appliance.support import ENTITY, POWER
 from tests.custom_component.support.chain import TOKEN, configure_energy, running_chain
+
+
+def test_identical_native_state_reports_refresh_last_reported_without_changing_last_updated():
+    """Native HA identical reports remain fresh despite Recorder retaining the old unchanged state time."""
+
+    async def scenario():
+        """Use actual HA state reporting and Recorder capture without force_update or invented changed values."""
+        async with running_chain(
+            live=True, recorder=True, fixture_devices=False, peer_gateway=True
+        ) as (hass, _entry, _url, _extra):
+            attributes = {
+                "unit_of_measurement": "W",
+                "device_class": "power",
+                "state_class": "measurement",
+            }
+            hass.states.async_set(POWER, "383", attributes)
+            hass.states.async_set(
+                ENTITY,
+                "10",
+                {
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                },
+            )
+            first = hass.states.get(POWER)
+            first_reported = first.last_reported
+            await hass.async_block_till_done()
+            hass.states.async_set(POWER, "383", attributes)
+            second = hass.states.get(POWER)
+            assert second.last_changed == first.last_changed
+            assert second.last_updated == first.last_updated
+            assert second.last_reported > first_reported
+            await hass.async_block_till_done()
+            await get_instance(hass).async_block_till_done()
+            coordinator = SimpleNamespace(
+                hass=hass,
+                closed=False,
+                appliance_raw_history_future=None,
+                appliance_observer_session="native-identical-reports",
+            )
+            body = await appliance_raw_history.capture(coordinator, ENTITY, POWER, False)
+            assert body["observer_session"] == "native-identical-reports"
+            assert body["power_reported_at"] == second.last_reported.isoformat()
+            assert body["power_states"][-1]["at"] == first.last_updated.isoformat()
+            assert body["power_states"][-1]["state"] == "383"
+
+    asyncio.run(scenario())
 
 
 def test_native_recorder_retains_original_times_unit_changes_and_explicit_limited_tail(monkeypatch):
@@ -102,7 +150,10 @@ def test_native_recorder_retains_original_times_unit_changes_and_explicit_limite
             await hass.async_block_till_done()
             await get_instance(hass).async_block_till_done()
             coordinator = SimpleNamespace(
-                hass=hass, closed=False, appliance_raw_history_future=None
+                hass=hass,
+                closed=False,
+                appliance_raw_history_future=None,
+                appliance_observer_session="native-fixture",
             )
             body = await appliance_raw_history.capture(coordinator, ENTITY, POWER, True)
             assert body is not None
@@ -162,8 +213,27 @@ def test_native_recorder_retains_original_times_unit_changes_and_explicit_limite
                 ) as saved,
             ):
                 assert saved.status == 200
+            from open_energy_planner.appliances.cycles import api as api_module
+
+            clock = [instant(body["end"])]
+
+            class CaptureClock(datetime):
+                """Deliver each genuinely captured fixture at its simulated app admission time."""
+
+                @classmethod
+                def now(cls, tz=None):
+                    """Advance HTTP admission without waiting for the entire physical cycle."""
+                    return clock[0].astimezone(tz)
+
+            monkeypatch.setattr(api_module, "datetime", CaptureClock)
+            for frame in raw_captures(body):
+                clock[0] = instant(frame["end"])
+                await client.request("POST", "/v1/appliances/raw_history", frame)
             response = await client.request("POST", "/v1/appliances/raw_history", body)
             [projected] = response["appliances"]["devices"]
+            assert "profile" in projected, {
+                key: projected.get(key) for key in ("report_coverage", "raw_history")
+            }
             assert len(projected["profile"]["phase_durations_seconds"]) == 145
             assert projected["profile"]["phase_durations_seconds"][-2:] == pytest.approx(
                 [20, 1179.7]
@@ -281,7 +351,10 @@ def test_collector_drops_a_row_bounded_frame_above_512_kib(monkeypatch):
 
             monkeypatch.setattr(appliance_raw_history, "get_last_state_changes", bounded)
             coordinator = SimpleNamespace(
-                hass=hass, closed=False, appliance_raw_history_future=None
+                hass=hass,
+                closed=False,
+                appliance_raw_history_future=None,
+                appliance_observer_session="native-fixture",
             )
             assert await appliance_raw_history.capture(coordinator, ENTITY, POWER, True) is None
             assert calls == [ENTITY, POWER]
@@ -345,6 +418,7 @@ def test_recorder_sql_failure_keeps_statistics_scan_and_next_appliance(monkeypat
                 client=SimpleNamespace(request=request),
                 appliance_history_attempts={},
                 appliance_raw_history_future=None,
+                appliance_observer_session="native-fixture",
             )
             await appliance_history.process(coordinator)
             assert scans == [ENTITY, other]

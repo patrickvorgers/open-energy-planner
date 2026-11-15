@@ -34,7 +34,13 @@ from open_energy_planner.installation.model import InstallationProblem, slice_in
 
 STATE_KEY = "appliance-state.json"
 PROGRESS_KEY = "appliance-progress.json"
-PROGRESS_FIELDS = ("learning_history", "history_import", "fine_import", "raw_history")
+PROGRESS_FIELDS = (
+    "learning_history",
+    "history_import",
+    "fine_import",
+    "raw_history",
+    "report_coverage",
+)
 MAX_CORRELATION_LENGTH = 64
 MAX_CYCLE_OBSERVATIONS = 2048
 MAX_FEEDBACK_EVENTS = 1024
@@ -90,6 +96,7 @@ class ApplianceService:
         self.issue = None
         self._cycle_records = {}
         self._phase_limited_entities = set()
+        self._report_pairs = set()
 
     @property
     def revision(self):
@@ -110,6 +117,7 @@ class ApplianceService:
                             "history_import",
                             "fine_import",
                             "raw_history",
+                            "report_coverage",
                         )
                         and not key.startswith("hourly_")
                     }
@@ -188,7 +196,7 @@ class ApplianceService:
         data = deepcopy(self.state)
         withdrawn = set()
         for entity, settings in data["devices"].items():
-            for field in ("fine_import", "observed_run", "raw_history"):
+            for field in ("fine_import", "observed_run", "raw_history", "report_coverage"):
                 if settings.get(field, {}).get("power_entity") not in (None, self.source(entity)):
                     settings.pop(field)
             progress = settings.get("history_import")
@@ -213,6 +221,7 @@ class ApplianceService:
                 settings.pop("learning_source", None)
                 settings.pop("recent_cycles", None)
                 settings.pop("profile_sources", None)
+                settings.pop("profile_basis", None)
                 settings.pop("last_detected_end", None)
                 settings.pop("learning_weight", None)
                 settings.pop("first_detected_start", None)
@@ -230,6 +239,9 @@ class ApplianceService:
         for pair in tuple(self._cycle_records):
             if pair[0] in withdrawn:
                 self._cycle_records.pop(pair)
+        self._report_pairs.intersection_update(
+            (entity, self.source(entity)) for entity in data["devices"]
+        )
 
     def set_manual_profile(self, entity, duration_minutes, energy_kwh, expected_version):
         """Retain an explicit estimate without replacing a ready learned profile or accepted task."""
@@ -250,7 +262,7 @@ class ApplianceService:
             settings["profile"] = asdict(estimate)
         self.commit(data)
 
-    def collect_cycles(self, entity, power_entity, cycles, synthetic, *, hourly=False):
+    def collect_cycles(self, entity, power_entity, cycles, synthetic, *, hourly=False, rows=None):
         """Prepare immutable evidence without publishing cache or state before a successful commit.
 
         Archives are read once for each sensor pair. Fine and hourly observations
@@ -294,7 +306,25 @@ class ApplianceService:
         extra = []
         prefix = "appliance-hourly-" if hourly else "appliance-detected-"
         for started, completed, points in cycles:
-            identity = digest([entity, power_entity, started.isoformat(), completed.isoformat()])
+            statistical = None
+            if not hourly and rows is not None:
+                from .learning import statistics_profile
+
+                try:
+                    statistical = statistics_profile(
+                        rows, started, completed, points, synthetic=synthetic
+                    )
+                except ValueError:
+                    continue
+            identity = digest(
+                [
+                    entity,
+                    power_entity,
+                    started.isoformat(),
+                    completed.isoformat(),
+                    *([asdict(statistical)] if statistical else []),
+                ]
+            )
             key = prefix + identity + ".json"
             # Resolution is part of archive identity even when both time ranges agree.
             record_key = prefix + identity
@@ -309,6 +339,17 @@ class ApplianceService:
                 "points": points,
                 "synthetic": synthetic,
                 **({"quality": "hourly_estimate"} if hourly else {}),
+                **(
+                    {
+                        "quality": "five_minute_statistics",
+                        "profile": asdict(statistical),
+                        "mean_power": [
+                            row for row in rows if started <= instant(row["at"]) < completed
+                        ],
+                    }
+                    if statistical
+                    else {}
+                ),
             }
             cached = dict(body)
             try:
@@ -354,7 +395,12 @@ class ApplianceService:
         cycles = detect_cycles(rows, now, sample_seconds=sample_seconds, activity=activity)
         self.sync_sources()
         records, extra, changed = self.collect_cycles(
-            entity, power_entity, cycles, synthetic, hourly=sample_seconds == HOURLY_SAMPLE_SECONDS
+            entity,
+            power_entity,
+            cycles,
+            synthetic,
+            hourly=sample_seconds == HOURLY_SAMPLE_SECONDS,
+            rows=rows if sample_seconds == SAMPLE_SECONDS else None,
         )
         data = deepcopy(self.state)
         settings = data["devices"].setdefault(entity, {"shiftable": False})
@@ -425,6 +471,7 @@ class ApplianceService:
         from .evidence import refine
         from .model import MAX_PROFILE_STEPS, MAX_VARIABLE_PROFILE_STEPS
         from .raw import MAX_RAW_BODY_BYTES, analyze
+        from .report_coverage import advance, covers
 
         processing_started = monotonic() if processing_started is None else processing_started
         entity, power_entity = body["entity_id"], body["power_entity"]
@@ -441,11 +488,24 @@ class ApplianceService:
         records, _, changed = self.collect_cycles(entity, power_entity, (), body["synthetic"])
         data = deepcopy(self.state)
         settings = data["devices"].setdefault(entity, {"shiftable": False})
+        pair = (entity, power_entity)
+        previous_capture = settings.get("report_coverage", {}).get("captured_at")
+        coverage = advance(
+            settings.get("report_coverage"), body, continuous=pair in self._report_pairs
+        )
+        settings["report_coverage"] = coverage
         if changed:
             refine(settings, list(records.values()))
         extra = []
         frame = "appliance-state-history-" + digest(body) + ".json"
         for cycle in result["runs"]:
+            followed = covers(
+                coverage,
+                instant(cycle["started_at"]) - timedelta(minutes=30),
+                instant(cycle["completed_at"]) + timedelta(minutes=30),
+            )
+            if cycle["profile"] is not None and not followed:
+                result["status"] = "not_observed"
             identity = digest(
                 [
                     entity,
@@ -453,6 +513,7 @@ class ApplianceService:
                     cycle["started_at"],
                     cycle["completed_at"],
                     asdict(cycle["profile"]) if cycle["profile"] else None,
+                    followed,
                 ]
             )
             key = "appliance-raw-" + identity + ".json"
@@ -470,7 +531,8 @@ class ApplianceService:
                 "quality": "recorder_state",
                 "synthetic": body["synthetic"],
                 "history_ref": frame,
-                "training_usable": cycle["profile"] is not None,
+                "training_usable": cycle["profile"] is not None and followed,
+                "observation_coverage": followed,
                 "profile": asdict(cycle["profile"]) if cycle["profile"] else None,
                 "points": [
                     row
@@ -480,6 +542,8 @@ class ApplianceService:
                     <= instant(cycle["completed_at"])
                 ],
             }
+            if cycle["profile"] is not None and not followed:
+                record["rejection"] = "not_observed"
             candidate_records = {**records, "appliance-raw-" + identity: dict(record)}
             if record["training_usable"]:
                 candidate = deepcopy(settings)
@@ -532,6 +596,22 @@ class ApplianceService:
             extra.append((key, record))
         if extra:
             extra.insert(0, (frame, body))
+        if result["running"] and not covers(
+            coverage,
+            instant(result["running"]["started_at"]) - timedelta(minutes=30),
+            instant(result["running"]["observed_until"]),
+        ):
+            result["running"] = None
+            result["status"] = "not_observed"
+        result["cycles"] = [
+            cycle
+            for cycle in result["cycles"]
+            if covers(
+                coverage,
+                instant(cycle["started_at"]) - timedelta(minutes=30),
+                instant(cycle["completed_at"]) + timedelta(minutes=30),
+            )
+        ]
         settings["raw_history"] = {
             "power_entity": power_entity,
             "start": body["start"],
@@ -569,6 +649,8 @@ class ApplianceService:
             processing_started=processing_started,
         )
         self.commit(data, extra=extra)
+        if previous_capture is None or end > instant(previous_capture):
+            self._report_pairs.add(pair)
         self._cycle_records[(entity, power_entity)] = records
 
     def observed(self, entity):
