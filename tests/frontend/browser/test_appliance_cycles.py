@@ -74,6 +74,7 @@ def test_planning_links_select_device_and_insights_retain_unshiftable_history(ap
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_have_count(0)
     expect(page.locator("#detected-cycles > li")).to_have_count(25)
     page.get_by_role("button", name="Next", exact=True).click()
+    expect(page.get_by_role("button", name="Previous", exact=True)).to_be_focused()
     expect(page.locator("#detected-cycles > li")).to_have_count(2)
     expect(page.get_by_text("Page 2", exact=True)).to_be_visible()
     first = page.locator("#detected-cycles details").first
@@ -84,6 +85,7 @@ def test_planning_links_select_device_and_insights_retain_unshiftable_history(ap
     expect(page.get_by_text("Page 2", exact=True)).to_be_visible()
     expect(first).to_have_attribute("open", "")
     page.get_by_role("button", name="Previous", exact=True).click()
+    expect(page.get_by_role("button", name="Next", exact=True)).to_be_focused()
     expect(page.locator("#detected-cycles > li")).to_have_count(25)
     page.locator("#profile-device").select_option("sensor.washer")
     expect(page.locator("#profile-history")).to_contain_text(

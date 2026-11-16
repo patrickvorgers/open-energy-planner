@@ -56,7 +56,7 @@ function profile() {
     if (historyEntity !== device?.entity_id) { historyPage = 0; historyEntity = device?.entity_id; }
     const cycles = [...(device?.recent_cycles || [])].reverse();
     historyPage = Math.min(historyPage, Math.max(0, Math.ceil(cycles.length / 25) - 1));
-    const historyKey = JSON.stringify([device, historyPage, when(device?.learning_history?.start || cycles[0]?.started_at)]);
+    const historyKey = JSON.stringify([device, historyPage, when("2000-01-01T00:00:00Z")]);
     if (historyKey === renderedHistory) return;
     renderedHistory = historyKey;
     const history = find("profile-history"); history.replaceChildren();
@@ -67,8 +67,8 @@ function profile() {
         pagination.className = "activity-pagination"; pagination.setAttribute("aria-label", "Detected cycle pages"); page.setAttribute("role", "status");
         for (const button of [previous, next]) { button.type = "button"; button.className = "secondary"; button.setAttribute("aria-controls", "detected-cycles"); }
         previous.disabled = historyPage === 0; next.disabled = (historyPage + 1) * 25 >= cycles.length;
-        previous.onclick = () => { historyPage--; profile(); document.querySelector("#profile-history button").focus(); };
-        next.onclick = () => { historyPage++; profile(); document.querySelector("#profile-history button:last-child").focus(); };
+        previous.onclick = () => { historyPage--; profile(); document.querySelector("#profile-history button:not(:disabled)").focus(); };
+        next.onclick = () => { historyPage++; profile(); document.querySelector("#profile-history button:not(:disabled)").focus(); };
         pagination.append(previous, page, next); history.append(pagination);
         const list = node("ul"); list.id = "detected-cycles"; list.className = "activity-list";
         for (const cycle of cycles.slice(historyPage * 25, (historyPage + 1) * 25)) {
