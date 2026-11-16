@@ -7,6 +7,20 @@ from pathlib import Path
 from script.ci.check_commit_signatures import GitHub, VerificationError, identity
 
 MAX_THREAD_PAGES = 10
+FORMAL_REVIEW_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      state headRefOid baseRefOid reviewDecision
+      latestOpinionatedReviews(first: 100, after: $cursor, writersOnly: false) {
+        totalCount
+        nodes { id state author { __typename login ... on Node { id } } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
 THREAD_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
@@ -26,6 +40,106 @@ mutation($id: ID!) {
   }
 }
 """
+
+
+def require_clear_formal_reviews(repository, number, head, base, client):
+    """Reject effective formal objections, independent of thread and provider completion.
+
+    Paginate GitHub's own latest opinionated review per actor on the frozen open
+    revision, including non-writers. A later APPROVED can supersede that actor's
+    change request. COMMENTED, resolved threads and successful checks cannot.
+    Missing or duplicate actor identities fail closed. No review is mutated.
+    """
+    owner, name = repository.split("/")
+    cursor = None
+    cursors = set()
+    seen = set()
+    reviewers = set()
+    expected_count = None
+    states = {"PENDING", "COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
+    for _ in range(MAX_THREAD_PAGES):
+        response = client.post(
+            "graphql",
+            {
+                "query": FORMAL_REVIEW_QUERY,
+                "variables": {"owner": owner, "name": name, "number": number, "cursor": cursor},
+            },
+        )
+        try:
+            if response.get("errors"):
+                raise VerificationError("Formal review evidence unavailable")
+            current = response["data"]["repository"]["pullRequest"]
+            if (
+                current["state"] != "OPEN"
+                or current["headRefOid"] != head
+                or current["baseRefOid"] != base
+            ):
+                raise VerificationError("PR changed during formal review verification")
+            decision = current["reviewDecision"]
+            if decision not in {None, "APPROVED", "REVIEW_REQUIRED", "CHANGES_REQUESTED"}:
+                raise VerificationError("Invalid formal review decision")
+            connection = current["latestOpinionatedReviews"]
+            rows, page, total = (
+                connection["nodes"],
+                connection["pageInfo"],
+                connection["totalCount"],
+            )
+            if (
+                type(total) is not int
+                or total < 0
+                or (expected_count is not None and total != expected_count)
+            ):
+                raise VerificationError("Formal review count changed or is invalid")
+            expected_count = total
+            if not isinstance(rows, list) or len(rows) > 100:
+                raise VerificationError("Invalid formal review evidence")
+            for review in rows:
+                if (
+                    not isinstance(review, dict)
+                    or not isinstance(review.get("id"), str)
+                    or not review["id"]
+                    or review["id"] in seen
+                    or review.get("state") not in states
+                ):
+                    raise VerificationError("Invalid or duplicate formal review evidence")
+                seen.add(review["id"])
+                author = review.get("author")
+                if (
+                    not isinstance(author, dict)
+                    or author.get("__typename") not in {"User", "Bot"}
+                    or not isinstance(author.get("id"), str)
+                    or not author["id"]
+                    or author["id"] in reviewers
+                    or not isinstance(author.get("login"), str)
+                    or not author["login"]
+                ):
+                    raise VerificationError("Missing or ambiguous formal reviewer identity")
+                reviewers.add(author["id"])
+                if review["state"] == "CHANGES_REQUESTED":
+                    raise VerificationError(
+                        "Outstanding CHANGES_REQUESTED review. "
+                        "Keep Draft and follow the individual review-disposition procedure"
+                    )
+            if decision == "CHANGES_REQUESTED":
+                raise VerificationError("GitHub still reports CHANGES_REQUESTED")
+            if page["hasNextPage"] is False:
+                if len(seen) != total:
+                    raise VerificationError("Incomplete formal review history")
+                return
+            cursor = page["endCursor"]
+            if (
+                page["hasNextPage"] is not True
+                or not rows
+                or len(seen) >= total
+                or not isinstance(cursor, str)
+                or not cursor
+                or cursor in cursors
+            ):
+                raise VerificationError("Incomplete formal review history")
+            cursors.add(cursor)
+        except (KeyError, TypeError) as error:
+            raise VerificationError("Invalid formal review evidence") from error
+    raise VerificationError("Formal reviews exceed the page limit")
 
 
 def require_resolved_threads(repository, number, client):

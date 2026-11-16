@@ -7,7 +7,7 @@ from os import environ
 from pathlib import Path
 
 from script.ci.check_commit_signatures import GitHub, VerificationError, identity
-from script.ci.pr_readiness import require_resolved_threads
+from script.ci.pr_readiness import require_clear_formal_reviews, require_resolved_threads
 
 REQUEST_CI_LABEL = "ci: run"
 CHECKS_PER_PAGE = 100
@@ -227,6 +227,7 @@ def check(event, repository, client):
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks)
     require_resolved_threads(repository, number, client)
+    require_clear_formal_reviews(repository, number, head, base, client)
     final_count = current_pr().get("changed_files")
     if type(final_count) is not int or final_count != file_count:
         raise VerificationError("PR file count changed during admission")
