@@ -279,7 +279,9 @@ state for the new site. Restart resets these in-memory retry counters.
 ### Direct production model and learned time trend
 
 The production candidate is an independent CPU XGBoost model per independently
-metered source. Its target is the measured hourly kWh at the declared AC or DC
+metered source. Home Assistant Energy solar meters represent pure PV production,
+including hybrid and shared-inverter groups. Topology alone does not block training
+or model selection. Its target is the measured hourly kWh at the declared AC or DC
 boundary. Its features are UTC calendar cycles, GHI/DNI/DHI, temperature, wind
 and solar position. Neither PVWatts output
 nor a measured-to-PVWatts ratio enters the learned features or target. The fixed
@@ -625,8 +627,14 @@ explicit comparison issue. It does not overwrite damaged evidence or block an
 otherwise valid baseline. Manual selection does not depend on old accuracy data.
 
 Per-source `calibration_status` distinguishes missing/insufficient history,
-missing curtailment feedback, missing hybrid route history and a fitted shadow
-candidate. It does not silently present all of these cases as a trained model.
+missing curtailment feedback and a fitted shadow candidate. It does not silently present all of these cases as a trained model.
+
+Independently selected HA, PVWatts and ML sources retain one common AC rating per
+shared inverter and planning interval. Proportional reduction caps their combined
+AC production without increasing an already clipped value or changing DC energy.
+This also applies to HA-only forecasts when weather is unavailable. Historical
+forecast archives remain original. Newly eligible models do not create forecasts
+retroactively for days before training.
 
 ## API and retained evidence
 

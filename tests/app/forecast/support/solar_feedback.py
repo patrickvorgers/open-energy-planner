@@ -17,8 +17,8 @@ from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 
 
-def seed(path, *, active=False):
-    """Original/alternative errors are .07/.035 kWh over 17 eligible hours. The incomplete comparable day stays unscored."""
+def seed(path, *, active=False, hybrid=False, feedback=True):
+    """Seed pure PV with optional topology and feedback. Errors are .07/.035 kWh over 17 eligible feedback hours or 1.93/.965 kWh over a complete day."""
     start = datetime(2026, 6, 15, tzinfo=UTC)
     end = start + timedelta(days=1)
     actual = (0,) * 6 + (0.1, 0.25, 0.5, 0.8, 1.1, 1.4, 1.5, 1.4, 1.1, 0.8, 0.5, 0.2) + (0,) * 6
@@ -41,10 +41,12 @@ def seed(path, *, active=False):
                     "inverter",
                     5000,
                     "south",
-                    curtailment_entity_id="binary_sensor.synthetic_curtailment",
+                    curtailment_entity_id="binary_sensor.synthetic_curtailment"
+                    if feedback
+                    else None,
                 ),
             ),
-            (SolarInverter("inverter", 5000),),
+            (SolarInverter("inverter", 5000, hybrid=hybrid),),
         )
         # This is an archived source, without a current installation or weather dependency.
         solar.archive("configuration", configuration.version, configuration_document(configuration))

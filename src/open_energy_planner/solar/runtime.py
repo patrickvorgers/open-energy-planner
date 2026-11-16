@@ -17,7 +17,7 @@ from open_energy_planner.solar.forecast_weather import (
 
 from ..planning_policy import FINE_INTERVAL_MINUTES, PLANNING_HORIZON_HOURS
 from .boosting import TrainingResult, TrainingStatus, TrainingSummary, fit_boosted_model
-from .calculation.projection import learned_forecast
+from .calculation.projection import learned_forecast, limit_ac_production
 from .curtailment import (
     FEEDBACK_EPOCH,
     FEEDBACK_REFRESH_MINUTES,
@@ -29,7 +29,6 @@ from .curtailment import (
     save_feedback,
 )
 from .ha_forecasts import HA_REFRESH_MAX_AGE
-from .learning import learning_blocker
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
 from .source_selection import MIN_ACCURACY_DAYS, SOURCE_POLICY, choose_sources, ha_energies
 from .storage.history import HistoryContinuityError, SolarHistoryImport
@@ -752,7 +751,9 @@ class SolarRuntime:
         if any(choice[0] != ForecastSource.PVWATTS for choice in choices.values()):
             forecast = replace(
                 baseline,
-                energies=tuple(row for choice in choices.values() for row in choice[1]),
+                energies=limit_ac_production(
+                    configuration, tuple(row for choice in choices.values() for row in choice[1])
+                ),
                 model="solar-selected-v1",
                 quality="selected",
                 calibration_versions=tuple(learned_references[row.source_id] for row in selected),
@@ -991,15 +992,8 @@ class SolarRuntime:
         candidate = forecast_document(self.candidate, series=series)
         statuses = {}
         if self.configuration:
-            inverters = {
-                inverter.inverter_id: inverter for inverter in self.configuration.inverters
-            }
             fitted = {candidate_item.source_id for candidate_item in self.calibrations}
             for source in self.configuration.sources:
-                status = learning_blocker(source, inverters[source.inverter_id])
-                if status is not None:
-                    statuses[source.source_id] = status
-                    continue
                 if source.entity_id not in self.histories:
                     status = "history_required"
                 else:

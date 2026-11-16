@@ -259,10 +259,10 @@ def test_restore_rejects_incompatible_or_unsafe_native_tree_data(damage):
 
 
 @pytest.mark.parametrize("curtail,hybrid,boundary", [(True, False, "ac"), (False, True, "ac")])
-def test_learning_preserves_unknown_control_and_hybrid_measurement_guards(
+def test_pure_hybrid_pv_can_learn_while_actual_curtailment_still_excludes_hours(
     curtail, hybrid, boundary
 ):
-    """More historical data cannot establish available production when its control or route is unknown."""
+    """Pure hybrid PV is a valid measured target. Confirmed curtailment still cannot teach potential yield."""
     configuration = plant()
     history, physical, weather, before = training_data()
     result = fit_boosted_model(
@@ -282,16 +282,18 @@ def test_learning_preserves_unknown_control_and_hybrid_measurement_guards(
         if curtail
         else None,
     )
-    assert result.model is None
     if curtail:
+        assert result.model is None
         assert result.summary.status == "insufficient_clean_history"
         assert result.summary.excluded_counts["control_history_unconfirmed"] > 0
     else:
-        assert result.summary.status == "blocked"
-        assert result.summary.issue == "hybrid_route_history_required"
+        assert result.model is not None
+        assert result.model.measurement_boundary == "ac"
+        assert result.summary.status == "nonlinear_shadow"
+        assert result.summary.issue is None
 
 
-def runtime_case(tmp_path, *, store=None):
+def runtime_case(tmp_path, *, store=None, hybrid=False):
     """Build real geometry for two roofs, with repeated morning shade measured only on the first roof."""
     from open_energy_planner.solar.calculation.predictor import PVWattsPredictor
     from open_energy_planner.solar.runtime import SolarRuntime
@@ -301,6 +303,10 @@ def runtime_case(tmp_path, *, store=None):
     from tests.database.support.archive import make_store
 
     configuration = plant(count=2)
+    configuration = replace(
+        configuration,
+        inverters=(replace(configuration.inverters[0], hybrid=hybrid), configuration.inverters[1]),
+    )
     conditions = tuple(
         replace(row, received_at=NOW) for row in weather(NOW - timedelta(days=56), days=59)
     )
@@ -321,9 +327,10 @@ def runtime_case(tmp_path, *, store=None):
     return runtime, NOW
 
 
-def test_runtime_archives_tree_and_cleaning_without_premature_activation(tmp_path):
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_runtime_archives_tree_and_cleaning_without_premature_activation(tmp_path, hybrid):
     """A nonlinear roof has auditable native weights while its untrained neighbor and active PVWatts remain independent."""
-    runtime, now = runtime_case(tmp_path)
+    runtime, now = runtime_case(tmp_path, hybrid=hybrid)
     original = deepcopy(runtime.histories)
     assert runtime.install(runtime.build(runtime.job(now)), now)
     assert runtime.histories == original

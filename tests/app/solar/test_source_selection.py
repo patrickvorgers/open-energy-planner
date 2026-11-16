@@ -104,8 +104,8 @@ def test_cache_discovery_and_expired_refresh_do_not_establish_freshness(age):
     assert "refresh" in issues["pv0"]
 
 
-def test_ha_cannot_invent_available_dc_for_a_hybrid():
-    """Post-inverter AC cannot establish hybrid PV/battery routes even when explicitly selected."""
+def test_ha_pure_pv_forecast_is_comparable_on_a_hybrid():
+    """A pure PV meter admits 0.4 AC kWh and converts through efficiency exactly once."""
     configuration = plant()
     configuration = replace(
         configuration, inverters=(replace(configuration.inverters[0], hybrid=True),)
@@ -113,14 +113,73 @@ def test_ha_cannot_invent_available_dc_for_a_hybrid():
     rows, issues = ha_energies(
         configuration, prediction(START, 0.5), {"sensor.pv0": (provider(),)}, START
     )
-    assert rows == {}
-    assert "Hybrid" in issues["pv0"]
+    assert issues == {}
+    assert rows["pv0"][0].ac_kwh == pytest.approx(0.4)
+    assert rows["pv0"][0].dc_kwh == pytest.approx(0.4 / 0.96)
 
 
-def test_automatic_uses_three_identical_complete_days_and_survives_restart(tmp_path):
+@pytest.mark.parametrize(
+    "second_model,with_weather", [("ha", False), ("ha", True), ("pvwatts", True)]
+)
+def test_shared_hybrid_pv_models_retain_one_common_ac_limit(tmp_path, with_weather, second_model):
+    """Two pure PV meters share 500 W. HA and mixed forecasts cannot each spend the full inverter rating."""
+    configuration = plant(count=2, shared=True, limit=500)
+    configuration = replace(
+        configuration,
+        sources=(
+            replace(configuration.sources[0], forecast_source="ha"),
+            replace(configuration.sources[1], forecast_source=second_model),
+        ),
+        inverters=(replace(configuration.inverters[0], hybrid=True),),
+    )
+    store = make_store(tmp_path, SolarStore)
+    store.save(configuration)
+    runtime = SolarRuntime(store)
+    runtime.set_weather(SITE, weather(ghi=1000) if with_weather else ())
+    runtime.receive_ha(
+        {
+            "sensor.pv0": (provider(),),
+            "sensor.pv1": (
+                replace(
+                    provider(), configuration=replace(provider().configuration, entry_id="other")
+                ),
+            ),
+        }
+    )
+    assert runtime.install(runtime.build(runtime.job(START)), START)
+    assert runtime.active_model("pv0") == "ha-production-v1"
+    assert runtime.active_model("pv1") == (
+        "ha-production-v1" if second_model == "ha" else "pvwatts-v2"
+    )
+    energies = runtime.forecast.energies
+    intervals = {(row.start, row.duration_h) for row in energies}
+    totals = {
+        (start, duration): sum(
+            row.ac_kwh for row in energies if row.start == start and row.duration_h == duration
+        )
+        for start, duration in intervals
+    }
+    assert max(total / duration for (_, duration), total in totals.items()) == pytest.approx(0.5)
+    assert all(total <= 0.5 * duration + 1e-12 for (_, duration), total in totals.items())
+    assert max(
+        total for (_, duration), total in totals.items() if duration == 0.25
+    ) == pytest.approx(0.125)
+    assert max(total for (_, duration), total in totals.items() if duration == 1) == pytest.approx(
+        0.5
+    )
+    assert next(row for row in energies if row.source_id == "pv0").dc_kwh == pytest.approx(
+        0.1 / 0.96
+    )
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_automatic_uses_three_identical_complete_days_and_survives_restart(tmp_path, hybrid):
     """HA's zero error beats PVWatts' 0.1 kWh and ML's 0.2 kWh on the same 72 realized hours."""
     store = make_store(tmp_path, SolarStore)
     configuration = plant()
+    configuration = replace(
+        configuration, inverters=(replace(configuration.inverters[0], hybrid=hybrid),)
+    )
     for day in range(3):
         now = START + timedelta(days=day)
         baseline = prediction(now, 0.5)
@@ -463,14 +522,17 @@ def test_provider_expiry_is_enforced_between_quarters(tmp_path):
 @pytest.mark.parametrize(
     "challenger_kwh,expected", [(0.4, "ml"), (0.497, "pvwatts"), (0.7, "pvwatts")]
 )
+@pytest.mark.parametrize("hybrid", [False, True])
 def test_tree_activation_needs_its_own_forward_days_and_material_gain(
-    tmp_path, requested, challenger_kwh, expected
+    tmp_path, requested, challenger_kwh, expected, hybrid
 ):
     """Three frozen future days admit 0.4 kWh against 0.4 actual, but reject weak/worse alternatives."""
     store = make_store(tmp_path, SolarStore)
     configuration = plant()
     configuration = replace(
-        configuration, sources=(replace(configuration.sources[0], forecast_source=requested),)
+        configuration,
+        sources=(replace(configuration.sources[0], forecast_source=requested),),
+        inverters=(replace(configuration.inverters[0], hybrid=hybrid),),
     )
     fitted = (SimpleNamespace(source_id="pv0"),)
     history = EnergyHistory(

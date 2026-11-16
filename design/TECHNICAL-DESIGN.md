@@ -312,8 +312,9 @@ measurement may not qualify for a score.
 
 Household and device series preserve the original measurement boundary and identify
 controlled EV or appliance operation that changes consumption timing. PV series use
-the configured AC or DC boundary. Curtailed, hybrid and shared-inverter metering,
-and clipped AC production, cannot independently establish available-production
+the configured AC or DC boundary. HA Energy solar meters represent pure PV
+production, including hybrid and shared-inverter groups. Actual curtailed intervals
+and clipped AC production cannot independently establish available-production
 accuracy. The view can retain these curves while withholding unsupported metrics.
 The responsive Chart.js page provides day selection, daily totals and errors,
 interactive graphs and interval tables. It distinguishes original forecasts from current active and
@@ -795,12 +796,14 @@ DC production, declared inverter efficiency, one shared inverter AC cap, then
 proportional source attribution for comparison with disjoint AC production meters.
 Compare interval energies on the selected side, never invert clipped AC samples
 to invent available DC. A declared DC production meter compares directly with
-canonical DC at that same production boundary. Hybrid AC history cannot identify
-available DC yield without the contemporaneous direct-DC/battery/AC route context.
-The current calibration therefore reports `hybrid_route_history_required` and
-does not fit it. Future hybrid evaluation must use the same route compiler as
-runtime planning: direct PV-to-battery flows bypass AC throughput, while paths
-reaching AC cross the applicable conversion/shared limit once.
+canonical DC at that same production boundary. HA Energy meters contain only
+PV production, including hybrid and shared-inverter groups. Fit their declared
+boundary without a topology exclusion. AC predictions imply standalone-equivalent
+DC through the declared efficiency. They do not reconstruct clipped or curtailed
+panel potential. Mixed model choices retain one common inverter AC cap while
+preserving DC evidence. Runtime planning keeps its route compiler: direct
+PV-to-battery flows bypass AC throughput, while paths reaching AC cross the
+applicable conversion/shared limit once.
 
 Usable existing HA production history may inform local learning immediately.
 An archive of old OEP forecasts is not required to begin training. Historical
@@ -823,7 +826,7 @@ The yield model estimates weather/physically available production without EMS cu
 
 Use known curtailment when selecting training data. Low controlled production is not proof of weak sun/model failure. A planned command does not prove physical execution. Use available feedback/measurements and retain uncertainty. Training selection is technical work, not another wizard.
 
-Solar learning treats production as unrestricted when no actual-curtailment sensor is linked, and before the first valid observation of a linked sensor. This is an explicit assumption, not verified operating evidence. Once feedback begins, its true/false/unknown state applies forward from each original observation time. Exclude complete training or accuracy intervals containing any curtailed or unknown portion. Never infer control execution from prices or commands, or apply a later observation backward. Feedback history and its successfully checked coverage belong to the existing solar database namespace and remain separate from cumulative production imports. Learning-start dates and hybrid/shared-inverter measurement safeguards remain independent.
+Solar learning treats production as unrestricted when no actual-curtailment sensor is linked, and before the first valid observation of a linked sensor. This is an explicit assumption, not verified operating evidence. Once feedback begins, its true/false/unknown state applies forward from each original observation time. Exclude complete training or accuracy intervals containing any curtailed or unknown portion. Never infer control execution from prices or commands, or apply a later observation backward. Feedback history and its successfully checked coverage belong to the existing solar database namespace and remain separate from cumulative production imports. Learning-start dates, measurement continuity and declared AC/DC boundaries remain independent safeguards.
 
 | Source | Role | Status/access |
 |---|---|---|

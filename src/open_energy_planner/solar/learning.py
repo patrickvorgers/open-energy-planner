@@ -68,13 +68,6 @@ class Calibration:
     history_version: str = ""
 
 
-def calibration_blocker(source, inverter):
-    """Explain missing route/control evidence identically for fitting and published status."""
-    if inverter.hybrid and source.measurement_boundary == "ac":
-        return "hybrid_route_history_required"
-    return None
-
-
 def fit(source, history, physical_hours, before, inverter, *, feedback=None):
     """Learn one bounded factor per measured source from complete, uncurtailed daylight hours.
 
@@ -83,7 +76,7 @@ def fit(source, history, physical_hours, before, inverter, *, feedback=None):
     production. Linked feedback must cover each hour after its first observation.
     No command is assumed physically executed. AC targets compare to physical AC.
     """
-    if calibration_blocker(source, inverter) or history is None:
+    if history is None:
         return None
     predictions = {
         hour.start: hour for hour in physical_hours if hour.source_id == source.source_id
@@ -122,13 +115,6 @@ def calibration_factor(rows):
     )
     factor = max(MIN_CALIBRATION_FACTOR, min(MAX_CALIBRATION_FACTOR, factor))
     return factor
-
-
-def learning_blocker(source, inverter):
-    """Require explicit historical control evidence without inferring available hybrid DC."""
-    if inverter.hybrid and source.measurement_boundary == "ac":
-        return "hybrid_route_history_required"
-    return None
 
 
 def unrestricted_interval(source, start, end, feedback=None):

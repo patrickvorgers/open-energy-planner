@@ -727,7 +727,13 @@ def test_solar_feedback_excludes_only_affected_plan_hours_and_alternatives(archi
     result = evidence(plan, archive, archive.documents, solar, START + timedelta(hours=6))
     source = next(row for row in result["series"] if row["scope"] == "solar")
     for row, expected_mae in [(source, 1), (source["alternatives"][0], 0.5)]:
-        eligible = {"none": [0, 2], "hybrid": [], "shared": [], "clipping": [0], "late": [2]}[guard]
+        eligible = {
+            "none": [0, 2],
+            "hybrid": [0, 2],
+            "shared": [0, 2],
+            "clipping": [0],
+            "late": [2],
+        }[guard]
         assert row["coverage"] == {"hours": 5, "measured_hours": 5, "paired_hours": len(eligible)}
         assert row["metrics"]["mae_kwh"] == (expected_mae if eligible else None)
         assert [hour["error_kwh"] for hour in row["rows"]] == [
@@ -919,8 +925,8 @@ def test_refinement_retains_original_household_and_component_archives(archive, s
 
 
 @pytest.mark.parametrize("boundary", ["hybrid", "shared", "curtailed", "clipped"])
-def test_pv_physical_boundaries_withhold_accuracy_but_keep_measured_values(archive, boundary):
-    """PV's 1-kWh meter reading stays visible, but unavailable production proof must not produce a perfect score."""
+def test_pv_meter_scores_ignore_topology_and_preserve_actual_limitations(archive, boundary):
+    """Pure PV's 1-kWh prediction and actual score on hybrid/shared topology, but not curtailment or clipping."""
     plan, solar = frozen_plan(archive)
     definition = solar.read("configuration-solar-definition.json")
     if boundary == "hybrid":
@@ -951,8 +957,9 @@ def test_pv_physical_boundaries_withhold_accuracy_but_keep_measured_values(archi
     result = evidence(plan, archive, archive.documents, solar, START + timedelta(hours=4))
     pv = next(row for row in result["series"] if row["id"] == "roof")
     assert pv["rows"][0]["measured_kwh"] == 1
-    assert pv["coverage"]["paired_hours"] == 0
-    assert pv["metrics"]["mae_kwh"] is None
+    comparable = boundary in ("hybrid", "shared")
+    assert pv["coverage"]["paired_hours"] == (1 if comparable else 0)
+    assert pv["metrics"]["mae_kwh"] == (0 if comparable else None)
 
 
 def test_controlled_load_timing_never_claims_forecast_error_or_measured_savings(archive):

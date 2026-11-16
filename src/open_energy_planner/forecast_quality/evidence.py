@@ -310,13 +310,6 @@ def evidence(
                     archive, sources, [{"entity_id": source["entity_id"], "sign": 1}], start, end
                 )
                 inverter = inverters[source["inverter_id"]]
-                shared = (
-                    sum(
-                        row["inverter_id"] == source["inverter_id"]
-                        for row in configuration["sources"]
-                    )
-                    > 1
-                )
                 feedback = None
                 if source.get("curtailment_entity_id"):
                     sensor = source["curtailment_entity_id"]
@@ -342,11 +335,6 @@ def evidence(
                             "Curtailment feedback does not establish unrestricted production for this hour"
                         )
                     hour += timedelta(hours=1)
-                issue = (
-                    "Available production is not independently comparable with curtailed, hybrid or shared-inverter metering"
-                    if inverter["hybrid"] or shared
-                    else None
-                )
                 maximum = (
                     inverter["ac_limit_w"] / WATTS_PER_KW * INVERTER_CLIPPING_THRESHOLD
                     if boundary == "ac"
@@ -367,7 +355,6 @@ def evidence(
                     start,
                     end,
                     now,
-                    issue=issue,
                     receipt=receipt,
                     maximum_comparable_kwh=maximum,
                     hourly_issues=hourly_issues,
@@ -385,7 +372,6 @@ def evidence(
                         end,
                         now,
                         receipt=receipt,
-                        issue=issue,
                         field=field,
                         maximum=maximum,
                         hourly_issues=hourly_issues,

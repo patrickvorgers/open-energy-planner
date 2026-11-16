@@ -30,6 +30,7 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
+from open_energy_planner.solar.calculation.projection import limit_ac_production
 from open_energy_planner.solar.forecast_weather import FORECAST_WEATHER_POLICY
 from open_energy_planner.solar.learning import learning_interval, unrestricted_interval
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
@@ -38,18 +39,6 @@ from open_energy_planner.solar.wire import document
 HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)
 SOURCE_POLICY = "matched-local-day-mae-feedback-v2"
-
-
-def eligibility(configuration, source):
-    """Exclude unknown available-production boundaries without inventing DC from hybrid AC metering."""
-    inverter = next(row for row in configuration.inverters if row.inverter_id == source.inverter_id)
-    if inverter.hybrid:
-        return (
-            "Hybrid solar needs independent route evidence before using an HA production forecast"
-        )
-    if sum(row.inverter_id == source.inverter_id for row in configuration.sources) > 1:
-        return "Shared-inverter sources need independent production evidence"
-    return None
 
 
 def ha_energies(configuration, baseline, predictions, now):
@@ -63,7 +52,7 @@ def ha_energies(configuration, baseline, predictions, now):
     inverters = {row.inverter_id: row for row in configuration.inverters}
     for source in configuration.sources:
         providers = predictions.get(source.entity_id, ())
-        issue = eligibility(configuration, source)
+        issue = None
         if source.measurement_boundary != "ac":
             issue = "HA production forecasts need an AC production meter"
         if not providers:
@@ -118,7 +107,13 @@ def ha_energies(configuration, baseline, predictions, now):
             result[source.source_id] = tuple(energies)
         elif source.source_id not in issues:
             issues[source.source_id] = "Home Assistant forecast coverage is incomplete"
-    return result, issues
+    limited = limit_ac_production(
+        configuration, tuple(row for rows in result.values() for row in rows)
+    )
+    return {
+        source_id: tuple(row for row in limited if row.source_id == source_id)
+        for source_id in result
+    }, issues
 
 
 def family(configuration, source, location, *, learned_policy=None):
@@ -339,8 +334,7 @@ def choose_sources(
                 break
         scores = {}
         admission_basis = "captured_forecasts"
-        eligibility_issue = eligibility(configuration, source)
-        issue = eligibility_issue or evidence_issue
+        issue = evidence_issue
         if len(cohorts) == MIN_ACCURACY_DAYS and issue is None:
             scores = {
                 model: mean_absolute_error(
@@ -385,7 +379,7 @@ def choose_sources(
             if preference == ForecastSource.AUTOMATIC
             else preference
         )
-        if chosen not in models or eligibility_issue and chosen != ForecastSource.PVWATTS:
+        if chosen not in models:
             chosen = ForecastSource.PVWATTS
         learning_issue = None
         if (

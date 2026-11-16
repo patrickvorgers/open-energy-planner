@@ -32,7 +32,6 @@ from open_energy_planner.solar.forecast_weather import (
 from open_energy_planner.solar.learning import (
     MIN_CALIBRATION_SAMPLES,
     TrainingExclusion,
-    learning_blocker,
     learning_interval,
     unrestricted_interval,
 )
@@ -715,11 +714,6 @@ def fit_boosted_model(
     if known_at < before:
         raise ValueError("Solar training knowledge precedes its outcome cutoff")
     source_hours = max(0, len(history.hours) - 1) if history else 0
-    issue = learning_blocker(source, inverter)
-    if issue:
-        return TrainingResult(
-            None, TrainingSummary(TrainingStatus.BLOCKED, source_hours, 0, 0, {}, (), issue=issue)
-        )
     samples = _weather_samples(
         source, location, weather, physical_hours, forecast_runs, forecast_physical
     )
