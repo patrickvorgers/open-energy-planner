@@ -43,6 +43,13 @@ function profile(pageFocus) {
         }
     }
     const metrics = learned ? profileMetrics(learned) : null, powers = metrics?.powerW || [], labels = metrics?.labels || powers.map((_, index) => `${index * metrics.phaseMinutes}–${Math.min((index + 1) * metrics.phaseMinutes, metrics.minutes)} min`);
+    find("profile-title").textContent = device?.name || "Appliance";
+    find("profile-summary").textContent = metrics ? `${money(metrics.energyKwh)} kWh per cycle: ${metrics.minutes} minutes` : "";
+    find("profile-summary").hidden = !metrics;
+    find("profile-kind").textContent = !learned ? "Waiting for learning" : learned.evidence === "manual" ? "Manual estimate" : learned.evidence === "hourly_estimate" ? (device.hourly_synthetic ? "Simulated hourly estimate" : "Historical estimate") : learned.evidence === "synthetic" ? "Simulated profile" : device?.profile_basis === "observed" ? "Followed profile" : device?.profile_basis === "statistics" ? "Historical estimate" : "Learned profile";
+    const note = !learned ? (device?.power_entity ? "Use the appliance normally, or enter a manual profile in Appliances settings." : "Link a power sensor in Home Assistant Energy to start learning.") : learned.evidence === "manual" ? "Energy is spread evenly over the entered duration." : learned.evidence === "hourly_estimate" ? "Cycle timing is approximate. Finer measurements will refine it." : device?.profile_basis === "statistics" ? "Historical data cannot confirm continuous reporting." : learned.samples === 1 ? "Based on one complete cycle. Further use refines the profile." : "";
+    find("profile-note").textContent = note;
+    find("profile-note").hidden = !note;
     const profileKey = JSON.stringify([device?.entity_id, learned]);
     find("cycle-charts").hidden = !learned;
     if (profileKey !== renderedProfile) {
@@ -62,14 +69,16 @@ function profile(pageFocus) {
     const historyKey = JSON.stringify([device, historyPage, historyTimezone]);
     if (historyKey === renderedHistory) return;
     renderedHistory = historyKey;
-    const history = find("profile-history"), focused = document.activeElement;
+    const history = find("profile-history"), focused = document.activeElement, profileEvidence = find("profile-evidence");
+    const learningOpen = sameHistoryDevice && find("learning-history")?.open;
+    const learningFocused = sameHistoryDevice && focused?.closest("#learning-history");
     const opened = new Set(sameHistoryDevice ? [...history.querySelectorAll("details[open]")].map(detail => detail.dataset.cycleKey) : []);
     const focusedCycle = sameHistoryDevice ? focused?.closest("#detected-cycles details")?.dataset.cycleKey : null;
     const focusedButton = pageFocus || (sameHistoryDevice && history.contains(focused) && focused.tagName === "BUTTON" ? focused.id : null);
     history.replaceChildren();
-    history.append(node("h3", "Detected cycles"));
-    if (!cycles.length) history.append(node("p", "No completed measured cycles available. Previously learned profiles remain available."));
-    else {
+    history.append(node("h2", "Detected cycles"));
+    if (!cycles.length) history.append(node("p", learned ? "No recent completed cycles. The learned profile is retained." : "No completed cycles yet."));
+    if (cycles.length) {
         const pagination = node("nav"), previous = node("button", "Previous"), next = node("button", "Next"), page = node("span", `Page ${historyPage + 1}`);
         pagination.className = "activity-pagination"; pagination.setAttribute("aria-label", "Detected cycle pages"); page.setAttribute("role", "status");
         for (const button of [previous, next]) { button.type = "button"; button.className = "secondary"; button.setAttribute("aria-controls", "detected-cycles"); }
@@ -77,61 +86,65 @@ function profile(pageFocus) {
         previous.disabled = historyPage === 0; next.disabled = (historyPage + 1) * 25 >= cycles.length;
         previous.onclick = () => { historyPage--; profile("cycle-previous"); };
         next.onclick = () => { historyPage++; profile("cycle-next"); };
-        pagination.append(previous, page, next); history.append(pagination);
+        pagination.append(previous, page, next);
         const list = node("ul"); list.id = "detected-cycles"; list.className = "activity-list";
         for (const cycle of cycles.slice(historyPage * 25, (historyPage + 1) * 25)) {
             const minutes = Math.round((new Date(cycle.completed_at) - new Date(cycle.started_at)) / 60000);
-            const row = node("li"), detail = node("details"), summary = node("summary", `${when(cycle.started_at)}: ${minutes} minutes: ${money(cycle.energy_kwh)} kWh${cycle.synthetic ? ": Simulated" : ""}`);
+            const row = node("li"), detail = node("details"), summary = node("summary"), label = node("span");
+            label.className = "cycle-run-label";
+            label.append(node("span", `${when(cycle.started_at)}: `), node("small", `${minutes} minutes: ${money(cycle.energy_kwh)} kWh${cycle.synthetic ? ": Simulated" : ""}`));
+            summary.append(label);
             detail.dataset.cycleKey = JSON.stringify([cycle.started_at, cycle.completed_at]);
             detail.open = opened.has(detail.dataset.cycleKey);
             detail.className = "activity-row"; detail.append(summary, node("p", `Completed: ${when(cycle.completed_at)}`)); row.append(detail); list.append(row);
         }
-        history.append(list);
+        history.append(list, pagination);
     }
-    if (device?.learning_half_life_days) history.append(node("p", `Recency weighting: ${device.learning_half_life_days}-day half-life. A cycle ${device.learning_half_life_days} days older has half the weight. Fine timing refines hourly evidence. Each detected run counts once.`));
-    if (device?.hourly_synthetic) history.append(node("p", "Hourly evidence: Simulated data"));
+    const learning = node("details"); learning.id = "learning-history"; learning.open = Boolean(learningOpen);
+    learning.append(node("summary", "Learning and usable history"), profileEvidence);
+    if (device?.learning_half_life_days) learning.append(node("p", `Recency weighting: ${device.learning_half_life_days}-day half-life. A cycle ${device.learning_half_life_days} days older has half the weight. Fine timing refines hourly evidence. Each detected run counts once.`));
+    if (device?.hourly_synthetic) learning.append(node("p", "Hourly evidence: Simulated data"));
     const evidenceCard = node("div"), facts = node("dl"); evidenceCard.className = "evidence-card";
-    evidenceCard.append(node("h3", "Model and usable history"), facts);
+    evidenceCard.append(node("h3", "Model evidence"), facts);
     const addFact = (label, value) => facts.append(node("dt", label), node("dd", value));
     for (const [label, value] of [["Fine cycles in model", device?.learned_profile?.samples ?? 0], ["Hourly estimated cycles", device?.hourly_profile?.samples ?? 0]]) addFact(label, String(value));
+    learning.append(evidenceCard);
     for (const [label, value] of [["Fine cycle weight", device?.learning_weight], ["Hourly cycle weight", device?.hourly_weight]]) if (value != null) addFact(label, `${money(value)} at latest cycle`);
     const recent = device?.learning_history;
     if (recent?.start) {
         addFact("Recent fine history received", `${when(recent.start)} to ${when(recent.end)}`);
         addFact("Usable fine intervals", `${recent.usable_intervals} of ${recent.expected_intervals}: ${percentage(recent.expected_intervals ? 100 * recent.usable_intervals / recent.expected_intervals : null)}`);
     }
-    const observation = node("div"); observation.className = "evidence-card";
-    observation.append(node("h3", "Recent observations"), node("p", device?.recent_cycles?.length ? `${device.recent_cycles.length} completed measured cycles in the available recent history.` : "No completed measured cycles in the available recent history. This does not discard the retained model."));
-    history.prepend(observation, evidenceCard);
-    if (metrics?.variable) history.append(node("p", "Recorded state timing: This learned profile preserves actual irregular phase durations. It does not imply a fixed measurement frequency."));
+    if (metrics?.variable) learning.append(node("p", "Recorded state timing: This learned profile preserves actual irregular phase durations. It does not imply a fixed measurement frequency."));
     if (device?.planning_issue) history.append(node("p", device.planning_issue));
-    if (learned && learned.evidence !== "manual" && learned.samples === 1) history.append(node("p", "Provisional profile: One complete cycle. Further cycles refine this estimate."));
-    if (device?.profile_basis === "statistics" && learned && !["manual", "hourly_estimate"].includes(learned.evidence)) history.append(node("p", "Provisional statistical profile: Reconstructed from historical interval data. The energy counter supplies the total. Historical data cannot prove continuous reporting."));
-    if (device?.profile_basis === "observed") history.append(node("p", "Continuously followed profile: Complete cycles with current power reports refine this shape. Historical statistics cannot replace it."));
+    if (learned && learned.evidence !== "manual" && learned.samples === 1) learning.append(node("p", "Provisional profile: One complete cycle. Further cycles refine this estimate."));
+    if (device?.profile_basis === "statistics" && learned && !["manual", "hourly_estimate"].includes(learned.evidence)) learning.append(node("p", "Provisional statistical profile: Reconstructed from historical interval data. The energy counter supplies the total. Historical data cannot prove continuous reporting."));
+    if (device?.profile_basis === "observed") learning.append(node("p", "Continuously followed profile: Complete cycles with current power reports refine this shape. Historical statistics cannot replace it."));
     const run = device?.observed_run;
-    if (run && !["complete", "idle"].includes(run.status)) history.append(node("p", `Measured activity: ${run.status === "observed" ? "Cycle in progress" : "Execution uncertain"}: Started ${when(run.started_at)}: ${money(run.energy_kwh)} kWh measured. Pending starts are blocked. This is separate from execution confirmation.`));
+    if (run && !["complete", "idle"].includes(run.status)) history.append(node("p", `${run.status === "observed" ? "Cycle in progress" : "Execution uncertain"}: Started ${when(run.started_at)}: ${money(run.energy_kwh)} kWh measured. Pending starts are blocked.`));
     const fine = device?.fine_import;
-    if (fine) history.append(node("p", `Fine history: ${optionLabel(fine.phase)}${fine.cursor ? `: Examined back to ${when(fine.cursor)}` : ""}`));
+    if (fine) learning.append(node("p", `Fine history: ${optionLabel(fine.phase)}${fine.cursor ? `: Examined back to ${when(fine.cursor)}` : ""}`));
     const scan = device?.history_import, status = node("p"); status.setAttribute("role", "status");
     const phases = {discovering: "Discovering available hourly history…", processing: "Processing hourly history", complete: "Historical scan complete", unavailable: "No paired hourly energy and power history available", failed: "History processing interrupted. Retained progress will resume automatically"};
     status.textContent = `Historical learning: ${phases[scan?.phase] || (device?.power_entity ? "Waiting for background processing" : "Power sensor required")}`;
-    history.append(status);
+    learning.append(status);
     if (scan?.start && scan?.end) {
         const total = Date.parse(scan.end) - Date.parse(scan.start), processed = Date.parse(scan.cursor) - Date.parse(scan.start);
-        history.append(node("p", `Examined through ${when(scan.cursor)}: Target: ${when(scan.start)} to ${when(scan.end)}`));
+        learning.append(node("p", `Examined through ${when(scan.cursor)}: Target: ${when(scan.start)} to ${when(scan.end)}`));
         if (scan.phase === "processing") {
             const progress = node("progress"); progress.max = total; progress.value = processed; progress.setAttribute("aria-label", "Hourly history progress");
-            history.append(progress, node("span", ` ${percentage(100 * processed / total)}`));
+            learning.append(progress, node("span", ` ${percentage(100 * processed / total)}`));
         }
-        if (scan.expected_intervals) history.append(node("p", `Usable hourly intervals: ${scan.usable_intervals} of ${scan.expected_intervals}: ${percentage(100 * scan.usable_intervals / scan.expected_intervals)}`));
+        if (scan.expected_intervals) learning.append(node("p", `Usable hourly intervals: ${scan.usable_intervals} of ${scan.expected_intervals}: ${percentage(100 * scan.usable_intervals / scan.expected_intervals)}`));
     }
-    if (metrics?.sourcePhaseMinutes > metrics.phaseMinutes) history.append(node("p", learned?.evidence === "hourly_estimate" ? "Five-minute display: Hourly power is spread uniformly. Each energy bar estimates one twelfth of its hour. Fine measurements refine this shape later." : "Five-minute display: Coarser mean power is spread uniformly. These are estimates within each original measurement interval."));
-    if (learned?.evidence === "hourly_estimate") history.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. The first complete fine cycle refines this estimate automatically."));
-    if (focusedCycle || focusedButton) {
-        const target = focusedCycle ? [...history.querySelectorAll("details")].find(detail => detail.dataset.cycleKey === focusedCycle)?.querySelector("summary") : find(focusedButton);
-        const fallback = history.querySelector("button:not(:disabled)") || history.querySelector("h3");
+    if (metrics && metrics.sourcePhaseMinutes > metrics.phaseMinutes) learning.append(node("p", learned?.evidence === "hourly_estimate" ? "Five-minute display: Hourly power is spread uniformly. Each energy bar estimates one twelfth of its hour. Fine measurements refine this shape later." : "Five-minute display: Coarser mean power is spread uniformly. These are estimates within each original measurement interval."));
+    if (learned?.evidence === "hourly_estimate") learning.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. The first complete fine cycle refines this estimate automatically."));
+    history.append(learning);
+    if (focusedCycle || focusedButton || learningFocused) {
+        const target = learningFocused ? learning.querySelector("summary") : focusedCycle ? [...history.querySelectorAll("details")].find(detail => detail.dataset.cycleKey === focusedCycle)?.querySelector("summary") : find(focusedButton);
+        const fallback = history.querySelector("button:not(:disabled)") || history.querySelector("h2");
         const restored = target && !target.disabled ? target : fallback;
-        if (restored) { if (restored.tagName === "H3") restored.tabIndex = -1; restored.focus({preventScroll: true}); }
+        if (restored) { if (restored.tagName === "H2") restored.tabIndex = -1; restored.focus({preventScroll: true}); }
     }
 }
 /** Preserve the selected profile and selector focus when only read-only evidence changes. */
