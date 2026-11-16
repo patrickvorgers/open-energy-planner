@@ -120,6 +120,15 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
         title: items => {const row = datasetRows(items[0].datasetIndex)[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`;},
         label: item => `${item.dataset.label}: ${item.parsed.y == null ? "Unavailable" : item.parsed.y.toFixed(3)} ${item.dataset.yAxisID === "radiation" ? "W/m²" : "kWh"}`,
     }}}}});
+    /** Refresh the selected interval from visible original rows, including recorded null values. */
+    function showIntervalEvidence(interval) {
+        const points = datasets.flatMap((dataset, datasetIndex) => {
+            const dataIndex = dataset.intervalBounds.findIndex(candidate => candidate.start === interval.start && candidate.end === interval.end);
+            return chart.isDatasetVisible(datasetIndex) && dataIndex >= 0 ? [{datasetIndex, dataIndex}] : [];
+        });
+        if (!points.length) {tooltip.hidden = true; return;}
+        showEvidence({chart, tooltip: {opacity: 1, dataPoints: points}});
+    }
     canvas.addEventListener("click", () => {pinned = !pinned; if (pinned) showEvidence({chart, tooltip: chart.tooltip}); else tooltip.hidden = true;});
     canvas.addEventListener("keydown", event => {
         if (event.key === "Escape") {pinned = false; tooltip.hidden = true; return;}
@@ -129,11 +138,7 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
         event.preventDefault(); pinned = true;
         const previous = Math.max(0, available.findIndex(interval => interval.start === selectedInterval?.start && interval.end === selectedInterval?.end));
         const selected = event.key === "Home" ? available[0] : event.key === "End" ? available.at(-1) : available[Math.max(0, Math.min(available.length - 1, previous + (event.key === "ArrowLeft" ? -1 : 1)))];
-        const points = datasets.flatMap((dataset, datasetIndex) => {
-            const dataIndex = dataset.intervalBounds.findIndex(interval => interval.start === selected.start && interval.end === selected.end);
-            return chart.isDatasetVisible(datasetIndex) && dataIndex >= 0 ? [{datasetIndex, dataIndex}] : [];
-        });
-        showEvidence({chart, tooltip: {opacity: 1, dataPoints: points}});
+        showIntervalEvidence(selected);
     });
     tooltip.addEventListener("mouseleave", () => {if (!pinned) tooltip.hidden = true;});
     tooltip.addEventListener("keydown", event => {if (event.key === "Escape") {pinned = false; tooltip.hidden = true; canvas.focus({preventScroll: true});}});
@@ -142,7 +147,13 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
     datasets.forEach((dataset, index) => {
         const label = document.createElement("label"), input = document.createElement("input"), swatch = document.createElement("span");
         input.type = "checkbox"; input.checked = !dataset.hidden;
-        input.onchange = () => {chart.setDatasetVisibility(index, input.checked); if (radiation) chart.options.scales.radiation.display = datasets.some((_, datasetIndex) => datasetIndex >= radiationOffset && chart.isDatasetVisible(datasetIndex)); chart.update();};
+        input.onchange = () => {
+            const interval = selectedInterval;
+            chart.setDatasetVisibility(index, input.checked);
+            if (radiation) chart.options.scales.radiation.display = datasets.some((_, datasetIndex) => datasetIndex >= radiationOffset && chart.isDatasetVisible(datasetIndex));
+            chart.update();
+            if (pinned && interval) showIntervalEvidence(interval);
+        };
         swatch.className = dataset.type === "bar" ? "series-swatch" : "quality-line-swatch";
         swatch.style.setProperty("--series-color", dataset.borderColor || "#078b80");
         if (dataset.type === "bar") {swatch.style.backgroundColor = "#078b8080"; swatch.style.border = "0";}

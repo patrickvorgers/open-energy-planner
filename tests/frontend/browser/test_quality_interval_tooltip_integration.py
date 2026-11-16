@@ -80,6 +80,63 @@ def test_independent_intervals_keep_native_indices_and_select_matching_evidence(
     canvas = page.locator("#quality-chart-0")
     evidence = page.get_by_role("region", name="Hourly forecast evidence", exact=True)
 
+    def keyboard_focus(target, direction="Tab"):
+        """Reach a chart or legend control through actual keyboard navigation."""
+        for _ in range(40):
+            if target.evaluate("element => element === document.activeElement"):
+                return
+            page.keyboard.press(direction)
+        raise AssertionError("Keyboard did not reach the requested control")
+
+    def toggle_series(name, checked):
+        """Toggle one legend checkbox without pointer events refreshing the tooltip."""
+        control = page.get_by_role("checkbox", name=name, exact=True)
+        keyboard_focus(control)
+        page.keyboard.press("Space")
+        expect(control).to_be_checked(checked=checked)
+
+    canvas.focus()
+    canvas.press("Home")
+    expect(evidence).to_contain_text("Original hourly forecast: Original choice: 1.000 kWh")
+    canvas.press("End")
+    expect(evidence).to_contain_text("Independent alternative: 4.000 kWh")
+    assert (
+        canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.getActiveElements().length") == 0
+    )
+    toggle_series("Independent alternative", False)
+    expect(evidence).not_to_contain_text("Independent alternative:")
+    expect(evidence).to_contain_text("Original hourly forecast: Original choice: 3.000 kWh")
+    toggle_series("Independent alternative", True)
+    expect(evidence).to_contain_text("Independent alternative: 4.000 kWh")
+    toggle_series("Forecast irradiance", True)
+    expect(evidence).to_contain_text("Forecast irradiance: Unavailable W/m²")
+    expect(evidence).not_to_contain_text("Forecast irradiance: 400.000 W/m²")
+    keyboard_focus(canvas, "Shift+Tab")
+    canvas.press("End")
+    expect(evidence).to_contain_text("Forecast irradiance: 400.000 W/m²")
+    toggle_series("Forecast irradiance", False)
+    expect(evidence).to_be_hidden()
+    toggle_series("Forecast irradiance", True)
+    expect(evidence).to_contain_text("Forecast irradiance: 400.000 W/m²")
+    for name in (
+        "Measured",
+        "Original hourly forecast: Original choice",
+        "Independent alternative",
+        "Forecast irradiance",
+    ):
+        toggle_series(name, False)
+    expect(evidence).to_be_hidden()
+    toggle_series("Independent alternative", True)
+    expect(evidence).to_be_hidden()
+    toggle_series("Forecast irradiance", True)
+    expect(evidence).to_contain_text("Forecast irradiance: 400.000 W/m²")
+    toggle_series("Measured", True)
+    toggle_series("Original hourly forecast: Original choice", True)
+    toggle_series("Forecast irradiance", False)
+    keyboard_focus(canvas, "Shift+Tab")
+    canvas.press("Escape")
+    expect(evidence).to_be_hidden()
+
     def select_point(dataset, index):
         """Use actual mouse or touch input at an original dataset's rendered point."""
         point = canvas.evaluate(
