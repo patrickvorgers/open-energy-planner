@@ -451,7 +451,8 @@ not another published assessment status.
 The model predicts production directly within its measurement boundary and
 physical power limits. Standalone AC production may be represented as equivalent
 DC using declared conversion efficiency for planning. This does not reconstruct
-unobserved clipped panel DC. Hybrid AC still needs independent route evidence.
+unobserved clipped panel DC. Pure PV meters on hybrid inverters use the same
+declared boundary as other PV meters.
 Changing algorithm, feature policy, geometry or site starts an independent
 comparison family. Earlier scalar or correction-factor evidence cannot promote
 the new direct-production model. The scalar fitting utility does not provide a
@@ -629,6 +630,23 @@ from a different provider configuration cannot promote the new configuration.
 Unreadable optional accuracy evidence retains the physical forecast with an
 explicit comparison issue. It does not overwrite damaged evidence or block an
 otherwise valid baseline. Manual selection does not depend on old accuracy data.
+
+Accuracy admission checks the combined measured AC output of all sources on the
+same inverter against 98% of its declared AC rating. Two 2.5 kWh hourly meters on
+one 5 kW inverter therefore cannot provide unrestricted accuracy evidence, even
+though neither meter individually reaches the inverter rating. Missing or
+corrected sibling measurements make that AC comparison unknown for the affected
+hour. They are never filled with zero. A sibling measured only on the DC side
+also cannot establish the missing AC contribution. DC comparisons and independent
+inverters remain separate. Captured daily selection, original and alternative Forecast
+quality scores and historical activation share this rule. Complete comparable
+days remain eligible. PVWatts planning remains available when comparison proof
+is incomplete. Direct measured-production training still retains its actual
+measurements and existing daylight, control and continuity safeguards.
+
+New comparison and backtest policy identities prevent reuse of an earlier
+activation assessment under the previous clipping rules. Earlier captures and
+assessment documents remain immutable.
 
 Per-source `calibration_status` distinguishes missing/insufficient history,
 missing curtailment feedback and a fitted shadow candidate. It does not silently present all of these cases as a trained model.

@@ -3,13 +3,12 @@
 from datetime import UTC, datetime, timedelta
 from math import fsum
 
-from open_energy_planner.core.units import WATTS_PER_KW
 from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.forecast_quality.calculation.metrics import series
 from open_energy_planner.forecast_quality.radiation import original_radiation, radiation_view
 
 from ..solar.curtailment import load_feedback
-from ..solar.learning import INVERTER_CLIPPING_THRESHOLD, unrestricted_interval
+from ..solar.learning import ac_comparison_issue, unrestricted_interval
 from ..solar.wire import parse_source
 
 ENERGY_TOLERANCE_KWH = 1e-7
@@ -295,6 +294,7 @@ def evidence(
                 solar_documents.read(models_path) if solar_documents.exists(models_path) else {}
             )
             inverters = {row["inverter_id"]: row for row in configuration["inverters"]}
+            meter_readings = {}
             for source in configuration["sources"]:
                 identity = source["source_id"]
                 if identity not in entry["source_ids"]:
@@ -306,9 +306,18 @@ def evidence(
                     for row in forecast["energies"]
                     if row["source_id"] == identity
                 ]
-                actual, receipt = measured(
-                    archive, sources, [{"entity_id": source["entity_id"], "sign": 1}], start, end
-                )
+                siblings = [
+                    other
+                    for other in configuration["sources"]
+                    if other["inverter_id"] == source["inverter_id"]
+                ]
+                for other in siblings:
+                    entity = other["entity_id"]
+                    if entity not in meter_readings:
+                        meter_readings[entity] = measured(
+                            archive, sources, [{"entity_id": entity, "sign": 1}], start, end
+                        )
+                actual, receipt = meter_readings[source["entity_id"]]
                 inverter = inverters[source["inverter_id"]]
                 feedback = None
                 if source.get("curtailment_entity_id"):
@@ -327,19 +336,27 @@ def evidence(
                 )
                 hourly_issues = {}
                 hour = start
-                while source_definition and hour < end:
-                    if not unrestricted_interval(
+                while hour < end:
+                    if actual.get(hour) is not None:
+                        clipping_issue = ac_comparison_issue(
+                            boundary,
+                            inverter["ac_limit_w"],
+                            tuple(
+                                meter_readings[other["entity_id"]][0].get(hour)
+                                if other.get("measurement_boundary", "ac") == "ac"
+                                else None
+                                for other in siblings
+                            ),
+                        )
+                        if clipping_issue:
+                            hourly_issues[hour] = clipping_issue
+                    if source_definition and not unrestricted_interval(
                         source_definition, hour, hour + timedelta(hours=1), feedback
                     ):
                         hourly_issues[hour] = (
                             "Curtailment feedback does not establish unrestricted production for this hour"
                         )
                     hour += timedelta(hours=1)
-                maximum = (
-                    inverter["ac_limit_w"] / WATTS_PER_KW * INVERTER_CLIPPING_THRESHOLD
-                    if boundary == "ac"
-                    else None
-                )
                 row = series(
                     identity,
                     (names or {}).get(
@@ -356,7 +373,6 @@ def evidence(
                     end,
                     now,
                     receipt=receipt,
-                    maximum_comparable_kwh=maximum,
                     hourly_issues=hourly_issues,
                 )
                 row["measurement_boundary"] = boundary.upper()
@@ -373,7 +389,6 @@ def evidence(
                         now,
                         receipt=receipt,
                         field=field,
-                        maximum=maximum,
                         hourly_issues=hourly_issues,
                     )
                 except (FileNotFoundError, OSError, KeyError, TypeError, ValueError):

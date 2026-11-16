@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
+from math import fsum
 
 from open_energy_planner.core.units import WATTS_PER_KW
 from open_energy_planner.solar.calculation.model import version
@@ -50,6 +51,33 @@ def training_sample_issue(source, inverter, previous, following, expected, befor
         or expected.ac_kwh < expected.dc_kwh * inverter.efficiency * CONVERSION_CLIPPING_THRESHOLD
     ):
         return TrainingExclusion.CLIPPING
+    return None
+
+
+def production_hours(history, before):
+    """Read complete nonnegative hourly sum deltas without filling gaps or negative corrections."""
+    return {
+        following.start: following.total_kwh - previous.total_kwh
+        for previous, following in pairwise(history.hours if history else ())
+        if following.start - previous.start == timedelta(hours=1)
+        and following.start + timedelta(hours=1) <= before
+        and following.total_kwh >= previous.total_kwh
+    }
+
+
+def ac_comparison_issue(boundary, inverter_limit_w, meter_values):
+    """Withhold AC accuracy proof at the common limit or when a contributing meter is unknown.
+
+    Values are complete-hour kWh from disjoint meters on the same inverter.
+    DC observations retain their own measurement boundary. This does not filter
+    the direct production model's training targets or modify retained readings.
+    """
+    if boundary != "ac":
+        return None
+    if any(value is None for value in meter_values):
+        return "Shared inverter production measurements are unavailable for this hour"
+    if fsum(meter_values) >= inverter_limit_w / WATTS_PER_KW * INVERTER_CLIPPING_THRESHOLD:
+        return "Clipped AC production cannot establish available PV"
     return None
 
 

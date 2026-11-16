@@ -2,7 +2,6 @@
 
 from dataclasses import asdict
 from datetime import datetime, timedelta
-from itertools import pairwise
 from math import fsum
 from zoneinfo import ZoneInfo
 
@@ -31,13 +30,18 @@ from open_energy_planner.solar.calculation.model import (
     version,
 )
 from open_energy_planner.solar.forecast_weather import FORECAST_WEATHER_POLICY
-from open_energy_planner.solar.learning import learning_interval, unrestricted_interval
+from open_energy_planner.solar.learning import (
+    ac_comparison_issue,
+    learning_interval,
+    production_hours,
+    unrestricted_interval,
+)
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
 from open_energy_planner.solar.wire import document
 
 HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)
-SOURCE_POLICY = "matched-local-day-mae-feedback-v2"
+SOURCE_POLICY = "matched-local-day-mae-ac-clipping-v3"
 
 
 def ha_energies(configuration, baseline, predictions, now):
@@ -214,11 +218,16 @@ def choose_sources(
         Damaged evidence is retained unchanged. Other invariant failures propagate.
     """
     selected, statuses = {}, {}
+    meter_hours = {entity: production_hours(history, now) for entity, history in histories.items()}
+    inverters = {inverter.inverter_id: inverter for inverter in configuration.inverters}
     fitted = {row.source_id for row in calibrations}
     tomorrow = now.astimezone(ZoneInfo(baseline.location.timezone)).date() + DAY
     future_hours, _end = comparison_hours(tomorrow, baseline.location.timezone)
     for source in configuration.sources:
         source_id = source.source_id
+        siblings = tuple(
+            other for other in configuration.sources if other.inverter_id == source.inverter_id
+        )
         field = "ac_kwh" if source.measurement_boundary == "ac" else "dc_kwh"
         models = {
             ForecastSource.PVWATTS: tuple(
@@ -276,13 +285,7 @@ def choose_sources(
         except OSError:
             evidence_issue = "Solar accuracy evidence could not be saved"
         history = histories.get(source.entity_id)
-        actual = {}
-        if history:
-            for before, after in pairwise(history.hours):
-                if after.start - before.start == HOUR and after.start + HOUR <= now:
-                    value = after.total_kwh - before.total_kwh
-                    if value >= 0:
-                        actual[after.start] = value
+        actual = meter_hours.get(source.entity_id, {})
         cohorts = []
         for day_index in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1):
             day = tomorrow - day_index * DAY
@@ -322,6 +325,20 @@ def choose_sources(
                 continue
             values = [actual.get(instant) for instant in hours]
             if any(value is None for value in values):
+                continue
+            if any(
+                ac_comparison_issue(
+                    source.measurement_boundary,
+                    inverters[source.inverter_id].ac_limit_w,
+                    tuple(
+                        meter_hours.get(other.entity_id, {}).get(instant)
+                        if other.measurement_boundary == "ac"
+                        else None
+                        for other in siblings
+                    ),
+                )
+                for instant in hours
+            ):
                 continue
             cohorts.append((record, values))
             if len(cohorts) == MIN_ACCURACY_DAYS:

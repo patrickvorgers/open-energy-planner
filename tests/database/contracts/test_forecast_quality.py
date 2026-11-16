@@ -709,6 +709,15 @@ def test_solar_feedback_excludes_only_affected_plan_hours_and_alternatives(archi
         source=pv,
         now=START + timedelta(hours=6),
     )
+    if guard == "shared":
+        sibling_meter = {**pv, "entity_id": "sensor.other_pv", "version": "d" * 64}
+        plan["forecast_quality_sources"].append(sibling_meter)
+        receipt(
+            archive,
+            [(-1, 20)] + [(index, 21 + index) for index in range(5)],
+            source=sibling_meter,
+            now=START + timedelta(hours=6),
+        )
     save_feedback(
         SolarStore(solar),
         None,
@@ -932,7 +941,16 @@ def test_pv_meter_scores_ignore_topology_and_preserve_actual_limitations(archive
     if boundary == "hybrid":
         definition["inverters"][0]["hybrid"] = True
     elif boundary == "shared":
-        definition["sources"].append({**definition["sources"][0], "source_id": "garage"})
+        definition["sources"].append(
+            {**definition["sources"][0], "source_id": "garage", "entity_id": "sensor.garage_pv"}
+        )
+        sibling_meter = {
+            **plan["forecast_quality_sources"][-1],
+            "entity_id": "sensor.garage_pv",
+            "version": "d" * 64,
+        }
+        plan["forecast_quality_sources"].append(sibling_meter)
+        receipt(archive, [(-1, 20), (0, 21)], source=sibling_meter)
     elif boundary == "curtailed":
         from open_energy_planner.solar.curtailment import CurtailmentHistory, save_feedback
         from open_energy_planner.solar.storage import SolarStore
@@ -960,6 +978,55 @@ def test_pv_meter_scores_ignore_topology_and_preserve_actual_limitations(archive
     comparable = boundary in ("hybrid", "shared")
     assert pv["coverage"]["paired_hours"] == (1 if comparable else 0)
     assert pv["metrics"]["mae_kwh"] == (0 if comparable else None)
+
+
+@pytest.mark.parametrize(
+    "case,expected_pairs",
+    [
+        ("shared_limit", 0),
+        ("shared_below", 1),
+        ("missing_sibling", 0),
+        ("dc", 1),
+        ("independent", 1),
+    ],
+)
+def test_shared_ac_clipping_limits_original_and_alternative_accuracy(archive, case, expected_pairs):
+    """Two disjoint AC meters totaling 5 kWh fill 5 kW. Their individual 2.5-kWh readings stay visible but cannot prove accuracy."""
+    plan, solar = frozen_plan(archive)
+    definition = solar.read("configuration-solar-definition.json")
+    sibling = {**definition["sources"][0], "source_id": "other", "entity_id": "sensor.pv_other"}
+    if case == "independent":
+        sibling["inverter_id"] = "other-inverter"
+        definition["inverters"].append(
+            {"inverter_id": "other-inverter", "ac_limit_w": 5000, "hybrid": False}
+        )
+    if case == "dc":
+        definition["sources"][0]["measurement_boundary"] = "dc"
+    definition["sources"].append(sibling)
+    solar.write("configuration-solar-definition.json", definition)
+    actual_kwh = 2.4 if case == "shared_below" else 2.5
+    source = plan["forecast_quality_sources"][-1]
+    receipt(
+        archive, [(-1, 10), (0, 10 + actual_kwh)], source=source, now=START + timedelta(hours=5)
+    )
+    if case != "missing_sibling":
+        sibling_meter = {**source, "entity_id": "sensor.pv_other", "version": "d" * 64}
+        plan["forecast_quality_sources"].append(sibling_meter)
+        receipt(archive, [(-1, 10), (0, 10 + actual_kwh)], source=sibling_meter)
+    original = solar.read("forecast-pv-original.json")["forecast"]
+    original["configuration_version"] = "solar-definition"
+    solar.write("forecast-pv-original.json", {"forecast": original})
+    alternative = {**original, "version": "pv-alternative", "model": "solar-xgboost-production-v2"}
+    solar.write("forecast-pv-alternative.json", {"forecast": alternative})
+    solar.write("quality-candidates-pv-original.json", {"forecasts": ["pv-alternative"]})
+    result = evidence(plan, archive, archive.documents, solar, START + timedelta(hours=4))
+    source_view = next(row for row in result["series"] if row["id"] == "roof")
+    for candidate in (source_view, source_view["alternatives"][0]):
+        assert candidate["coverage"]["paired_hours"] == expected_pairs
+        assert candidate["rows"][0]["measured_kwh"] == pytest.approx(actual_kwh)
+        assert (candidate["metrics"]["mae_kwh"] is not None) == bool(expected_pairs)
+        if not expected_pairs:
+            assert candidate["rows"][0]["evaluation_issue"]
 
 
 def test_controlled_load_timing_never_claims_forecast_error_or_measured_savings(archive):

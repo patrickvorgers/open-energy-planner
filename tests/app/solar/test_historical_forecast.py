@@ -426,3 +426,50 @@ def test_historical_projection_requires_coverage_but_keeps_explicit_zeros(missin
             NOW + timedelta(hours=index) for index in range(48)
         }
         assert all(row.ac_kwh == row.dc_kwh == 0 for row in forecast.energies)
+
+
+@pytest.mark.parametrize("case", ["clipped", "missing", "independent"])
+def test_historical_admission_requires_comparable_shared_ac_measurements(tmp_path, case):
+    """A .864-kWh source plus 4.136 kWh sibling fills 5 kW in a fixed holdout hour. Missing shared data also cannot authorize ML."""
+    from open_energy_planner.solar.calculation.model import SolarConfiguration, SolarInverter
+
+    runtime = configured_runtime(tmp_path)
+    original = runtime.configuration
+    source = original.sources[0]
+    sibling = replace(
+        source,
+        source_id="other",
+        entity_id="sensor.other",
+        capacity_w=1,
+        inverter_id="other-inverter" if case == "independent" else source.inverter_id,
+    )
+    inverters = (
+        (*original.inverters, SolarInverter("other-inverter", 5000))
+        if case == "independent"
+        else original.inverters
+    )
+    history = runtime.histories[source.entity_id]
+    configuration = SolarConfiguration((source, sibling), inverters)
+    runtime.store.save(configuration)
+    runtime.configure(configuration)
+    runtime.histories[source.entity_id] = history
+    fault = scheduled_runs(NOW)[0] + timedelta(hours=2)
+    if case == "clipped":
+        history = runtime.histories[source.entity_id]
+        runtime.histories[sibling.entity_id] = EnergyHistory(
+            sibling.entity_id,
+            tuple(
+                replace(
+                    hour,
+                    total_kwh=100 + (4.136 if hour.start >= fault else 0),
+                    meter_kwh=100 + (4.136 if hour.start >= fault else 0),
+                )
+                for hour in history.hours
+            ),
+        )
+    assert runtime.install(runtime.build(runtime.job(NOW)), NOW)
+    report = runtime.learning[source.source_id].summary.historical_assessment
+    assert report.status == ("eligible" if case == "independent" else "insufficient_history")
+    assert runtime.source_selection[source.source_id]["active"] == (
+        "ml" if case == "independent" else "pvwatts"
+    )

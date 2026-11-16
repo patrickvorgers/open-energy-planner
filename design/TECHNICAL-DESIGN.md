@@ -315,7 +315,11 @@ controlled EV or appliance operation that changes consumption timing. PV series 
 the configured AC or DC boundary. HA Energy solar meters represent pure PV
 production, including hybrid and shared-inverter groups. Actual curtailed intervals
 and clipped AC production cannot independently establish available-production
-accuracy. The view can retain these curves while withholding unsupported metrics.
+accuracy. Shared AC clipping is determined from the combined disjoint meter
+deltas. Missing AC contributions leave that hour incomparable. Captured source
+selection, original/alternative quality and historical activation share this rule
+without discarding direct production training targets. The view can retain these
+curves while withholding unsupported metrics.
 The responsive Chart.js page provides day selection, daily totals and errors,
 interactive graphs and interval tables. It distinguishes original forecasts from current active and
 candidate model status, descriptive errors from simulated financial decision

@@ -352,6 +352,110 @@ def test_automatic_uses_three_identical_complete_days_and_survives_restart(tmp_p
     assert status["pv0"]["mae_kwh"] == {}
 
 
+@pytest.mark.parametrize(
+    "count,shared,boundary,actual_kwh,sibling_present,curtailed,expected_days",
+    [
+        (2, True, "ac", 2.5, True, False, 0),
+        (2, True, "ac", 2.4, True, False, 3),
+        (1, False, "ac", 2.5, False, False, 3),
+        (2, False, "ac", 2.5, True, False, 3),
+        (2, True, "dc", 2.5, True, False, 3),
+        (2, True, "ac", 2.4, False, False, 0),
+        (2, True, "ac", 2.4, True, True, 0),
+        (1, False, "ac", 5.0, False, False, 0),
+    ],
+)
+def test_automatic_requires_unclipped_comparable_meter_days(
+    tmp_path, count, shared, boundary, actual_kwh, sibling_present, curtailed, expected_days
+):
+    """Two 2.5-kWh AC meters fill 5 kW and cannot promote ML. Below-limit/DC/independent days remain usable, missing data never means zero."""
+    from open_energy_planner.solar.curtailment import CurtailmentHistory
+
+    configuration = plant(count=count, shared=shared, limit=5000)
+    configuration = replace(
+        configuration,
+        sources=tuple(
+            replace(
+                source,
+                capacity_w=5000,
+                measurement_boundary=boundary,
+                curtailment_entity_id="binary_sensor.limited"
+                if curtailed and source.source_id == "pv0"
+                else None,
+            )
+            for source in configuration.sources
+        ),
+    )
+    store = make_store(tmp_path, SolarStore)
+    fitted = tuple(SimpleNamespace(source_id=source.source_id) for source in configuration.sources)
+
+    def forecast(now, amount):
+        """Supply independently specified hourly boundary values for each disjoint meter."""
+        original = prediction(now, amount, configuration=configuration)
+        return replace(
+            original,
+            energies=tuple(
+                replace(row, source_id=source.source_id, ac_kwh=amount, dc_kwh=amount)
+                for source in configuration.sources
+                for row in original.energies
+            ),
+        )
+
+    for day in range(3):
+        now = START + timedelta(days=day)
+        choose_sources(
+            store,
+            configuration,
+            forecast(now, actual_kwh + 0.1),
+            forecast(now, actual_kwh),
+            fitted,
+            {},
+            {},
+            now,
+        )
+    original_captures = list(store.documents.iter_prefix("source-day-"))
+    now = START + timedelta(days=4, hours=1)
+    histories = {
+        source.entity_id: EnergyHistory(
+            source.entity_id,
+            tuple(
+                EnergyHour(START + timedelta(hours=index), index * actual_kwh, index * actual_kwh)
+                for index in range(97)
+            ),
+        )
+        for source in configuration.sources
+        if source.source_id == "pv0" or sibling_present
+    }
+    feedback = (
+        {
+            "binary_sensor.limited": CurtailmentHistory(
+                "binary_sensor.limited", now, ((START - timedelta(days=1), True),)
+            )
+        }
+        if curtailed
+        else {}
+    )
+    chosen, statuses = choose_sources(
+        store,
+        configuration,
+        forecast(now, actual_kwh + 0.1),
+        forecast(now, actual_kwh),
+        fitted,
+        {},
+        histories,
+        now,
+        feedback=feedback,
+    )
+    assert statuses["pv0"]["complete_days"] == expected_days
+    assert chosen["pv0"][0] == ("ml" if expected_days else "pvwatts")
+    assert statuses["pv0"]["mae_kwh"] == (
+        pytest.approx({"pvwatts": 0.1, "ml": 0}) if expected_days else {}
+    )
+    assert all(
+        capture in list(store.documents.iter_prefix("source-day-")) for capture in original_captures
+    )
+
+
 def test_capture_waits_for_every_available_candidate_then_freezes_the_same_build(tmp_path):
     """A short cached HA horizon cannot freeze a PVWatts-only tomorrow before the next real refresh."""
     store = make_store(tmp_path, SolarStore)
