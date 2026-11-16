@@ -54,6 +54,38 @@ their visible time. Archived UTC daily savings retain UTC calendar boundaries.
 Relative appliance-cycle charts retain their elapsed-time axis. Bands do not
 fill missing series, change interval widths or alter stored evidence.
 
+### Exact coverage at chart edges
+
+The shared `chart_theme.js` owns numeric time-axis bounds for all chart builders.
+Linear x axes use data bounds and disable category offsets. Explicit day, plan,
+recorded-cycle and selected-window bounds remain authoritative. Automatic bounds
+end at the original first and last timestamps instead of rounding out to a tick.
+Category energy bars retain their end spacing so the first and last bins are not
+cut in half. An empty or single-instant series retains the renderer's finite
+fallback range.
+
+Forecast quality stores one point at each original interval midpoint. Its
+interval renderer draws the beginning and ending of each covered run to the
+recorded interval boundaries, clipped to the selected day. For example, the
+00:00–01:00 forecast covers the left edge of a complete local day even though its
+inspection point remains at 00:30. A single available hour fills only that hour.
+Null values and absent intervals break the line. Alternative forecasts and
+irradiance references use their own coverage. No values, timestamps, tooltip
+indices, daily totals or accuracy calculations are added or changed.
+
+| Chart family | Edge and missing-coverage rule |
+| --- | --- |
+| Planning balances, forecasts, grid exchange and prices | Preserve the selected plan window and original interval or state boundaries. |
+| Savings and realization | Preserve the selected evaluation window and explicit unavailable periods. |
+| Forecast quality | Cover recorded forecast intervals, including clipped edge hours and 23-hour, 25-hour and half-hour DST days. Leave missing first or last hours empty. |
+| Thermal storage | Align the planned time window to both edges. Temperature points remain recorded end states. Do not invent an initial state. |
+| Appliance profiles and recorded cycles | Use original elapsed or recorded times. Category energy bars keep complete bins. Recorded context and missing measurements remain visible. |
+| Planning performance | Daily attempts retain the complete selected day. Detail plots end at the last recorded sample, with no invented sample before the first observation. |
+
+Check both the axis pixels and the visible stroke when testing interval lines.
+Correct scale bounds alone cannot detect a half-interval gap between the plot
+edge and the first or last midpoint. Check resize and visibility changes too.
+
 Planning day headings expose energy summaries on hover, focus and tap. Integrate
 each visible balance series in kWh over its covered duration, clipped to the
 selected range and installation-local day. Preserve the chart's signs and omit
