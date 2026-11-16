@@ -22,7 +22,7 @@ from script.ci.check_ci_candidate import (
     require_prerequisites,
 )
 from script.ci.check_commit_signatures import GitHub, VerificationError, sha
-from script.ci.pr_readiness import require_resolved_threads
+from script.ci.pr_readiness import require_clear_formal_reviews, require_resolved_threads
 from script.ci.review_preflight import (
     GITHUB_ACTIONS_BOT_ID,
     GITHUB_ACTIONS_BOT_LOGIN,
@@ -573,9 +573,19 @@ def advance(repository, number, state, comments, client, now, publisher=None):
     except VerificationError:
         pass
     else:
+        message = "A substantive current-head review completed. Evaluate all findings before Ready for review."
+        try:
+            require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
+        except VerificationError:
+            message = (
+                "A substantive current-head review completed, but formal review clearance "
+                "is blocked or unavailable. Keep Draft. Inspect formal change requests and "
+                "follow the individual operator recovery procedure before Ready. "
+                "Provider completion does not dismiss any review or dispose of findings."
+            )
         state.update(
             phase="complete",
-            message="A substantive current-head review completed. Evaluate all findings before Ready for review.",
+            message=message,
         )
         save_state(state, subject, client)
         return

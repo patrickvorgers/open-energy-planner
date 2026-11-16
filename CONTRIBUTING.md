@@ -55,6 +55,16 @@ See [GitHub's attachment procedure](https://docs.github.com/en/github-cli/github
 
 ## Development and review
 
+Inspect formal GitHub change requests before Ready and again before merge.
+Resolved threads and a later clean bot publication do not clear a formal
+`CHANGES_REQUESTED` review. Use the read-only **Formal review state (trusted main)**
+workflow for the frozen head/base. Candidate admission checks formal objections
+independently. Individual obsolete bot reviews require an explicit operator action
+with complete finding dispositions, genuine current coverage, a concrete reason
+and live readback. Follow [individual review recovery](docs/development/CI-STAGES.md#formal-change-requests-and-individual-recovery).
+Human requests and current objections remain blocking. A premature Ready transition
+requires returning to Draft and completing recovery before requesting one new candidate.
+
 AI-assisted development also follows the repository [AI development agreements](AGENTS.md), including evidence-based handling of all Codex, CodeRabbit and Kody-ai review findings.
 
 At least one automated reviewer, CodeRabbit or Kody-ai, must complete a substantive review of the latest PR head before Ready for review or merge. Every new commit, including documentation-only changes, requires a completed review of that head from either provider. Evaluate and address every finding from all reviewers, including outside-diff comments, and resolve the evaluated threads. Passing CI, no comments, pending or skipped reviews, an unavailable provider and older-head reviews do not prove completion. Recheck the head SHA immediately before merging.
