@@ -20,10 +20,15 @@ from open_energy_planner.solar.forecast_weather import (
     FORECAST_WEATHER_MODEL,
     FORECAST_WEATHER_POLICY,
 )
-from open_energy_planner.solar.learning import learning_interval, unrestricted_interval
+from open_energy_planner.solar.learning import (
+    ac_comparison_issue,
+    learning_interval,
+    production_hours,
+    unrestricted_interval,
+)
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
 
-BACKTEST_POLICY = "four-weekly-frozen-ifs-dual-origin-48h-v1"
+BACKTEST_POLICY = "four-weekly-frozen-ifs-dual-origin-48h-ac-clipping-v2"
 BACKTEST_RUN_COUNT = 4
 BACKTEST_SPACING_DAYS = 7
 BACKTEST_RUN_HOUR = 12
@@ -363,6 +368,9 @@ def assess_forecasts(
             raise ValueError("Historical solar forecast context changed")
         return report
     inverter = next(row for row in configuration.inverters if row.inverter_id == source.inverter_id)
+    siblings = tuple(
+        other for other in configuration.sources if other.inverter_id == source.inverter_id
+    )
     max_power_kw = (
         inverter.ac_limit_w / 1000
         if source.measurement_boundary == "ac"
@@ -377,6 +385,15 @@ def assess_forecasts(
             and following.start + HOUR <= now
         ):
             actual[following.start] = value
+    meter_hours = {
+        other.entity_id: production_hours(
+            history
+            if other.source_id == source.source_id
+            else (histories or {}).get(other.entity_id),
+            now,
+        )
+        for other in siblings
+    }
     run_by_init = {run.initialized_at: run for run in relevant_runs}
     windows, issue = [], None
     for initialized in initializations:
@@ -389,6 +406,16 @@ def assess_forecasts(
             instants = tuple(origin + index * HOUR for index in range(PLANNING_HORIZON_HOURS))
             if any(
                 instant not in actual
+                or ac_comparison_issue(
+                    source.measurement_boundary,
+                    inverter.ac_limit_w,
+                    tuple(
+                        meter_hours.get(other.entity_id, {}).get(instant)
+                        if other.measurement_boundary == "ac"
+                        else None
+                        for other in siblings
+                    ),
+                )
                 or not learning_interval(source, instant, instant + HOUR)
                 or not unrestricted_interval(
                     source,

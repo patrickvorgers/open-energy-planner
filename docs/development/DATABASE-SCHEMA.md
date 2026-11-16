@@ -588,8 +588,18 @@ HTTP requests and native fitting run outside the write lock.
 | `source-choice-<forecast-version>.json` | Original source-selection statuses, requested/active source, matched comparison days, common-cohort per-model MAE in kWh per hour, required/completed day counts, measurement history version, policy and HA observation references. Choices do not rewrite earlier forecasts or selections when Recorder history changes. |
 
 Selected forecast documents also retain their source selection and HA observation
-references. Raw HA observations are AC production evidence, not independently
-observable available DC. Source-day windows are immutable. Rankings may be derived
+references. HA Energy solar source meters represent pure PV production at their
+declared `measurement_boundary`, including hybrid and shared-inverter groups.
+Their topology does not block training, selection or accuracy scoring. Raw HA
+forecast observations remain AC production evidence, not independently observable
+available DC. Actual curtailment, clipping and unusable history retain their
+exclusions. AC comparisons use the combined disjoint meter deltas at each inverter.
+A missing sibling delta leaves that hour incomparable. Captured-day and historical
+assessment policy identities change with this guard, so old assessments cannot
+activate a model under the new rule. Earlier records are not rewritten. Selected mixed forecasts preserve original DC values and apply one
+common inverter AC cap. Existing training and quality documents retain their
+original status and provenance rather than being rewritten after this policy change.
+Source-day windows are immutable. Rankings may be derived
 again from corrected measured sums, while earlier choices retain their original
 history version. All documents use the shared SQLAlchemy engine, existing namespace
 and namespace/name index, and participate in four-backend transfer. No new SQL

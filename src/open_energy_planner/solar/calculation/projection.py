@@ -1,15 +1,45 @@
 """Project independent measured-production models onto the shared planning grid."""
 
+from collections import defaultdict
+from dataclasses import replace
 from datetime import timedelta
 from math import fsum
 
-from open_energy_planner.core.units import MINUTES_PER_HOUR, SECONDS_PER_HOUR
+from open_energy_planner.core.units import MINUTES_PER_HOUR, SECONDS_PER_HOUR, WATTS_PER_KW
 from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
 from open_energy_planner.solar.calculation.model import SolarEnergy, SolarForecast, horizon, version
 
 QUARTERS_PER_HOUR = MINUTES_PER_HOUR // FINE_INTERVAL_MINUTES
 QUARTER_HOURS = FINE_INTERVAL_MINUTES / MINUTES_PER_HOUR
 COVERAGE_TOLERANCE_HOURS = 1e-8
+
+
+def limit_ac_production(configuration, energies):
+    """Keep selected PV-only AC forecasts within each shared inverter rating.
+
+    Mixing independently selected models must not give every source the whole
+    converter budget. Preserve measured-boundary conversion and existing clipping
+    by reducing AC only. Available DC and original candidate archives are unchanged.
+    """
+    inverters = {inverter.inverter_id: inverter for inverter in configuration.inverters}
+    sources = {source.source_id: source.inverter_id for source in configuration.sources}
+    totals = defaultdict(float)
+    for energy in energies:
+        totals[sources[energy.source_id], energy.start, energy.duration_h] += energy.ac_kwh
+    ratios = {
+        interval: min(1, inverters[interval[0]].ac_limit_w / WATTS_PER_KW * interval[2] / total)
+        if total
+        else 1
+        for interval, total in totals.items()
+    }
+    return tuple(
+        replace(
+            energy,
+            ac_kwh=energy.ac_kwh
+            * ratios[sources[energy.source_id], energy.start, energy.duration_h],
+        )
+        for energy in energies
+    )
 
 
 def integrate_intervals(rows, now, source_ids):
