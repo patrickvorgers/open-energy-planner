@@ -483,6 +483,12 @@ def test_thermal_chart_and_measured_request_separation_are_responsive(thermal_mo
     assert evidence["minimum"] == 0
     assert all(tick % 900000 == 0 for tick in evidence["ticks"])
     assert evidence["width"] <= page.viewport_size["width"]
+    edges = canvas.evaluate("""canvas => {
+        const chart = Chart.getChart(canvas), x = chart.scales.x;
+        return [x.getPixelForValue(x.min) - chart.chartArea.left,
+                x.getPixelForValue(x.max) - chart.chartArea.right];
+    }""")
+    assert edges == pytest.approx([0, 0])
     page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(
         path=f"results/ci/boiler-controls-{page.viewport_size['width']}.png", full_page=True
