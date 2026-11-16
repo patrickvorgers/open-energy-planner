@@ -23,11 +23,19 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
             datasets.push({label, type: "line", order: 0, borderColor: color, backgroundColor: color, borderWidth: 2.8, borderDash: dash, pointRadius: 0, pointHitRadius: 8, fill: false, spanGaps: false, tension: 0, yAxisID: "radiation", hidden: true, data: points(radiation.rows, field)});
         }
     }
+    /** Keep each model and reference on its own original evidence intervals. */
+    const datasetRows = index => datasets[index].yAxisID === "radiation" ? radiation.rows : index === 0 ? source.rows : forecasts[index - 1].rows;
+    for (const [index, dataset] of datasets.entries()) {
+        const rows = datasetRows(index);
+        dataset.intervalBounds = rows.map(row => ({start: Date.parse(row.start), end: Date.parse(row.end)}));
+        if (dataset.type !== "line") continue;
+        dataset.segment = {borderColor: context => Date.parse(rows[context.p0DataIndex].end) === Date.parse(rows[context.p1DataIndex].start) ? undefined : "transparent"};
+    }
     const intervals = {id: "quality-interval-bounds",
         /** Fit partial edge intervals in pixels without changing their original evidence timestamps or values. */
         afterDatasetsUpdate(chart) {
             datasets.forEach((dataset, datasetIndex) => {
-                const rows = dataset.yAxisID === "radiation" ? radiation.rows : datasetIndex === 0 ? source.rows : forecasts[datasetIndex - 1].rows;
+                const rows = datasetRows(datasetIndex);
                 chart.getDatasetMeta(datasetIndex).data.forEach((element, index) => {
                     const start = Date.parse(rows[index].start), end = Date.parse(rows[index].end);
                     const left = Math.max(start, Date.parse(day.start)), right = Math.min(end, Date.parse(day.end));
@@ -37,6 +45,32 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
                     if (dataset.type === "bar") element.width *= fraction;
                 });
             });
+        },
+        /** Draw each covered run to its recorded interval edges without adding or moving evidence points. */
+        afterDatasetDraw(chart, {index, meta}) {
+            const dataset = datasets[index];
+            if (dataset.type !== "line") return;
+            const rows = datasetRows(index), points = meta.data, context = chart.ctx, area = chart.chartArea;
+            context.save();
+            context.beginPath(); context.rect(area.left, area.top, area.right - area.left, area.bottom - area.top); context.clip();
+            context.strokeStyle = dataset.borderColor; context.lineWidth = dataset.borderWidth;
+            context.setLineDash(dataset.borderDash || []);
+            rows.forEach((row, rowIndex) => {
+                const point = points[rowIndex];
+                if (point.skip) return;
+                const start = Date.parse(row.start), end = Date.parse(row.end);
+                if (end <= chart.scales.x.min || start >= chart.scales.x.max) return;
+                const previous = rows[rowIndex - 1], next = rows[rowIndex + 1];
+                if (!previous || points[rowIndex - 1].skip || Date.parse(previous.end) !== start) {
+                    context.beginPath(); context.moveTo(chart.scales.x.getPixelForValue(start), point.y);
+                    context.lineTo(point.x, point.y); context.stroke();
+                }
+                if (!next || points[rowIndex + 1].skip || end !== Date.parse(next.start)) {
+                    context.beginPath(); context.moveTo(point.x, point.y);
+                    context.lineTo(chart.scales.x.getPixelForValue(end), point.y); context.stroke();
+                }
+            });
+            context.restore();
         }
     };
     const chart = new Chart(canvas, {type: "bar", plugins: [intervals, calendarDays], data: {datasets}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "nearest", axis: "x", intersect: false}, scales: {

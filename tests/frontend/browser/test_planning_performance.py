@@ -32,6 +32,11 @@ def test_daily_calculation_chart_dialog_and_day_navigation(app_page):
     expect(dialog.locator("#calculation-summary")).to_contain_text("4 s")
     expect(dialog.locator("#calculation-cost-note")).to_contain_text(re.compile(r"0[.,]06 EUR"))
     expect(dialog.locator("#calculation-proof")).to_contain_text(re.compile(r"2[.,]0%"))
+    time_bounds = page.locator("#improvement-chart").evaluate("""canvas => {
+        const chart = Chart.getChart(canvas), x = chart.scales.x;
+        return [x.min, x.max, x.getPixelForValue(22) - chart.chartArea.right];
+    }""")
+    assert time_bounds == pytest.approx([0, 22, 0])
     box = dialog.bounding_box()
     if page.viewport_size["width"] < 500:
         assert box["y"] == 0 and box["height"] == page.viewport_size["height"]

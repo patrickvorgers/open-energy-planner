@@ -6,12 +6,18 @@ const NICE_INTERVALS = [1, 2, 2.5, 5, 10];
 let synchronizingGroup = false;
 let batchRanges = null;
 const renderedStates = new WeakMap();
+/** Exact numeric time bounds apply to every chart. Category bars keep their interval-sized end space. */
+Chart.register({id: "timeAxisBounds", beforeDataLimits(_chart, {scale}) {
+    if (scale.axis !== "x" || scale.type !== "linear") return;
+    scale.options.offset = false;
+    scale.options.bounds = "data";
+}});
 /** Remember rendered inputs rather than treating an unchanged range request as new data. */
 function chartState(chart) {
     return JSON.stringify([chart.data, chart.data.datasets.map((_, index) => chart.isDatasetVisible(index)), chart.config.options.scales, chart.width, chart.height]);
 }
 /** Collect visible extrema, with signed stack totals and interpolated line edges.
- * Interval bars contribute whenever any part overlaps the selected window.
+ * Interval values contribute whenever any part overlaps the selected window, even if their midpoint is outside.
  * Missing values break lines. Hidden datasets and the separate SoC axis contribute nothing.
  */
 function visibleRange(chart, axis) {
@@ -26,7 +32,8 @@ function visibleRange(chart, axis) {
         dataset.data.forEach((raw, index) => {
             const point = typeof raw === "number" ? {x: index, y: raw} : raw;
             if (!point || !Number.isFinite(point.y)) { previous = null; return; }
-            const inside = bars && point.start != null ? point.end > lower && point.start < upper : point.x >= lower && point.x <= upper;
+            const interval = dataset.intervalBounds?.[index] || (bars ? point : null);
+            const inside = interval?.start != null ? interval.end > lower && interval.start < upper : point.x >= lower && point.x <= upper;
             if (inside) {
                 if (chart.options.scales[axis].stacked) {
                     const key = JSON.stringify([dataset.stack || "default", point.x, point.y < 0]);
