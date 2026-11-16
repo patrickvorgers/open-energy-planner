@@ -4,6 +4,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.quality_helpers import show_hour
 
 
 @pytest.mark.parametrize(
@@ -36,7 +37,6 @@ def test_partial_solar_plan_accuracy_and_daily_chart_remain_distinct(app_page, r
     if hybrid:
         expect(source).not_to_contain_text("not independently comparable")
         expect(source).not_to_contain_text("Not scored yet")
-        expect(source).to_contain_text("Comparable pairs: 24")
     else:
         expect(source).to_contain_text(
             "Curtailment feedback does not establish unrestricted production for this hour"
@@ -80,9 +80,13 @@ def test_partial_solar_plan_accuracy_and_daily_chart_remain_distinct(app_page, r
     if not hybrid:
         expect(source.get_by_text("Not scored yet", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    source.get_by_text("Hourly evidence and provenance", exact=True).click()
-    if not hybrid:
-        expect(source.locator("details table")).to_contain_text("Curtailment feedback")
+    evidence = show_hour(page, 12)
+    if hybrid:
+        expect(evidence).to_contain_text("Comparable pairs: 24")
+        expect(evidence).not_to_contain_text("Curtailment feedback")
+    else:
+        expect(evidence).to_contain_text("Curtailment feedback")
+    page.locator("#quality-chart-0").press("Escape")
     page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(
         path=f"results/ci/solar-feedback-partial-{request.node.callspec.params['app_site']}-{page.viewport_size['width']}.png",

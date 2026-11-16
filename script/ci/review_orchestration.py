@@ -681,18 +681,17 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                     "CodeRabbit availability reply timed out. No fallback was inferred"
                 )
             return
-    provider = latest_check(
-        checks,
-        "Kody Code Review" if state["phase"] == "kody" else "CodeRabbit",
-        KODY_APP_ID if state["phase"] == "kody" else CODERABBIT_APP_ID,
-    )
+    provider_name = "Kody Code Review" if state["phase"] == "kody" else "CodeRabbit"
+    provider_app_id = KODY_APP_ID if state["phase"] == "kody" else CODERABBIT_APP_ID
+    provider = latest_check(checks, provider_name, provider_app_id)
     if provider is None:
+        # Matching-name metadata was already excluded by latest_check.
         provider = max(
             (
                 row
                 for row in checks
-                if row.get("app", {}).get("id")
-                == (KODY_APP_ID if state["phase"] == "kody" else CODERABBIT_APP_ID)
+                if row.get("app", {}).get("id") == provider_app_id
+                and row.get("name") != provider_name
             ),
             key=lambda row: row["id"],
             default=None,

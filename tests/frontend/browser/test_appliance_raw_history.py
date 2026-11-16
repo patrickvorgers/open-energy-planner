@@ -194,7 +194,7 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(
         page.route("**/v1/appliances?raw_entity=*", hold_detail)
         page.locator("#profile-device").select_option(other)
         expect(page.locator("#profile-device")).to_have_value(other)
-        page.wait_for_function("window.rawDetailHeld === true")
+        page.wait_for_function("() => window.rawDetailHeld === true")
         assert len(pending) == 1
         page.locator("#profile-device").select_option(ENTITY)
         with page.expect_response(
@@ -202,7 +202,7 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(
         ):
             pending.pop().continue_()
         # The marker runs after the synchronous consumer finishes evaluating the public revision guard.
-        page.wait_for_function("window.releasedRawHandlerCompleted === true")
+        page.wait_for_function("() => window.releasedRawHandlerCompleted === true")
         assert (
             max(
                 point["y"] or 0
