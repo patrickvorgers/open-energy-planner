@@ -266,6 +266,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     page.get_by_role("button", name="Connect", exact=True).click()
     history = page.locator("#profile-history")
     expect(history).to_contain_text("Processing hourly history")
+    page.get_by_text("Learning and usable history", exact=True).click()
     expect(history).to_contain_text("0.0%")
     expect(page.locator("#cycle-charts")).to_be_hidden()
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_have_count(0)
@@ -935,11 +936,7 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     assert sum(energy) == pytest.approx(0.83)
     power_bounds = page.locator("#cycle-chart").bounding_box()
     energy_bounds = page.locator("#cycle-energy-chart").bounding_box()
-    if page.viewport_size["width"] > 1000:
-        assert energy_bounds["x"] > power_bounds["x"]
-        assert energy_bounds["y"] == power_bounds["y"]
-    else:
-        assert energy_bounds["y"] >= power_bounds["y"] + power_bounds["height"]
+    assert energy_bounds["y"] >= power_bounds["y"] + power_bounds["height"]
     assert page.evaluate("""() => {
         const chart = Chart.getChart(document.getElementById('cycle-chart'));
         return chart.config.type === 'line' && chart.data.datasets[0].stepped === true;

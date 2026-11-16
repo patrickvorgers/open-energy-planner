@@ -210,6 +210,66 @@ def test_poll_updates_evidence_without_closing_or_defocusing_cycle(review_eviden
 
 
 @pytest.mark.parametrize(
+    "app_page", [{"width": 1440, "height": 1024}, {"width": 390, "height": 844}], indirect=True
+)
+def test_page_selection_controls_profile_and_right_hand_history(review_evidence):
+    """Page selection stays above stacked charts and responsive history preserves open learning on refresh."""
+    page, devices, _ = review_evidence
+    expect(page.locator("#profile-title")).to_have_text("Washer")
+    expect(page.locator("#profile-summary")).to_have_text("0.30 kWh per cycle: 45 minutes")
+    selector = page.get_by_label("Appliance", exact=True).bounding_box()
+    profile = page.get_by_role("heading", name="Average cycle profile", exact=True).bounding_box()
+    history = page.get_by_role("heading", name="Detected cycles", exact=True).bounding_box()
+    power = page.locator("#cycle-chart").bounding_box()
+    energy = page.locator("#cycle-energy-chart").bounding_box()
+    assert selector["y"] + selector["height"] <= profile["y"]
+    assert energy["y"] >= power["y"] + power["height"]
+    if page.viewport_size["width"] > 1100:
+        assert history["x"] > power["x"] + power["width"]
+        assert abs(history["y"] - profile["y"]) < 2
+    else:
+        assert history["y"] > energy["y"] + energy["height"]
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    learning = page.locator("#learning-history")
+    expect(learning).not_to_have_attribute("open", "")
+    learning.locator("summary").click()
+    chart_identity = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
+    devices[0]["learning_weight"] = 12.5
+    with page.expect_response("**/v1/appliances"):
+        page.clock.fast_forward(10000)
+    expect(learning).to_have_attribute("open", "")
+    expect(learning.locator("summary")).to_be_focused()
+    expect(learning).to_contain_text("12.50 at latest cycle")
+    assert (
+        page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
+        == chart_identity
+    )
+    page.get_by_label("Appliance", exact=True).select_option("sensor.dryer")
+    expect(page.locator("#profile-title")).to_have_text("Dryer")
+    expect(learning).not_to_have_attribute("open", "")
+    expect(learning).not_to_contain_text("12.50 at latest cycle")
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_waiting_profile_keeps_learning_and_recorded_evidence_available(review_evidence):
+    """A device without a learned profile still completes rendering and exposes its retained evidence."""
+    page, devices, _ = review_evidence
+    devices[0]["profile"] = None
+    devices[0]["history_import"] = {"phase": "processing"}
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    expect(page.locator("#profile-kind")).to_have_text("Waiting for learning")
+    expect(page.locator("#cycle-charts")).to_be_hidden()
+    learning = page.get_by_text("Learning and usable history", exact=True)
+    expect(learning).to_be_visible()
+    learning.click()
+    expect(page.locator("#learning-history")).to_contain_text("Processing hourly history")
+    expect(page.locator("#status")).to_have_text("Connected")
+    expect(page.get_by_text("Recorded cycle measurements", exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
 def test_keyboard_paging_keeps_direction_until_boundary(review_evidence):

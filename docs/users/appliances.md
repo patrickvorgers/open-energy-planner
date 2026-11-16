@@ -33,15 +33,21 @@ cycle must be resolved before removal is permitted.
 
 ## Understand learned appliance cycles
 
-Open **Insights > Appliance cycles** and choose an appliance. **View cycle insights**
+Open **Insights > Appliance cycles** and choose an appliance in the toolbar above
+the page content. This selection controls both the profile and its history. **View cycle insights**
 on its planning card selects that same appliance directly. Followed cycle appliances
 remain available here when complete-cycle shifting is disabled. EV and thermal
 equipment use their own workspaces.
 
-The average power and energy charts describe the retained planning model.
-**Recent observations** describes the available measured cycles. No recent
-complete cycle does not mean the existing model has been lost. **Model and usable
-history** shows the evidence retained in the model and the recent import coverage.
+The selected appliance name, typical energy, duration and profile provenance appear
+above the charts. **Average power** and **Energy per phase** describe the retained
+planning model. They are stacked on the left on wide screens, with **Detected
+cycles** on the right. On smaller screens, cycle history follows the charts.
+No recent complete cycle does not mean the existing model has been lost.
+**Model evidence** distinguishes fine cycles from hourly estimates. Open **Learning
+and usable history** for processing progress, import coverage and recency weights.
+These details start collapsed and stay open during refreshes for the same appliance.
+Profile limitations and uncertain measured activity remain visible outside them.
 
 [![A retained learned profile remains usable when no complete cycles are present in recent observations.](../assets/appliance-cycles.png)](../assets/appliance-cycles.png)
 

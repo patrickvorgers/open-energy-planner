@@ -21,6 +21,15 @@ def test_profile_quality_explains_full_cycle_on_desktop_and_mobile(app_page, app
     """Actual charts show the complete wash and pause with honest provenance after storage restart."""
     page, url = app_page
     connect_profile(page, url)
+    expect(page.locator("#cycle-charts")).to_be_visible()
+    page.wait_for_function("""() => ['cycle-chart', 'cycle-energy-chart'].every(id => {
+        const chart = Chart.getChart(id), meta = chart?.getDatasetMeta(0);
+        return meta?.data.length && meta.data.every((element, index) => Math.abs(element.y - chart.scales.y.getPixelForValue(meta._parsed[index].y)) < .1);
+    })""")
+    page.screenshot(
+        path=f"results/ci/cycle-layout-{'statistics' if statistical else 'observed'}-{page.viewport_size['width']}.png",
+        full_page=True,
+    )
     page.get_by_text("Recorded cycle measurements", exact=True).click()
     expect(page.locator("#profile-history")).to_contain_text(
         "Provisional statistical profile" if statistical else "Continuously followed profile"
