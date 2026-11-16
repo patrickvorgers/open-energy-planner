@@ -5,7 +5,8 @@ Home Assistant Energy owns device membership and sensor bindings. OEP reuses
 optional `stat_rate` as the power sensor. There is no second OEP sensor picker,
 manual start/end entry, detection threshold or learning wizard. Settings remain
 under Settings > Appliances. Readiness and finish-before requests stay under
-Energy > Appliances. Historical use never grants readiness or start permission.
+Energy > Appliance planning. Cycle models and history live under Insights > Appliance cycles.
+Historical use never grants readiness or start permission.
 
 ## Learning and manual fallback
 
@@ -255,7 +256,7 @@ Unknown values inside a nonempty source remain visible gaps, never invented zero
 The joint status cannot claim agreement or completion when either source is
 empty, even if accompanying status metadata says the cycle was complete.
 
-Energy > Appliances shows source-bound progress, usable coverage, detected cycles,
+Insights > Appliance cycles shows source-bound progress, usable coverage, detected cycles,
 provisional profiles and measured activity. Settings retains the short planning
 summary and manual fallback. Both pages refresh read-only evidence every ten
 seconds without discarding drafts or replacing unchanged charts. A newly learned

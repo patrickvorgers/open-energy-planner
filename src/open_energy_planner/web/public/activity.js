@@ -54,7 +54,7 @@ function activityLink(row) {
         planning:["overview#planning", "View planning"],
         settlement:["overview#savings", "View savings"],
         "contract-valuations":["contract", "View contract"],
-        appliances:["appliances", "View appliance profiles"],
+        appliances:["appliance-cycles", "View appliance profiles"],
         demand:["quality", "View forecast quality"],
         solar:["quality", "View forecast quality"],
         models:["quality", "View forecast quality"],
