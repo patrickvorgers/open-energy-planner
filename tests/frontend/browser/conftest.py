@@ -97,10 +97,14 @@ def app_site(request, savings_now):
                     observed_at=now.isoformat(),
                 )
                 store.calibration.write(rows)
-        if getattr(request, "param", None) == "solar_feedback_quality":
+        if getattr(request, "param", None) in (
+            "solar_feedback_quality",
+            "solar_feedback_quality_hybrid",
+        ):
             from tests.app.forecast.support.solar_feedback import seed
 
-            seed(Path(directory))
+            hybrid = request.param == "solar_feedback_quality_hybrid"
+            seed(Path(directory), hybrid=hybrid, feedback=not hybrid)
         if getattr(request, "param", None) == "consumers_unreadable":
             from open_energy_planner.storage.adapters.documents import SqlDocuments
             from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository

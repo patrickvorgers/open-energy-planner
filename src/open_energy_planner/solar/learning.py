@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
+from math import fsum
 
 from open_energy_planner.core.units import WATTS_PER_KW
 from open_energy_planner.solar.calculation.model import version
@@ -53,6 +54,33 @@ def training_sample_issue(source, inverter, previous, following, expected, befor
     return None
 
 
+def production_hours(history, before):
+    """Read complete nonnegative hourly sum deltas without filling gaps or negative corrections."""
+    return {
+        following.start: following.total_kwh - previous.total_kwh
+        for previous, following in pairwise(history.hours if history else ())
+        if following.start - previous.start == timedelta(hours=1)
+        and following.start + timedelta(hours=1) <= before
+        and following.total_kwh >= previous.total_kwh
+    }
+
+
+def ac_comparison_issue(boundary, inverter_limit_w, meter_values):
+    """Withhold AC accuracy proof at the common limit or when a contributing meter is unknown.
+
+    Values are complete-hour kWh from disjoint meters on the same inverter.
+    DC observations retain their own measurement boundary. This does not filter
+    the direct production model's training targets or modify retained readings.
+    """
+    if boundary != "ac":
+        return None
+    if any(value is None for value in meter_values):
+        return "Shared inverter production measurements are unavailable for this hour"
+    if fsum(meter_values) >= inverter_limit_w / WATTS_PER_KW * INVERTER_CLIPPING_THRESHOLD:
+        return "Clipped AC production cannot establish available PV"
+    return None
+
+
 @dataclass(frozen=True)
 class Calibration:
     """Regularized through-origin regression. Candidate parameters are archived without pickle."""
@@ -68,13 +96,6 @@ class Calibration:
     history_version: str = ""
 
 
-def calibration_blocker(source, inverter):
-    """Explain missing route/control evidence identically for fitting and published status."""
-    if inverter.hybrid and source.measurement_boundary == "ac":
-        return "hybrid_route_history_required"
-    return None
-
-
 def fit(source, history, physical_hours, before, inverter, *, feedback=None):
     """Learn one bounded factor per measured source from complete, uncurtailed daylight hours.
 
@@ -83,7 +104,7 @@ def fit(source, history, physical_hours, before, inverter, *, feedback=None):
     production. Linked feedback must cover each hour after its first observation.
     No command is assumed physically executed. AC targets compare to physical AC.
     """
-    if calibration_blocker(source, inverter) or history is None:
+    if history is None:
         return None
     predictions = {
         hour.start: hour for hour in physical_hours if hour.source_id == source.source_id
@@ -122,13 +143,6 @@ def calibration_factor(rows):
     )
     factor = max(MIN_CALIBRATION_FACTOR, min(MAX_CALIBRATION_FACTOR, factor))
     return factor
-
-
-def learning_blocker(source, inverter):
-    """Require explicit historical control evidence without inferring available hybrid DC."""
-    if inverter.hybrid and source.measurement_boundary == "ac":
-        return "hybrid_route_history_required"
-    return None
 
 
 def unrestricted_interval(source, start, end, feedback=None):

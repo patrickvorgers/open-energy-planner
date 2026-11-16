@@ -12,7 +12,7 @@ from open_energy_planner.solar.curtailment import (
     parse_feedback,
     save_feedback,
 )
-from open_energy_planner.solar.learning import learning_blocker, unrestricted_interval
+from open_energy_planner.solar.learning import unrestricted_interval
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import configuration_document, parse_configuration
@@ -25,7 +25,6 @@ def test_switchable_source_without_feedback_uses_its_history():
     """Control permission alone does not exclude production from learning or scoring."""
     configuration = plant()
     source = replace(configuration.sources[0], can_curtail=True)
-    assert learning_blocker(source, configuration.inverters[0]) is None
     assert unrestricted_interval(source, START, START + timedelta(hours=1))
 
 

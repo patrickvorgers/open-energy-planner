@@ -53,7 +53,7 @@ and the notification clears only when one is available.
 
 When Home Assistant Energy links supported Forecast.Solar panel metadata to the production meter, those panel groups are read-only in OEP. The link supplies geometry, not automatic permission to change the physical inverter's rating. With a confirmed absent link, manual geometry can be edited. A temporary discovery failure must not be mistaken for removal of that ownership.
 
-Available solar DC energy and measured inverter AC production are different quantities. Conversion losses, clipping, curtailment and hybrid battery flows can prevent a direct comparison. Do not infer forecast failure from two values that use different measurement boundaries.
+Solar production meters imported from Home Assistant Energy measure only solar production, including groups on hybrid or shared inverters. They can support learning and accuracy comparisons at their declared AC or DC boundary. Available solar DC energy and measured AC production remain different quantities. Conversion losses, actual curtailment and clipping still affect comparability. If groups share an inverter, their combined AC production determines whether the inverter limit was reached. Missing group readings leave the affected comparison unavailable. Other usable hours and the planning forecast remain available. Do not infer forecast failure from values at different measurement boundaries.
 
 Each solar source can use **PVWatts**, **Machine learning** or **Home Assistant**. These
 are independent production predictions. PVWatts uses the installation geometry
@@ -173,8 +173,8 @@ recovered evidence. Background capture can continue while it is empty.
 
 Feedback is independent of **Allow proposed solar on/off commands**. It can
 describe curtailment by another automation even when planner commands are not
-enabled. Linking feedback does not control equipment. Hybrid and shared-inverter
-measurement boundaries retain their separate comparability requirements.
+enabled. Linking feedback does not control equipment. Hybrid or shared inverter
+topology alone does not exclude a solar production meter from learning or scoring.
 
 The forecast model is labelled **Machine learning**. The implementation uses
 XGBoost on the CPU. A successful historical forecast assessment can activate it
