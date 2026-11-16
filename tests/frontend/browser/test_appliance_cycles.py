@@ -89,9 +89,7 @@ def test_planning_links_select_device_and_insights_retain_unshiftable_history(ap
     expect(page.get_by_role("button", name="Next", exact=True)).to_be_focused()
     expect(page.locator("#detected-cycles > li")).to_have_count(25)
     page.locator("#profile-device").select_option("sensor.washer")
-    expect(page.locator("#profile-history")).to_contain_text(
-        "This does not discard the retained model"
-    )
+    expect(page.locator("#profile-history")).to_contain_text("The learned profile is retained")
     expect(page.locator("#profile-history")).to_contain_text("Fine cycles in model")
     expect(page.locator("#cycle-charts")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -204,9 +202,143 @@ def test_poll_updates_evidence_without_closing_or_defocusing_cycle(review_eviden
     with page.expect_response("**/v1/appliances"):
         page.clock.fast_forward(10000)
     expect(page.locator("#profile-history")).to_contain_text("0.50 kWh measured")
+    expect(
+        page.locator("#profile-history > p").filter(has_text="0.50 kWh measured")
+    ).to_be_visible()
     expect(first.locator("summary")).to_contain_text("1.23 kWh")
     expect(first).to_have_attribute("open", "")
     expect(first.locator("summary")).to_be_focused()
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1440, "height": 1024}, {"width": 390, "height": 844}], indirect=True
+)
+def test_page_selection_controls_profile_and_right_hand_history(review_evidence):
+    """Page selection stays above stacked charts and responsive history preserves open learning on refresh."""
+    page, devices, _ = review_evidence
+    expect(page.locator("#profile-title")).to_have_text("Washer")
+    expect(page.locator("#profile-summary")).to_have_text("0.30 kWh per cycle: 45 minutes")
+    selector = page.get_by_label("Appliance", exact=True).bounding_box()
+    profile = page.get_by_role("heading", name="Average cycle profile", exact=True).bounding_box()
+    history = page.get_by_role("heading", name="Detected cycles", exact=True).bounding_box()
+    power = page.locator("#cycle-chart").bounding_box()
+    energy = page.locator("#cycle-energy-chart").bounding_box()
+    assert selector["y"] + selector["height"] <= profile["y"]
+    assert energy["y"] >= power["y"] + power["height"]
+    if page.viewport_size["width"] > 1100:
+        assert history["x"] > power["x"] + power["width"]
+        assert abs(history["y"] - profile["y"]) < 2
+    else:
+        assert history["y"] > energy["y"] + energy["height"]
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    learning = page.locator("#learning-history")
+    expect(learning).not_to_have_attribute("open", "")
+    learning.locator("summary").click()
+    chart_identity = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
+    devices[0]["learning_weight"] = 12.5
+    with page.expect_response("**/v1/appliances"):
+        page.clock.fast_forward(10000)
+    expect(learning).to_have_attribute("open", "")
+    expect(learning.locator("summary")).to_be_focused()
+    expect(learning).to_contain_text("12.50 at latest cycle")
+    assert (
+        page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
+        == chart_identity
+    )
+    page.get_by_label("Appliance", exact=True).select_option("sensor.dryer")
+    expect(page.locator("#profile-title")).to_have_text("Dryer")
+    expect(learning).not_to_have_attribute("open", "")
+    expect(learning).not_to_contain_text("12.50 at latest cycle")
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_waiting_profile_keeps_learning_and_recorded_evidence_available(review_evidence):
+    """A device without a learned profile still completes rendering and exposes its retained evidence."""
+    page, devices, _ = review_evidence
+    devices[0]["profile"] = None
+    devices[0]["history_import"] = {"phase": "processing"}
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    expect(page.locator("#profile-kind")).to_have_text("Waiting for learning")
+    expect(page.locator("#profile-summary")).to_be_hidden()
+    expect(page.locator("#profile-note")).to_contain_text("Use the appliance normally")
+    expect(page.locator("#cycle-charts")).to_be_hidden()
+    learning = page.get_by_text("Learning and usable history", exact=True)
+    expect(learning).to_be_visible()
+    learning.click()
+    expect(page.locator("#learning-history")).to_contain_text("Processing hourly history")
+    expect(page.locator("#status")).to_have_text("Connected")
+    expect(page.get_by_text("Recorded cycle measurements", exact=True)).to_be_visible()
+    devices[0]["power_entity"] = None
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    expect(page.locator("#profile-note")).to_have_text(
+        "Link a power sensor in Home Assistant Energy to start learning."
+    )
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+@pytest.mark.parametrize(
+    "evidence,basis,label,note",
+    [
+        (
+            "measured",
+            "statistics",
+            "Historical estimate",
+            "Historical data cannot confirm continuous reporting.",
+        ),
+        ("measured", "observed", "Followed profile", ""),
+        (
+            "hourly_estimate",
+            "statistics",
+            "Historical estimate",
+            "Cycle timing is approximate. Finer measurements will refine it.",
+        ),
+        ("manual", None, "Manual estimate", "Energy is spread evenly over the entered duration."),
+        ("synthetic", None, "Simulated profile", ""),
+    ],
+)
+def test_cycle_summary_keeps_decisions_visible_and_technical_evidence_collapsed(
+    review_evidence, evidence, basis, label, note
+):
+    """Profile provenance and limitations stay readable while model counts and explanations require expansion."""
+    page, devices, _ = review_evidence
+    devices[0]["profile"] = {**devices[0]["profile"], "evidence": evidence}
+    devices[0]["profile_basis"] = basis
+    devices[0]["learning_half_life_days"] = 90
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    expect(page.locator("#profile-kind")).to_have_text(label)
+    expect(page.locator("#profile-note")).to_have_text(note)
+    if note:
+        expect(page.locator("#profile-note")).to_be_visible()
+    else:
+        expect(page.locator("#profile-note")).to_be_hidden()
+    expect(page.get_by_text("Fine cycles in model", exact=True)).to_be_hidden()
+    expect(page.get_by_text("Model evidence", exact=True)).to_be_hidden()
+    expect(page.locator("#profile-history")).not_to_contain_text("completed measured cycles")
+    page.get_by_text("Learning and usable history", exact=True).click()
+    expect(page.get_by_text("Fine cycles in model", exact=True)).to_be_visible()
+    expect(page.locator("#learning-history")).to_contain_text("90-day half-life")
+    expect(page.locator("#profile-summary")).to_contain_text("0.30 kWh per cycle")
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_simulated_hourly_profile_and_planning_warning_stay_explicit(review_evidence):
+    """Collapsing technical evidence never conceals simulated input or an actionable planning limitation."""
+    page, devices, _ = review_evidence
+    devices[0]["profile"] = {**devices[0]["profile"], "evidence": "hourly_estimate"}
+    devices[0]["hourly_synthetic"] = True
+    devices[0]["planning_issue"] = "Link a power sensor in Home Assistant Energy."
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    expect(page.locator("#profile-kind")).to_have_text("Simulated hourly estimate")
+    expect(
+        page.get_by_text("Link a power sensor in Home Assistant Energy.", exact=True)
+    ).to_be_visible()
+    expect(page.locator("#learning-history")).not_to_have_attribute("open", "")
 
 
 @pytest.mark.parametrize(
