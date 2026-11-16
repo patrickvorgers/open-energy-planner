@@ -172,7 +172,7 @@ def test_old_formal_change_request_does_not_prevent_fresh_review():
                 "totalCount": 1,
                 "nodes": [
                     {
-                        "databaseId": 17,
+                        "id": "PRR_17",
                         "state": "CHANGES_REQUESTED",
                         "author": {
                             "__typename": "Bot",

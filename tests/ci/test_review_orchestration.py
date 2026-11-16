@@ -290,7 +290,7 @@ def test_old_formal_objection_allows_fresh_provider_review_but_keeps_ready_block
                                 "totalCount": 1,
                                 "nodes": [
                                     {
-                                        "databaseId": 17,
+                                        "id": "PRR_17",
                                         "state": "CHANGES_REQUESTED",
                                         "author": {
                                             "__typename": "Bot",

@@ -14,7 +14,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
       state headRefOid baseRefOid reviewDecision
       latestOpinionatedReviews(first: 100, after: $cursor, writersOnly: false) {
         totalCount
-        nodes { databaseId state author { __typename login ... on Node { id } } }
+        nodes { id state author { __typename login ... on Node { id } } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -96,13 +96,13 @@ def require_clear_formal_reviews(repository, number, head, base, client):
             for review in rows:
                 if (
                     not isinstance(review, dict)
-                    or type(review.get("databaseId")) is not int
-                    or review["databaseId"] <= 0
-                    or review["databaseId"] in seen
+                    or not isinstance(review.get("id"), str)
+                    or not review["id"]
+                    or review["id"] in seen
                     or review.get("state") not in states
                 ):
                     raise VerificationError("Invalid or duplicate formal review evidence")
-                seen.add(review["databaseId"])
+                seen.add(review["id"])
                 author = review.get("author")
                 if (
                     not isinstance(author, dict)
@@ -117,7 +117,7 @@ def require_clear_formal_reviews(repository, number, head, base, client):
                 reviewers.add(author["id"])
                 if review["state"] == "CHANGES_REQUESTED":
                     raise VerificationError(
-                        f"Outstanding CHANGES_REQUESTED review {review['databaseId']}. "
+                        f"Outstanding CHANGES_REQUESTED review {review['id']}. "
                         "Keep Draft and follow the individual review-disposition procedure"
                     )
             if decision == "CHANGES_REQUESTED":

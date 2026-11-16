@@ -37,7 +37,7 @@ def review_page(reviews=(), *, more=False, cursor=None, total=None):
                                 **review,
                                 "author": {
                                     "__typename": "Bot",
-                                    "id": f"actor-{review['databaseId']}",
+                                    "id": f"actor-{review['id']}",
                                     "login": "synthetic-reviewer",
                                     **review.get("author", {}),
                                 },
@@ -80,14 +80,14 @@ def test_formal_objection_blocks_green_candidate_despite_later_comment(candidate
     event, current, checks = candidate
     event["action"] = action
     reviews = [
-        {"databaseId": 17, "state": "CHANGES_REQUESTED", "author": {"login": reviewer}},
+        {"id": "PRR_17", "state": "CHANGES_REQUESTED", "author": {"login": reviewer}},
     ]
     response = review_page(reviews)
     response["data"]["repository"]["pullRequest"]["reviews"] = {
-        "nodes": [*reviews, {"databaseId": 18, "state": "COMMENTED", "author": {"login": reviewer}}]
+        "nodes": [*reviews, {"id": "PRR_18", "state": "COMMENTED", "author": {"login": reviewer}}]
     }
     client = FormalEvidence(current, checks, [response])
-    with pytest.raises(VerificationError, match="CHANGES_REQUESTED review 17"):
+    with pytest.raises(VerificationError, match="CHANGES_REQUESTED review PRR_17"):
         admit_candidate(event, REPOSITORY, client)
 
 
@@ -98,15 +98,15 @@ def test_native_effective_reviews_preserve_approval_comment_and_independent_acto
 ):
     """GitHub's effective opinion accepts later approval or dismissal but preserves comments and other objections."""
     event, current, checks = candidate
-    original = {"databaseId": 17, "state": "CHANGES_REQUESTED"}
-    later = {"databaseId": 18, "state": later_state}
+    original = {"id": "PRR_17", "state": "CHANGES_REQUESTED"}
+    later = {"id": "PRR_18", "state": later_state}
     effective = original if later_state == "COMMENTED" else later
     response = review_page([effective])
     pull_request = response["data"]["repository"]["pullRequest"]
     pull_request["reviews"] = {"nodes": [original, later]}
     if human_objection:
         human_review = {
-            "databaseId": 19,
+            "id": "PRR_19",
             "state": "CHANGES_REQUESTED",
             "author": {"id": "human-actor", "__typename": "User", "login": "human-reviewer"},
         }
@@ -127,7 +127,7 @@ def test_dependabot_exception_does_not_erase_formal_objections(candidate):
     client = FormalEvidence(
         current,
         checks[:2] + checks[3:],
-        [review_page([{"databaseId": 17, "state": "CHANGES_REQUESTED"}])],
+        [review_page([{"id": "PRR_17", "state": "CHANGES_REQUESTED"}])],
     )
     with pytest.raises(VerificationError, match="CHANGES_REQUESTED"):
         admit_candidate(event, REPOSITORY, client)
@@ -141,7 +141,7 @@ def test_individually_dismissed_history_is_read_only_and_repeatable(candidate):
         checks,
         [
             review_page(
-                [{"databaseId": 17, "state": "DISMISSED"}, {"databaseId": 18, "state": "COMMENTED"}]
+                [{"id": "PRR_17", "state": "DISMISSED"}, {"id": "PRR_18", "state": "COMMENTED"}]
             )
         ],
     )
@@ -153,13 +153,11 @@ def test_formal_objection_on_later_page_cannot_hide_behind_approval():
     """Read every page even when initial reviews are approved or dismissed."""
     client = FormalEvidence(
         pages=[
-            review_page(
-                [{"databaseId": 17, "state": "APPROVED"}], more=True, cursor="next", total=2
-            ),
-            review_page([{"databaseId": 18, "state": "CHANGES_REQUESTED"}], total=2),
+            review_page([{"id": "PRR_17", "state": "APPROVED"}], more=True, cursor="next", total=2),
+            review_page([{"id": "PRR_18", "state": "CHANGES_REQUESTED"}], total=2),
         ]
     )
-    with pytest.raises(VerificationError, match="review 18"):
+    with pytest.raises(VerificationError, match="review PRR_18"):
         require_clear_formal_reviews(REPOSITORY, 12, HEAD, BASE, client)
     assert [query["variables"]["cursor"] for query in client.queries] == [None, "next"]
 
@@ -169,11 +167,11 @@ def test_complete_paginated_history_allows_resolved_formal_states():
     client = FormalEvidence(
         pages=[
             review_page(
-                [{"databaseId": 17, "state": "DISMISSED"}], more=True, cursor="next", total=4
+                [{"id": "PRR_17", "state": "DISMISSED"}], more=True, cursor="next", total=4
             ),
             review_page(
                 [
-                    {"databaseId": index, "state": state}
+                    {"id": f"PRR_{index}", "state": state}
                     for index, state in [(18, "COMMENTED"), (19, "APPROVED"), (20, "PENDING")]
                 ],
                 total=4,
@@ -206,7 +204,7 @@ def test_complete_paginated_history_allows_resolved_formal_states():
 )
 def test_unavailable_or_ambiguous_formal_evidence_blocks(fault):
     """Identity drift, incomplete pages, malformed reviews and API errors never pass admission."""
-    response = review_page([{"databaseId": 17, "state": "COMMENTED"}])
+    response = review_page([{"id": "PRR_17", "state": "COMMENTED"}])
     current = response["data"]["repository"]["pullRequest"]
     reviews = current["latestOpinionatedReviews"]
     if fault in {"head", "base"}:
@@ -227,7 +225,7 @@ def test_unavailable_or_ambiguous_formal_evidence_blocks(fault):
         reviews["nodes"] *= 2
         reviews["totalCount"] = 2
     elif fault == "id":
-        reviews["nodes"][0]["databaseId"] = True
+        reviews["nodes"][0]["id"] = True
     elif fault == "state":
         reviews["nodes"][0]["state"] = "unknown"
     elif fault == "author":
@@ -248,11 +246,9 @@ def test_unavailable_or_ambiguous_formal_evidence_blocks(fault):
 )
 def test_formal_review_pagination_detects_races_and_nontermination(monkeypatch, fault):
     """A changed revision, changing history, duplicate review or looping cursor blocks safely."""
-    first = review_page(
-        [{"databaseId": 17, "state": "COMMENTED"}], more=True, cursor="next", total=3
-    )
+    first = review_page([{"id": "PRR_17", "state": "COMMENTED"}], more=True, cursor="next", total=3)
     second = review_page(
-        [{"databaseId": 18, "state": "COMMENTED"}], more=True, cursor="after", total=3
+        [{"id": "PRR_18", "state": "COMMENTED"}], more=True, cursor="after", total=3
     )
     current = second["data"]["repository"]["pullRequest"]
     if fault in {"head", "base"}:
@@ -260,9 +256,9 @@ def test_formal_review_pagination_detects_races_and_nontermination(monkeypatch, 
     elif fault == "count":
         current["latestOpinionatedReviews"]["totalCount"] = 4
     elif fault == "duplicate":
-        current["latestOpinionatedReviews"]["nodes"][0]["databaseId"] = 17
+        current["latestOpinionatedReviews"]["nodes"][0]["id"] = "PRR_17"
     elif fault == "reviewer":
-        current["latestOpinionatedReviews"]["nodes"][0]["author"]["id"] = "actor-17"
+        current["latestOpinionatedReviews"]["nodes"][0]["author"]["id"] = "actor-PRR_17"
     elif fault == "cycle":
         current["latestOpinionatedReviews"]["pageInfo"]["endCursor"] = "next"
     else:
@@ -282,7 +278,7 @@ def test_pre_ready_and_premerge_snapshot_rechecks_live_objections(candidate, fau
     if fault in {"head", "base"}:
         final["data"]["repository"]["pullRequest"][f"{fault}RefOid"] = "3" * 40
     elif fault == "objection":
-        final = review_page([{"databaseId": 19, "state": "CHANGES_REQUESTED"}])
+        final = review_page([{"id": "PRR_19", "state": "CHANGES_REQUESTED"}])
     elif fault == "provider":
         checks[2]["output"]["title"] = "Review skipped"
     elif fault == "identity":
@@ -358,3 +354,81 @@ def test_review_snapshot_workflow_never_executes_public_pr_code_or_mutates_revie
     assert "write" not in workflow
     assert "secrets." not in workflow
     assert "head.sha" not in workflow
+
+
+@pytest.mark.parametrize(
+    "legacy_fields",
+    [
+        {},
+        {"databaseId": None},
+        {"databaseId": None, "fullDatabaseId": 9223372036854775807},
+        {"databaseId": 2147483647},
+        {"databaseId": 2147483648},
+    ],
+    ids=["omitted", "null", "64-bit", "32-bit-boundary", "above-32-bit"],
+)
+def test_nonnull_review_node_id_accepts_approval_without_legacy_database_identity(legacy_fields):
+    """A valid effective approval uses its required node ID despite missing or 64-bit legacy metadata."""
+    response = review_page()
+    response["data"]["repository"]["pullRequest"]["latestOpinionatedReviews"].update(
+        totalCount=1,
+        nodes=[
+            {
+                "id": "PRR_effective_approval",
+                "state": "APPROVED",
+                "author": {"__typename": "User", "id": "actor-approval", "login": "reviewer"},
+                **legacy_fields,
+            }
+        ],
+    )
+    require_clear_formal_reviews(REPOSITORY, 12, HEAD, BASE, FormalEvidence(pages=[response]))
+
+
+@pytest.mark.parametrize(
+    "review_identity",
+    [
+        {},
+        {"id": None},
+        {"id": True},
+        {"id": False},
+        {"id": 17},
+        {"id": 9223372036854775807},
+        {"id": ""},
+    ],
+    ids=["missing", "null", "true", "false", "integer", "64-bit-integer", "empty"],
+)
+def test_missing_or_nonstring_review_node_id_blocks_even_with_valid_legacy_id(review_identity):
+    """A legacy numeric ID cannot conceal an absent or malformed required review node identity."""
+    response = review_page()
+    response["data"]["repository"]["pullRequest"]["latestOpinionatedReviews"].update(
+        totalCount=1,
+        nodes=[
+            {
+                "databaseId": 23,
+                "state": "APPROVED",
+                "author": {"__typename": "User", "id": "actor-approval", "login": "reviewer"},
+                **review_identity,
+            }
+        ],
+    )
+    with pytest.raises(VerificationError, match="formal review evidence"):
+        require_clear_formal_reviews(REPOSITORY, 12, HEAD, BASE, FormalEvidence(pages=[response]))
+
+
+def test_duplicate_review_node_id_across_distinct_actors_is_ambiguous():
+    """Distinct legacy IDs and reviewers cannot make a duplicate GraphQL review identity trustworthy."""
+    response = review_page()
+    response["data"]["repository"]["pullRequest"]["latestOpinionatedReviews"].update(
+        totalCount=2,
+        nodes=[
+            {
+                "id": "PRR_duplicate",
+                "databaseId": legacy_id,
+                "state": "APPROVED",
+                "author": {"__typename": "User", "id": actor, "login": actor},
+            }
+            for legacy_id, actor in [(23, "first-reviewer"), (24, "second-reviewer")]
+        ],
+    )
+    with pytest.raises(VerificationError, match="formal review evidence"):
+        require_clear_formal_reviews(REPOSITORY, 12, HEAD, BASE, FormalEvidence(pages=[response]))
