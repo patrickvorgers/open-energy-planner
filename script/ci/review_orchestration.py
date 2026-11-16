@@ -8,18 +8,24 @@ findings, marks a PR Ready or executes contributor code.
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from os import environ
 from pathlib import Path
 
 from script.ci.check_ci_candidate import (
     CODERABBIT_APP_ID,
+    CODEX_APP_ID,
+    GREPTILE_APP_ID,
     KODY_APP_ID,
     changed_files,
+    codex_review_state,
     current_checks,
+    greptile_completed_check,
     latest_check,
     require_automated_review,
     require_included_base,
     require_prerequisites,
+    review_comments,
 )
 from script.ci.check_commit_signatures import GitHub, VerificationError, sha
 from script.ci.pr_readiness import require_clear_formal_reviews, require_resolved_threads
@@ -39,7 +45,7 @@ REPLY_TIMEOUT = timedelta(minutes=15)
 REVIEW_TIMEOUT = timedelta(hours=2)
 REQUEST_TIMEOUT = timedelta(days=7)
 TERMINAL = {"complete", "blocked", "superseded"}
-PHASES = TERMINAL | {"sending", "quota", "coderabbit", "kody", "waiting"}
+PHASES = TERMINAL | {"sending", "quota", "coderabbit", "greptile", "kody", "codex", "waiting"}
 PUBLIC_FAILURE_MESSAGES = {
     "requester": "The original review request or its requester authority could not be verified. Check the request comment and the requester's current PR authorship or repository write access, then request review again.",
     "publisher": "The provider command account could not be verified. Ask a repository administrator to check the OEP_REVIEW_COMMAND_TOKEN secret and its repository access before requesting review again.",
@@ -48,9 +54,17 @@ PUBLIC_FAILURE_MESSAGES = {
     "quota": "CodeRabbit availability could not be verified. Inspect the quota reply and workflow before any retry.",
     "coderabbit": "CodeRabbit completion could not be verified. Inspect its check and findings before any retry.",
     "kody": "Kody completion could not be verified. Inspect its check and findings before any retry.",
+    "greptile": "Greptile completion could not be verified. Inspect its check, published summary and findings before any retry.",
+    "codex": "Codex completion could not be verified. Inspect its published code-review state and account allowance before any retry.",
     "waiting": "CodeRabbit retry evidence could not be verified. Inspect the reported retry time before any retry.",
     "retry": "CodeRabbit supplied no usable retry time. Inspect its quota reply before requesting another review.",
 }
+PROVIDER_BOT_LOGINS = (
+    "coderabbitai[bot]",
+    "greptile-apps[bot]",
+    "kody-ai[bot]",
+    "chatgpt-codex-connector[bot]",
+)
 ADD_COMMENT = """
 mutation($subject: ID!, $body: String!, $key: String!) {
   addComment(input: {subjectId: $subject, body: $body, clientMutationId: $key}) {
@@ -112,24 +126,7 @@ def is_bot(comment, login):
 
 def comments_for(repository, number, client):
     """Read complete bounded comment history, rejecting duplicate or incomplete metadata."""
-    comments = []
-    for page in range(1, MAX_PAGES + 1):
-        rows = client.get_list(
-            f"repos/{repository}/issues/{number}/comments?per_page=100&page={page}"
-        )
-        if len(rows) > 100 or any(
-            not isinstance(row, dict)
-            or type(row.get("id")) is not int
-            or not isinstance(row.get("body"), str)
-            for row in rows
-        ):
-            raise VerificationError("Invalid review comment evidence")
-        comments.extend(rows)
-        if len({row["id"] for row in comments}) != len(comments):
-            raise VerificationError("Duplicate review comment evidence")
-        if len(rows) < 100:
-            return comments
-    raise VerificationError("Review comment history exceeds the page limit")
+    return review_comments(repository, number, client)
 
 
 def read_state(comments):
@@ -150,7 +147,7 @@ def read_state(comments):
         if (
             not isinstance(state, dict)
             or state.get("phase") not in PHASES
-            or state.get("target") not in {"quota", "coderabbit", "kody"}
+            or state.get("target") not in {"quota", "coderabbit", "greptile", "kody", "codex"}
             or any(
                 type(state.get(field)) is not int or state[field] < 0
                 for field in (
@@ -164,15 +161,28 @@ def read_state(comments):
                 )
             )
             or type(state.get("kody_used")) is not bool
+            or any(
+                type(state.get(field, False)) is not bool
+                for field in ("greptile_used", "codex_used")
+            )
             or state["queries"] > MAX_QUOTA_QUERIES
             or state["reviews"] > MAX_CODERABBIT_REQUESTS
             or state["consumed"] < state["request"]
+            or (
+                "feedback_digest" in state
+                and (
+                    not isinstance(state["feedback_digest"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", state["feedback_digest"]) is None
+                )
+            )
             or (
                 "publisher_id" in state
                 and (type(state["publisher_id"]) is not int or state["publisher_id"] <= 0)
             )
         ):
             raise VerificationError("Invalid durable review state")
+        state.setdefault("greptile_used", False)
+        state.setdefault("codex_used", False)
         sha(state["head"])
         sha(state["base"])
         for field in ("started", "sent"):
@@ -300,10 +310,72 @@ def quota_reply(body, created):
 def provider_active(checks):
     """Recognize current-head in-flight provider work before any additional command."""
     return any(
-        row.get("app", {}).get("id") in {CODERABBIT_APP_ID, KODY_APP_ID}
+        row.get("app", {}).get("id")
+        in {CODERABBIT_APP_ID, GREPTILE_APP_ID, KODY_APP_ID, CODEX_APP_ID}
         and row.get("status") != "completed"
         for row in checks
     )
+
+
+def feedback_digest(comments):
+    """Fingerprint bounded provider publications without storing their bodies in durable state.
+
+    Include edit metadata and content so an older comment edited in place cannot
+    bypass the guard, even within GitHub's timestamp resolution. Missing or
+    inconsistent publication timestamps require inspection rather than fallback.
+    """
+    digest = sha256()
+    for comment in sorted(comments, key=lambda row: row["id"]):
+        if not any(is_bot(comment, login) for login in PROVIDER_BOT_LOGINS):
+            continue
+        try:
+            created = instant(comment["created_at"])
+            updated = instant(comment["updated_at"])
+        except (KeyError, TypeError, ValueError):
+            raise VerificationError("Provider comment edit evidence is unavailable") from None
+        if updated < created:
+            raise VerificationError("Provider comment edit evidence is inconsistent")
+        digest.update(
+            json.dumps(
+                [comment["id"], comment["body"], created.isoformat(), updated.isoformat()]
+            ).encode("utf-8")
+        )
+    return digest.hexdigest()
+
+
+def require_no_unclassified_feedback(repository, number, state, comments, client):
+    """Stop technical fallback when new provider feedback needs operator evaluation.
+
+    A terminal check is not proof that no partial review or outside-diff finding
+    was published. Do not infer disposition from comment text or resolved flags.
+    """
+    if state.get("feedback_digest") != feedback_digest(comments):
+        raise VerificationError("Provider feedback needs evaluation before any fallback")
+    seen = set()
+    for page in range(1, MAX_PAGES + 1):
+        rows = client.get_list(
+            f"repos/{repository}/pulls/{number}/reviews?per_page=100&page={page}"
+        )
+        if not isinstance(rows, list) or len(rows) > 100:
+            raise VerificationError("Invalid provider review history")
+        for row in rows:
+            if not isinstance(row, dict) or type(row.get("id")) is not int or row["id"] in seen:
+                raise VerificationError("Incomplete or duplicate provider review history")
+            seen.add(row["id"])
+            if row.get("commit_id") == state["head"] and any(
+                is_bot(row, login) for login in PROVIDER_BOT_LOGINS
+            ):
+                try:
+                    submitted = instant(row["submitted_at"])
+                except (KeyError, ValueError, TypeError):
+                    raise VerificationError("Provider review publication is uncertain") from None
+                if submitted >= instant(state["sent"]):
+                    raise VerificationError(
+                        "Published provider review needs evaluation before fallback"
+                    )
+        if len(rows) < 100:
+            return
+    raise VerificationError("Provider review history exceeds the page limit")
 
 
 def kody_request_command(checks):
@@ -368,12 +440,64 @@ def command_marker(state):
     return f"<!-- oep-review-command:{state['request']}:{state['sequence']} -->"
 
 
-def send_command(repository, number, state, target, subject, client, now, publisher=None):
+def require_previous_feedback(state, comments, target, availability_reply):
+    """Validate the preceding command's evidence before acknowledging one known quota reply.
+
+    Only that exact, newly published reply may differ from the previous digest.
+    Never absorb concurrent partial feedback into the next command's baseline.
+    """
+    previous_comments = comments
+    if availability_reply is not None:
+        if (
+            state["phase"] not in {"quota", "coderabbit"}
+            or not is_bot(availability_reply, "coderabbitai[bot]")
+            or availability_reply not in comments
+            or availability_reply["id"] <= state["command"]
+            or instant(availability_reply["created_at"]) < instant(state["sent"])
+            or "<!-- This is an auto-generated reply by CodeRabbit -->"
+            not in availability_reply["body"]
+        ):
+            raise VerificationError("Validated CodeRabbit availability reply changed")
+        availability, _ = quota_reply(
+            availability_reply["body"], instant(availability_reply["created_at"])
+        )
+        if (
+            availability not in {"available", "limited"}
+            or {
+                "quota": availability,
+                "coderabbit": "available",
+                "greptile": "limited",
+            }.get(target)
+            != availability
+        ):
+            raise VerificationError("CodeRabbit availability does not authorize this command")
+        previous_comments = [row for row in comments if row["id"] != availability_reply["id"]]
+    if state["sequence"] > 0 and state.get("feedback_digest") != feedback_digest(previous_comments):
+        raise VerificationError("Provider feedback changed since the preceding command")
+
+
+def send_command(
+    repository,
+    number,
+    state,
+    target,
+    subject,
+    client,
+    now,
+    publisher=None,
+    *,
+    availability_reply=None,
+):
     """Record an outbox intent, recheck identities and publish at most one command for that intent."""
     _, checks = require_revision(repository, number, state, client)
     require_resolved_threads(repository, number, client)
     if provider_active(checks):
         raise VerificationError("A provider is still working on this revision")
+    comments = comments_for(repository, number, client)
+    require_previous_feedback(state, comments, target, availability_reply)
+    codex = codex_review_state(comments, state["head"])
+    if codex and codex.get("status") != "completed":
+        raise VerificationError("Codex already has uncompleted work for this revision")
     require_original_requester(repository, number, state, client)
     publisher_id = require_command_account(repository, state, client, publisher)
     if target == "quota":
@@ -386,12 +510,27 @@ def send_command(repository, number, state, target, subject, client, now, publis
             raise VerificationError("CodeRabbit attempts reached the bounded request limit")
         state["reviews"] += 1
         command = f"@coderabbitai review\n<!-- oep-coderabbit-head:{state['head']} -->"
-    else:
+    elif target == "kody":
         if state["kody_used"]:
             raise VerificationError("Kody was already requested for this revision")
         kody_command = kody_request_command(checks)
         state["kody_used"] = True
         command = f"{kody_command}\n<!-- oep-kody-head:{state['head']} -->"
+    elif target in {"greptile", "codex"}:
+        if state[f"{target}_used"]:
+            raise VerificationError("This provider was already requested for this revision")
+        if any(
+            f"<!-- oep-{target}-head:{state['head']} -->" in row["body"].splitlines()
+            for row in comments
+        ):
+            raise VerificationError("This provider already has a same-head request")
+        state[f"{target}_used"] = True
+        provider_command = (
+            "@greptileai review this draft" if target == "greptile" else "@codex review"
+        )
+        command = f"{provider_command}\n<!-- oep-{target}-head:{state['head']} -->"
+    else:
+        raise VerificationError("Unknown review provider")
     state.update(
         phase="sending",
         publisher_id=publisher_id,
@@ -401,9 +540,19 @@ def send_command(repository, number, state, target, subject, client, now, publis
         command=0,
         sent=now.isoformat(),
         message=f"Publishing the {target} request.",
+        feedback_digest=feedback_digest(comments),
     )
     save_state(state, subject, client)
     _, final_checks = require_revision(repository, number, state, client)
+    require_resolved_threads(repository, number, client)
+    if provider_active(final_checks):
+        raise VerificationError("A provider started before command publication")
+    final_comments = comments_for(repository, number, client)
+    final_codex = codex_review_state(final_comments, state["head"])
+    if final_codex and final_codex.get("status") != "completed":
+        raise VerificationError("Codex started before command publication")
+    if feedback_digest(final_comments) != state["feedback_digest"]:
+        raise VerificationError("Provider feedback changed before command publication")
     if target == "kody" and kody_request_command(final_checks) != kody_command:
         raise VerificationError("Kody request evidence changed before publication")
     require_original_requester(repository, number, state, client)
@@ -514,6 +663,8 @@ def start_request(repository, number, command, client, now, publisher=None):
         "queries": 0,
         "reviews": 0,
         "kody_used": False,
+        "greptile_used": False,
+        "codex_used": False,
         "started": now.isoformat(),
         "sent": now.isoformat(),
         "resume": None,
@@ -569,7 +720,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         )
     checks = current_checks(repository, state["head"], client)
     try:
-        require_automated_review(checks)
+        require_automated_review(checks, repository, number, state["head"], client)
     except VerificationError:
         pass
     else:
@@ -615,7 +766,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
     ]
     if any(
         re.search(
-            r"(?m)^@(coderabbitai|kody)\s+(review(?: --force)?|start-review|rate limit)\s*$",
+            r"(?m)^@(?:coderabbitai|kody|codex|greptileai|greptile)(?:\s+(?:review(?: this draft| --force)?|start-review|rate limit))?\s*$",
             row["body"],
         )
         and not is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
@@ -649,14 +800,34 @@ def advance(repository, number, state, comments, client, now, publisher=None):
             if now - instant(reply["created_at"]) > REPLY_TIMEOUT:
                 if provider_active(checks):
                     return
-                send_command(repository, number, state, "quota", subject, client, now, publisher)
+                send_command(
+                    repository,
+                    number,
+                    state,
+                    "quota",
+                    subject,
+                    client,
+                    now,
+                    publisher,
+                    availability_reply=reply,
+                )
                 return
             if availability == "limited":
                 if provider_active(checks):
                     return
                 state["resume"] = resume.isoformat() if resume is not None else None
-                if not state["kody_used"]:
-                    send_command(repository, number, state, "kody", subject, client, now, publisher)
+                if not state["greptile_used"] and not state["kody_used"]:
+                    send_command(
+                        repository,
+                        number,
+                        state,
+                        "greptile",
+                        subject,
+                        client,
+                        now,
+                        publisher,
+                        availability_reply=reply,
+                    )
                 elif resume is not None:
                     state.update(
                         phase="waiting",
@@ -672,7 +843,15 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                         "Unknown CodeRabbit availability. No provider was selected"
                     )
                 send_command(
-                    repository, number, state, "coderabbit", subject, client, now, publisher
+                    repository,
+                    number,
+                    state,
+                    "coderabbit",
+                    subject,
+                    client,
+                    now,
+                    publisher,
+                    availability_reply=reply,
                 )
                 return
         if state["phase"] == "quota":
@@ -681,8 +860,17 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                     "CodeRabbit availability reply timed out. No fallback was inferred"
                 )
             return
-    provider_name = "Kody Code Review" if state["phase"] == "kody" else "CodeRabbit"
-    provider_app_id = KODY_APP_ID if state["phase"] == "kody" else CODERABBIT_APP_ID
+    if state["phase"] == "codex":
+        if now - instant(state["sent"]) > REVIEW_TIMEOUT:
+            raise VerificationError(
+                "Codex completion is uncertain. Inspect its published review state"
+            )
+        return
+    provider_name, provider_app_id = {
+        "kody": ("Kody Code Review", KODY_APP_ID),
+        "greptile": ("Greptile Review", GREPTILE_APP_ID),
+        "coderabbit": ("CodeRabbit", CODERABBIT_APP_ID),
+    }[state["phase"]]
     provider = latest_check(checks, provider_name, provider_app_id)
     if provider is None:
         # Matching-name metadata was already excluded by latest_check.
@@ -702,20 +890,36 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         and provider.get("status") == "completed"
     ):
         output = provider.get("output") or {}
-        if state["phase"] == "kody" and (
-            provider.get("conclusion") == "timed_out"
-            or (
-                provider.get("conclusion") == "failure"
-                and output.get("title") == "Code Review Failed"
+        if (
+            state["phase"] in {"coderabbit", "greptile"}
+            and provider.get("name") == provider_name
+            and provider.get("conclusion") == "timed_out"
+        ):
+            require_no_unclassified_feedback(repository, number, state, comments, client)
+            require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
+            target = "greptile" if state["phase"] == "coderabbit" else "kody"
+            send_command(repository, number, state, target, subject, client, now, publisher)
+            return
+        if (
+            state["phase"] == "kody"
+            and provider.get("name") == provider_name
+            and (
+                provider.get("conclusion") == "timed_out"
+                or (
+                    provider.get("conclusion") == "failure"
+                    and output.get("title") == "Code Review Failed"
+                )
             )
         ):
-            if state["resume"] is None:
-                return block_request(state, subject, client, category="retry")
-            state.update(
-                phase="waiting",
-                message=f"Kody failed technically. Recheck CodeRabbit at {state['resume']}.",
-            )
-            save_state(state, subject, client)
+            require_no_unclassified_feedback(repository, number, state, comments, client)
+            require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
+            send_command(repository, number, state, "codex", subject, client, now, publisher)
+            return
+        if (
+            state["phase"] == "greptile"
+            and greptile_completed_check(checks)
+            and now - instant(state["sent"]) <= REVIEW_TIMEOUT
+        ):
             return
         raise VerificationError(
             "Provider ended without substantive completion. Inspect its result and findings"
@@ -817,13 +1021,17 @@ def main():
         now = datetime.now(UTC)
         event_name = environ["GITHUB_EVENT_NAME"]
         if event_name == "issue_comment":
-            if event.get("action") != "created" or not event.get("issue", {}).get("pull_request"):
+            if event.get("action") not in {"created", "edited"} or not event.get("issue", {}).get(
+                "pull_request"
+            ):
                 return 0
             comment = event["comment"]
             number = event["issue"]["number"]
-            explicit = comment.get("body", "").strip() == REVIEW_COMMAND
+            explicit = (
+                event["action"] == "created" and comment.get("body", "").strip() == REVIEW_COMMAND
+            )
             if (
-                explicit or is_bot(comment, "coderabbitai[bot]") or is_bot(comment, "kody-ai[bot]")
+                explicit or any(is_bot(comment, login) for login in PROVIDER_BOT_LOGINS)
             ) and process_pr(
                 repository, number, client, now, comment["id"] if explicit else None, publisher
             ) is False:
@@ -831,7 +1039,7 @@ def main():
         elif event_name in {"schedule", "workflow_dispatch", "check_run"}:
             if event_name == "check_run" and event.get("check_run", {}).get("app", {}).get(
                 "id"
-            ) not in {CODERABBIT_APP_ID, KODY_APP_ID}:
+            ) not in {CODERABBIT_APP_ID, GREPTILE_APP_ID, KODY_APP_ID, CODEX_APP_ID}:
                 return 0
             failed = False
             for page in range(1, MAX_PAGES + 1):

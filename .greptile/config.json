@@ -1,0 +1,11 @@
+{
+  "autoReview": [],
+  "effort": "base",
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "shouldUpdateDescription": false,
+  "hideFooter": false,
+  "autoApprove": {
+    "enabled": false
+  }
+}

@@ -15,6 +15,11 @@ MAX_CHECK_PAGES = 10
 GITHUB_ACTIONS_APP_ID = 15368
 CODERABBIT_APP_ID = 347564
 KODY_APP_ID = 413034
+GREPTILE_APP_ID = 867647
+GREPTILE_BOT_ID = 165735046
+CODEX_APP_ID = 1144995
+CODEX_BOT_ID = 199175422
+MAX_CODEX_STATE_CHARACTERS = 10000
 CODEQL_APP_ID = 57789
 MAX_PR_FILES = 150
 PREREQUISITE_CHECKS = (
@@ -163,8 +168,124 @@ def require_coderabbit_review(checks):
         )
 
 
-def require_automated_review(checks):
-    """Accept substantive current-head CodeRabbit or Kody evidence from the actual provider app.
+def review_comments(repository, number, client):
+    """Read complete bounded PR comments before trusting a provider's publication evidence."""
+    comments = []
+    for page in range(1, MAX_CHECK_PAGES + 1):
+        rows = client.get_list(
+            f"repos/{repository}/issues/{number}/comments?per_page=100&page={page}"
+        )
+        if (
+            not isinstance(rows, list)
+            or len(rows) > CHECKS_PER_PAGE
+            or any(
+                not isinstance(row, dict)
+                or type(row.get("id")) is not int
+                or row["id"] <= 0
+                or not isinstance(row.get("body"), str)
+                for row in rows
+            )
+        ):
+            raise VerificationError("Invalid review comment evidence")
+        comments.extend(rows)
+        if len({row["id"] for row in comments}) != len(comments):
+            raise VerificationError("Duplicate review comment evidence")
+        if len(rows) < CHECKS_PER_PAGE:
+            return comments
+    raise VerificationError("Review comment history exceeds the page limit")
+
+
+def provider_comment(comment, login, bot_id, app_id):
+    """Authenticate provider publications using both numeric bot and GitHub App identities."""
+    user = comment.get("user")
+    app = comment.get("performed_via_github_app")
+    return (
+        isinstance(user, dict)
+        and user.get("type") == "Bot"
+        and user.get("login") == login
+        and user.get("id") == bot_id
+        and isinstance(app, dict)
+        and app.get("id") == app_id
+    )
+
+
+def codex_review_state(comments, head):
+    """Read Codex's published code-review state, never treating reactions as completion.
+
+    Security-review state is a separate product and does not satisfy this gate.
+    Findings remain subject to thread, formal-review and operator disposition.
+    """
+    summaries = [
+        row
+        for row in comments
+        if provider_comment(row, "chatgpt-codex-connector[bot]", CODEX_BOT_ID, CODEX_APP_ID)
+        and row["body"].startswith("<!-- codex-pull-request-review-summary -->\n")
+    ]
+    if not summaries:
+        return None
+    if len(summaries) != 1:
+        raise VerificationError("Ambiguous Codex review summaries")
+    markers = re.findall(r"(?m)^<!-- codex-review-state:v1 (.+) -->$", summaries[0]["body"])
+    if len(markers) != 1 or len(markers[0]) > MAX_CODEX_STATE_CHARACTERS:
+        raise VerificationError("Codex publication has no usable review state")
+    try:
+        state = json.loads(markers[0])["code_review"]
+    except (ValueError, KeyError, TypeError):
+        raise VerificationError("Invalid Codex code-review state") from None
+    if not isinstance(state, dict) or state.get("commit_sha") != head:
+        return None
+    if state.get("status") == "completed" and any(
+        type(state.get(field)) is not bool
+        for field in ("has_any_findings", "has_unresolved_findings")
+    ):
+        raise VerificationError("Incomplete Codex review completion evidence")
+    return state
+
+
+def greptile_completed_check(checks):
+    """Recognize observed substantive Greptile completion, separately from summary publication."""
+    latest = latest_check(checks, "Greptile Review", GREPTILE_APP_ID)
+    if not latest or latest.get("status") != "completed" or latest.get("conclusion") != "success":
+        return None
+    output = latest.get("output")
+    if (
+        isinstance(output, dict)
+        and output.get("title") == "Base review"
+        and isinstance(output.get("summary"), str)
+        and re.fullmatch(
+            r"Greptile has reviewed the Pull Request\.\n\n[1-9][0-9]* files reviewed, [0-9]+ comments added\.",
+            output["summary"],
+        )
+    ):
+        return latest
+    return None
+
+
+def greptile_review_summary(comments, repository, head):
+    """Require one authentic Greptile summary whose reviewed-commit link identifies this head."""
+    summaries = [
+        row
+        for row in comments
+        if provider_comment(row, "greptile-apps[bot]", GREPTILE_BOT_ID, GREPTILE_APP_ID)
+        and row["body"].startswith("<!-- greptile_summary -->\n")
+    ]
+    if len(summaries) > 1:
+        raise VerificationError("Ambiguous Greptile review summaries")
+    return bool(
+        summaries
+        and re.search(
+            r"Last reviewed commit: \[(?:\\[^\r\n]|[^\\\]\r\n])+\]\(https://github\.com/"
+            + re.escape(repository)
+            + r"/commit/"
+            + re.escape(head)
+            + r"\)",
+            summaries[0]["body"],
+        )
+    )
+
+
+def require_automated_review(checks, repository=None, number=None, head=None, client=None):
+    """Accept published current-head review evidence from an authenticated provider.
 
     Provider completion does not dispose of findings. The caller still checks all
     review threads, and the operator must evaluate outside-diff feedback too.
@@ -184,8 +305,15 @@ def require_automated_review(checks):
             == "Review finished successfully. Suggestions (if any) were posted as PR/file comments."
         ):
             return
+    if client is not None:
+        comments = review_comments(repository, number, client)
+        if greptile_completed_check(checks) and greptile_review_summary(comments, repository, head):
+            return
+        codex = codex_review_state(comments, head)
+        if codex and codex.get("status") == "completed":
+            return
     raise VerificationError(
-        f"No completed current-head CodeRabbit or Kody-ai review. CodeRabbit: {coderabbit_error}"
+        f"No completed current-head CodeRabbit or Kody-ai review, nor Greptile or Codex. CodeRabbit: {coderabbit_error}"
     )
 
 
@@ -226,7 +354,7 @@ def check(event, repository, client):
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
     if current.get("user", {}).get("login") != "dependabot[bot]":
-        require_automated_review(checks)
+        require_automated_review(checks, repository, number, head, client)
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
     final_count = current_pr().get("changed_files")
