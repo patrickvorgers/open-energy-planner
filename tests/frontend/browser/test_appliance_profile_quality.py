@@ -21,6 +21,7 @@ def test_profile_quality_explains_full_cycle_on_desktop_and_mobile(app_page, app
     """Actual charts show the complete wash and pause with honest provenance after storage restart."""
     page, url = app_page
     connect_profile(page, url)
+    page.get_by_text("Recorded cycle measurements", exact=True).click()
     expect(page.locator("#profile-history")).to_contain_text(
         "Provisional statistical profile" if statistical else "Continuously followed profile"
     )
@@ -103,6 +104,6 @@ def connect_profile(page, url):
     assert page.request.post(
         url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=catalogue
     ).ok
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

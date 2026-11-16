@@ -27,6 +27,15 @@ amounts. Charging sessions explain that Home Assistant controls the physical
 charge points. Appliance readiness explains complete-cycle scheduling beside
 the readiness forms.
 
+Keep appliance configuration in **Settings > Appliances**, operational readiness,
+deadlines and cancellation in **Energy > Appliance planning**, and learned cycle
+profiles/history in **Insights > Appliance cycles**. Planning cards retain concise
+expected energy/duration and a device-specific insights link. Read-only insights
+must include followed cycle appliances without shifting permission. Show recent
+observation coverage separately from the retained model. Put raw recorded states
+in a disclosure and use compact 25-row Previous/Next history with a page number.
+Do not infer physical execution or model loss from missing recent measurements.
+
 Verify the title and icon on desktop and mobile, including navigation between
 Planning and Savings. Check that moved help remains in the relevant block and
 that refresh, configuration actions, warning/status messages and wizard progress
@@ -199,7 +208,7 @@ historical evidence are not deleted. Re-adding a source does not automatically
 restore shifting permission. Review its configuration before saving again.
 
 Cycle evidence and setup instructions sit beside configuration. Daily readiness,
-deadlines and task cancellation remain on Energy: Appliances. They are immediate
+deadlines and task cancellation remain on Energy: Appliance planning. They are immediate
 operational actions rather than staged settings.
 The appliance name appears once above the configuration. Weather sensitivity and
 cycle-shifting choices include their explanations. The HA source is shown below

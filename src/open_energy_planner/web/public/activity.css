@@ -58,3 +58,5 @@
     #activity-list .activity-state { grid-area:state; font-size:11px; }
     #activity-list summary::after { grid-area:arrow; }
 }
+
+#detected-cycles .activity-row > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:44px; padding:8px 10px; box-sizing:border-box; font-weight:400; }

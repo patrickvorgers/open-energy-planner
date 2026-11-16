@@ -162,7 +162,7 @@ def test_refreshed_appliance_card_declines_stale_cancel_and_explains_retry(
             "button", name="Cancel planning" if dismissal == "Confirm" else "Cancel", exact=True
         ).click()
     expect(confirmation).to_have_count(0)
-    expect(page.get_by_role("heading", name="Appliances", exact=True)).to_be_focused()
+    expect(page.get_by_role("heading", name="Appliance planning", exact=True)).to_be_focused()
     assert writes == []
     expect(card).to_contain_text("Task: scheduled")
     if dismissal != "Confirm":

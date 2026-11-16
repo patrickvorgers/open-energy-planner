@@ -104,9 +104,10 @@ def test_empty_state_sources_keep_other_curve_and_profile_visible(
         page.evaluate("window.rawDetailHeldAfter = performance.now() - window.rawDetailRequestedAt")
 
     page.route("**/v1/appliances?raw_entity=*", hold_raw_detail)
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_text("Recorded cycle measurements", exact=True).click()
     expect(page.locator("#recorded-cycle-status")).to_have_text("Loading recorded state details…")
     expect(page.locator("#recorded-power-unavailable")).to_be_hidden()
     expect(page.locator("#recorded-energy-unavailable")).to_be_hidden()

@@ -191,8 +191,8 @@ def test_documentation_appliance_has_a_nonempty_cycle_and_explicit_readiness(app
         ),
     )
     authenticate(page, url, "/appliances")
-    expect(page.locator("#profile-evidence")).to_contain_text("0.83 kWh")
-    expect(page.locator("#profile-evidence")).to_contain_text("120 minutes")
+    expect(page.locator("#appliance-list")).to_contain_text("0.83 kWh")
+    expect(page.locator("#appliance-list")).to_contain_text("120 minutes")
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_be_visible()
     capture(page, "appliance-request")
 

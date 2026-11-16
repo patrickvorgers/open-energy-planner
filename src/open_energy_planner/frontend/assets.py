@@ -160,6 +160,7 @@ def register(app, installation, demand, solar):
                 .replace('href="/contract"', 'href="' + base + '/contract"')
                 .replace('href="/data-storage"', 'href="' + base + '/data-storage"')
                 .replace('href="/consumers"', 'href="' + base + '/consumers"')
+                .replace('href="/appliance-cycles"', 'href="' + base + '/appliance-cycles"')
                 .replace('href="/appliances"', 'href="' + base + '/appliances"')
                 .replace('href="/appliance-settings"', 'href="' + base + '/appliance-settings"')
                 .replace('href="/appliance-settings/', 'href="' + base + "/appliance-settings/")
