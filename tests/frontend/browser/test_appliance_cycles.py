@@ -372,7 +372,8 @@ def test_cycle_history_uses_five_minute_poll_and_latest_ten_by_completion(review
     page.on("request", lambda request: requests.append(request.url))
     expect(page.get_by_role("button", name="Refresh cycle evidence", exact=True)).to_have_count(0)
     expect(page.get_by_text("Recorded cycle measurements", exact=True)).to_have_count(0)
-    devices[0]["recent_cycles"] = list(reversed(devices[0]["recent_cycles"]))
+    cycles = devices[0]["recent_cycles"]
+    devices[0]["recent_cycles"] = cycles[1::2] + cycles[::2]
     page.clock.fast_forward(299999)
     assert not any("/v1/appliances" in address for address in requests)
     with page.expect_response("**/v1/appliances"):
