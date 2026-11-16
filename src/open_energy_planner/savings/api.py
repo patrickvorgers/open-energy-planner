@@ -32,7 +32,7 @@ from .evidence import evidence
 from .forecast import comparison
 from .repricing import PlanValuations
 from .runtime import SavingsRuntime, quarter
-from .scenarios import scenarios
+from .scenarios import ScenarioViews
 from .storage.adapters.sqlalchemy import SettlementStore
 from .windows import window_summary
 
@@ -76,37 +76,47 @@ PUBLIC_VALIDATION_MESSAGES = (
 )
 
 
+PLAN_VIEW_FIELDS = (
+    "plan_id",
+    "generated_at",
+    "strategy",
+    "solution_status",
+    "currency",
+    "consumption_objective",
+    "steps",
+    "expected_flows",
+    "independent_costs",
+    "comparison_names",
+    "appliance_schedule",
+)
+PLAN_SNAPSHOT_FIELDS = (
+    "problem",
+    "load_components",
+    "tariff_evidence",
+    "ev_evidence",
+    "thermal_evidence",
+)
+PLAN_DISPLAY_FIELDS = ("display_sources", "comparison_bindings", "forecast_quality_names")
+SIMULATION_FIELDS = (
+    "plan_id",
+    "generated_at",
+    "currency",
+    "input_snapshot",
+    "expected_flows",
+    "independent_costs",
+    "appliance_schedule",
+    "reference_forecast",
+    "reference_forecast_issue",
+)
+
+
 def initial_plan_view(plan):
     """Project first-chart inputs without changing or retransmitting the full archived evidence."""
-    result = {
-        field: plan[field]
-        for field in (
-            "plan_id",
-            "generated_at",
-            "strategy",
-            "solution_status",
-            "currency",
-            "consumption_objective",
-            "steps",
-            "expected_flows",
-            "independent_costs",
-            "comparison_names",
-            "appliance_schedule",
-        )
-        if field in plan
-    }
+    result = {field: plan[field] for field in PLAN_VIEW_FIELDS if field in plan}
     if "input_snapshot" in plan:
         snapshot = plan["input_snapshot"]
         result["input_snapshot"] = {
-            field: snapshot[field]
-            for field in (
-                "problem",
-                "load_components",
-                "tariff_evidence",
-                "ev_evidence",
-                "thermal_evidence",
-            )
-            if field in snapshot
+            field: snapshot[field] for field in PLAN_SNAPSHOT_FIELDS if field in snapshot
         }
         if snapshot.get("tariff_evidence") is not None:
             result["input_snapshot"]["tariff_evidence"] = [
@@ -161,6 +171,7 @@ def register(
     daily = DailySavings(runtime)
 
     valuations = PlanValuations(runtime.documents, plans)
+    scenario_views = ScenarioViews()
     from ..activities.api import EVENTS
 
     runtime.events = app.get(EVENTS)
@@ -422,7 +433,22 @@ def register(
                 raise web.HTTPBadRequest(
                     text="Choose an increasing, timezone-aware planning period"
                 ) from None
-        plan = await asyncio.to_thread(plans.get_plan, request.match_info["plan_id"])
+        projection_fields = (
+            (*PLAN_VIEW_FIELDS, "input_snapshot", *PLAN_DISPLAY_FIELDS)
+            if view == "plan"
+            else SIMULATION_FIELDS
+            if view == "simulations"
+            else None
+        )
+        plan = await asyncio.to_thread(
+            plans.get_plan,
+            request.match_info["plan_id"],
+            **(
+                {"fields": projection_fields, "snapshot_fields": PLAN_SNAPSHOT_FIELDS}
+                if projection_fields is not None
+                else {}
+            ),
+        )
         if plan is None:
             raise web.HTTPNotFound(text="Original plan not found")
         plan = display_plan(plan, catalogue.value)
@@ -470,7 +496,9 @@ def register(
                 operation="Original plan comparison",
                 fallback="Original plan comparison is unavailable. Inspect application diagnostics. Measure-based settlement remains independent.",
             )
-        result["scenarios"] = await asyncio.to_thread(scenarios, plan, result.get("comparison"))
+        result["scenarios"] = await asyncio.to_thread(
+            scenario_views.read, plan, result.get("comparison")
+        )
         if result.get("comparison_issue"):
             result["scenarios"]["self_consumption"]["issue"] = result["comparison_issue"]
         if window:

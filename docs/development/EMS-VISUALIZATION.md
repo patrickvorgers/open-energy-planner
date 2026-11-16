@@ -158,6 +158,14 @@ It does not duplicate them in whole-horizon energy, battery, solar or repricing 
 The evidence projection shows forecast model and quality without a technical forecast
 version label. Original snapshot version metadata and financial API evidence remain intact.
 
+Planning reads only the stored fields required by its selected view, before
+decoding large archive payloads. Repeated simulations reuse one app-local result
+only after rereading and validating the same frozen input contents. Current
+contract valuation remains a separate fresh read. An archived reference is
+physically verified before reuse. A newly computed no-battery reference supplies
+its own flows without another replay. Original numbers and displayed values are
+unchanged. See [archive validation and reuse](PLAN-ARCHIVE.md).
+
 Planning renders the original optimizer chart immediately with its available
 bounds. Each synchronous rendering stage then applies the selected windows and
 legend visibility before computing the shared scenario extrema once. When the

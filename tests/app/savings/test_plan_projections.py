@@ -10,6 +10,7 @@ import pytest
 from aiohttp import ClientSession
 
 from open_energy_planner.savings import api
+from open_energy_planner.savings import scenarios as scenario_module
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 from tests.app.contract.test_contract_app import running
 from tests.app.savings.support.scenarios import START, problem
@@ -58,7 +59,7 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
     calls = []
     original_evidence, original_scenarios, original_latest = (
         api.evidence,
-        api.scenarios,
+        scenario_module.scenarios,
         api.PlanValuations.latest,
     )
 
@@ -78,7 +79,7 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
         return original_latest(*arguments)
 
     monkeypatch.setattr(api, "evidence", evidence)
-    monkeypatch.setattr(api, "scenarios", scenarios)
+    monkeypatch.setattr(scenario_module, "scenarios", scenarios)
     monkeypatch.setattr(api.PlanValuations, "latest", latest)
 
     async def check():
@@ -139,6 +140,11 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                         "plan_id": "projection-original",
                         "evidence": complete["evidence"],
                     }
+            calls.clear()
+            async with session.get(path, params={"view": "simulations"}) as response:
+                assert response.status == 200
+                assert (await response.json())["scenarios"] == complete["scenarios"]
+            assert calls == ["valuation"]
             for query in ({"view": "unknown"}, {"view": "plan", "start": START.isoformat()}):
                 async with session.get(path, params=query) as response:
                     assert response.status == 400
