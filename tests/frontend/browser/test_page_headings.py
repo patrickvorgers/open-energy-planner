@@ -45,7 +45,8 @@ def test_functional_page_headings_keep_context_and_actions(app_page):
     for route, title in (
         ("/overview#planning", "Planning"),
         ("/overview#savings", "Savings"),
-        ("/appliances", "Appliances"),
+        ("/appliances", "Appliance planning"),
+        ("/appliance-cycles", "Appliance cycles"),
         ("/ev", "EV charging"),
         ("/thermal", "Thermal storage"),
         ("/quality", "Forecast quality"),

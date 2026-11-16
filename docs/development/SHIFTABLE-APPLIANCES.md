@@ -7,14 +7,31 @@ publishes facts and forwards authenticated actions. User automations own equipme
 
 ## From dashboard intent to physical execution
 
-The app's **Energy → Appliances** workspace shows only selected appliances with
-permission to shift complete cycles. Its task controls and cycle-profile selector
-exclude non-shiftable devices and charging meters. Without permitted appliances,
+The app's **Energy → Appliance planning** workspace at `/appliances` shows only
+selected appliances with permission to shift complete cycles. Its task controls
+exclude non-shiftable devices, charging meters and thermal meters. Without permitted appliances,
 the page shows an explanation and links to **Appliances settings** and
 **Forecast quality**, instead of deadline fields or empty cycle charts.
 **Appliances settings** retains all available consumer configuration. Both
 shiftable and non-shiftable selected consumers remain available to forecasting
 and daily comparisons in **Forecast quality** when their evidence is available.
+
+**Insights → Appliance cycles** at `/appliance-cycles` owns learned profiles,
+recent detected cycles and original recorded measurements. It includes followed
+cycle appliances without shifting permission and excludes charging and thermal
+meters. Planning cards retain concise energy/duration and link to the same
+device through a URL fragment. The existing workspace preserves that fragment
+on reload, including ingress. Unknown or removed devices fall back to an available
+followed appliance. The shared `appliance-data.js` boundary settles all related
+reads, bounds GET requests and verifies specialist membership before selection.
+No task or storage contract changes as part of this presentation split.
+
+Recent observations and retained model evidence are separate. The 25-row
+Previous/Next list covers the returned recent history, not the complete training
+archive. Recorded power and energy charts remain in a disclosure with original
+event times, gaps and evidence identity. Refresh retains the selected device,
+history page and unchanged expanded rows. Planning and cancellation retain their
+existing authorization and physical-execution safeguards.
 
 The Appliances page enables **Connect** after its form handler is ready. While
 the page is initializing, clicking Connect or pressing Enter cannot submit the

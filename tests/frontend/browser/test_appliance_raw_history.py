@@ -106,9 +106,11 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(
         "request",
         lambda request: details.append(request.url) if "raw_entity=" in request.url else None,
     )
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#recorded-cycle-status")).to_be_hidden()
+    page.get_by_text("Recorded cycle measurements", exact=True).click()
     expect(page.locator("#recorded-cycle")).to_be_visible()
     expect(page.locator("#recorded-cycle-status")).to_contain_text("Actual event times")
     expect(page.locator("#recorded-cycle-status")).to_contain_text(

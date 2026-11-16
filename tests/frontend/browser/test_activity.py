@@ -377,7 +377,12 @@ def test_activity_plan_link_reads_exact_archive_without_mutation_or_fallback(app
     "title,action,destination,heading",
     [
         ("Compare forecast models", "View forecast quality", "quality", "Forecast quality"),
-        ("Learn appliance cycles", "View appliance profiles", "appliances", "Appliances"),
+        (
+            "Learn appliance cycles",
+            "View appliance profiles",
+            "appliance-cycles",
+            "Appliance cycles",
+        ),
         ("Evaluate measured savings", "View savings", "overview#savings", "Savings"),
         (
             "Fetch price forecast: Jeroen.nl",
