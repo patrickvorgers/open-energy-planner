@@ -587,9 +587,7 @@ def test_kody_skip_is_not_a_technical_failure():
     client.reply(LIMITED)
     client.run()
     client.kody_result("skipped", "Code Review Skipped")
-    client.checks[-1]["output"]["summary"] = (
-        "No New Commits (No changes detected since last review)"
-    )
+    client.checks[-1]["output"]["summary"] = "Unrecognized review skip reason"
     client.run()
     assert client.state()["phase"] == "blocked"
     assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
@@ -734,6 +732,116 @@ def test_automatic_disabled_kody_metadata_does_not_block_an_explicit_review():
     )
     client.run(explicit=True)
     assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize(
+    "provider,summary",
+    [
+        (
+            "kody",
+            "Automated Review is disabled — Enable 'Automated Code Review' in General Settings",
+        ),
+        ("kody", "No New Commits (No changes detected since last review)"),
+        ("kody", "No changed files in this pull request."),
+        ("coderabbit", "Automatic review disabled"),
+    ],
+)
+@pytest.mark.parametrize("finish", ["completion", "timeout"])
+def test_later_provider_metadata_waits_for_substantive_completion(provider, summary, finish):
+    """Later metadata cannot end or resend an explicit review, and its original deadline remains binding."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED if provider == "kody" else AVAILABLE)
+    client.run()
+    commands = [
+        "@coderabbitai rate limit",
+        "@kody start-review" if provider == "kody" else "@coderabbitai review",
+    ]
+    client.checks.append(
+        {
+            "id": 20,
+            "name": "Kody Code Review" if provider == "kody" else "CodeRabbit",
+            "head_sha": HEAD,
+            "app": {"id": 413034 if provider == "kody" else 347564},
+            "status": "completed",
+            "conclusion": "skipped",
+            "output": {"title": "Code Review Skipped", "summary": summary},
+        }
+    )
+    client.run(minutes=1)
+    assert client.state()["phase"] == provider
+    client.run(minutes=2)
+    assert client.state()["phase"] == provider
+    assert client.provider_commands() == commands
+    if finish == "timeout":
+        client.run(minutes=121)
+        assert client.state()["phase"] == "blocked"
+    else:
+        if provider == "kody":
+            client.kody_result()
+            client.checks[-1]["id"] = 21
+        else:
+            client.checks.append(
+                {
+                    "id": 21,
+                    "name": "CodeRabbit",
+                    "head_sha": HEAD,
+                    "app": {"id": 347564},
+                    "status": "completed",
+                    "conclusion": "success",
+                    "output": {
+                        "title": "Finished",
+                        "summary": (
+                            "Result: Success - Review completed\n\n"
+                            "| Prepare review scope | Completed | 1s |\n"
+                            "| Prepare repository workspace | Completed | 1s |\n"
+                            "| Run analysis checks | Completed | 1s |\n"
+                            "| Generate review feedback | Completed | 1s |\n"
+                            "| Publish review results | Completed | 1s |\n"
+                        ),
+                    },
+                }
+            )
+        client.run(minutes=3)
+        assert client.state()["phase"] == "complete"
+    assert client.provider_commands() == commands
+
+
+@pytest.mark.parametrize(
+    "mutation,phase",
+    [
+        ("pending", "kody"),
+        ("failure", "blocked"),
+        ("warnings", "blocked"),
+        ("unknown-skip", "blocked"),
+        ("foreign-app", "kody"),
+        ("foreign-name", "blocked"),
+    ],
+)
+def test_nonmetadata_provider_results_keep_existing_failure_boundaries(mutation, phase):
+    """Pending or unrelated checks never complete review, while unknown genuine results fail closed."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    client.kody_result("skipped", "Code Review Skipped")
+    check = client.checks[-1]
+    check["output"]["summary"] = "Unrecognized provider result"
+    if mutation == "pending":
+        check["status"] = "in_progress"
+        check["conclusion"] = None
+    elif mutation == "failure":
+        check["conclusion"] = "failure"
+        check["output"]["title"] = "Code Review Complete"
+    elif mutation == "warnings":
+        check["conclusion"] = "neutral"
+    elif mutation == "foreign-app":
+        check["app"]["id"] = 999999
+    elif mutation == "foreign-name":
+        check["name"] = "Unexpected provider check"
+    client.run()
+    assert client.state()["phase"] == phase
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
 
 
 @pytest.mark.parametrize("availability", [AVAILABLE, LIMITED])
