@@ -102,6 +102,27 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(
         page.request.get(url + "/v1/appliances?raw_entity=" + POWER, headers=headers).status == 400
     )
     details = []
+    page.add_init_script(f"""(() => {{
+        const original = window.fetch.bind(window);
+        window.fetch = async (...arguments_) => {{
+            const response = await original(...arguments_);
+            if (String(arguments_[0]).includes('raw_entity=')) {{
+                const decode = response.json.bind(response);
+                response.json = async () => {{
+                    const data = await decode();
+                    if (data.devices.some(device => device.entity_id === {other!r})) {{
+                        const revision = data.revision;
+                        Object.defineProperty(data, 'revision', {{get() {{
+                            queueMicrotask(() => {{ window.releasedRawHandlerCompleted = true; }});
+                            return revision;
+                        }}}});
+                    }}
+                    return data;
+                }};
+            }}
+            return response;
+        }};
+    }})();""")
     page.on(
         "request",
         lambda request: details.append(request.url) if "raw_entity=" in request.url else None,
@@ -164,14 +185,24 @@ def test_original_recorder_events_and_conservation_fallback_are_visible(
         assert len(details) == 1
         assert page.evaluate("Chart.getChart('recorded-power-chart').retainedForTest")
         pending = []
-        page.route("**/v1/appliances?raw_entity=*", lambda route: pending.append(route))
+
+        def hold_detail(route):
+            """Acknowledge interception before changing selection and releasing the stale detail."""
+            pending.append(route)
+            page.evaluate("window.rawDetailHeld = true")
+
+        page.route("**/v1/appliances?raw_entity=*", hold_detail)
         page.locator("#profile-device").select_option(other)
         expect(page.locator("#profile-device")).to_have_value(other)
-        page.wait_for_timeout(200)
+        page.wait_for_function("window.rawDetailHeld === true")
         assert len(pending) == 1
         page.locator("#profile-device").select_option(ENTITY)
-        pending.pop().continue_()
-        page.wait_for_timeout(200)
+        with page.expect_response(
+            lambda response: "raw_entity=" in response.url and other in response.url
+        ):
+            pending.pop().continue_()
+        # The marker runs after the synchronous consumer finishes evaluating the public revision guard.
+        page.wait_for_function("window.releasedRawHandlerCompleted === true")
         assert (
             max(
                 point["y"] or 0

@@ -129,3 +129,138 @@ def authenticate(page, url):
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
         page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#status")).to_contain_text("Connected")
+
+
+@pytest.fixture
+def review_evidence(app_page):
+    """Serve stable cycle identities with independently mutable evidence and HA timezone."""
+    page, url = app_page
+    page.clock.install()
+    start = datetime(2026, 7, 1, 9, tzinfo=UTC)
+    profile = {"power_w": [1000, 0, 200], "samples": 76, "evidence": "synthetic"}
+    devices = [
+        {
+            "entity_id": entity,
+            "name": name,
+            "shiftable": False,
+            "power_entity": entity + "_power",
+            "profile": profile,
+            "learned_profile": profile,
+            "recent_cycles": [
+                {
+                    "started_at": (start + timedelta(hours=index * 4)).isoformat(),
+                    "completed_at": (start + timedelta(hours=index * 4 + 1)).isoformat(),
+                    "energy_kwh": 0.3,
+                }
+                for index in range(76)
+            ],
+            "raw_history": {
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                "status": "complete",
+                "power_curve": [
+                    {"at": start.isoformat(), "power_w": 1000},
+                    {"at": (start + timedelta(hours=1)).isoformat(), "power_w": 0},
+                ],
+                "energy_curve": [
+                    {"at": start.isoformat(), "kwh": 1},
+                    {"at": (start + timedelta(hours=1)).isoformat(), "kwh": 2},
+                ],
+            },
+        }
+        for entity, name in [("sensor.washer", "Washer"), ("sensor.dryer", "Dryer")]
+    ]
+    state = {"devices": devices, "revision": "review-evidence"}
+    session = {"ingress": False, "timezone": "UTC"}
+    sources = {
+        "charging_meters": [],
+        "thermal_meters": [],
+        "selected": [{"entity_id": device["entity_id"]} for device in devices],
+        "options": devices,
+    }
+    page.route("**/setup/session", lambda route: route.fulfill(json=session))
+    page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
+    page.route("**/v1/consumers?view=settings", lambda route: route.fulfill(json=sources))
+    page.goto(url + "/appliance-cycles")
+    authenticate(page, url)
+    return page, devices, session
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_poll_updates_evidence_without_closing_or_defocusing_cycle(review_evidence):
+    """Volatile learning evidence and corrected energy refresh while the same cycle stays open and focused."""
+    page, devices, _ = review_evidence
+    first = page.locator("#detected-cycles details").first
+    first.locator("summary").click()
+    devices[0]["observed_run"] = {
+        "status": "observed",
+        "started_at": "2026-07-20T10:00:00Z",
+        "energy_kwh": 0.5,
+    }
+    devices[0]["recent_cycles"][-1]["energy_kwh"] = 1.23
+    with page.expect_response("**/v1/appliances"):
+        page.clock.fast_forward(10000)
+    expect(page.locator("#profile-history")).to_contain_text("0.50 kWh measured")
+    expect(first.locator("summary")).to_contain_text("1.23 kWh")
+    expect(first).to_have_attribute("open", "")
+    expect(first.locator("summary")).to_be_focused()
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_keyboard_paging_keeps_direction_until_boundary(review_evidence):
+    """Repeated Enter traverses four pages in either direction with usable boundary focus."""
+    page, _, _ = review_evidence
+    page.get_by_role("button", name="Next", exact=True).focus()
+    for number in (2, 3, 4):
+        page.keyboard.press("Enter")
+        expect(page.get_by_text(f"Page {number}", exact=True)).to_be_visible()
+        expect(
+            page.get_by_role("button", name="Next" if number < 4 else "Previous", exact=True)
+        ).to_be_focused()
+    expect(page.locator("#detected-cycles > li")).to_have_count(1)
+    for number in (3, 2, 1):
+        page.keyboard.press("Enter")
+        expect(page.get_by_text(f"Page {number}", exact=True)).to_be_visible()
+        expect(
+            page.get_by_role("button", name="Previous" if number > 1 else "Next", exact=True)
+        ).to_be_focused()
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_raw_measurements_refresh_timezone_with_identical_winter_offset(review_evidence):
+    """Unchanged July measurements shift one hour in London, including already rendered chart ticks."""
+    page, _, session = review_evidence
+    page.get_by_text("Recorded cycle measurements", exact=True).click()
+    expect(page.locator("#recorded-cycle-status")).to_contain_text("10:00 AM")
+    original = page.locator("#recorded-power-chart").evaluate(
+        "canvas => Chart.getChart(canvas).scales.x.ticks.map(tick => tick.label)"
+    )
+    session["timezone"] = "Europe/London"
+    with page.expect_response("**/v1/appliances"):
+        page.clock.fast_forward(10000)
+    expect(page.locator("#recorded-cycle-status")).to_contain_text("11:00 AM")
+    current = page.locator("#recorded-power-chart").evaluate(
+        "canvas => Chart.getChart(canvas).scales.x.ticks.map(tick => tick.label)"
+    )
+    assert current != original
+    assert any("10:00 AM" in label for label in current)
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_back_to_empty_entity_fragment_restores_initial_device(review_evidence):
+    """An initial implicit device remains the target of browser Back after choosing another device."""
+    page, _, _ = review_evidence
+    expect(page.locator("#profile-device")).to_have_value("sensor.washer")
+    page.locator("#profile-device").select_option("sensor.dryer")
+    page.go_back()
+    expect(page.locator("#profile-device")).to_have_value("sensor.washer")
+    page.go_forward()
+    expect(page.locator("#profile-device")).to_have_value("sensor.dryer")

@@ -9,7 +9,7 @@ bindSettingsActions();
 const find = id => document.getElementById(id);
 let token = "", chart, energyChart, current, renderedProfile;
 let evidenceRefreshing = false, rawLoadingKey, rawLoaded;
-let historyPage = 0, historyEntity, renderedHistory, historyTimezone;
+let historyPage = 0, historyEntity, renderedHistory, historyTimezone, initialEntity;
 const requestedEntity = new URLSearchParams(location.hash.slice(1)).get("entity");
 const api = (path, body, method) => applianceApi(token, path, body, method);
 const readEvidence = () => readApplianceEvidence(token);
@@ -19,11 +19,11 @@ function node(tag, text) { const item = document.createElement(tag); if (text !=
  * The power chart plots AC power in W. The energy chart plots kWh per declared phase, preserving five-minute evidence.
  * With no eligible device, destroy both charts and clear their references.
  */
-function profile() {
-    if (!current.devices.length) { chart?.destroy(); energyChart?.destroy(); chart = energyChart = renderedProfile = null; renderRawHistory(null); return; }
+function profile(pageFocus) {
+    if (!current.devices.length) { chart?.destroy(); energyChart?.destroy(); chart = energyChart = renderedProfile = null; renderRawHistory(null, historyTimezone); return; }
     const device = current.devices.find((item) => item.entity_id === find("profile-device").value), learned = device?.profile;
     if (rawLoaded?.entity_id === device?.entity_id && rawLoaded?.power_entity === device?.power_entity && rawLoaded?.raw_history?.curve_revision === device?.raw_history?.curve_revision) device.raw_history = rawLoaded.raw_history;
-    renderRawHistory(device);
+    renderRawHistory(device, historyTimezone);
     if (device?.raw_history && !device.raw_history.power_curve) {
         const key = JSON.stringify([device.entity_id, device.raw_history.curve_revision]);
         if (rawLoadingKey !== key) {
@@ -34,7 +34,7 @@ function profile() {
                 if (data.revision === current.revision && find("profile-device").value === device.entity_id && retained?.power_entity === detail?.power_entity && retained?.raw_history?.curve_revision === detail?.raw_history?.curve_revision) {
                     rawLoaded = detail;
                     retained.raw_history = detail.raw_history;
-                    renderRawHistory(retained);
+                    renderRawHistory(retained, historyTimezone);
                 }
             }).catch(() => { if (find("profile-device").value === device.entity_id) find("recorded-cycle-status").textContent = "Recorded state details unavailable. The learned profile is retained."; })
                 .finally(() => { if (rawLoadingKey === key) rawLoadingKey = null; });
@@ -53,27 +53,35 @@ function profile() {
         renderedProfile = profileKey;
     }
     find("profile-evidence").textContent = learned ? (learned.evidence === "hourly_estimate" ? `Profile: Historical estimate: Estimated cycles: ${learned.samples}: Energy: ${profileMetrics(learned).energyKwh.toFixed(2)} kWh: Cycle time: ${profileMetrics(learned).minutes} minutes: Provisional hourly shape${device.hourly_synthetic ? ": Simulated data" : ""}.` : `Profile: ${learned.evidence === "manual" ? "Manual estimate" : "Learned"}: Completed cycles: ${learned.evidence === "manual" ? 0 : learned.samples}: Evidence: ${optionLabel(learned.evidence)}: Energy: ${(profileMetrics(learned).energyKwh).toFixed(2)} kWh: Cycle time: ${profileMetrics(learned).minutes} minutes: Zero-power phases remain part of the cycle.`) : "Profile not ready. Wait for automatic learning or enter duration and energy in Appliances settings.";
-    if (historyEntity !== device?.entity_id) { historyPage = 0; historyEntity = device?.entity_id; }
+    const sameHistoryDevice = historyEntity === device?.entity_id;
+    if (!sameHistoryDevice) { historyPage = 0; historyEntity = device?.entity_id; }
     const cycles = [...(device?.recent_cycles || [])].reverse();
     historyPage = Math.min(historyPage, Math.max(0, Math.ceil(cycles.length / 25) - 1));
-    const historyKey = JSON.stringify([device, historyPage, historyTimezone, when("2000-01-01T00:00:00Z")]);
+    const historyKey = JSON.stringify([device, historyPage, historyTimezone]);
     if (historyKey === renderedHistory) return;
     renderedHistory = historyKey;
-    const history = find("profile-history"); history.replaceChildren();
+    const history = find("profile-history"), focused = document.activeElement;
+    const opened = new Set(sameHistoryDevice ? [...history.querySelectorAll("details[open]")].map(detail => detail.dataset.cycleKey) : []);
+    const focusedCycle = sameHistoryDevice ? focused?.closest("#detected-cycles details")?.dataset.cycleKey : null;
+    const focusedButton = pageFocus || (sameHistoryDevice && history.contains(focused) && focused.tagName === "BUTTON" ? focused.id : null);
+    history.replaceChildren();
     history.append(node("h3", "Detected cycles"));
     if (!cycles.length) history.append(node("p", "No completed measured cycles available. Previously learned profiles remain available."));
     else {
         const pagination = node("nav"), previous = node("button", "Previous"), next = node("button", "Next"), page = node("span", `Page ${historyPage + 1}`);
         pagination.className = "activity-pagination"; pagination.setAttribute("aria-label", "Detected cycle pages"); page.setAttribute("role", "status");
         for (const button of [previous, next]) { button.type = "button"; button.className = "secondary"; button.setAttribute("aria-controls", "detected-cycles"); }
+        previous.id = "cycle-previous"; next.id = "cycle-next";
         previous.disabled = historyPage === 0; next.disabled = (historyPage + 1) * 25 >= cycles.length;
-        previous.onclick = () => { historyPage--; profile(); document.querySelector("#profile-history button:not(:disabled)").focus(); };
-        next.onclick = () => { historyPage++; profile(); document.querySelector("#profile-history button:not(:disabled)").focus(); };
+        previous.onclick = () => { historyPage--; profile("cycle-previous"); };
+        next.onclick = () => { historyPage++; profile("cycle-next"); };
         pagination.append(previous, page, next); history.append(pagination);
         const list = node("ul"); list.id = "detected-cycles"; list.className = "activity-list";
         for (const cycle of cycles.slice(historyPage * 25, (historyPage + 1) * 25)) {
             const minutes = Math.round((new Date(cycle.completed_at) - new Date(cycle.started_at)) / 60000);
             const row = node("li"), detail = node("details"), summary = node("summary", `${when(cycle.started_at)}: ${minutes} minutes: ${money(cycle.energy_kwh)} kWh${cycle.synthetic ? ": Simulated" : ""}`);
+            detail.dataset.cycleKey = JSON.stringify([cycle.started_at, cycle.completed_at]);
+            detail.open = opened.has(detail.dataset.cycleKey);
             detail.className = "activity-row"; detail.append(summary, node("p", `Completed: ${when(cycle.completed_at)}`)); row.append(detail); list.append(row);
         }
         history.append(list);
@@ -117,6 +125,12 @@ function profile() {
     }
     if (metrics?.sourcePhaseMinutes > metrics.phaseMinutes) history.append(node("p", learned?.evidence === "hourly_estimate" ? "Five-minute display: Hourly power is spread uniformly. Each energy bar estimates one twelfth of its hour. Fine measurements refine this shape later." : "Five-minute display: Coarser mean power is spread uniformly. These are estimates within each original measurement interval."));
     if (learned?.evidence === "hourly_estimate") history.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. The first complete fine cycle refines this estimate automatically."));
+    if (focusedCycle || focusedButton) {
+        const target = focusedCycle ? [...history.querySelectorAll("details")].find(detail => detail.dataset.cycleKey === focusedCycle)?.querySelector("summary") : find(focusedButton);
+        const fallback = history.querySelector("button:not(:disabled)") || history.querySelector("h3");
+        const restored = target && !target.disabled ? target : fallback;
+        if (restored) { if (restored.tagName === "H3") restored.tabIndex = -1; restored.focus({preventScroll: true}); }
+    }
 }
 /** Preserve the selected profile and selector focus when only read-only evidence changes. */
 function showProfiles() {
@@ -127,6 +141,7 @@ function showProfiles() {
         for (const [id, name] of options) { const option = node("option", name); option.value = id; selector.append(option); }
         if (current.devices.some(device => device.entity_id === selected)) selector.value = selected;
     }
+    initialEntity ??= selector.value || undefined;
     profile();
 }
 /** Refresh retained evidence without replacing a selected device or unchanged charts. */
@@ -152,8 +167,9 @@ find("profile-device").onchange = () => {
     location.hash = address.hash; profile();
 };
 window.addEventListener("hashchange", () => {
-    const selected = new URLSearchParams(location.hash.slice(1)).get("entity");
-    if (current?.devices.some(device => device.entity_id === selected)) { find("profile-device").value = selected; profile(); }
+    const selected = new URLSearchParams(location.hash.slice(1)).get("entity") || initialEntity;
+    const device = current?.devices.find(device => device.entity_id === selected) || current?.devices[0];
+    if (device) { find("profile-device").value = device.entity_id; profile(); }
 });
 find("refresh").onclick = load;
 find("connect").onsubmit = event => { event.preventDefault(); token = find("token").value; load(); };

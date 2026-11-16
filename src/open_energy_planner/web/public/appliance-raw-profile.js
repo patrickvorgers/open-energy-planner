@@ -3,10 +3,10 @@ import {when} from "./display.js";
 let powerChart, energyChart, rendered;
 
 /** Plot original Recorder event times with explicit state hold, separate from a learned average. */
-export function renderRawHistory(device) {
+export function renderRawHistory(device, timezone) {
     const card = document.getElementById("recorded-cycle"), raw = device?.raw_history;
     card.hidden = !raw;
-    const key = JSON.stringify([device?.entity_id, raw]);
+    const key = JSON.stringify([device?.entity_id, raw, timezone]);
     if (key === rendered) return;
     powerChart?.destroy(); energyChart?.destroy(); powerChart = energyChart = null;
     rendered = key;
@@ -36,12 +36,12 @@ export function renderRawHistory(device) {
         document.getElementById(`recorded-${source}-unavailable`).hidden = hasStates;
         document.getElementById(`recorded-${source}-chart`).parentElement.hidden = !hasStates;
     }
-    document.getElementById("recorded-cycle-status").textContent = `${status} Captured ${when(raw.end)}.${available ? " Actual event times are shown. Lines hold each recorded state until the next event. A carried state is not a new measurement." : ""}${raw.limited ? " The source response is limited." : ""}${raw.synthetic ? " Simulated data." : ""}`;
+    document.getElementById("recorded-cycle-status").textContent = `${status} Captured ${when(raw.end, {}, timezone)}.${available ? " Actual event times are shown. Lines hold each recorded state until the next event. A carried state is not a new measurement." : ""}${raw.limited ? " The source response is limited." : ""}${raw.synthetic ? " Simulated data." : ""}`;
     const min = Date.parse(raw.cycle_started_at || raw.start) - (raw.cycle_started_at ? 60000 : 0);
     const max = Math.min(Date.parse(raw.end), Date.parse(raw.cycle_completed_at || raw.end) + 60000);
     const options = title => ({responsive: true, maintainAspectRatio: false, animation: false, spanGaps: false,
-        scales: {x: {type: "linear", min, max, title: {display: true, text: "Recorded time"}, ticks: {maxTicksLimit: 4, callback: value => when(new Date(value).toISOString())}}, y: {title: {display: true, text: title}}},
-        plugins: {tooltip: {callbacks: {title: items => items.length ? when(new Date(items[0].parsed.x).toISOString()) : ""}}}});
+        scales: {x: {type: "linear", min, max, title: {display: true, text: "Recorded time"}, ticks: {maxTicksLimit: 4, callback: value => when(new Date(value).toISOString(), {}, timezone)}}, y: {title: {display: true, text: title}}},
+        plugins: {tooltip: {callbacks: {title: items => items.length ? when(new Date(items[0].parsed.x).toISOString(), {}, timezone) : ""}}}});
     if (raw.power_curve.length) powerChart = new Chart(document.getElementById("recorded-power-chart"), {type: "line",
         data: {datasets: [{label: "Recorded power (W)", data: raw.power_curve.map(row => ({x: Date.parse(row.at), y: row.power_w})), stepped: "before", borderColor: "#009e73", backgroundColor: "#009e73", pointRadius: 2}]},
         options: {...options("Recorded AC power (W)"), scales: {...options("").scales, y: {min: 0, title: {display: true, text: "Recorded AC power (W)"}}}}});

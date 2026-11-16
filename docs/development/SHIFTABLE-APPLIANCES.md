@@ -30,7 +30,13 @@ Recent observations and retained model evidence are separate. The 25-row
 Previous/Next list covers the returned recent history, not the complete training
 archive. Recorded power and energy charts remain in a disclosure with original
 event times, gaps and evidence identity. Refresh retains the selected device,
-history page and unchanged expanded rows. Planning and cancellation retain their
+history page, expanded cycle identities and keyboard focus even when learning
+evidence changes. Repeated Enter on Next or Previous keeps that direction until
+its boundary, then focuses the usable opposite control. Recorded timestamps,
+chart labels and tooltips refresh when the actual HA timezone changes, even
+when the old and new zones share their winter offset. Back to an initially
+implicit device restores that original device when it remains eligible.
+Planning and cancellation retain their
 existing authorization and physical-execution safeguards.
 
 The Appliances page enables **Connect** after its form handler is ready. While
