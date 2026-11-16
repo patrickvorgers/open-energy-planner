@@ -117,7 +117,7 @@ def require_clear_formal_reviews(repository, number, head, base, client):
                 reviewers.add(author["id"])
                 if review["state"] == "CHANGES_REQUESTED":
                     raise VerificationError(
-                        f"Outstanding CHANGES_REQUESTED review {review['id']}. "
+                        "Outstanding CHANGES_REQUESTED review. "
                         "Keep Draft and follow the individual review-disposition procedure"
                     )
             if decision == "CHANGES_REQUESTED":

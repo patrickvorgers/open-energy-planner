@@ -87,7 +87,7 @@ def test_formal_objection_blocks_green_candidate_despite_later_comment(candidate
         "nodes": [*reviews, {"id": "PRR_18", "state": "COMMENTED", "author": {"login": reviewer}}]
     }
     client = FormalEvidence(current, checks, [response])
-    with pytest.raises(VerificationError, match="CHANGES_REQUESTED review PRR_17"):
+    with pytest.raises(VerificationError, match="CHANGES_REQUESTED review"):
         admit_candidate(event, REPOSITORY, client)
 
 
@@ -157,7 +157,7 @@ def test_formal_objection_on_later_page_cannot_hide_behind_approval():
             review_page([{"id": "PRR_18", "state": "CHANGES_REQUESTED"}], total=2),
         ]
     )
-    with pytest.raises(VerificationError, match="review PRR_18"):
+    with pytest.raises(VerificationError, match="CHANGES_REQUESTED review"):
         require_clear_formal_reviews(REPOSITORY, 12, HEAD, BASE, client)
     assert [query["variables"]["cursor"] for query in client.queries] == [None, "next"]
 
@@ -432,3 +432,53 @@ def test_duplicate_review_node_id_across_distinct_actors_is_ambiguous():
     )
     with pytest.raises(VerificationError, match="formal review evidence"):
         require_clear_formal_reviews(REPOSITORY, 12, HEAD, BASE, FormalEvidence(pages=[response]))
+
+
+def test_formal_objection_uses_fixed_guidance_without_external_review_id():
+    """A valid external review identity remains internal when the helper blocks an objection."""
+    sentinel = "EXTERNAL_REVIEW_NODE_SENTINEL"
+    client = FormalEvidence(pages=[review_page([{"id": sentinel, "state": "CHANGES_REQUESTED"}])])
+    with pytest.raises(VerificationError) as failure:
+        require_clear_formal_reviews(REPOSITORY, 12, HEAD, BASE, client)
+    assert sentinel not in str(failure.value)
+    assert str(failure.value) == (
+        "Outstanding CHANGES_REQUESTED review. "
+        "Keep Draft and follow the individual review-disposition procedure"
+    )
+
+
+def test_snapshot_logging_uses_fixed_objection_message_without_external_review_id(
+    monkeypatch, tmp_path, capsys
+):
+    """The actual snapshot entrypoint blocks and logs fixed guidance without echoing a review identity."""
+    sentinel = "SNAPSHOT_EXTERNAL_REVIEW_NODE_SENTINEL"
+    client = FormalEvidence(pages=[review_page([{"id": sentinel, "state": "CHANGES_REQUESTED"}])])
+    repository = "patrickvorgers/open-energy-planner"
+    event = {
+        "repository": {"full_name": repository, "default_branch": "main"},
+        "inputs": {"pull_request": "12", "expected_head": HEAD, "expected_base": BASE},
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    for name, value in {
+        "GITHUB_EVENT_PATH": str(event_path),
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_SHA": "4" * 40,
+        "GITHUB_REPOSITORY": repository,
+        "GITHUB_TOKEN": "private-fixture-token",
+        "GITHUB_STEP_SUMMARY": str(summary),
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(review_state, "GitHub", lambda token: client)
+    assert review_state.main() == 1
+    captured = capsys.readouterr()
+    assert sentinel not in captured.out + captured.err
+    assert captured.err == ""
+    assert captured.out == (
+        "Review-state check failed: Outstanding CHANGES_REQUESTED review. "
+        "Keep Draft and follow the individual review-disposition procedure. "
+        "No review or PR state was changed.\n"
+    )
+    assert not summary.exists()

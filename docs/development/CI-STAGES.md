@@ -455,8 +455,9 @@ with stable actor identities. A later formal `APPROVED` from the same reviewer
 can supersede that reviewer's earlier change request. An objection from another
 reviewer remains blocking. The gate does not demand dismissal of an already
 superseded request. Missing or ambiguous reviewer identity fails closed.
-Review identity, deduplication and diagnostics use the required GraphQL node
-`id`. They do not depend on the nullable, deprecated 32-bit `databaseId` field.
+Review identity and deduplication use the required GraphQL node `id`. They do
+not depend on the nullable, deprecated 32-bit `databaseId` field. Blocking
+diagnostics use fixed guidance without echoing external review identifiers.
 A later `COMMENTED`
 review, a clean publication, green checks and resolved threads do not retract a
 formal change request. The Dependabot provider exception does not exempt formal
