@@ -4,6 +4,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.quality_helpers import show_hour
 
 
 @pytest.mark.parametrize("app_site", ["solar_feedback_quality"], indirect=True)
@@ -69,8 +70,8 @@ def test_partial_solar_plan_accuracy_and_daily_chart_remain_distinct(app_page):
     )
     expect(source.get_by_text("Not scored yet", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    source.get_by_text("Hourly evidence and provenance", exact=True).click()
-    expect(source.locator("details table")).to_contain_text("Curtailment feedback")
+    expect(show_hour(page, 12)).to_contain_text("Curtailment feedback")
+    page.locator("#quality-chart-0").press("Escape")
     page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(
         path=f"results/ci/solar-feedback-partial-{page.viewport_size['width']}.png", full_page=True

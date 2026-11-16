@@ -228,7 +228,18 @@ observations with an explicit warning.
 
 ## Separate historical accuracy from the current model
 
-**Current model and learning** describes the model available now. The chart retains the model that produced the selected day's midnight prediction. Refreshing evidence updates measurements and current readiness, not that original forecast.
+The active model and a short reason for its current selection appear above the
+daily totals. **Current model and learning** keeps training and assessment details
+collapsed until requested. The chart retains the model that produced the selected
+day's midnight prediction. Refreshing evidence updates measurements and current
+readiness, not that original forecast.
+
+**Model comparison for this day** compares the original forecasts for the selected
+day. Hover or tap a chart hour to see measured energy, each visible forecast,
+its difference and any exclusion reason. The same popup contains the original
+forecast version, issue time, receipt and comparison context. On a keyboard,
+focus the chart and use Left/Right or Home/End to select an hour. Escape closes
+the popup. The general explanations remain in Wiki help.
 
 For Solar, **Current forecast weather** names the current service and newest-run
 selection. Actual download time is distinct from run initialization and provider

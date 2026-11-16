@@ -29,8 +29,29 @@ export function currentModelRows(current = {}, selection = {}) {
     return rows;
 }
 
+/** Explain the existing selection status without making a new model or metering decision. */
+function selectionReason(row) {
+    const solar = row.solarSelection;
+    if (solar) {
+        if (solar.issue) return solar.issue;
+        if (solar.requested !== "automatic") return "Manually selected forecast source.";
+        if (solar.admission_basis === "historical_forecast_backtest") return "Machine learning passed the historical forecast assessment.";
+        if (solar.complete_days < solar.required_days) return "Collecting comparable forecast evidence before changing the active source.";
+        return "Selected from forecasts compared on the same measured production hours.";
+    }
+    if (row.issue) return Object.hasOwn(HISTORY_IMPORT_MESSAGES, row.issue) ? HISTORY_IMPORT_MESSAGES[row.issue] : row.issue;
+    const statuses = {training_history_required: "Collecting training history", learned_preferred: "Learned model has consistent decision benefit", collecting_decision_evidence: "Collecting realized decision evidence", no_consistent_decision_benefit: "Baseline retained: No consistent decision benefit"};
+    return statuses[row.selection?.status] || (row.dailySelection ? `Daily accuracy: ${optionLabel(row.dailySelection.status)}` : `Readiness: ${row.readiness ? optionLabel(row.readiness) : "Not known"}`);
+}
+
 /** Append text-only current evidence, explicitly separate from the chart's frozen midnight model. */
 export function renderCurrentModel(parent, row, expanded = false) {
+    const current = document.createElement("section"), active = document.createElement("p"), reason = document.createElement("p");
+    current.className = "quality-current-summary"; current.setAttribute("aria-label", "Current forecast model");
+    active.textContent = `${row.scope === "devices" ? "Component forecast model" : "Active forecast model"}: ${row.active || "Waiting for forecast"}`;
+    reason.textContent = selectionReason(row);
+    current.append(active, reason);
+    parent.querySelector("h2")?.after(current);
     const details = document.createElement("details"), summary = document.createElement("summary");
     details.className = "quality-current-model"; details.dataset.modelSource = row.id; details.open = expanded;
     summary.textContent = "Current model and learning"; details.append(summary);
@@ -55,9 +76,8 @@ export function renderCurrentModel(parent, row, expanded = false) {
     };
     paragraph("Current status observed now. The graph retains the original model and forecast fixed at the selected day's midnight.");
     const model = row.selection;
-    const statuses = {training_history_required: "Collecting training history", learned_preferred: "Learned model has consistent decision benefit", collecting_decision_evidence: "Collecting realized decision evidence", no_consistent_decision_benefit: "Baseline retained: No consistent decision benefit"};
     const fields = document.createElement("dl"); fields.className = "model-selection-summary";
-    const values = [[row.scope === "devices" ? "Component forecast model" : "Active forecast model", row.active || "Waiting for forecast"], ["Readiness", row.readiness ? optionLabel(row.readiness) : "Not known"]];
+    const values = [["Readiness", row.readiness ? optionLabel(row.readiness) : "Not known"]];
     if (row.solarLearningStart) values.push(["Learning data from", when(row.solarLearningStart)]);
     if (row.solarHistory) {
         const history = row.solarHistory;
@@ -118,7 +138,6 @@ export function renderCurrentModel(parent, row, expanded = false) {
         for (const window of learning.windows || []) paragraph(`${when(window.start)} to ${when(window.end)}: Mean absolute error per hour: Candidate ${window.mae_kwh.candidate.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Simpler model ${window.mae_kwh.simpler.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Weekday profile ${window.mae_kwh.profile.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh.`);
         paragraph("This predicts consumption. Home Assistant retains control of operating mode, comfort and safety.");
     }
-    if (model) paragraph(statuses[model.status] || "Waiting for model status");
     if (row.solarSelection) {
         const solar = row.solarSelection;
         const names = {automatic: "Automatic", pvwatts: "PVWatts", ha: "Home Assistant", ml: "Machine learning"};

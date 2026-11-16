@@ -8,6 +8,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.quality_helpers import show_hour
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
@@ -141,7 +142,7 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
     page.get_by_role("button", name="Devices", exact=True).click()
     page.get_by_text("Current model and learning", exact=True).click()
     details = page.locator(".quality-current-model")
-    expect(details).to_contain_text("Component forecast model")
+    expect(page.locator(".quality-current-summary")).to_contain_text("Component forecast model")
     expect(details).to_contain_text("Shadow waiting for decision evidence")
     expect(details).to_contain_text(
         "Home Assistant retains control of operating mode, comfort and safety."
@@ -161,9 +162,8 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
     else:
         expect(details).to_contain_text("The simpler model is retained")
     expect(page.locator("#quality-charts h2")).to_have_text("Heat pump")
-    page.get_by_text("Hourly evidence and provenance", exact=True).click()
-    expect(page.locator("#quality-charts")).to_contain_text("Original weekday profile")
-    page.get_by_text("Hourly evidence and provenance", exact=True).click()
+    expect(show_hour(page)).to_contain_text("Original weekday profile")
+    page.locator("#quality-chart-0").press("Escape")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     capture = Path("results/ci")
     capture.mkdir(parents=True, exist_ok=True)
