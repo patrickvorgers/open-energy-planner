@@ -635,7 +635,7 @@ Accuracy admission checks the combined measured AC output of all sources on the
 same inverter against 98% of its declared AC rating. Two 2.5 kWh hourly meters on
 one 5 kW inverter therefore cannot provide unrestricted accuracy evidence, even
 though neither meter individually reaches the inverter rating. Missing or
-corrected sibling measurements make that AC comparison unknown for the affected
+decreasing sibling measurements make that AC comparison unknown for the affected
 hour. They are never filled with zero. A sibling measured only on the DC side
 also cannot establish the missing AC contribution. DC comparisons and independent
 inverters remain separate. Captured daily selection, original and alternative Forecast
