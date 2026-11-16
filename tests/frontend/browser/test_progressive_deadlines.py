@@ -1,5 +1,7 @@
 """Each Planning read owns its deadline without hiding already available advice."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from playwright.sync_api import expect
 
@@ -10,11 +12,13 @@ from tests.frontend.browser.helpers import TOKEN
 def test_slow_listing_does_not_consume_the_plan_or_simulation_deadline(app_page):
     """Four seconds spent listing plans leave five fresh seconds for simulations, whose timeout preserves advice."""
     page, url = app_page
-    page.clock.install()
+    beginning = datetime.now(UTC)
+    page.clock.install(time=beginning)
+    page.clock.pause_at(beginning + timedelta(minutes=1))
     page.add_init_script("""(() => {
-        const original=window.fetch,budgets=new WeakMap();
+        const original=window.fetch;
         AbortSignal.timeout=milliseconds=>{
-            const controller=new AbortController();budgets.set(controller.signal,milliseconds);
+            const controller=new AbortController();
             setTimeout(()=>controller.abort(),milliseconds);return controller.signal;
         };
         window.fetch=(path,options={})=>{
@@ -22,12 +26,14 @@ def test_slow_listing_does_not_consume_the_plan_or_simulation_deadline(app_page)
             if(address.pathname.endsWith('/v1/plans')&&address.searchParams.get('limit')==='20') {
                 window.listSignal=options.signal;
                 return original(path,options).then(async response=>{
-                    await new Promise(resolve=>{window.releaseList=resolve;});return response;
+                    await new Promise(resolve=>{
+                        window.releaseList=resolve;document.documentElement.dataset.listHeld='true';
+                    });return response;
                 });
             }
             if(address.searchParams.get('view')==='plan')window.planSignal=options.signal;
             if(address.searchParams.get('view')==='simulations') {
-                window.simulationSignal=options.signal;window.simulationBudget=budgets.get(options.signal);
+                window.simulationSignal=options.signal;
                 return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Private timeout details','AbortError')),{once:true}));
             }
             return original(path,options);
@@ -36,16 +42,17 @@ def test_slow_listing_does_not_consume_the_plan_or_simulation_deadline(app_page)
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    page.wait_for_function("() => typeof window.releaseList === 'function'")
+    expect(page.locator("html")).to_have_attribute("data-list-held", "true")
     page.clock.fast_forward(4000)
     page.evaluate("window.releaseList()")
     expect(page.locator("#overview-status")).to_have_text("Plan loaded. Loading simulations…")
     assert page.evaluate(
-        "window.planSignal!==window.listSignal&&window.simulationSignal!==window.planSignal&&window.simulationBudget===5000"
+        "window.planSignal!==window.listSignal&&window.simulationSignal!==window.planSignal"
     )
-    page.clock.fast_forward(1500)
+    page.clock.fast_forward(4999)
     assert page.evaluate("!window.simulationSignal.aborted")
-    page.clock.fast_forward(3600)
+    page.clock.fast_forward(1)
+    assert page.evaluate("window.simulationSignal.aborted")
     expect(page.locator("#overview-status")).to_contain_text(
         "Plan loaded. Simulations are unavailable"
     )
