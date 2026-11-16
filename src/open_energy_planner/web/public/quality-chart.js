@@ -18,7 +18,7 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
     tooltip.setAttribute("aria-label", "Hourly forecast evidence"); tooltip.setAttribute("aria-live", "polite"); plot.append(tooltip);
     canvas.tabIndex = 0; canvas.setAttribute("aria-describedby", tooltip.id);
     canvas.setAttribute("aria-keyshortcuts", "ArrowLeft ArrowRight Home End Escape");
-    let selectedHour = 0, pinned = false, renderedHour;
+    let selectedInterval, pinned = false, renderedInterval;
     const close = document.createElement("button"); close.type = "button"; close.textContent = "Close";
     close.setAttribute("aria-label", "Close hourly evidence");
     close.addEventListener("click", () => {pinned = false; tooltip.hidden = true; canvas.focus({preventScroll: true});});
@@ -34,11 +34,19 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
             datasets.push({label, type: "line", order: 0, borderColor: color, backgroundColor: color, borderWidth: 2.8, borderDash: dash, pointRadius: 0, pointHitRadius: 8, fill: false, spanGaps: false, tension: 0, yAxisID: "radiation", hidden: true, data: points(radiation.rows, field)});
         }
     }
+    /** Keep each model and reference on its own original evidence intervals. */
+    const datasetRows = index => datasets[index].yAxisID === "radiation" ? radiation.rows : index === 0 ? source.rows : forecasts[index - 1].rows;
+    for (const [index, dataset] of datasets.entries()) {
+        const rows = datasetRows(index);
+        dataset.intervalBounds = rows.map(row => ({start: Date.parse(row.start), end: Date.parse(row.end)}));
+        if (dataset.type !== "line") continue;
+        dataset.segment = {borderColor: context => Date.parse(rows[context.p0DataIndex].end) === Date.parse(rows[context.p1DataIndex].start) ? undefined : "transparent"};
+    }
     const intervals = {id: "quality-interval-bounds",
         /** Fit partial edge intervals in pixels without changing their original evidence timestamps or values. */
         afterDatasetsUpdate(chart) {
             datasets.forEach((dataset, datasetIndex) => {
-                const rows = dataset.yAxisID === "radiation" ? radiation.rows : datasetIndex === 0 ? source.rows : forecasts[datasetIndex - 1].rows;
+                const rows = datasetRows(datasetIndex);
                 chart.getDatasetMeta(datasetIndex).data.forEach((element, index) => {
                     const start = Date.parse(rows[index].start), end = Date.parse(rows[index].end);
                     const left = Math.max(start, Date.parse(day.start)), right = Math.min(end, Date.parse(day.end));
@@ -48,26 +56,54 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
                     if (dataset.type === "bar") element.width *= fraction;
                 });
             });
+        },
+        /** Draw each covered run to its recorded interval edges without adding or moving evidence points. */
+        afterDatasetDraw(chart, {index, meta}) {
+            const dataset = datasets[index];
+            if (dataset.type !== "line") return;
+            const rows = datasetRows(index), points = meta.data, context = chart.ctx, area = chart.chartArea;
+            context.save();
+            context.beginPath(); context.rect(area.left, area.top, area.right - area.left, area.bottom - area.top); context.clip();
+            context.strokeStyle = dataset.borderColor; context.lineWidth = dataset.borderWidth;
+            context.setLineDash(dataset.borderDash || []);
+            rows.forEach((row, rowIndex) => {
+                const point = points[rowIndex];
+                if (point.skip) return;
+                const start = Date.parse(row.start), end = Date.parse(row.end);
+                if (end <= chart.scales.x.min || start >= chart.scales.x.max) return;
+                const previous = rows[rowIndex - 1], next = rows[rowIndex + 1];
+                if (!previous || points[rowIndex - 1].skip || Date.parse(previous.end) !== start) {
+                    context.beginPath(); context.moveTo(chart.scales.x.getPixelForValue(start), point.y);
+                    context.lineTo(point.x, point.y); context.stroke();
+                }
+                if (!next || points[rowIndex + 1].skip || end !== Date.parse(next.start)) {
+                    context.beginPath(); context.moveTo(point.x, point.y);
+                    context.lineTo(chart.scales.x.getPixelForValue(end), point.y); context.stroke();
+                }
+            });
+            context.restore();
         }
     };
     /** Keep long provenance readable on touch screens without clipping a canvas tooltip. */
     function showEvidence({chart, tooltip: state}) {
         if (window.matchMedia("(max-width:640px)").matches && !pinned) {tooltip.hidden = true; return;}
         if (!state.opacity) { if (!pinned && !tooltip.matches(":hover") || !datasets.some((_, index) => chart.isDatasetVisible(index))) tooltip.hidden = true; return; }
-        selectedHour = state.dataPoints[0]?.dataIndex ?? selectedHour;
-        const hour = source.rows[selectedHour];
-        if (!hour) return;
-        const key = [selectedHour, ...datasets.map((_, index) => chart.isDatasetVisible(index))].join(":");
-        if (key === renderedHour) {tooltip.hidden = false; return;}
-        renderedHour = key;
+        const point = state.dataPoints[0];
+        if (!point) return;
+        const hour = datasetRows(point.datasetIndex)[point.dataIndex];
+        selectedInterval = datasets[point.datasetIndex].intervalBounds[point.dataIndex];
+        const matchingIndex = datasetIndex => datasets[datasetIndex].intervalBounds.findIndex(interval => interval.start === selectedInterval.start && interval.end === selectedInterval.end);
+        const key = [selectedInterval.start, selectedInterval.end, ...datasets.map((_, index) => chart.isDatasetVisible(index))].join(":");
+        if (key === renderedInterval) {tooltip.hidden = false; return;}
+        renderedInterval = key;
         const lines = [`${evidenceTime(hour.start)} to ${evidenceTime(hour.end, {hour: "2-digit", minute: "2-digit"})}`];
-        if (chart.isDatasetVisible(0)) lines.push(`Measured: ${number(hour.measured_kwh)} kWh`);
+        if (chart.isDatasetVisible(0)) lines.push(`Measured: ${number(source.rows[matchingIndex(0)]?.measured_kwh)} kWh`);
         forecasts.forEach((forecast, index) => {
             if (!chart.isDatasetVisible(index + 1)) return;
-            const row = forecast.rows[selectedHour];
-            lines.push(`${forecast.model_label}${index ? "" : ": Original choice"}: ${number(row?.predicted_kwh)} kWh`, `Difference: ${number(row?.error_kwh)} kWh`, `Evaluation: ${row?.evaluation_issue || "Eligible"}`, `Issued: ${when(forecast.issued_at)}`, `Forecast version: ${forecast.forecast_version}`);
+            const row = forecast.rows[matchingIndex(index + 1)];
+            lines.push(`${forecast.model_label}${index ? "" : ": Original choice"}: ${number(row?.predicted_kwh)} kWh`, `Difference: ${number(row?.error_kwh)} kWh`, `Evaluation: ${row ? row.evaluation_issue || "Eligible" : "No matching forecast interval"}`, `Issued: ${when(forecast.issued_at)}`, `Forecast version: ${forecast.forecast_version ?? "Unavailable"}`);
         });
-        if (radiation) for (const [index, field] of ["forecast_w_m2", "satellite_w_m2"].entries()) if (chart.isDatasetVisible(radiationOffset + index)) lines.push(`${datasets[radiationOffset + index].label}: ${number(radiation.rows[selectedHour]?.[field])} W/m²`);
+        if (radiation) for (const [index, field] of ["forecast_w_m2", "satellite_w_m2"].entries()) if (chart.isDatasetVisible(radiationOffset + index)) lines.push(`${datasets[radiationOffset + index].label}: ${number(radiation.rows[matchingIndex(radiationOffset + index)]?.[field])} W/m²`);
         lines.push(`Original model: ${source.model_label}`, `Measured hours: ${source.coverage.measured_hours} of ${source.coverage.hours}: Comparable pairs: ${source.coverage.paired_hours}`, `MAE: ${number(source.metrics.mae_kwh)} kWh/hour: Bias: ${number(source.metrics.bias_kwh)} kWh/hour`, `RMSE: ${number(source.metrics.rmse_kwh)} kWh/hour: WAPE: ${percentage(source.metrics.wape_percent)}`, `Latest measurement receipt: ${source.last_received_at ? when(source.last_received_at) : "Unavailable"}`);
         if (source.measurement_boundary) lines.push(`Measurement boundary: ${source.measurement_boundary}`);
         if (source.comparison_issue) lines.push(source.comparison_issue);
@@ -81,18 +117,23 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
         y: {min: 0, title: {display: true, text: "Energy per hour (kWh)"}},
         ...(radiation ? {radiation: {display: false, position: "right", min: 0, grid: {drawOnChartArea: false}, title: {display: true, text: "Global horizontal irradiance (W/m²)"}}} : {}),
     }, plugins: {legend: {display: false}, tooltip: {enabled: false, animation: false, external: showEvidence, bodyFont: {family: "monospace"}, callbacks: {
-        title: items => {const dataset = items[0].dataset, row = dataset.yAxisID === "radiation" ? radiation.rows[items[0].dataIndex] : source.rows[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`;},
+        title: items => {const row = datasetRows(items[0].datasetIndex)[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`;},
         label: item => `${item.dataset.label}: ${item.parsed.y == null ? "Unavailable" : item.parsed.y.toFixed(3)} ${item.dataset.yAxisID === "radiation" ? "W/m²" : "kWh"}`,
     }}}}});
     canvas.addEventListener("click", () => {pinned = !pinned; if (pinned) showEvidence({chart, tooltip: chart.tooltip}); else tooltip.hidden = true;});
     canvas.addEventListener("keydown", event => {
         if (event.key === "Escape") {pinned = false; tooltip.hidden = true; return;}
         if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-        if (!source.rows.length) return;
+        const available = [...new Map(datasets.flatMap((dataset, index) => chart.isDatasetVisible(index) ? dataset.intervalBounds.filter(interval => interval.end > Date.parse(day.start) && interval.start < Date.parse(day.end)).map(interval => [`${interval.start}:${interval.end}`, interval]) : [])).values()].sort((left, right) => left.start - right.start || left.end - right.end);
+        if (!available.length) {tooltip.hidden = true; return;}
         event.preventDefault(); pinned = true;
-        selectedHour = event.key === "Home" ? 0 : event.key === "End" ? source.rows.length - 1 : Math.max(0, Math.min(source.rows.length - 1, selectedHour + (event.key === "ArrowLeft" ? -1 : 1)));
-        chart.tooltip.setActiveElements(datasets.flatMap((_, datasetIndex) => chart.isDatasetVisible(datasetIndex) ? [{datasetIndex, index: selectedHour}] : []), {x: 0, y: 0});
-        chart.update("none");
+        const previous = Math.max(0, available.findIndex(interval => interval.start === selectedInterval?.start && interval.end === selectedInterval?.end));
+        const selected = event.key === "Home" ? available[0] : event.key === "End" ? available.at(-1) : available[Math.max(0, Math.min(available.length - 1, previous + (event.key === "ArrowLeft" ? -1 : 1)))];
+        const points = datasets.flatMap((dataset, datasetIndex) => {
+            const dataIndex = dataset.intervalBounds.findIndex(interval => interval.start === selected.start && interval.end === selected.end);
+            return chart.isDatasetVisible(datasetIndex) && dataIndex >= 0 ? [{datasetIndex, dataIndex}] : [];
+        });
+        showEvidence({chart, tooltip: {opacity: 1, dataPoints: points}});
     });
     tooltip.addEventListener("mouseleave", () => {if (!pinned) tooltip.hidden = true;});
     tooltip.addEventListener("keydown", event => {if (event.key === "Escape") {pinned = false; tooltip.hidden = true; canvas.focus({preventScroll: true});}});

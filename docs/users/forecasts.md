@@ -197,6 +197,12 @@ The comparison table keeps the original choice separate from later model status.
 
 Read the daily prediction, measured total and difference first. Then inspect the hourly chart. Missing measurements remain gaps. A running or incomplete day must not be interpreted as a scored full day. Clock-change days have their actual 23 or 25 hours.
 
+Forecast lines cover the start and end of each available period. A complete day
+therefore reaches both plot edges. Empty space at an edge means that the first
+or last forecast interval is unavailable. Gaps inside the day remain empty too.
+Hovering still identifies the original hour and its original value. The chart
+does not add measurements or change the daily totals to fill the width.
+
 Expand the metrics when you need them:
 
 | Metric | What it helps you notice |

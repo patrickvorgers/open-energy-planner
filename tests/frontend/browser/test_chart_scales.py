@@ -9,6 +9,44 @@ WEB = Path(__file__).resolve().parents[3] / "src/open_energy_planner/web/public"
 
 
 @pytest.mark.parametrize("width", [390, 1280])
+def test_linear_time_axes_keep_exact_edges_without_category_padding(browser, width):
+    """Line and mixed bar plots use exact times after redraws while category bins keep their full width."""
+    with browser.new_context(viewport={"width": width, "height": 900}) as context:
+        page = context.new_page()
+        page.set_content('<div style="height:400px"><canvas id="plot"></canvas></div>')
+        page.add_script_tag(path=str(WEB / "chart.umd.min.js"))
+        page.add_script_tag(path=str(WEB / "chart_theme.js"), type="module")
+        page.wait_for_function("Chart.registry.plugins.get('valueAxisHeadroom')")
+        results = page.evaluate("""() => ['line', 'bar'].map(type => {
+            const chart = new Chart(document.getElementById('plot'), {type,
+                data: {datasets: [{data: [{x: 2.3, y: 1}, {x: 17.1, y: 2}]}]},
+                options: {responsive: false, animation: false, scales: {x: {type: 'linear'}}}});
+            const snapshot = () => ({min: chart.scales.x.min, max: chart.scales.x.max,
+                left: chart.scales.x.getPixelForValue(2.3) - chart.chartArea.left,
+                right: chart.scales.x.getPixelForValue(17.1) - chart.chartArea.right});
+            const initial = snapshot(); chart.resize(320, 400); chart.update();
+            const resized = snapshot();
+            chart.options.scales.x.min = 0; chart.options.scales.x.max = 20; chart.update();
+            const explicit = [chart.scales.x.min, chart.scales.x.max];
+            chart.destroy();
+            return {initial, resized, explicit};
+        })""")
+        category = page.evaluate("""() => {
+            const chart = new Chart(document.getElementById('plot'), {type: 'bar',
+                data: {labels: ['First interval', 'Last interval'], datasets: [{data: [1, 2]}]},
+                options: {responsive: false, animation: false}});
+            const bars = chart.getDatasetMeta(0).data;
+            return bars.every(bar => bar.x - bar.width / 2 >= chart.chartArea.left
+                && bar.x + bar.width / 2 <= chart.chartArea.right);
+        }""")
+    for result in results:
+        for snapshot in (result["initial"], result["resized"]):
+            assert snapshot == pytest.approx({"min": 2.3, "max": 17.1, "left": 0, "right": 0})
+        assert result["explicit"] == [0, 20]
+    assert category
+
+
+@pytest.mark.parametrize("width", [390, 1280])
 def test_zero_reference_keeps_zero_and_ten_percent_negative_clearance(browser, width):
     """Positive prices start at zero. Signed prices retain zero and ten percent of axis height below."""
     with browser.new_context(viewport={"width": width, "height": 900}) as context:
