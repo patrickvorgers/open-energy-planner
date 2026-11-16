@@ -1,5 +1,6 @@
 """Keep daily cycle planning separate from retained read-only appliance insights."""
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
@@ -264,3 +265,99 @@ def test_back_to_empty_entity_fragment_restores_initial_device(review_evidence):
     expect(page.locator("#profile-device")).to_have_value("sensor.washer")
     page.go_forward()
     expect(page.locator("#profile-device")).to_have_value("sensor.dryer")
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_old_raw_failure_cannot_replace_newer_success_and_current_failure_recovers(review_evidence):
+    """Release a stale rejection after a newer success, then prove current failures and retry remain visible."""
+    page, devices, _ = review_evidence
+    raw = deepcopy(devices[0]["raw_history"])
+    state = {"revision": "r1", "devices": devices}
+    pending = []
+    page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
+    page.evaluate("""() => {
+        window.rawFailuresHandled = [];
+        const original = Promise.prototype.catch;
+        Promise.prototype.catch = function(handler) {
+            return original.call(this, error => {
+                try { return handler(error); }
+                finally {
+                    if (['stale-raw-failure', 'current-raw-failure'].includes(error?.message)) window.rawFailuresHandled.push(error.message);
+                }
+            });
+        };
+    }""")
+
+    def hold_raw(route):
+        """Acknowledge each actual request before the test controls its terminal response."""
+        pending.append(route)
+        page.evaluate("count => window.rawHeldCount = count", len(pending))
+
+    def use_summary(revision):
+        """Advance the evidence identity without including the separately requested original curves."""
+        state["revision"] = revision
+        devices[0]["raw_history"] = {
+            **{
+                key: value
+                for key, value in raw.items()
+                if key not in ("power_curve", "energy_curve")
+            },
+            "curve_revision": revision,
+        }
+
+    def succeed(request_index, revision, peak):
+        """Return independently specified raw evidence for the selected revision."""
+        detail = deepcopy(devices[0])
+        detail["raw_history"] = {**deepcopy(raw), "curve_revision": revision}
+        detail["raw_history"]["power_curve"][0]["power_w"] = peak
+        pending[request_index].fulfill(json={"revision": revision, "devices": [detail]})
+
+    page.route("**/v1/appliances?raw_entity=*", hold_raw)
+    page.get_by_text("Recorded cycle measurements", exact=True).click()
+    use_summary("r1")
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.wait_for_function("() => window.rawHeldCount === 1")
+    use_summary("r2")
+    with page.expect_response("**/v1/appliances"):
+        page.clock.fast_forward(10000)
+    page.wait_for_function("() => window.rawHeldCount === 2")
+    succeed(1, "r2", 2000)
+    expect(page.locator("#recorded-cycle-status")).to_contain_text("Power and energy agree")
+    before = page.locator("#recorded-cycle-status").inner_text()
+    curves = page.evaluate(
+        "['recorded-power-chart','recorded-energy-chart'].map(id => Chart.getChart(id).data.datasets[0].data)"
+    )
+    assert curves[0][0]["y"] == 2000
+    with page.expect_response(
+        lambda response: "raw_entity=" in response.url and response.status == 503
+    ):
+        pending[0].fulfill(status=503, body="stale-raw-failure")
+    page.wait_for_function("() => window.rawFailuresHandled.includes('stale-raw-failure')")
+    expect(page.locator("#recorded-cycle-status")).to_have_text(before)
+    assert (
+        page.evaluate(
+            "['recorded-power-chart','recorded-energy-chart'].map(id => Chart.getChart(id).data.datasets[0].data)"
+        )
+        == curves
+    )
+    with page.expect_response("**/v1/appliances"):
+        page.clock.fast_forward(10000)
+    expect(page.locator("#recorded-cycle-status")).to_have_text(before)
+    assert len(pending) == 2
+    use_summary("r3")
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.wait_for_function("() => window.rawHeldCount === 3")
+    pending[2].fulfill(status=503, body="current-raw-failure")
+    page.wait_for_function("() => window.rawFailuresHandled.includes('current-raw-failure')")
+    expect(page.locator("#recorded-cycle-status")).to_contain_text(
+        "Recorded state details unavailable"
+    )
+    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.wait_for_function("() => window.rawHeldCount === 4")
+    succeed(3, "r3", 3000)
+    expect(page.locator("#recorded-cycle-status")).to_contain_text("Power and energy agree")
+    assert (
+        page.evaluate("Chart.getChart('recorded-power-chart').data.datasets[0].data[0].y") == 3000
+    )

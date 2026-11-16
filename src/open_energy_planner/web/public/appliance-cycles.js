@@ -8,7 +8,7 @@ import {applianceApi, readApplianceEvidence, followedDevices} from "./appliance-
 bindSettingsActions();
 const find = id => document.getElementById(id);
 let token = "", chart, energyChart, current, renderedProfile;
-let evidenceRefreshing = false, rawLoadingKey, rawLoaded;
+let evidenceRefreshing = false, rawLoading, rawLoaded;
 let historyPage = 0, historyEntity, renderedHistory, historyTimezone, initialEntity;
 const requestedEntity = new URLSearchParams(location.hash.slice(1)).get("entity");
 const api = (path, body, method) => applianceApi(token, path, body, method);
@@ -25,19 +25,21 @@ function profile(pageFocus) {
     if (rawLoaded?.entity_id === device?.entity_id && rawLoaded?.power_entity === device?.power_entity && rawLoaded?.raw_history?.curve_revision === device?.raw_history?.curve_revision) device.raw_history = rawLoaded.raw_history;
     renderRawHistory(device, historyTimezone);
     if (device?.raw_history && !device.raw_history.power_curve) {
-        const key = JSON.stringify([device.entity_id, device.raw_history.curve_revision]);
-        if (rawLoadingKey !== key) {
-            rawLoadingKey = key;
+        const revision = current.revision, key = JSON.stringify([revision, device.entity_id, device.power_entity, device.raw_history.curve_revision]);
+        if (rawLoading?.key !== key) {
+            const request = {key}; rawLoading = request;
             api(`v1/appliances?raw_entity=${encodeURIComponent(device.entity_id)}`).then(data => {
                 const detail = data.devices.find(item => item.entity_id === device.entity_id);
                 const retained = current.devices.find(item => item.entity_id === device.entity_id);
-                if (data.revision === current.revision && find("profile-device").value === device.entity_id && retained?.power_entity === detail?.power_entity && retained?.raw_history?.curve_revision === detail?.raw_history?.curve_revision) {
+                if (data.revision === current.revision && rawLoading === request && find("profile-device").value === device.entity_id && retained?.power_entity === detail?.power_entity && retained?.raw_history?.curve_revision === detail?.raw_history?.curve_revision) {
                     rawLoaded = detail;
                     retained.raw_history = detail.raw_history;
                     renderRawHistory(retained, historyTimezone);
                 }
-            }).catch(() => { if (find("profile-device").value === device.entity_id) find("recorded-cycle-status").textContent = "Recorded state details unavailable. The learned profile is retained."; })
-                .finally(() => { if (rawLoadingKey === key) rawLoadingKey = null; });
+            }).catch(() => {
+                const retained = current.devices.find(item => item.entity_id === device.entity_id);
+                if (rawLoading === request && current.revision === revision && find("profile-device").value === device.entity_id && retained?.power_entity === device.power_entity && retained?.raw_history?.curve_revision === device.raw_history.curve_revision) find("recorded-cycle-status").textContent = "Recorded state details unavailable. The learned profile is retained.";
+            }).finally(() => { if (rawLoading === request) rawLoading = null; });
         }
     }
     const metrics = learned ? profileMetrics(learned) : null, powers = metrics?.powerW || [], labels = metrics?.labels || powers.map((_, index) => `${index * metrics.phaseMinutes}–${Math.min((index + 1) * metrics.phaseMinutes, metrics.minutes)} min`);
