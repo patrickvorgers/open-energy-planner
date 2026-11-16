@@ -222,9 +222,15 @@ request. New, edited or deleted provider publications stop technical fallback,
 including a summary updated in place with its original ID and creation time.
 Unchanged historical summaries do not count as new feedback. Missing edit
 evidence or a legacy request without a digest cannot authorize technical
-fallback. Immediately before publication, the controller rereads the comments,
-rechecks pending Codex work and verifies the digest alongside the existing
-revision, active-check and authority guards.
+fallback. Before replacing a command's baseline, the sender compares its fresh
+comment read with the preceding validated digest. A recognized CodeRabbit
+capacity reply is the only publication it may acknowledge separately. That
+exact reply must still be present and unchanged. Concurrent partial feedback,
+edited historical summaries and additional unclassified acknowledgements stop
+the transition. A quota reply never disposes of other feedback. Immediately
+before publication, the controller rereads the comments, rechecks pending Codex
+work and verifies the new digest alongside the existing revision, active-check
+and authority guards.
 
 The controller writes a durable intent before each provider command. If a worker
 loses the publication response, it recovers a uniquely marked command from the PR

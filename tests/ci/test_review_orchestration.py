@@ -1299,8 +1299,8 @@ def test_stale_quota_does_not_requery_while_a_provider_is_active():
 
 
 @pytest.mark.parametrize("with_actual_limit", [False, True])
-def test_review_acknowledgement_does_not_count_as_quota_evidence(with_actual_limit):
-    """A generic review acknowledgement neither expires a long review nor makes real quota ambiguous."""
+def test_review_acknowledgement_is_not_quota_or_silent_feedback_disposition(with_actual_limit):
+    """An acknowledgement keeps an active review pending and cannot be silently discarded by a quota reply."""
     client = GitHubEvidence()
     client.run(explicit=True)
     client.reply(AVAILABLE)
@@ -1311,8 +1311,8 @@ def test_review_acknowledgement_does_not_count_as_quota_evidence(with_actual_lim
     if with_actual_limit:
         client.reply(LIMITED)
         client.run()
-        assert client.state()["phase"] == "greptile"
-        assert client.provider_commands()[-1] == "@greptileai review this draft"
+        assert client.state()["phase"] == "blocked"
+        assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
     else:
         client.checks.append(
             {
@@ -2558,3 +2558,108 @@ def test_historical_summary_edit_during_command_intent_prevents_publication(monk
     assert client.provider_commands() == commands
     client.run()
     assert client.state()["phase"] == "blocked"
+
+
+@pytest.mark.parametrize("provider", ["greptile", "kody"])
+@pytest.mark.parametrize("change", ["new-comment", "old-id-edit", "unchanged"])
+def test_fallback_read_cannot_absorb_feedback_after_advance_guard(monkeypatch, provider, change):
+    """Feedback arriving after advance checks its snapshot cannot become a silently accepted baseline."""
+    client = GitHubEvidence()
+    historical = historical_provider_summary(client, "greptile")
+    original_identity = (historical["id"], historical["created_at"])
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    if provider == "kody":
+        client.greptile_timeout()
+    original_guard = review.require_no_unclassified_feedback
+    passed_guard = []
+
+    def publish_between_guard_and_fresh_read(repository, number, state, comments, metadata_client):
+        """Inject feedback only after the real advance snapshot guard has successfully returned."""
+        original_guard(repository, number, state, comments, metadata_client)
+        passed_guard.append(True)
+        if change == "new-comment":
+            client.comment(
+                "Partial findings published after the advance guard.", "greptile-apps[bot]"
+            )
+        elif change == "old-id-edit":
+            historical["body"] += "\nPartial findings edited after the advance guard."
+            historical["updated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+
+    monkeypatch.setattr(
+        review, "require_no_unclassified_feedback", publish_between_guard_and_fresh_read
+    )
+    commands = client.provider_commands()
+    if provider == "greptile":
+        client.greptile_timeout()
+    else:
+        client.kody_result("failure", "Code Review Failed")
+        client.run()
+    assert passed_guard == [True]
+    assert (historical["id"], historical["created_at"]) == original_identity
+    if change == "unchanged":
+        assert client.state()["phase"] == ("kody" if provider == "greptile" else "codex")
+        assert len(client.provider_commands()) == len(commands) + 1
+    else:
+        assert client.state()["phase"] == "blocked"
+        assert client.provider_commands() == commands
+
+
+@pytest.mark.parametrize("answer", [AVAILABLE, LIMITED])
+@pytest.mark.parametrize("change", ["new-comment", "old-id-edit", "quota-only"])
+def test_known_quota_reply_cannot_absorb_other_partial_feedback(answer, change):
+    """Only the recognized capacity reply may be acknowledged when advancing the primary quota phase."""
+    client = GitHubEvidence()
+    historical = historical_provider_summary(client, "greptile")
+    client.run(explicit=True)
+    client.reply(answer)
+    if change == "new-comment":
+        client.comment(
+            "Partial provider findings alongside a quota response.", "greptile-apps[bot]"
+        )
+    elif change == "old-id-edit":
+        historical["body"] += "\nPartial findings published alongside a quota response."
+        historical["updated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+    commands = client.provider_commands()
+    client.run()
+    if change == "quota-only":
+        expected = (
+            "@coderabbitai review" if answer == AVAILABLE else "@greptileai review this draft"
+        )
+        assert client.provider_commands() == [*commands, expected]
+    else:
+        assert client.state()["phase"] == "blocked"
+        assert client.provider_commands() == commands
+
+
+@pytest.mark.parametrize("answer", [AVAILABLE, LIMITED])
+@pytest.mark.parametrize("change", ["edit-reply", "delete-reply", "late-partial"])
+def test_quota_reply_must_remain_exact_between_validation_and_send(monkeypatch, answer, change):
+    """A validated capacity reply authorizes no modified reply or concurrent partial publication."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    reply = client.reply(answer)
+    original_send = review.send_command
+    invoked = []
+
+    def change_before_fresh_sender_read(*arguments, **keywords):
+        """Mutate live comments after advance selected the quota reply but before send rereads them."""
+        invoked.append(True)
+        if change == "edit-reply":
+            reply["body"] += "\nChanged after validation."
+            reply["updated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+        elif change == "delete-reply":
+            client.comments.remove(reply)
+        else:
+            client.comment(
+                "Partial findings arriving just before the sender read.", "greptile-apps[bot]"
+            )
+        return original_send(*arguments, **keywords)
+
+    monkeypatch.setattr(review, "send_command", change_before_fresh_sender_read)
+    commands = client.provider_commands()
+    client.run()
+    assert invoked == [True]
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == commands

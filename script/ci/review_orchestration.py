@@ -440,13 +440,61 @@ def command_marker(state):
     return f"<!-- oep-review-command:{state['request']}:{state['sequence']} -->"
 
 
-def send_command(repository, number, state, target, subject, client, now, publisher=None):
+def require_previous_feedback(state, comments, target, availability_reply):
+    """Validate the preceding command's evidence before acknowledging one known quota reply.
+
+    Only that exact, newly published reply may differ from the previous digest.
+    Never absorb concurrent partial feedback into the next command's baseline.
+    """
+    previous_comments = comments
+    if availability_reply is not None:
+        if (
+            state["phase"] not in {"quota", "coderabbit"}
+            or not is_bot(availability_reply, "coderabbitai[bot]")
+            or availability_reply not in comments
+            or availability_reply["id"] <= state["command"]
+            or instant(availability_reply["created_at"]) < instant(state["sent"])
+            or "<!-- This is an auto-generated reply by CodeRabbit -->"
+            not in availability_reply["body"]
+        ):
+            raise VerificationError("Validated CodeRabbit availability reply changed")
+        availability, _ = quota_reply(
+            availability_reply["body"], instant(availability_reply["created_at"])
+        )
+        if (
+            availability not in {"available", "limited"}
+            or {
+                "quota": availability,
+                "coderabbit": "available",
+                "greptile": "limited",
+            }.get(target)
+            != availability
+        ):
+            raise VerificationError("CodeRabbit availability does not authorize this command")
+        previous_comments = [row for row in comments if row["id"] != availability_reply["id"]]
+    if state["sequence"] > 0 and state.get("feedback_digest") != feedback_digest(previous_comments):
+        raise VerificationError("Provider feedback changed since the preceding command")
+
+
+def send_command(
+    repository,
+    number,
+    state,
+    target,
+    subject,
+    client,
+    now,
+    publisher=None,
+    *,
+    availability_reply=None,
+):
     """Record an outbox intent, recheck identities and publish at most one command for that intent."""
     _, checks = require_revision(repository, number, state, client)
     require_resolved_threads(repository, number, client)
     if provider_active(checks):
         raise VerificationError("A provider is still working on this revision")
     comments = comments_for(repository, number, client)
+    require_previous_feedback(state, comments, target, availability_reply)
     codex = codex_review_state(comments, state["head"])
     if codex and codex.get("status") != "completed":
         raise VerificationError("Codex already has uncompleted work for this revision")
@@ -752,7 +800,17 @@ def advance(repository, number, state, comments, client, now, publisher=None):
             if now - instant(reply["created_at"]) > REPLY_TIMEOUT:
                 if provider_active(checks):
                     return
-                send_command(repository, number, state, "quota", subject, client, now, publisher)
+                send_command(
+                    repository,
+                    number,
+                    state,
+                    "quota",
+                    subject,
+                    client,
+                    now,
+                    publisher,
+                    availability_reply=reply,
+                )
                 return
             if availability == "limited":
                 if provider_active(checks):
@@ -760,7 +818,15 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                 state["resume"] = resume.isoformat() if resume is not None else None
                 if not state["greptile_used"] and not state["kody_used"]:
                     send_command(
-                        repository, number, state, "greptile", subject, client, now, publisher
+                        repository,
+                        number,
+                        state,
+                        "greptile",
+                        subject,
+                        client,
+                        now,
+                        publisher,
+                        availability_reply=reply,
                     )
                 elif resume is not None:
                     state.update(
@@ -777,7 +843,15 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                         "Unknown CodeRabbit availability. No provider was selected"
                     )
                 send_command(
-                    repository, number, state, "coderabbit", subject, client, now, publisher
+                    repository,
+                    number,
+                    state,
+                    "coderabbit",
+                    subject,
+                    client,
+                    now,
+                    publisher,
+                    availability_reply=reply,
                 )
                 return
         if state["phase"] == "quota":
