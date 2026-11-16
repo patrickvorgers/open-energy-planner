@@ -12,9 +12,10 @@ from tests.frontend.browser.helpers import TOKEN
 def test_slow_listing_does_not_consume_the_plan_or_simulation_deadline(app_page):
     """Four seconds spent listing plans leave five fresh seconds for simulations, whose timeout preserves advice."""
     page, url = app_page
-    beginning = datetime.now(UTC)
-    page.clock.install(time=beginning)
-    page.clock.pause_at(beginning + timedelta(minutes=1))
+    clock_start = datetime.now(UTC)
+    paused_time = clock_start + timedelta(minutes=1)
+    page.clock.install(time=clock_start)
+    page.clock.pause_at(paused_time)
     page.add_init_script("""(() => {
         const original=window.fetch;
         AbortSignal.timeout=milliseconds=>{

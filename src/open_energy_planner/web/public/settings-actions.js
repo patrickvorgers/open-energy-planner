@@ -1,7 +1,9 @@
 let notifications;
 const SESSION_READ_TIMEOUT_MILLISECONDS = 5000;
 
-/** Join concurrent public metadata reads within one same-origin workspace, never retaining settled data. */
+/** Join concurrent public metadata reads within one same-origin workspace, never retaining settled data.
+ * Every caller is bounded by the original shared-read expiry. Late joiners receive only its remaining time.
+ */
 export async function sessionResponse(base, signal) {
     signal?.throwIfAborted();
     const url = new URL("setup/session", new URL(base, location.href)).href;
