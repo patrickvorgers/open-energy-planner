@@ -117,6 +117,7 @@ class GitHubEvidence:
             "node_id": f"COMMENT_{number}",
             "body": body,
             "created_at": self.now.isoformat(),
+            "updated_at": self.now.isoformat(),
             "user": {
                 "login": login,
                 "type": kind,
@@ -2399,3 +2400,161 @@ def test_technical_failure_cannot_bypass_partial_or_outside_diff_feedback(channe
         client.run()
     assert client.state()["phase"] == "blocked"
     assert client.provider_commands() == commands
+
+
+def historical_provider_summary(client, provider):
+    """Seed a genuine old-head summary before the request, retaining its original comment identity."""
+    fixtures = json.loads(
+        (Path(__file__).parent / "fixtures/review_providers.json")
+        .read_text(encoding="utf-8")
+        .replace("@HEAD@", "3" * 40)
+        .replace("@REPOSITORY@", REPOSITORY)
+    )
+    wire = fixtures[f"{provider}_comment"]
+    client.now = NOW - timedelta(days=1)
+    comment = client.comment(wire["body"], wire["user"]["login"])
+    comment["user"] = wire["user"]
+    comment["performed_via_github_app"] = wire["performed_via_github_app"]
+    client.now = NOW
+    return comment
+
+
+@pytest.mark.parametrize("provider", ["greptile", "kody"])
+@pytest.mark.parametrize("summary_provider", ["greptile", "codex"])
+def test_edited_historical_summary_blocks_terminal_fallback(provider, summary_provider):
+    """Partial findings edited into an old comment cannot bypass the no-feedback fallback guard."""
+    client = GitHubEvidence()
+    comment = historical_provider_summary(client, summary_provider)
+    identity = (comment["id"], comment["created_at"])
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    if provider == "kody":
+        client.greptile_timeout()
+    comment["body"] += "\nA new partially published finding requires evaluation."
+    comment["updated_at"] = (NOW + timedelta(minutes=1)).isoformat()
+    commands = client.provider_commands()
+    if provider == "greptile":
+        client.greptile_timeout()
+    else:
+        client.kody_result("failure", "Code Review Failed")
+        client.run()
+    assert (comment["id"], comment["created_at"]) == identity
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == commands
+
+
+@pytest.mark.parametrize("summary_provider", ["greptile", "codex"])
+def test_unchanged_historical_summary_does_not_block_terminal_fallback(summary_provider):
+    """An unchanged old-head publication remains historical evidence rather than new partial feedback."""
+    client = GitHubEvidence()
+    historical_provider_summary(client, summary_provider)
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    client.greptile_timeout()
+    assert client.state()["phase"] == "kody"
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+        "@kody start-review",
+    ]
+
+
+def test_comment_only_codex_pending_between_intent_and_publication_blocks_overlap(monkeypatch):
+    """A pending Codex summary appearing after the initial read prevents publishing another review."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    original_post = client.post
+    injected = []
+
+    def inject_pending_after_intent(path, payload):
+        """Publish authentic comment-only pending work immediately after the durable intent is saved."""
+        result = original_post(path, payload)
+        if (
+            not injected
+            and client.state()["phase"] == "sending"
+            and client.state()["target"] == "greptile"
+        ):
+            comment = client.published_result("codex")
+            comment["body"] = comment["body"].replace(
+                '"status":"completed"', '"status":"in_progress"'
+            )
+            injected.append(comment)
+        return result
+
+    monkeypatch.setattr(client, "post", inject_pending_after_intent)
+    commands = client.provider_commands()
+    try:
+        client.run()
+    except VerificationError:
+        pass
+    assert injected
+    assert client.provider_commands() == commands
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == commands
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "same-timestamp-body-edit",
+        "timestamp-only",
+        "missing-update",
+        "invalid-update",
+        "deleted-summary",
+        "legacy-no-digest",
+    ],
+)
+def test_ambiguous_or_changed_publication_evidence_blocks_fallback(change):
+    """Missing, edited or removed publication evidence cannot be treated as unchanged history."""
+    client = GitHubEvidence()
+    comment = historical_provider_summary(client, "greptile")
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    commands = client.provider_commands()
+    if change == "same-timestamp-body-edit":
+        comment["body"] += "\nNew partial feedback within the timestamp resolution."
+    elif change == "timestamp-only":
+        comment["updated_at"] = (NOW + timedelta(minutes=1)).isoformat()
+    elif change == "missing-update":
+        del comment["updated_at"]
+    elif change == "invalid-update":
+        comment["updated_at"] = "not-a-timestamp"
+    elif change == "deleted-summary":
+        client.comments.remove(comment)
+    else:
+        state = client.state()
+        del state["feedback_digest"]
+        review.save_state(state, "PR_12", client)
+    client.greptile_timeout()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == commands
+
+
+def test_historical_summary_edit_during_command_intent_prevents_publication(monkeypatch):
+    """The final comment read detects an old-ID edit that arrives after the initial no-feedback check."""
+    client = GitHubEvidence()
+    comment = historical_provider_summary(client, "greptile")
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    original_post = client.post
+
+    def edit_after_intent(path, payload):
+        """Change an old provider summary just after persisting the next command intent."""
+        result = original_post(path, payload)
+        if client.state()["phase"] == "sending" and client.state()["target"] == "greptile":
+            comment["body"] += "\nPartial feedback published during intent persistence."
+            comment["updated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+        return result
+
+    monkeypatch.setattr(client, "post", edit_after_intent)
+    commands = client.provider_commands()
+    with pytest.raises(VerificationError, match="feedback changed"):
+        client.run()
+    assert client.provider_commands() == commands
+    client.run()
+    assert client.state()["phase"] == "blocked"

@@ -274,7 +274,7 @@ def greptile_review_summary(comments, repository, head):
     return bool(
         summaries
         and re.search(
-            r"Last reviewed commit: \[[^\]\n]+\]\(https://github\.com/"
+            r"Last reviewed commit: \[(?:\\[^\r\n]|[^\\\]\r\n])+\]\(https://github\.com/"
             + re.escape(repository)
             + r"/commit/"
             + re.escape(head)

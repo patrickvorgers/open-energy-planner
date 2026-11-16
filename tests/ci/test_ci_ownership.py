@@ -98,6 +98,7 @@ NATIVE_SOLVER_FORBIDDEN_MODULES = (CALCULATION_FORBIDDEN_MODULES - {"highspy"}) 
 
 # Only reviewed exports may cross into owners with conservative CI coverage.
 PROOF_CAPABILITIES = {
+    "hashlib": {"sha256"},
     "script.ci.proof_git": {
         "VerificationError",
         "sha",
@@ -934,6 +935,8 @@ def test_proof_owners_only_consume_reviewed_metadata_capabilities():
         "exec(source)",
         "getattr(value, name)(command)",
         "import runpy",
+        "import hashlib",
+        "from hashlib import file_digest",
         "from script.ci.proof_git import subprocess",
         "import script.ci.proof_git",
         "from script.ci.ci_scope import subprocess",
@@ -951,6 +954,16 @@ def test_proof_owners_only_consume_reviewed_metadata_capabilities():
 def test_proof_guard_rejects_execution_escape(source):
     """Direct workload imports, process launch and dynamic import escapes fail the cheap boundary."""
     assert lifecycle_dependencies(source, "script.ci.future", proof_reader=True, forbidden=set())
+
+
+def test_proof_guard_accepts_only_the_reviewed_sha256_export():
+    """The metadata owner may hash publication evidence without gaining broad hashing or file helpers."""
+    assert not lifecycle_dependencies(
+        "from hashlib import sha256\ndigest = sha256(b'provider metadata').hexdigest()",
+        "script.ci.future",
+        proof_reader=True,
+        forbidden=set(),
+    )
 
 
 @pytest.mark.parametrize("helper", ["script", "script.ci", "script.ci.helper"])

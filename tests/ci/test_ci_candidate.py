@@ -694,3 +694,27 @@ def test_new_provider_success_cannot_bypass_formal_change_requests(candidate, pr
     client.comments = [fixtures[f"{provider}_comment"]]
     with pytest.raises(VerificationError, match="CHANGES_REQUESTED"):
         check(event, REPOSITORY, client)
+
+
+@pytest.mark.parametrize(
+    "label", [r"docs: add \[Unreleased\] entry", r"fix \[nested \[label\]\]", r"fix \\ path"]
+)
+def test_greptile_review_accepts_escaped_markdown_commit_subject(candidate, label):
+    """Markdown escapes in a commit label do not weaken or prevent exact-repository full-head proof."""
+    event, current, checks = candidate
+    checks[:] = [row for row in checks if row["name"] != "CodeRabbit"]
+    fixtures = json.loads(
+        (Path(__file__).parent / "fixtures/review_providers.json")
+        .read_text(encoding="utf-8")
+        .replace("@HEAD@", HEAD)
+        .replace("@REPOSITORY@", REPOSITORY)
+    )
+    checks.append(fixtures["greptile_check"])
+    client = Evidence(current, checks)
+    comment = fixtures["greptile_comment"]
+    comment["body"] = comment["body"].replace('"Example change"', label)
+    client.comments = [comment]
+    assert check(event, REPOSITORY, client) == HEAD
+    comment["body"] = comment["body"].replace(HEAD, "3" * 40)
+    with pytest.raises(VerificationError):
+        check(event, REPOSITORY, client)

@@ -216,6 +216,16 @@ A confirmed CodeRabbit limit needs no invented retry time to enter Greptile.
 New requests do not loop back to CodeRabbit after the final fallback. Existing
 durable waiting requests remain readable and retain their bounded recovery.
 
+The controller fingerprints provider comment content and edit timestamps before
+each command. It stores only the digest, not the comment bodies, in the durable
+request. New, edited or deleted provider publications stop technical fallback,
+including a summary updated in place with its original ID and creation time.
+Unchanged historical summaries do not count as new feedback. Missing edit
+evidence or a legacy request without a digest cannot authorize technical
+fallback. Immediately before publication, the controller rereads the comments,
+rechecks pending Codex work and verifies the digest alongside the existing
+revision, active-check and authority guards.
+
 The controller writes a durable intent before each provider command. If a worker
 loses the publication response, it recovers a uniquely marked command from the PR
 instead of sending it again. An uncertain outcome without that command blocks.

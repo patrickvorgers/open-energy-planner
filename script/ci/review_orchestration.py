@@ -8,6 +8,7 @@ findings, marks a PR Ready or executes contributor code.
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from os import environ
 from pathlib import Path
 
@@ -168,6 +169,13 @@ def read_state(comments):
             or state["reviews"] > MAX_CODERABBIT_REQUESTS
             or state["consumed"] < state["request"]
             or (
+                "feedback_digest" in state
+                and (
+                    not isinstance(state["feedback_digest"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", state["feedback_digest"]) is None
+                )
+            )
+            or (
                 "publisher_id" in state
                 and (type(state["publisher_id"]) is not int or state["publisher_id"] <= 0)
             )
@@ -309,13 +317,39 @@ def provider_active(checks):
     )
 
 
-def require_no_unclassified_feedback(repository, number, state, fresh, client):
+def feedback_digest(comments):
+    """Fingerprint bounded provider publications without storing their bodies in durable state.
+
+    Include edit metadata and content so an older comment edited in place cannot
+    bypass the guard, even within GitHub's timestamp resolution. Missing or
+    inconsistent publication timestamps require inspection rather than fallback.
+    """
+    digest = sha256()
+    for comment in sorted(comments, key=lambda row: row["id"]):
+        if not any(is_bot(comment, login) for login in PROVIDER_BOT_LOGINS):
+            continue
+        try:
+            created = instant(comment["created_at"])
+            updated = instant(comment["updated_at"])
+        except (KeyError, TypeError, ValueError):
+            raise VerificationError("Provider comment edit evidence is unavailable") from None
+        if updated < created:
+            raise VerificationError("Provider comment edit evidence is inconsistent")
+        digest.update(
+            json.dumps(
+                [comment["id"], comment["body"], created.isoformat(), updated.isoformat()]
+            ).encode("utf-8")
+        )
+    return digest.hexdigest()
+
+
+def require_no_unclassified_feedback(repository, number, state, comments, client):
     """Stop technical fallback when new provider feedback needs operator evaluation.
 
     A terminal check is not proof that no partial review or outside-diff finding
     was published. Do not infer disposition from comment text or resolved flags.
     """
-    if any(any(is_bot(row, login) for login in PROVIDER_BOT_LOGINS) for row in fresh):
+    if state.get("feedback_digest") != feedback_digest(comments):
         raise VerificationError("Provider feedback needs evaluation before any fallback")
     seen = set()
     for page in range(1, MAX_PAGES + 1):
@@ -458,12 +492,19 @@ def send_command(repository, number, state, target, subject, client, now, publis
         command=0,
         sent=now.isoformat(),
         message=f"Publishing the {target} request.",
+        feedback_digest=feedback_digest(comments),
     )
     save_state(state, subject, client)
     _, final_checks = require_revision(repository, number, state, client)
     require_resolved_threads(repository, number, client)
     if provider_active(final_checks):
         raise VerificationError("A provider started before command publication")
+    final_comments = comments_for(repository, number, client)
+    final_codex = codex_review_state(final_comments, state["head"])
+    if final_codex and final_codex.get("status") != "completed":
+        raise VerificationError("Codex started before command publication")
+    if feedback_digest(final_comments) != state["feedback_digest"]:
+        raise VerificationError("Provider feedback changed before command publication")
     if target == "kody" and kody_request_command(final_checks) != kody_command:
         raise VerificationError("Kody request evidence changed before publication")
     require_original_requester(repository, number, state, client)
@@ -780,7 +821,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
             and provider.get("name") == provider_name
             and provider.get("conclusion") == "timed_out"
         ):
-            require_no_unclassified_feedback(repository, number, state, fresh, client)
+            require_no_unclassified_feedback(repository, number, state, comments, client)
             require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
             target = "greptile" if state["phase"] == "coderabbit" else "kody"
             send_command(repository, number, state, target, subject, client, now, publisher)
@@ -796,7 +837,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                 )
             )
         ):
-            require_no_unclassified_feedback(repository, number, state, fresh, client)
+            require_no_unclassified_feedback(repository, number, state, comments, client)
             require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
             send_command(repository, number, state, "codex", subject, client, now, publisher)
             return
