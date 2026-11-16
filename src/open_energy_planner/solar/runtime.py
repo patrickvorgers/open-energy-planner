@@ -555,7 +555,9 @@ class SolarRuntime:
                 location,
                 now,
                 "none",
-                tuple(row for rows in energies.values() for row in rows),
+                limit_ac_production(
+                    configuration, tuple(row for rows in energies.values() for row in rows)
+                ),
                 model="ha-production-v1",
                 quality="provider_estimate",
                 valid_until=min(

@@ -582,14 +582,18 @@ at planning admission. HA unload rejects queued synchronization, waits for the
 active exchange and then removes provider listeners. Deferred catalogue or cache
 reads cannot start a new forecast upload after closure begins.
 
-HA forecasts describe metered AC production. Eligible standalone sources use
-AC divided by their declared converter efficiency as standalone-equivalent DC.
-The planner then applies that conversion exactly once. This does not recover
-clipped available panel DC. Hybrid routes, potential curtailment, DC meters and
-independently metered sources sharing an inverter are ineligible for HA planning.
-Their imported geometry remains usable by PVWatts. They retain an explicit reason
-and baseline fallback. Explicit all-HA standalone installations do not require
-the independent PVWatts weather service to produce a fresh HA forecast.
+HA forecasts describe pure PV metered AC production, including hybrid and
+independently metered groups sharing an inverter. AC divided by the declared
+converter efficiency gives standalone-equivalent DC. The planner applies that
+conversion exactly once. This does not recover clipped available panel DC.
+HA candidates and their captured accuracy values remain independent per source.
+The shared AC cap applies only to the final selected model combination, including
+the all-HA path without weather. Changing a sibling provider revision cannot
+alter another source's captured comparison values. DC meters remain ineligible
+for HA AC forecasts and retain explicit PVWatts fallback. Actual curtailment
+feedback and clipping still exclude affected accuracy intervals. Explicit all-HA
+installations do not require the independent PVWatts weather service to produce
+a fresh HA forecast.
 As with other installation forecasts, a shorter complete HA horizon clips the
 future planning tail to its real end. It does not have to cover all 48 elapsed
 hours. Missing intervals inside that horizon remain an error. No omitted tail

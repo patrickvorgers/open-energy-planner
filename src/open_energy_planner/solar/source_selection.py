@@ -30,7 +30,6 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
-from open_energy_planner.solar.calculation.projection import limit_ac_production
 from open_energy_planner.solar.forecast_weather import FORECAST_WEATHER_POLICY
 from open_energy_planner.solar.learning import learning_interval, unrestricted_interval
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
@@ -42,10 +41,11 @@ SOURCE_POLICY = "matched-local-day-mae-feedback-v2"
 
 
 def ha_energies(configuration, baseline, predictions, now):
-    """Project complete fresh AC groups using the declared standalone conversion exactly once.
+    """Project independent pure-PV AC candidates without spending a shared converter budget.
 
     Dividing metered AC by declared efficiency is a standalone-equivalent DC
     input. It does not claim to recover clipped panel DC or hybrid battery routes.
+    Shared AC limits apply after model selection, not to these comparison candidates.
     Missing provider coverage remains absent. No provider extends another's tail.
     """
     result, issues = {}, {}
@@ -107,13 +107,7 @@ def ha_energies(configuration, baseline, predictions, now):
             result[source.source_id] = tuple(energies)
         elif source.source_id not in issues:
             issues[source.source_id] = "Home Assistant forecast coverage is incomplete"
-    limited = limit_ac_production(
-        configuration, tuple(row for rows in result.values() for row in rows)
-    )
-    return {
-        source_id: tuple(row for row in limited if row.source_id == source_id)
-        for source_id in result
-    }, issues
+    return result, issues
 
 
 def family(configuration, source, location, *, learned_policy=None):
