@@ -51,17 +51,24 @@ recency weights and explanations of the underlying measurements.
 These details start collapsed and stay open during refreshes for the same appliance.
 Profile limitations and uncertain measured activity remain visible outside them.
 
-[![A retained learned profile remains usable when no complete cycles are present in recent observations.](../assets/appliance-cycles.png)](../assets/appliance-cycles.png)
+[![A learned cycle profile with active activity and ten recent completed cycles.](../assets/appliance-cycles.png)](../assets/appliance-cycles.png)
 
-*This synthetic example retains a usable profile while its recent cycle list is
-empty. The saved model and recent observations cover separate evidence windows.*
+*This synthetic example shows a complete average profile, a running cycle and
+ten recent completions. Learning details remain collapsed below the list.*
 
-**Detected cycles** shows at most 25 rows at a time. Use **Previous** and **Next**
-and open a row for its completion time. The list reflects the recent cycles
-returned by OEP, rather than every cycle ever used to train the retained model.
-Open **Recorded cycle measurements** to inspect original power and energy states
-separately from the learned average. Missing measurements and uncertain execution
-remain explicit. They are not proof that a physical cycle completed.
+**Detected cycles** shows the ten most recent completed cycles, newest first.
+Each row includes its start, completion, duration and energy without expanding it.
+A detected running cycle appears above the completed cycles with its start time
+and energy measured so far. Uncertain execution remains explicit. Only complete
+accepted cycles refine the model. The page refreshes automatically every five
+minutes while visible. Live activity can therefore lag by up to five minutes.
+The list reflects recent evidence, rather than every cycle ever used to train
+the retained model. Limiting the display does not discard saved evidence.
+
+Learning validates source coverage, counter continuity and physical limits.
+It does not reject an otherwise valid cycle solely because its duration or
+energy differs from previous cycles. Different appliance programs can have
+different consumption. Historical statistics cannot establish continuous reporting.
 
 ## Prepare EV charging
 

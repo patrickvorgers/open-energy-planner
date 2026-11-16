@@ -1,6 +1,5 @@
 """Keep daily cycle planning separate from retained read-only appliance insights."""
 
-from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
@@ -15,7 +14,7 @@ from tests.frontend.browser.helpers import TOKEN
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
 def test_planning_links_select_device_and_insights_retain_unshiftable_history(app_page):
-    """Device identity, pagination, retained models and narrow screens survive the page split."""
+    """Device identity, ten recent cycles, retained models and narrow screens survive the page split."""
     page, url = app_page
     page.clock.install()
     start = datetime(2026, 11, 1, tzinfo=UTC)
@@ -73,21 +72,16 @@ def test_planning_links_select_device_and_insights_retain_unshiftable_history(ap
     authenticate(page, url)
     expect(page.locator("#profile-device")).to_have_value("sensor.dishwasher")
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_have_count(0)
-    expect(page.locator("#detected-cycles > li")).to_have_count(25)
-    page.get_by_role("button", name="Next", exact=True).click()
-    expect(page.get_by_role("button", name="Previous", exact=True)).to_be_focused()
-    expect(page.locator("#detected-cycles > li")).to_have_count(2)
-    expect(page.get_by_text("Page 2", exact=True)).to_be_visible()
-    first = page.locator("#detected-cycles details").first
-    first.locator("summary").click()
-    expect(first).to_have_attribute("open", "")
+    expect(page.locator("#detected-cycles > li")).to_have_count(10)
+    expect(page.get_by_role("button", name="Next", exact=True)).to_have_count(0)
+    expect(page.get_by_role("button", name="Previous", exact=True)).to_have_count(0)
+    expect(page.locator("#detected-cycles details")).to_have_count(0)
+    first = page.locator("#detected-cycles > li").first
+    expect(first).to_contain_text("Started:")
+    expect(first).to_contain_text("Completed:")
     with page.expect_response("**/v1/appliances"):
-        page.clock.fast_forward(10000)
-    expect(page.get_by_text("Page 2", exact=True)).to_be_visible()
-    expect(first).to_have_attribute("open", "")
-    page.get_by_role("button", name="Previous", exact=True).click()
-    expect(page.get_by_role("button", name="Next", exact=True)).to_be_focused()
-    expect(page.locator("#detected-cycles > li")).to_have_count(25)
+        page.clock.fast_forward(300000)
+    expect(page.locator("#detected-cycles > li")).to_have_count(10)
     page.locator("#profile-device").select_option("sensor.washer")
     expect(page.locator("#profile-history")).to_contain_text("The learned profile is retained")
     expect(page.locator("#profile-history")).to_contain_text("Fine cycles in model")
@@ -113,10 +107,10 @@ def test_planning_links_select_device_and_insights_retain_unshiftable_history(ap
     expect(content.locator("#profile-device")).to_have_value("sensor.dishwasher")
     expect(page.locator('.sidebar a[aria-current="page"]')).to_contain_text("Appliance cycles")
     sources["charging_meters"] = ["sensor.dishwasher"]
-    content.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.clock.fast_forward(300000)
     expect(content.locator("#profile-device option")).to_have_text(["Example washer"])
     sources["selected"] = []
-    content.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.clock.fast_forward(300000)
     expect(content.locator("#appliance-profiles")).to_be_hidden()
     expect(content.get_by_role("heading", name="No followed cycle appliances")).to_be_visible()
     assert content.locator("#cycle-chart").evaluate("canvas => !Chart.getChart(canvas)")
@@ -134,7 +128,9 @@ def authenticate(page, url):
 def review_evidence(app_page):
     """Serve stable cycle identities with independently mutable evidence and HA timezone."""
     page, url = app_page
-    page.clock.install()
+    clock_start = datetime(2026, 7, 20, tzinfo=UTC)
+    page.clock.install(time=clock_start)
+    page.clock.pause_at(clock_start)
     start = datetime(2026, 7, 1, 9, tzinfo=UTC)
     profile = {"power_w": [1000, 0, 200], "samples": 76, "evidence": "synthetic"}
     devices = [
@@ -188,11 +184,11 @@ def review_evidence(app_page):
 @pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
-def test_poll_updates_evidence_without_closing_or_defocusing_cycle(review_evidence):
-    """Volatile learning evidence and corrected energy refresh while the same cycle stays open and focused."""
+def test_poll_updates_active_and_completed_cycles_without_replacing_profile(review_evidence):
+    """Running and uncertain activity stays above ten completed runs while unchanged charts retain identity."""
     page, devices, _ = review_evidence
-    first = page.locator("#detected-cycles details").first
-    first.locator("summary").click()
+    first = page.locator("#detected-cycles > li").first
+    chart_identity = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
     devices[0]["observed_run"] = {
         "status": "observed",
         "started_at": "2026-07-20T10:00:00Z",
@@ -200,14 +196,25 @@ def test_poll_updates_evidence_without_closing_or_defocusing_cycle(review_eviden
     }
     devices[0]["recent_cycles"][-1]["energy_kwh"] = 1.23
     with page.expect_response("**/v1/appliances"):
-        page.clock.fast_forward(10000)
+        page.clock.fast_forward(300000)
     expect(page.locator("#profile-history")).to_contain_text("0.50 kWh measured")
-    expect(
-        page.locator("#profile-history > p").filter(has_text="0.50 kWh measured")
-    ).to_be_visible()
-    expect(first.locator("summary")).to_contain_text("1.23 kWh")
-    expect(first).to_have_attribute("open", "")
-    expect(first.locator("summary")).to_be_focused()
+    active = page.locator("#cycle-in-progress")
+    expect(active).to_be_visible()
+    expect(active).to_contain_text("Cycle in progress")
+    expect(active).to_contain_text("Started:")
+    expect(first).to_contain_text("1.23 kWh")
+    expect(page.locator("#detected-cycles > li")).to_have_count(10)
+    assert active.bounding_box()["y"] < first.bounding_box()["y"]
+    assert (
+        page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
+        == chart_identity
+    )
+    devices[0]["observed_run"]["status"] = "uncertain"
+    page.clock.fast_forward(300000)
+    expect(active).to_contain_text("Execution uncertain")
+    devices[0]["observed_run"]["status"] = "complete"
+    page.clock.fast_forward(300000)
+    expect(active).to_have_count(0)
 
 
 @pytest.mark.parametrize(
@@ -237,7 +244,7 @@ def test_page_selection_controls_profile_and_right_hand_history(review_evidence)
     chart_identity = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
     devices[0]["learning_weight"] = 12.5
     with page.expect_response("**/v1/appliances"):
-        page.clock.fast_forward(10000)
+        page.clock.fast_forward(300000)
     expect(learning).to_have_attribute("open", "")
     expect(learning.locator("summary")).to_be_focused()
     expect(learning).to_contain_text("12.50 at latest cycle")
@@ -254,12 +261,12 @@ def test_page_selection_controls_profile_and_right_hand_history(review_evidence)
 @pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
-def test_waiting_profile_keeps_learning_and_recorded_evidence_available(review_evidence):
+def test_waiting_profile_keeps_learning_available_without_raw_detail_requests(review_evidence):
     """A device without a learned profile still completes rendering and exposes its retained evidence."""
     page, devices, _ = review_evidence
     devices[0]["profile"] = None
     devices[0]["history_import"] = {"phase": "processing"}
-    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.clock.fast_forward(300000)
     expect(page.locator("#profile-kind")).to_have_text("Waiting for learning")
     expect(page.locator("#profile-summary")).to_be_hidden()
     expect(page.locator("#profile-note")).to_contain_text("Use the appliance normally")
@@ -269,9 +276,9 @@ def test_waiting_profile_keeps_learning_and_recorded_evidence_available(review_e
     learning.click()
     expect(page.locator("#learning-history")).to_contain_text("Processing hourly history")
     expect(page.locator("#status")).to_have_text("Connected")
-    expect(page.get_by_text("Recorded cycle measurements", exact=True)).to_be_visible()
+    expect(page.get_by_text("Recorded cycle measurements", exact=True)).to_have_count(0)
     devices[0]["power_entity"] = None
-    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.clock.fast_forward(300000)
     expect(page.locator("#profile-note")).to_have_text(
         "Link a power sensor in Home Assistant Energy to start learning."
     )
@@ -308,7 +315,7 @@ def test_cycle_summary_keeps_decisions_visible_and_technical_evidence_collapsed(
     devices[0]["profile"] = {**devices[0]["profile"], "evidence": evidence}
     devices[0]["profile_basis"] = basis
     devices[0]["learning_half_life_days"] = 90
-    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.clock.fast_forward(300000)
     expect(page.locator("#profile-kind")).to_have_text(label)
     expect(page.locator("#profile-note")).to_have_text(note)
     if note:
@@ -333,56 +340,12 @@ def test_simulated_hourly_profile_and_planning_warning_stay_explicit(review_evid
     devices[0]["profile"] = {**devices[0]["profile"], "evidence": "hourly_estimate"}
     devices[0]["hourly_synthetic"] = True
     devices[0]["planning_issue"] = "Link a power sensor in Home Assistant Energy."
-    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
+    page.clock.fast_forward(300000)
     expect(page.locator("#profile-kind")).to_have_text("Simulated hourly estimate")
     expect(
         page.get_by_text("Link a power sensor in Home Assistant Energy.", exact=True)
     ).to_be_visible()
     expect(page.locator("#learning-history")).not_to_have_attribute("open", "")
-
-
-@pytest.mark.parametrize(
-    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
-)
-def test_keyboard_paging_keeps_direction_until_boundary(review_evidence):
-    """Repeated Enter traverses four pages in either direction with usable boundary focus."""
-    page, _, _ = review_evidence
-    page.get_by_role("button", name="Next", exact=True).focus()
-    for number in (2, 3, 4):
-        page.keyboard.press("Enter")
-        expect(page.get_by_text(f"Page {number}", exact=True)).to_be_visible()
-        expect(
-            page.get_by_role("button", name="Next" if number < 4 else "Previous", exact=True)
-        ).to_be_focused()
-    expect(page.locator("#detected-cycles > li")).to_have_count(1)
-    for number in (3, 2, 1):
-        page.keyboard.press("Enter")
-        expect(page.get_by_text(f"Page {number}", exact=True)).to_be_visible()
-        expect(
-            page.get_by_role("button", name="Previous" if number > 1 else "Next", exact=True)
-        ).to_be_focused()
-
-
-@pytest.mark.parametrize(
-    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
-)
-def test_raw_measurements_refresh_timezone_with_identical_winter_offset(review_evidence):
-    """Unchanged July measurements shift one hour in London, including already rendered chart ticks."""
-    page, _, session = review_evidence
-    page.get_by_text("Recorded cycle measurements", exact=True).click()
-    expect(page.locator("#recorded-cycle-status")).to_contain_text("10:00 AM")
-    original = page.locator("#recorded-power-chart").evaluate(
-        "canvas => Chart.getChart(canvas).scales.x.ticks.map(tick => tick.label)"
-    )
-    session["timezone"] = "Europe/London"
-    with page.expect_response("**/v1/appliances"):
-        page.clock.fast_forward(10000)
-    expect(page.locator("#recorded-cycle-status")).to_contain_text("11:00 AM")
-    current = page.locator("#recorded-power-chart").evaluate(
-        "canvas => Chart.getChart(canvas).scales.x.ticks.map(tick => tick.label)"
-    )
-    assert current != original
-    assert any("10:00 AM" in label for label in current)
 
 
 @pytest.mark.parametrize(
@@ -402,94 +365,115 @@ def test_back_to_empty_entity_fragment_restores_initial_device(review_evidence):
 @pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
-def test_old_raw_failure_cannot_replace_newer_success_and_current_failure_recovers(review_evidence):
-    """Release a stale rejection after a newer success, then prove current failures and retry remain visible."""
+def test_cycle_history_uses_five_minute_poll_and_latest_ten_by_completion(review_evidence):
+    """No reads happen before five minutes and unordered evidence still shows the ten newest completions."""
     page, devices, _ = review_evidence
-    raw = deepcopy(devices[0]["raw_history"])
-    state = {"revision": "r1", "devices": devices}
-    pending = []
-    page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
+    requests = []
+    page.on("request", lambda request: requests.append(request.url))
+    expect(page.get_by_role("button", name="Refresh cycle evidence", exact=True)).to_have_count(0)
+    expect(page.get_by_text("Recorded cycle measurements", exact=True)).to_have_count(0)
+    devices[0]["recent_cycles"] = list(reversed(devices[0]["recent_cycles"]))
+    page.clock.fast_forward(299999)
+    assert not any("/v1/appliances" in address for address in requests)
+    with page.expect_response("**/v1/appliances"):
+        page.clock.fast_forward(1)
+    rows = page.locator("#detected-cycles > li")
+    expect(rows).to_have_count(10)
+    expect(rows.first).to_contain_text("7/13/2026, 9:00 PM")
+    expect(rows.first).to_contain_text("7/13/2026, 10:00 PM")
+    expect(rows.last).to_contain_text("7/12/2026, 9:00 AM")
+    expect(page.locator("#detected-cycles details")).to_have_count(0)
+    assert not any("raw_entity=" in address for address in requests)
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_cycle_poll_failure_keeps_evidence_then_recovers_automatically(review_evidence):
+    """A failed periodic read retains the selected model and automatically recovers at the next interval."""
+    page, devices, _ = review_evidence
+    page.get_by_label("Appliance", exact=True).select_option("sensor.dryer")
+    page.route("**/v1/appliances", lambda route: route.fulfill(status=503))
+    page.clock.fast_forward(300000)
+    expect(page.locator("#status")).to_contain_text("Retained evidence is shown")
+    expect(page.locator("#profile-title")).to_have_text("Dryer")
+    expect(page.locator("#cycle-charts")).to_be_visible()
+    page.unroute("**/v1/appliances")
+    page.route("**/v1/appliances", lambda route: route.fulfill(json={"devices": devices}))
+    page.clock.fast_forward(300000)
+    expect(page.locator("#status")).to_have_text("Connected")
+    expect(page.locator("#profile-device")).to_have_value("sensor.dryer")
+
+
+def test_initial_cycle_read_failure_retries_without_manual_refresh(review_evidence):
+    """Polling waits for connection and recovers a failed first authenticated load automatically."""
+    page, devices, _ = review_evidence
+    requests = []
+    page.on("request", lambda request: requests.append(request.url))
+    page.reload()
+    page.clock.fast_forward(300000)
+    assert not any("/v1/appliances" in address for address in requests)
+    page.route("**/v1/appliances", lambda route: route.fulfill(status=503))
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#status")).to_contain_text("reload this page")
+    page.unroute("**/v1/appliances")
+    page.route("**/v1/appliances", lambda route: route.fulfill(json={"devices": devices}))
+    page.clock.fast_forward(300000)
+    expect(page.locator("#status")).to_have_text("Connected")
+    expect(page.locator("#cycle-charts")).to_be_visible()
+
+
+@pytest.mark.parametrize(
+    "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
+)
+def test_cycle_rows_follow_installation_timezone_and_capture_compact_history(review_evidence):
+    """A representative complete profile, ten inline runs and active status stay readable in the HA timezone."""
+    page, devices, session = review_evidence
+    devices[0]["profile"] = {
+        "power_w": [
+            300,
+            1800,
+            1200,
+            80,
+            80,
+            3000,
+            1800,
+            80,
+            0,
+            0,
+            0,
+            120,
+            600,
+            80,
+            80,
+            1800,
+            200,
+            50,
+        ],
+        "phase_seconds": 300,
+        "samples": 76,
+        "evidence": "synthetic",
+    }
+    devices[0]["observed_run"] = {
+        "status": "observed",
+        "started_at": "2026-07-20T10:00:00Z",
+        "energy_kwh": 0.5,
+    }
+    session["timezone"] = "Europe/London"
+    page.clock.fast_forward(300000)
+    first = page.locator("#detected-cycles > li").first
+    expect(first).to_contain_text("7/13/2026, 10:00 PM")
+    expect(first).to_contain_text("7/13/2026, 11:00 PM")
+    expect(page.locator("#cycle-in-progress")).to_contain_text("11:00 AM")
+    expect(page.locator("#detected-cycles > li")).to_have_count(10)
+    expect(page.locator("#learning-history")).not_to_have_attribute("open", "")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.evaluate("""() => {
-        window.rawFailuresHandled = [];
-        const original = Promise.prototype.catch;
-        Promise.prototype.catch = function(handler) {
-            return original.call(this, error => {
-                try { return handler(error); }
-                finally {
-                    if (['stale-raw-failure', 'current-raw-failure'].includes(error?.message)) window.rawFailuresHandled.push(error.message);
-                }
-            });
-        };
-    }""")
-
-    def hold_raw(route):
-        """Acknowledge each actual request before the test controls its terminal response."""
-        pending.append(route)
-        page.evaluate("count => window.rawHeldCount = count", len(pending))
-
-    def use_summary(revision):
-        """Advance the evidence identity without including the separately requested original curves."""
-        state["revision"] = revision
-        devices[0]["raw_history"] = {
-            **{
-                key: value
-                for key, value in raw.items()
-                if key not in ("power_curve", "energy_curve")
-            },
-            "curve_revision": revision,
+        for (const id of ['cycle-chart', 'cycle-energy-chart']) {
+            const chart = Chart.getChart(id); chart.stop(); chart.update('none');
         }
-
-    def succeed(request_index, revision, peak):
-        """Return independently specified raw evidence for the selected revision."""
-        detail = deepcopy(devices[0])
-        detail["raw_history"] = {**deepcopy(raw), "curve_revision": revision}
-        detail["raw_history"]["power_curve"][0]["power_w"] = peak
-        pending[request_index].fulfill(json={"revision": revision, "devices": [detail]})
-
-    page.route("**/v1/appliances?raw_entity=*", hold_raw)
-    page.get_by_text("Recorded cycle measurements", exact=True).click()
-    use_summary("r1")
-    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
-    page.wait_for_function("() => window.rawHeldCount === 1")
-    use_summary("r2")
-    with page.expect_response("**/v1/appliances"):
-        page.clock.fast_forward(10000)
-    page.wait_for_function("() => window.rawHeldCount === 2")
-    succeed(1, "r2", 2000)
-    expect(page.locator("#recorded-cycle-status")).to_contain_text("Power and energy agree")
-    before = page.locator("#recorded-cycle-status").inner_text()
-    curves = page.evaluate(
-        "['recorded-power-chart','recorded-energy-chart'].map(id => Chart.getChart(id).data.datasets[0].data)"
-    )
-    assert curves[0][0]["y"] == 2000
-    with page.expect_response(
-        lambda response: "raw_entity=" in response.url and response.status == 503
-    ):
-        pending[0].fulfill(status=503, body="stale-raw-failure")
-    page.wait_for_function("() => window.rawFailuresHandled.includes('stale-raw-failure')")
-    expect(page.locator("#recorded-cycle-status")).to_have_text(before)
-    assert (
-        page.evaluate(
-            "['recorded-power-chart','recorded-energy-chart'].map(id => Chart.getChart(id).data.datasets[0].data)"
-        )
-        == curves
-    )
-    with page.expect_response("**/v1/appliances"):
-        page.clock.fast_forward(10000)
-    expect(page.locator("#recorded-cycle-status")).to_have_text(before)
-    assert len(pending) == 2
-    use_summary("r3")
-    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
-    page.wait_for_function("() => window.rawHeldCount === 3")
-    pending[2].fulfill(status=503, body="current-raw-failure")
-    page.wait_for_function("() => window.rawFailuresHandled.includes('current-raw-failure')")
-    expect(page.locator("#recorded-cycle-status")).to_contain_text(
-        "Recorded state details unavailable"
-    )
-    page.get_by_role("button", name="Refresh cycle evidence", exact=True).click()
-    page.wait_for_function("() => window.rawHeldCount === 4")
-    succeed(3, "r3", 3000)
-    expect(page.locator("#recorded-cycle-status")).to_contain_text("Power and energy agree")
-    assert (
-        page.evaluate("Chart.getChart('recorded-power-chart').data.datasets[0].data[0].y") == 3000
+    }""")
+    page.screenshot(
+        path=f"results/ci/cycle-compact-{page.viewport_size['width']}.png", full_page=True
     )
