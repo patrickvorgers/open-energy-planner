@@ -900,16 +900,20 @@ def test_workspace_view_signal_survives_late_modules_hash_bursts_and_history(app
     page.route("**/chart_days.js", hold)
     page.goto(url + "/workspace?page=%2Foverview%23planning", wait_until="domcontentloaded")
     page.wait_for_function("() => window.heldViewModules > 0")
-    open_primary_navigation(page)
-    page.get_by_role("region", name="Energy", exact=True).get_by_role(
-        "link", name="Savings", exact=True
-    ).click()
-    page.unroute("**/chart_days.js")
+    assert len(held) == 1
+    page.locator("#workspace-content").evaluate("""element => {
+        element.contentWindow.retainedViewMarker = true;
+        element.contentWindow.location.hash = 'savings';
+    }""")
+    with page.expect_response(lambda response: response.url.endswith("/chart_days.js")) as loaded:
+        held[0].continue_()
+    assert loaded.value.ok
+    page.unroute("**/chart_days.js", hold)
     content = page.frame_locator("#workspace-content")
     expect(content.locator("h1")).to_have_text("Savings")
     expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Savings")
-    page.locator("#workspace-content").evaluate(
-        "element => {element.contentWindow.retainedViewMarker = true;}"
+    page.wait_for_function(
+        "() => document.getElementById('workspace-content').contentDocument.readyState === 'complete'"
     )
     for destination in ("Planning", "Savings", "Planning"):
         open_primary_navigation(page)

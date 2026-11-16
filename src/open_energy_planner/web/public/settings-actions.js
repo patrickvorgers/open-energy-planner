@@ -11,8 +11,8 @@ export async function sessionResponse(base, signal) {
             && new URL(parent.document.querySelector('meta[name="oep-api-base"]').content, parent.location.href).href === new URL(base, location.href).href) owner = parent.document;
     } catch { /* Standalone and cross-origin frames own their separate requests. */ }
     let pending = owner.oepSessionRequest;
-    if (!pending || pending.url !== url) {
-        pending = {url};
+    if (!pending || pending.url !== url || pending.expiresAt <= Date.now()) {
+        pending = {url, expiresAt: Date.now() + SESSION_READ_TIMEOUT_MILLISECONDS};
         const current = pending;
         const deadline = AbortSignal.timeout(SESSION_READ_TIMEOUT_MILLISECONDS);
         pending.promise = fetch(url, {cache: "no-store", redirect: "error", signal: deadline})
@@ -20,15 +20,23 @@ export async function sessionResponse(base, signal) {
             .finally(() => { if (owner.oepSessionRequest === current) delete owner.oepSessionRequest; });
         owner.oepSessionRequest = pending;
     }
-    let response;
-    if (signal) {
-        response = await new Promise((resolve, reject) => {
-            const abort = () => reject(signal.reason);
-            signal.addEventListener("abort", abort, {once: true});
-            pending.promise.then(value => { signal.removeEventListener("abort", abort); resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
+    let timer, abort;
+    try {
+        const response = await new Promise((resolve, reject) => {
+            abort = () => reject(signal.reason);
+            // A discarded child can leave its shared promise unsettled, so every live waiter owns its deadline.
+            timer = setTimeout(() => {
+                if (owner.oepSessionRequest === pending) delete owner.oepSessionRequest;
+                reject(new DOMException("Session read timed out", "TimeoutError"));
+            }, Math.max(0, pending.expiresAt - Date.now()));
+            signal?.addEventListener("abort", abort, {once: true});
+            pending.promise.then(resolve, reject);
         });
-    } else response = await pending.promise;
-    return response.clone();
+        return response.clone();
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+    }
 }
 
 /** Dismiss the shared mobile menu, including interactions originating in the content document. */

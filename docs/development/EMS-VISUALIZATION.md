@@ -176,6 +176,10 @@ Planning, Installation, Contract, Forecast quality and Activity join concurrent
 public session reads with their same-origin workspace shell. Each consumer gets
 its own response body. Cancelling one consumer does not cancel the shared read.
 The underlying request has a five-second deadline and is removed when settled.
+Every consumer also bounds its own wait by that shared deadline. An expired
+pending record is replaced even when its originating child document disappeared
+before settling the fetch. Cleanup removes only the same pending record, so an
+old completion cannot remove a newer read.
 No completed metadata, credential, failed response or cross-origin request is
 cached. Later version and source-name checks still fetch fresh metadata.
 

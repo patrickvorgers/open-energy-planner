@@ -90,3 +90,59 @@ def test_one_cancelled_session_consumer_does_not_cancel_other_readers(app_page):
     assert len(held) == 2
     held[1].fulfill(json={"timezone": "Europe/Berlin", "ingress": False})
     page.wait_for_function("() => window.sessionWaiters.fresh?.timezone === 'Europe/Berlin'")
+
+
+@pytest.mark.parametrize("shell_waiter", [True, False])
+def test_discarded_child_session_owner_cannot_strand_shell_or_replacement(app_page, shell_waiter):
+    """A discarded child with a nonsettling transport cannot strand shell waiters or subsequent reads."""
+    page, url = app_page
+    page.goto(url + "/workspace?page=%2Factivity")
+    page.wait_for_load_state("networkidle")
+    held = []
+
+    def hold(route):
+        """Keep the real child fetch pending until its owning document is discarded."""
+        held.append(route)
+        page.evaluate("count => {window.sessionHeldCount = count;}", len(held))
+
+    page.route("**/setup/session", hold)
+    child = page.locator("#workspace-content").content_frame
+    child.locator("body").evaluate("""async () => {
+        const script = [...document.scripts].find(script => script.src.endsWith('/activity.js'));
+        const {sessionResponse} = await import(new URL('./settings-actions.js', script.src));
+        const original = window.fetch;
+        window.fetch = (...arguments_) => {
+            original(...arguments_).catch(() => {});
+            return new Promise(() => {});
+        };
+        sessionResponse(document.querySelector('meta[name="oep-api-base"]').content).catch(() => {});
+    }""")
+    page.wait_for_function("() => window.sessionHeldCount === 1")
+    page.evaluate(
+        """async shellWaiter => {
+        const script = [...document.scripts].find(script => script.src.endsWith('/workspace.js'));
+        const {sessionResponse} = await import(new URL('./settings-actions.js', script.src));
+        const base = document.querySelector('meta[name="oep-api-base"]').content;
+        window.readFreshSession = () => sessionResponse(base).then(response => response.json());
+        window.shellSessionStarted = performance.now();
+        if (shellWaiter) window.readFreshSession().then(() => window.shellSessionOutcome = 'success', error => {
+            window.shellSessionOutcome = error.name;
+            window.shellSessionDuration = performance.now() - window.shellSessionStarted;
+        });
+        document.getElementById('workspace-content').src = 'about:blank';
+    }""",
+        shell_waiter,
+    )
+    if shell_waiter:
+        page.wait_for_function("() => window.shellSessionOutcome !== undefined", timeout=6500)
+        assert page.evaluate("window.shellSessionOutcome") == "TimeoutError"
+        assert page.evaluate("window.shellSessionDuration") <= 6000
+    else:
+        page.wait_for_function(
+            "() => performance.now() - window.shellSessionStarted >= 5100", timeout=6500
+        )
+    assert len(held) == 1
+    page.evaluate("() => {window.readFreshSession().then(value => window.freshSession = value);}")
+    page.wait_for_function("() => window.sessionHeldCount === 2", timeout=1500)
+    held[1].fulfill(json={"timezone": "Europe/Berlin", "ingress": False})
+    page.wait_for_function("() => window.freshSession?.timezone === 'Europe/Berlin'")
