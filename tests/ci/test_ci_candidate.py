@@ -521,6 +521,7 @@ def test_every_reviewer_requires_base_inclusion(candidate, kody_candidate, provi
     [
         "No New Commits (No changes detected since last review)",
         "No changed files in this pull request.",
+        "Automated Review is disabled — Enable 'Automated Code Review' in General Settings",
     ],
 )
 def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, action, summary):
@@ -541,16 +542,29 @@ def test_kody_no_new_commits_skip_preserves_completed_review(kody_candidate, act
     assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
 
 
-@pytest.mark.parametrize("earlier", ["missing", "failure", "in_progress", "skipped"])
+@pytest.mark.parametrize(
+    "earlier",
+    [
+        "missing",
+        "failure",
+        "in_progress",
+        "skipped",
+        "warnings",
+        "unknown_skip",
+        "wrong_app",
+        "wrong_head",
+    ],
+)
 @pytest.mark.parametrize(
     "summary",
     [
         "No New Commits (No changes detected since last review)",
         "No changed files in this pull request.",
+        "Automated Review is disabled — Enable 'Automated Code Review' in General Settings",
     ],
 )
 def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate, earlier, summary):
-    """A no-change skip needs real success and cannot hide an actual later failed or pending attempt."""
+    """Known metadata needs authentic current-head success and cannot hide a later substantive problem."""
     event, current, checks = kody_candidate
     metadata = {
         **checks[2],
@@ -563,10 +577,27 @@ def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate
     }
     if earlier == "missing":
         checks.pop(2)
+    elif earlier == "wrong_app":
+        checks[2]["app"] = {"id": 999}
+    elif earlier == "wrong_head":
+        checks[2]["head_sha"] = "3" * 40
     else:
         attempt = {**checks[2], "id": 5, "conclusion": earlier}
         if earlier == "in_progress":
             attempt.update(status="in_progress", conclusion=None)
+        elif earlier == "warnings":
+            attempt.update(
+                conclusion="success",
+                output={
+                    "title": "Code Review Completed with Warnings",
+                    "summary": "Review finished with warnings.",
+                },
+            )
+        elif earlier == "unknown_skip":
+            attempt.update(
+                conclusion="skipped",
+                output={"title": "Code Review Skipped", "summary": "Unrecognized skip reason"},
+            )
         checks.append(attempt)
     checks.append(metadata)
     with pytest.raises(VerificationError):

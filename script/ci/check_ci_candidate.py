@@ -111,6 +111,7 @@ def latest_check(checks, name, app_id):
                     in {
                         "No New Commits (No changes detected since last review)",
                         "No changed files in this pull request.",
+                        "Automated Review is disabled — Enable 'Automated Code Review' in General Settings",
                     }
                 )
             )
