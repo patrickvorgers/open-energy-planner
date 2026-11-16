@@ -61,6 +61,14 @@ No table, column, index or stored JSON shape is added by this coordination.
 
 ## Capacity read model
 
+Planning projections select required `oep_archive_parts` fields and joined
+`oep_archive_values` payloads before decoding. Selected leaves and complete selected
+child records retain SHA-256 validation. Omitted root/snapshot content is not
+validated by a projection. Full archive reads and transfers retain full hashes.
+This adds no tables, persisted caches, columns, indexes or JSON contracts.
+The app-local single-result scenario cache does not bypass fresh archive reads,
+retention or current contract valuation. See [archive reads](PLAN-ARCHIVE.md).
+
 Settings > Data storage reads the active engine through authenticated
 `GET /v1/storage`. It adds no tables, writes, pruning or migration.
 The separate authenticated `/v1/storage/migration` maintenance API manages

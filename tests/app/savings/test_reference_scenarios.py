@@ -30,6 +30,71 @@ def plan_document(physics):
     }
 
 
+def test_scenario_reuse_is_detached_invalidated_and_joins_concurrent_reads(monkeypatch):
+    """One frozen request computes once. Changed stock, content and a new app cannot reuse stale bars."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from open_energy_planner.savings import scenarios as module
+
+    plan = plan_document(problem())
+    reference = comparison(plan)
+    calls = []
+    dispatch = module.dispatch
+
+    def counted(*arguments):
+        """Observe actual replay work while retaining all physics validation."""
+        calls.append(1)
+        return dispatch(*arguments)
+
+    monkeypatch.setattr(module, "dispatch", counted)
+    views = module.ScenarioViews()
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        results = list(workers.map(lambda _: views.read(plan, reference), range(4)))
+    assert len(calls) == 1
+    assert all(result == results[0] for result in results)
+    results[0]["self_consumption"]["chart"]["expected_flows"][0]["grid_import"] = 999
+    assert (
+        views.read(plan, reference)["self_consumption"]["chart"]["expected_flows"][0]["grid_import"]
+        == 0
+    )
+    reference["reference"][0]["import_kwh"] = 99
+    assert "issue" in views.read(plan, reference)["self_consumption"]
+    assert len(calls) == 2
+    reference = comparison(plan)
+    changed = deepcopy(plan)
+    changed["input_snapshot"]["problem"]["batteries"][0]["battery"]["initial_kwh"] = 0
+    result = views.read(changed, comparison(changed))
+    assert result["self_consumption"]["chart"]["expected_flows"][0]["grid_import"] == 1
+    assert len(calls) == 3
+    module.ScenarioViews().read(plan, reference)
+    assert len(calls) == 4
+
+
+def test_fresh_no_battery_comparison_is_not_dispatched_twice(monkeypatch):
+    """A quarter needs one no-battery pass and one archived-reference verification, never a duplicate pass."""
+    from open_energy_planner.savings import forecast
+    from open_energy_planner.savings import scenarios as module
+
+    plan = plan_document(problem(pv_kwh=1, load_kwh=0.5))
+    reference = comparison(plan)
+    calls = []
+    dispatch = forecast.dispatch
+
+    def counted(*arguments):
+        """Count real physical interval dispatches in both calculation owners."""
+        calls.append(1)
+        return dispatch(*arguments)
+
+    monkeypatch.setattr(forecast, "dispatch", counted)
+    monkeypatch.setattr(module, "dispatch", counted)
+    result = scenarios(plan, reference)
+    assert len(calls) == 2
+    assert result["without_battery"]["chart"]["expected_flows"][0]["grid_export"] == 0.5
+    assert (
+        result["self_consumption"]["chart"]["expected_flows"][0]["batteries"][0]["end_kwh"] == 2.5
+    )
+
+
 def test_without_battery_exports_even_when_export_costs_money():
     """1 kWh solar minus .5 demand exports .5 at -.1: .05 cost. Self-consumption stores .5 instead."""
     plan = plan_document(problem(pv_kwh=1, load_kwh=0.5))

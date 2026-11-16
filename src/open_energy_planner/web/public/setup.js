@@ -1,5 +1,6 @@
 import {money, when, percentage, percentageInput, inputNumber, useHomeAssistantTimezone, sourceName, localDate, localInstant} from "./display.js";
 import {SaveBar} from "./save-bar.js";
+import {sessionResponse} from "./settings-actions.js";
 import {InstallationLayout} from "./installation-layout.js";
 import {PriceSourceSettings} from "./price-sources.js";
 import {sourceRefresh} from "./source-refresh.js";
@@ -1131,7 +1132,7 @@ $("save").onclick = async () => {
 async function initializeIngress() {
     try {
         const base = document.querySelector('meta[name="oep-api-base"]').content;
-        const response = await fetch(base + "setup/session", {redirect: "error"});
+        const response = await sessionResponse(base);
         const session = await response.json();
         if (!session.ingress) return;
         ingressSession = true;

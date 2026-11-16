@@ -38,7 +38,6 @@ function loaded() {
 
 /** Attach hash tracking to each new document without reading an inaccessible error document. */
 function contentLoaded() {
-    // Attach after the child view handler so hash navigation reads its updated selection.
     if (frame.contentDocument?.readyState !== "complete") return;
     loaded();
     if (frame.contentDocument) {
@@ -48,6 +47,7 @@ function contentLoaded() {
     }
 }
 frame.addEventListener("load", contentLoaded);
+frame.addEventListener("oep-view-change", loaded);
 
 document.addEventListener("click", event => {
     const link = event.target.closest("a[href]");

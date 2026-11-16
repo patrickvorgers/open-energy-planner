@@ -463,26 +463,29 @@ class SqlPlanRepository:
         }
         self.save()
 
-    def _read_record(self, connection, ref, cache, depth=0):
-        """Reconstruct exact stored JSON and verify its content hash, never rerunning the planner."""
+    def _read_record(self, connection, ref, cache, depth=0, *, fields=None, snapshot_fields=None):
+        """Decode selected leaves, verifying complete records only when all their fields are read."""
         if depth >= MAX_RECORD_DEPTH:
             raise ValueError("Archive record nesting invalid")
         if ref in cache:
             return deepcopy(cache[ref])
-        rows = (
-            connection.execute(
-                select(PARTS, VALUES.c.payload)
-                .outerjoin(VALUES, VALUES.c.digest == PARTS.c.value_ref)
-                .where(PARTS.c.owner == ref)
-            )
-            .mappings()
-            .all()
+        query = (
+            select(PARTS, VALUES.c.payload)
+            .outerjoin(VALUES, VALUES.c.digest == PARTS.c.value_ref)
+            .where(PARTS.c.owner == ref)
         )
+        if fields is not None:
+            query = query.where(PARTS.c.field.in_(fields))
+        rows = connection.execute(query).mappings().all()
         value = {}
         for row in rows:
             if row["record_ref"]:
                 value[row["field"]] = self._read_record(
-                    connection, row["record_ref"], cache, depth + 1
+                    connection,
+                    row["record_ref"],
+                    cache,
+                    depth + 1,
+                    fields=snapshot_fields if row["field"] == "input_snapshot" else None,
                 )
             else:
                 payload = row["payload"]
@@ -492,7 +495,7 @@ class SqlPlanRepository:
                 if digest(child) != row["value_ref"]:
                     raise ValueError("Archive input hash mismatch")
                 value[row["field"]] = child
-        if digest(value) != ref:
+        if fields is None and snapshot_fields is None and digest(value) != ref:
             raise ValueError("Archive record hash mismatch")
         cache[ref] = value
         return value
@@ -502,11 +505,28 @@ class SqlPlanRepository:
         ref = connection.scalar(select(PLANS.c.record_ref).where(PLANS.c.plan_id == plan_id))
         return self._read_record(connection, ref, {}) if ref else None
 
-    def get_plan(self, plan_id):
-        """Load an original archived plan independently of current validity/configuration."""
+    def get_plan(self, plan_id, *, fields=None, snapshot_fields=None):
+        """Read detached originals or selected hash-checked leaves from the active archive.
+
+        A projection verifies selected leaves and complete selected child records,
+        not the omitted fields or the complete root hash. Full reads retain full
+        reconstruction validation. No content survives between requests, so
+        deletion, transfer and changed payloads are observed on every read.
+        """
         try:
             with self.engine.connect() as connection:
-                return self._read_plan(connection, plan_id)
+                if fields is None and snapshot_fields is None:
+                    return self._read_plan(connection, plan_id)
+                ref = connection.scalar(
+                    select(PLANS.c.record_ref).where(PLANS.c.plan_id == plan_id)
+                )
+                return (
+                    self._read_record(
+                        connection, ref, {}, fields=fields, snapshot_fields=snapshot_fields
+                    )
+                    if ref
+                    else None
+                )
         except SQLAlchemyError:
             raise OSError("Archive read failed") from None
 

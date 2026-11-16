@@ -1,7 +1,7 @@
 import "./chart_theme.js";
 import {qualityChart} from "./quality-chart.js";
 import {when, dateLabel, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
-import {bindSettingsActions} from "./settings-actions.js";
+import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 import {currentModelRows, renderCurrentModel} from "./quality-models.js";
 bindSettingsActions();
 
@@ -156,4 +156,4 @@ find("connect").onsubmit = (event) => { event.preventDefault(); token = find("to
 find("quality-source").onchange = () => {selections[subject] = find("quality-source").value; remember(); renderSources();};
 for (const button of document.querySelectorAll("#quality-subjects button")) button.onclick = () => {subject = button.dataset.subject; devices(displayedDay || {}); remember(); renderSources();};
 find("quality-day").onchange = show; find("quality-refresh").onclick = () => load(); find("quality-older").onclick = () => load(true);
-fetch(base + "setup/session", {redirect: "error"}).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); watchSourceNames(() => api("setup/session"), show, session.source_names_revision); find("connect").hidden = Boolean(session.ingress); if (session.ingress) load(); }).catch((error) => { find("quality-status").textContent = error.message; });
+sessionResponse(base).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); watchSourceNames(() => sessionResponse(base).then(response => response.json()), show, session.source_names_revision); find("connect").hidden = Boolean(session.ingress); if (session.ingress) load(); }).catch((error) => { find("quality-status").textContent = error.message; });

@@ -1,6 +1,6 @@
 /** Read-only activity history with installation-local dates and cursor-based live updates. */
 import {when, localDate, useHomeAssistantTimezone, planName, planStrategy} from "./display.js";
-import {bindSettingsActions} from "./settings-actions.js";
+import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 import {connectEvents, observeEvents} from "./events.js";
 import {priceSourceName} from "./price-sources.js";
 bindSettingsActions();
@@ -20,7 +20,7 @@ const newestFirst = (left, right) => right.started_at.localeCompare(left.started
 /** Never expose raw response bodies or save credentials. */
 async function api(path) {
     try {
-        const response = await fetch(base + path, {headers: token ? {Authorization:`Bearer ${token}`} : {}, cache:"no-store", redirect:"error", signal:AbortSignal.timeout(10000)});
+        const response = path === "setup/session" ? await sessionResponse(base) : await fetch(base + path, {headers: token ? {Authorization:`Bearer ${token}`} : {}, cache:"no-store", redirect:"error", signal:AbortSignal.timeout(10000)});
         if ([401,403].includes(response.status)) find("connect").hidden = false;
         if (!response.ok) {
             await response.body?.cancel();

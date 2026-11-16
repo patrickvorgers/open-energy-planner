@@ -80,6 +80,45 @@ def test_backend_exact_reconstruction_reuse_and_restart(archive):
         assert connection.scalar(select(func.count()).select_from(PLANS)) == 2
 
 
+def test_plan_projection_omits_unselected_payloads_and_rechecks_selected_content(archive):
+    """Selected leaves stay exact and detached. Fresh corruption fails despite a previous successful read."""
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import digest
+
+    repository, engine, _root = archive
+    original = plan()
+    original["solar_evidence"] = {"training": list(range(100))}
+    repository.state["plan"] = original
+    repository.save()
+    options = {
+        "fields": ("plan_id", "input_snapshot"),
+        "snapshot_fields": ("problem",),
+    }
+    expected = {
+        "plan_id": "plan-a",
+        "input_snapshot": {"problem": original["input_snapshot"]["problem"]},
+    }
+    assert repository.get_plan("missing", **options) is None
+    projected = repository.get_plan("plan-a", **options)
+    assert projected == expected
+    projected["input_snapshot"]["problem"]["limit"] = 999
+    assert repository.get_plan("plan-a", **options) == expected
+    with engine.begin() as connection:
+        connection.execute(
+            VALUES.update()
+            .where(VALUES.c.digest == digest(original["solar_evidence"]))
+            .values(payload="not JSON")
+        )
+    assert repository.get_plan("plan-a", **options) == expected
+    with pytest.raises(ValueError):
+        repository.get_plan("plan-a")
+    with engine.begin() as connection:
+        connection.execute(
+            VALUES.update().where(VALUES.c.digest == digest(5.0)).values(payload="6.0")
+        )
+    with pytest.raises(ValueError, match="hash mismatch"):
+        repository.get_plan("plan-a", **options)
+
+
 def test_contract_projection_reads_one_query_and_verifies_only_selected_leaves(archive):
     """One bounded query reads contract identity without loading unrelated forecasts on every backend."""
     repository, engine, _root = archive
