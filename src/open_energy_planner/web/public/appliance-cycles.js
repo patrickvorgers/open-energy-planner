@@ -9,7 +9,7 @@ bindSettingsActions();
 const find = id => document.getElementById(id);
 let token = "", chart, energyChart, current, renderedProfile;
 let evidenceRefreshing = false, rawLoadingKey, rawLoaded;
-let historyPage = 0, historyEntity, renderedHistory;
+let historyPage = 0, historyEntity, renderedHistory, historyTimezone;
 const requestedEntity = new URLSearchParams(location.hash.slice(1)).get("entity");
 const api = (path, body, method) => applianceApi(token, path, body, method);
 const readEvidence = () => readApplianceEvidence(token);
@@ -56,7 +56,7 @@ function profile() {
     if (historyEntity !== device?.entity_id) { historyPage = 0; historyEntity = device?.entity_id; }
     const cycles = [...(device?.recent_cycles || [])].reverse();
     historyPage = Math.min(historyPage, Math.max(0, Math.ceil(cycles.length / 25) - 1));
-    const historyKey = JSON.stringify([device, historyPage, when("2000-01-01T00:00:00Z")]);
+    const historyKey = JSON.stringify([device, historyPage, historyTimezone, when("2000-01-01T00:00:00Z")]);
     if (historyKey === renderedHistory) return;
     renderedHistory = historyKey;
     const history = find("profile-history"); history.replaceChildren();
@@ -137,6 +137,7 @@ async function load() {
         const [data, sources, session] = await readEvidence();
         const devices = followedDevices(data, sources);
         useHomeAssistantTimezone(session.timezone);
+        historyTimezone = session.timezone || "UTC";
         current = {...data, devices};
         find("connect").hidden = true;
         find("status").textContent = data.issue || "Connected";

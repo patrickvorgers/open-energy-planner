@@ -384,14 +384,14 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     )
     chart_id = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
     page.locator("#profile-device").focus()
-    body["timezone"] = "Pacific/Auckland"
+    body["timezone"] = "Europe/London"
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
     with page.expect_response(url + "/setup/session") as metadata:
         page.clock.fast_forward(20000)
-    assert metadata.value.json()["timezone"] == "Pacific/Auckland"
+    assert metadata.value.json()["timezone"] == "Europe/London"
     page.clock.fast_forward(10000)
     expected_start = page.evaluate(
-        "value => new Date(value).toLocaleString(undefined, {timeZone: 'Pacific/Auckland', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'})",
+        "value => new Date(value).toLocaleString(undefined, {timeZone: 'Europe/London', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'})",
         start.isoformat(),
     )
     expect(history).to_contain_text(expected_start)
