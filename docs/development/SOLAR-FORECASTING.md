@@ -279,7 +279,9 @@ state for the new site. Restart resets these in-memory retry counters.
 ### Direct production model and learned time trend
 
 The production candidate is an independent CPU XGBoost model per independently
-metered source. Its target is the measured hourly kWh at the declared AC or DC
+metered source. Home Assistant Energy solar meters represent pure PV production,
+including hybrid and shared-inverter groups. Topology alone does not block training
+or model selection. Its target is the measured hourly kWh at the declared AC or DC
 boundary. Its features are UTC calendar cycles, GHI/DNI/DHI, temperature, wind
 and solar position. Neither PVWatts output
 nor a measured-to-PVWatts ratio enters the learned features or target. The fixed
@@ -449,7 +451,8 @@ not another published assessment status.
 The model predicts production directly within its measurement boundary and
 physical power limits. Standalone AC production may be represented as equivalent
 DC using declared conversion efficiency for planning. This does not reconstruct
-unobserved clipped panel DC. Hybrid AC still needs independent route evidence.
+unobserved clipped panel DC. Pure PV meters on hybrid inverters use the same
+declared boundary as other PV meters.
 Changing algorithm, feature policy, geometry or site starts an independent
 comparison family. Earlier scalar or correction-factor evidence cannot promote
 the new direct-production model. The scalar fitting utility does not provide a
@@ -580,14 +583,18 @@ at planning admission. HA unload rejects queued synchronization, waits for the
 active exchange and then removes provider listeners. Deferred catalogue or cache
 reads cannot start a new forecast upload after closure begins.
 
-HA forecasts describe metered AC production. Eligible standalone sources use
-AC divided by their declared converter efficiency as standalone-equivalent DC.
-The planner then applies that conversion exactly once. This does not recover
-clipped available panel DC. Hybrid routes, potential curtailment, DC meters and
-independently metered sources sharing an inverter are ineligible for HA planning.
-Their imported geometry remains usable by PVWatts. They retain an explicit reason
-and baseline fallback. Explicit all-HA standalone installations do not require
-the independent PVWatts weather service to produce a fresh HA forecast.
+HA forecasts describe pure PV metered AC production, including hybrid and
+independently metered groups sharing an inverter. AC divided by the declared
+converter efficiency gives standalone-equivalent DC. The planner applies that
+conversion exactly once. This does not recover clipped available panel DC.
+HA candidates and their captured accuracy values remain independent per source.
+The shared AC cap applies only to the final selected model combination, including
+the all-HA path without weather. Changing a sibling provider revision cannot
+alter another source's captured comparison values. DC meters remain ineligible
+for HA AC forecasts and retain explicit PVWatts fallback. Actual curtailment
+feedback and clipping still exclude affected accuracy intervals. Explicit all-HA
+installations do not require the independent PVWatts weather service to produce
+a fresh HA forecast.
 As with other installation forecasts, a shorter complete HA horizon clips the
 future planning tail to its real end. It does not have to cover all 48 elapsed
 hours. Missing intervals inside that horizon remain an error. No omitted tail
@@ -624,9 +631,32 @@ Unreadable optional accuracy evidence retains the physical forecast with an
 explicit comparison issue. It does not overwrite damaged evidence or block an
 otherwise valid baseline. Manual selection does not depend on old accuracy data.
 
+Accuracy admission checks the combined measured AC output of all sources on the
+same inverter against 98% of its declared AC rating. Two 2.5 kWh hourly meters on
+one 5 kW inverter therefore cannot provide unrestricted accuracy evidence, even
+though neither meter individually reaches the inverter rating. Missing or
+decreasing sibling measurements make that AC comparison unknown for the affected
+hour. They are never filled with zero. A sibling measured only on the DC side
+also cannot establish the missing AC contribution. DC comparisons and independent
+inverters remain separate. Captured daily selection, original and alternative Forecast
+quality scores and historical activation share this rule. Complete comparable
+days remain eligible. PVWatts planning remains available when comparison proof
+is incomplete. Direct measured-production training still retains its actual
+measurements and existing daylight, control and continuity safeguards.
+
+New comparison and backtest policy identities prevent reuse of an earlier
+activation assessment under the previous clipping rules. Earlier captures and
+assessment documents remain immutable.
+
 Per-source `calibration_status` distinguishes missing/insufficient history,
-missing curtailment feedback, missing hybrid route history and a fitted shadow
-candidate. It does not silently present all of these cases as a trained model.
+missing curtailment feedback and a fitted shadow candidate. It does not silently present all of these cases as a trained model.
+
+Independently selected HA, PVWatts and ML sources retain one common AC rating per
+shared inverter and planning interval. Proportional reduction caps their combined
+AC production without increasing an already clipped value or changing DC energy.
+This also applies to HA-only forecasts when weather is unavailable. Historical
+forecast archives remain original. Newly eligible models do not create forecasts
+retroactively for days before training.
 
 ## API and retained evidence
 

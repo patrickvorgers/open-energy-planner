@@ -111,7 +111,7 @@ class ForecastSource(StrEnum):
 
 @dataclass(frozen=True)
 class SolarSource:
-    """Independently measured PV array/group. Wp is panel DC rating, not inverter AC rating."""
+    """Pure PV production array/group from HA Energy. Wp is panel DC rating, not inverter AC rating."""
 
     source_id: str
     entity_id: str

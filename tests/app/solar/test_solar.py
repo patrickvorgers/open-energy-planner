@@ -189,8 +189,8 @@ def test_clipped_shared_inverter_hours_cannot_teach_available_dc_yield():
     assert fit(plant().sources[0], history, clipped, START, plant().inverters[0]) is None
 
 
-def test_hybrid_ac_history_cannot_identify_dc_yield_but_declared_dc_history_uses_dc_target():
-    """Unknown hybrid battery routes block AC calibration. 0.8 measured DC against 1/0.96 predicted DC gives factor about 0.768."""
+def test_hybrid_pv_production_history_uses_its_declared_ac_or_dc_target():
+    """Pure PV AC learns 0.8 on either inverter. Declared DC against 1/0.96 gives about 0.768."""
     history, predicted = training_history()
     predicted = tuple(
         replace(production_point, dc_kwh=0, ac_kwh=0)
@@ -202,7 +202,7 @@ def test_hybrid_ac_history_cannot_identify_dc_yield_but_declared_dc_history_uses
     source = plant().sources[0]
     standalone = fit(source, history, predicted, START, replace(inverter, hybrid=False))
     assert standalone.factor == pytest.approx(0.8, abs=0.002)
-    assert fit(source, history, predicted, START, inverter) is None
+    assert fit(source, history, predicted, START, inverter).factor == pytest.approx(0.8, abs=0.002)
     result = fit(replace(source, measurement_boundary="dc"), history, predicted, START, inverter)
     assert result.factor == pytest.approx(0.8 * 0.96, abs=0.002)
     assert (
@@ -226,16 +226,16 @@ def test_hybrid_ac_history_cannot_identify_dc_yield_but_declared_dc_history_uses
     "hybrid,boundary,curtail,expected",
     [
         (False, "ac", False, "history_required"),
-        (True, "ac", False, "hybrid_route_history_required"),
+        (True, "ac", False, "history_required"),
         (True, "dc", False, "history_required"),
-        (True, "ac", True, "hybrid_route_history_required"),
+        (True, "ac", True, "history_required"),
         (True, "dc", True, "history_required"),
     ],
 )
 def test_calibration_status_preserves_guard_precedence_and_history_failure(
     tmp_path, hybrid, boundary, curtail, expected
 ):
-    """Missing route/control evidence takes precedence. Missing history retains its separate Recorder failure cause."""
+    """Every pure PV meter needs history, independently of inverter topology and control permission."""
     config = SolarConfiguration(
         (replace(plant().sources[0], measurement_boundary=boundary, can_curtail=curtail),),
         (replace(plant().inverters[0], hybrid=hybrid),),
