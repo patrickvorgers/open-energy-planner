@@ -44,7 +44,7 @@ def check(repository, number, head, base, client):
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
     if current.get("user", {}).get("login") != "dependabot[bot]":
-        require_automated_review(checks)
+        require_automated_review(checks, repository, number, head, client)
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
 

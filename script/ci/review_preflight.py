@@ -7,12 +7,17 @@ from pathlib import Path
 
 from script.ci.check_ci_candidate import (
     CODERABBIT_APP_ID,
+    CODEX_APP_ID,
+    GREPTILE_APP_ID,
     changed_files,
+    codex_review_state,
     current_checks,
+    greptile_review_summary,
     latest_check,
     require_coderabbit_review,
     require_included_base,
     require_prerequisites,
+    review_comments,
 )
 from script.ci.check_commit_signatures import GitHub, VerificationError, sha
 from script.ci.pr_readiness import require_resolved_threads
@@ -85,6 +90,8 @@ def require_no_request(repository, number, head, client):
                 for provider, commands in (
                     ("coderabbit", {"@coderabbitai review"}),
                     ("kody", {"@kody start-review", "@kody review --force"}),
+                    ("greptile", {"@greptileai review this draft"}),
+                    ("codex", {"@codex review"}),
                 )
             ):
                 raise VerificationError("A reviewer request already exists for this head")
@@ -139,6 +146,15 @@ def preflight(repository, number, head, base, client):
     require_pr_history(repository, number, current, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
+    if any(row.get("app", {}).get("id") in {GREPTILE_APP_ID, CODEX_APP_ID} for row in checks):
+        raise VerificationError(
+            "Another reviewer already has evidence for this head. Inspect it first"
+        )
+    comments = review_comments(repository, number, client)
+    if codex_review_state(comments, head) or greptile_review_summary(comments, repository, head):
+        raise VerificationError(
+            "Another reviewer already has publication evidence for this head. Inspect it first"
+        )
     review = latest_check(checks, "CodeRabbit", CODERABBIT_APP_ID)
     if review:
         if review.get("status") != "completed":

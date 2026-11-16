@@ -47,7 +47,9 @@ class UserPublisher:
     def post(self, path, payload):
         """Permit only a provider command and retain its real user author after uncertain writes."""
         assert payload["query"] == review.ADD_COMMENT
-        assert payload["variables"]["body"].startswith(("@coderabbitai", "@kody"))
+        assert payload["variables"]["body"].startswith(
+            ("@coderabbitai", "@greptileai", "@kody", "@codex")
+        )
         before = len(self.owner.comments)
         try:
             return self.owner.post(path, payload)
@@ -70,6 +72,7 @@ class GitHubEvidence:
         """Create an eligible Draft and an explicit maintainer command, without any provider work."""
         self.now = NOW
         self.comments = []
+        self.reviews = []
         self.publisher = UserPublisher(self)
         self.permission = "write"
         self.main = BASE
@@ -144,6 +147,9 @@ class GitHubEvidence:
         if "/comments?" in path:
             page = int(path.rsplit("=", 1)[1])
             return deepcopy(self.comments[(page - 1) * 100 : page * 100])
+        if "/reviews?" in path:
+            page = int(path.rsplit("=", 1)[1])
+            return deepcopy(self.reviews[(page - 1) * 100 : page * 100])
         if "/files?" in path:
             return [{"filename": "docs/development/example.md"}]
         if "/commits?" in path:
@@ -245,18 +251,52 @@ class GitHubEvidence:
         return [
             row["body"].splitlines()[0]
             for row in self.comments
-            if row["body"].startswith(("@coderabbitai", "@kody"))
+            if row["body"].startswith(("@coderabbitai", "@greptileai", "@kody", "@codex"))
         ]
 
     def reply(self, body):
         """Publish a genuine provider-identity response after the most recent controller command."""
         return self.comment(body, "coderabbitai[bot]")
 
+    def published_result(self, provider):
+        """Publish independently recorded success fields with this fixture's repository and head."""
+        fixtures = json.loads(
+            (Path(__file__).parent / "fixtures/review_providers.json")
+            .read_text(encoding="utf-8")
+            .replace("@HEAD@", HEAD)
+            .replace("@REPOSITORY@", REPOSITORY)
+        )
+        if provider == "greptile":
+            check = fixtures["greptile_check"]
+            check["id"] = max(row["id"] for row in self.checks) + 1
+            self.checks.append(check)
+        row = fixtures[f"{provider}_comment"]
+        comment = self.comment(row["body"], row["user"]["login"])
+        comment["user"] = row["user"]
+        comment["performed_via_github_app"] = row["performed_via_github_app"]
+        return comment
+
+    def greptile_timeout(self):
+        """Supply a terminal GitHub timeout for the exact requested Greptile head, then resume."""
+        assert self.state()["phase"] == "greptile"
+        self.checks.insert(
+            3,
+            {
+                "id": max(row["id"] for row in self.checks) + 1,
+                "name": "Greptile Review",
+                "head_sha": HEAD,
+                "app": {"id": 867647},
+                "status": "completed",
+                "conclusion": "timed_out",
+            },
+        )
+        self.run()
+
     def kody_result(self, conclusion="success", title="Code Review Complete"):
         """Supply a new exact-head provider check with independently specified completion text."""
         self.checks.append(
             {
-                "id": 20,
+                "id": max(row["id"] for row in self.checks) + 1,
                 "name": "Kody Code Review",
                 "head_sha": HEAD,
                 "app": {"id": 413034},
@@ -311,9 +351,12 @@ def test_old_formal_objection_allows_fresh_provider_review_but_keeps_ready_block
     client.run(explicit=True)
     client.reply(LIMITED)
     client.run()
-    client.kody_result()
+    client.published_result("greptile")
     client.run()
-    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+    ]
     assert client.state()["phase"] == "complete"
     assert "formal review clearance is blocked" in client.state()["message"]
     assert "Keep Draft" in client.state()["message"]
@@ -348,36 +391,40 @@ def test_confirmed_quota_selects_kody_and_findings_do_not_trigger_a_fallback():
     client.run(explicit=True)
     client.reply(LIMITED)
     client.run()
+    client.greptile_timeout()
     client.kody_result()
     client.unresolved = True
     client.run()
-    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+        "@kody start-review",
+    ]
     assert client.state()["phase"] == "complete"
     assert client.unresolved
     assert not any("convertPullRequestToDraft" in str(call) for call in client.calls)
 
 
-def test_kody_technical_failure_waits_then_queries_fresh_coderabbit_capacity():
-    """The controller waits for the reported deadline before retrying availability, never sleeping."""
+def test_kody_technical_failure_requests_one_final_codex_review():
+    """A terminal Kody failure advances once to the authorized account-linked GitHub review."""
     client = GitHubEvidence()
     client.run(explicit=True)
     client.reply(LIMITED)
     client.run()
+    client.greptile_timeout()
     client.kody_result("failure", "Code Review Failed")
     client.run(minutes=5)
-    assert client.state()["phase"] == "waiting"
-    client.run(minutes=29)
-    assert len(client.provider_commands()) == 2
+    assert client.state()["phase"] == "codex"
     client.run(minutes=30)
-    client.reply(AVAILABLE)
+    client.published_result("codex")
     client.run(minutes=30)
+    assert client.state()["phase"] == "complete"
     assert client.provider_commands() == [
         "@coderabbitai rate limit",
+        "@greptileai review this draft",
         "@kody start-review",
-        "@coderabbitai rate limit",
-        "@coderabbitai review",
+        "@codex review",
     ]
-    assert client.state()["phase"] == "coderabbit"
 
 
 @pytest.mark.parametrize(
@@ -503,11 +550,16 @@ def test_kody_content_failure_or_unknown_result_does_not_trigger_technical_fallb
     client.run(explicit=True)
     client.reply(LIMITED)
     client.run()
+    client.greptile_timeout()
     client.kody_result("failure", "Code Review Complete")
     client.run()
     client.run(minutes=60)
     assert client.state()["phase"] == "blocked"
-    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+        "@kody start-review",
+    ]
 
 
 def test_durable_state_round_trip_contains_no_raw_provider_body():
@@ -566,7 +618,7 @@ def test_quota_can_disappear_between_query_and_actual_review():
     assert client.provider_commands() == [
         "@coderabbitai rate limit",
         "@coderabbitai review",
-        "@kody start-review",
+        "@greptileai review this draft",
     ]
 
 
@@ -586,11 +638,16 @@ def test_kody_skip_is_not_a_technical_failure():
     client.run(explicit=True)
     client.reply(LIMITED)
     client.run()
+    client.greptile_timeout()
     client.kody_result("skipped", "Code Review Skipped")
     client.checks[-1]["output"]["summary"] = "Unrecognized review skip reason"
     client.run()
     assert client.state()["phase"] == "blocked"
-    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+        "@kody start-review",
+    ]
 
 
 def test_no_fallback_while_a_rate_limited_provider_still_reports_running():
@@ -614,15 +671,16 @@ def test_no_fallback_while_a_rate_limited_provider_still_reports_running():
     assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
     client.checks[-1].update(status="completed", conclusion="skipped")
     client.run()
-    assert client.provider_commands()[-1] == "@kody start-review"
+    assert client.provider_commands()[-1] == "@greptileai review this draft"
 
 
-def test_bounded_quota_rechecks_never_repeat_kody():
-    """Repeated genuine quota limits terminate after eight queries without looping between reviewers."""
+def test_final_fallback_never_loops_back_to_quota_or_repeats_a_provider():
+    """Later quota replies cannot restart the chain after its final Codex request."""
     client = GitHubEvidence()
     client.run(explicit=True)
     client.reply(LIMITED)
     client.run()
+    client.greptile_timeout()
     client.kody_result("failure", "Code Review Failed")
     client.run()
     for attempt in range(1, 8):
@@ -631,7 +689,9 @@ def test_bounded_quota_rechecks_never_repeat_kody():
         client.run(minutes=attempt * 30)
     client.run(minutes=240)
     assert client.state()["phase"] == "blocked"
-    assert client.provider_commands().count("@coderabbitai rate limit") == 8
+    assert client.provider_commands().count("@coderabbitai rate limit") == 1
+    assert client.provider_commands().count("@greptileai review this draft") == 1
+    assert client.provider_commands().count("@codex review") == 1
     assert client.provider_commands().count("@kody start-review") == 1
 
 
@@ -753,8 +813,11 @@ def test_later_provider_metadata_waits_for_substantive_completion(provider, summ
     client.run(explicit=True)
     client.reply(LIMITED if provider == "kody" else AVAILABLE)
     client.run()
+    if provider == "kody":
+        client.greptile_timeout()
     commands = [
         "@coderabbitai rate limit",
+        *(["@greptileai review this draft"] if provider == "kody" else []),
         "@kody start-review" if provider == "kody" else "@coderabbitai review",
     ]
     client.checks.append(
@@ -779,7 +842,6 @@ def test_later_provider_metadata_waits_for_substantive_completion(provider, summ
     else:
         if provider == "kody":
             client.kody_result()
-            client.checks[-1]["id"] = 21
         else:
             client.checks.append(
                 {
@@ -824,6 +886,7 @@ def test_nonmetadata_provider_results_keep_existing_failure_boundaries(mutation,
     client.run(explicit=True)
     client.reply(LIMITED)
     client.run()
+    client.greptile_timeout()
     client.kody_result("skipped", "Code Review Skipped")
     check = client.checks[-1]
     check["output"]["summary"] = "Unrecognized provider result"
@@ -841,7 +904,11 @@ def test_nonmetadata_provider_results_keep_existing_failure_boundaries(mutation,
         check["name"] = "Unexpected provider check"
     client.run()
     assert client.state()["phase"] == phase
-    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+        "@kody start-review",
+    ]
 
 
 @pytest.mark.parametrize("availability", [AVAILABLE, LIMITED])
@@ -856,14 +923,23 @@ def test_merge_only_skip_allows_quota_then_one_appropriate_review(availability):
     assert client.provider_commands() == ["@coderabbitai rate limit"]
     client.reply(availability)
     client.run()
+    if availability == LIMITED:
+        client.greptile_timeout()
     expected = "@coderabbitai review" if availability == AVAILABLE else "@kody review --force"
-    assert client.provider_commands() == ["@coderabbitai rate limit", expected]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        *(["@greptileai review this draft"] if availability == LIMITED else []),
+        expected,
+    ]
     client.run(explicit=True)
     client.run()
-    assert client.provider_commands() == ["@coderabbitai rate limit", expected]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        *(["@greptileai review this draft"] if availability == LIMITED else []),
+        expected,
+    ]
     if availability == LIMITED:
         client.kody_result()
-        client.checks[-1]["id"] = 21
         client.run()
         assert client.state()["phase"] == "complete"
 
@@ -893,7 +969,12 @@ def test_merge_only_force_requires_concrete_current_provider_evidence(mutation):
         client.run(explicit=True)
         client.reply(LIMITED)
         client.run()
-        assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+        client.greptile_timeout()
+        assert client.provider_commands() == [
+            "@coderabbitai rate limit",
+            "@greptileai review this draft",
+            "@kody start-review",
+        ]
     else:
         with pytest.raises(VerificationError):
             client.run(explicit=True)
@@ -915,6 +996,7 @@ def test_merge_only_force_rechecks_provider_evidence_before_sending(monkeypatch,
     if change == "before-quota-reply":
         client.checks[-1]["output"]["summary"] = "Unknown provider state"
         client.run()
+        client.greptile_timeout()
         assert client.state()["phase"] == "blocked"
     else:
         original_post = client.post
@@ -933,10 +1015,14 @@ def test_merge_only_force_rechecks_provider_evidence_before_sending(monkeypatch,
         monkeypatch.setattr(client, "post", change_after_intent)
         with pytest.raises(VerificationError):
             client.run()
+            client.greptile_timeout()
         assert client.state()["phase"] == "sending"
         client.run()
         assert client.state()["phase"] == "blocked"
-    assert client.provider_commands() == ["@coderabbitai rate limit"]
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+    ]
 
 
 def test_external_force_command_prevents_a_second_fallback():
@@ -1097,17 +1183,23 @@ def test_consumed_duplicate_cannot_start_a_review_after_a_later_push():
     assert client.state()["head"] == changed_head
 
 
-def test_missing_quota_retry_time_blocks_after_kody_technical_failure():
-    """A confirmed limit without a retry interval cannot invent a delayed CodeRabbit deadline."""
+def test_final_fallback_does_not_need_an_invented_coderabbit_retry_time():
+    """The bounded provider chain needs no invented CodeRabbit retry deadline."""
     client = GitHubEvidence()
     client.run(explicit=True)
     client.reply(LIMITED.replace(" Your next review will be available in 30 minutes.", ""))
     client.run()
+    client.greptile_timeout()
     client.kody_result("failure", "Code Review Failed")
     client.run(minutes=5)
     client.run(minutes=60)
-    assert client.state()["phase"] == "blocked"
-    assert client.provider_commands() == ["@coderabbitai rate limit", "@kody start-review"]
+    assert client.state()["phase"] == "codex"
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+        "@kody start-review",
+        "@codex review",
+    ]
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "oversized"])
@@ -1218,8 +1310,8 @@ def test_review_acknowledgement_does_not_count_as_quota_evidence(with_actual_lim
     if with_actual_limit:
         client.reply(LIMITED)
         client.run()
-        assert client.state()["phase"] == "kody"
-        assert client.provider_commands()[-1] == "@kody start-review"
+        assert client.state()["phase"] == "greptile"
+        assert client.provider_commands()[-1] == "@greptileai review this draft"
     else:
         client.checks.append(
             {
@@ -2053,3 +2145,257 @@ def test_requester_failure_during_start_uses_authority_recovery_advice(failure):
     assert "PR authorship or repository write access" in statuses[-1]
     assert "CodeRabbit availability could not be verified" not in statuses[-1]
     assert client.provider_commands() == []
+
+
+@pytest.mark.parametrize("provider", ["greptile", "codex"])
+def test_published_exact_head_review_stops_the_chain_even_with_findings(provider):
+    """Provider completion stops dispatch while unresolved findings keep candidate admission separate."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    if provider == "codex":
+        client.greptile_timeout()
+        client.kody_result("failure", "Code Review Failed")
+        client.run()
+    comment = client.published_result(provider)
+    if provider == "codex":
+        comment["body"] = (
+            comment["body"]
+            .replace('"has_any_findings":false', '"has_any_findings":true')
+            .replace('"has_unresolved_findings":false', '"has_unresolved_findings":true')
+        )
+    client.unresolved = True
+    commands = client.provider_commands()
+    client.run()
+    client.run(minutes=180)
+    assert client.state()["phase"] == "complete"
+    assert client.provider_commands() == commands
+    assert client.current["draft"] is True
+    assert client.unresolved
+
+
+def test_greptile_check_waits_for_exact_head_summary_publication():
+    """A success check that arrives before its summary cannot complete or prematurely block the request."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    comment = client.published_result("greptile")
+    client.comments.remove(comment)
+    client.run(minutes=1)
+    assert client.state()["phase"] == "greptile"
+    client.comments.append(comment)
+    client.run(minutes=2)
+    assert client.state()["phase"] == "complete"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "missing",
+        "running",
+        "quota-message",
+        "failure",
+        "skipped",
+        "foreign-timeout",
+        "wrong-name-timeout",
+    ],
+)
+def test_uncertain_greptile_result_never_starts_an_overlapping_fallback(result):
+    """Elapsed local time and unknown provider messages do not prove a terminal technical failure."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    if result == "quota-message":
+        client.comment("Review quota exhausted", "greptile-apps[bot]")
+    elif result != "missing":
+        client.checks.append(
+            {
+                "id": 15,
+                "head_sha": HEAD,
+                "app": {"id": 867647},
+                "name": "Greptile Review",
+                "status": "completed",
+                "conclusion": result,
+            }
+        )
+        if result == "running":
+            client.checks[-1].update(status="in_progress", conclusion=None)
+        if result in {"foreign-timeout", "wrong-name-timeout"}:
+            client.checks[-1]["conclusion"] = "timed_out"
+            if result == "foreign-timeout":
+                client.checks[-1]["app"]["id"] = 999999
+            else:
+                client.checks[-1]["name"] = "Unrelated check"
+    client.run(minutes=1)
+    client.run(minutes=121)
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+    ]
+
+
+def test_greptile_terminal_timeout_cannot_bypass_unresolved_findings():
+    """Even an authenticated terminal timeout cannot authorize fallback through unresolved threads."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    client.unresolved = True
+    client.greptile_timeout()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+    ]
+
+
+@pytest.mark.parametrize("provider", ["greptile", "codex"])
+def test_new_provider_uncertain_publication_recovers_without_sending_twice(provider):
+    """An acknowledged durable command survives a lost response without consuming another review."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    if provider == "codex":
+        client.run()
+        client.greptile_timeout()
+        client.kody_result("failure", "Code Review Failed")
+    client.lose_response = True
+    with pytest.raises(VerificationError, match="response loss"):
+        client.run()
+    assert client.state()["phase"] == "sending"
+    client.lose_response = False
+    commands = client.provider_commands()
+    client.run()
+    assert client.state()["phase"] == provider
+    assert client.provider_commands() == commands
+
+
+@pytest.mark.parametrize("provider", ["greptile", "codex"])
+def test_provider_callback_without_an_explicit_request_never_starts_a_review(provider):
+    """Authentic provider publications are resume signals and cannot create an explicit request."""
+    client = GitHubEvidence()
+    client.comments.clear()
+    client.published_result(provider)
+    client.run()
+    assert client.provider_commands() == []
+    assert client.state() is None
+
+
+def test_existing_durable_request_without_new_flags_remains_readable():
+    """Pre-upgrade state retains its current target rather than restarting or duplicating its command."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    state = client.state()
+    state.pop("greptile_used")
+    state.pop("codex_used")
+    review.save_state(state, "PR_12", client)
+    client.run()
+    assert client.state()["phase"] == "quota"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "failure", "cancelled"])
+def test_only_provider_terminal_timeout_advances_coderabbit(conclusion):
+    """An actual provider timeout differs from an unknown failure or the controller's local deadline."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.run()
+    client.checks.append(
+        {
+            "id": 15,
+            "head_sha": HEAD,
+            "app": {"id": 347564},
+            "name": "CodeRabbit",
+            "status": "completed",
+            "conclusion": conclusion,
+        }
+    )
+    client.run(minutes=1)
+    assert client.state()["phase"] == ("greptile" if conclusion == "timed_out" else "blocked")
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@coderabbitai review",
+        *(["@greptileai review this draft"] if conclusion == "timed_out" else []),
+    ]
+
+
+@pytest.mark.parametrize("provider", ["greptile", "codex"])
+@pytest.mark.parametrize("action", ["created", "edited"])
+def test_published_summary_events_resume_existing_requests(tmp_path, monkeypatch, provider, action):
+    """Created and edited summary callbacks use trusted main and resume the same durable request."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    if provider == "codex":
+        client.greptile_timeout()
+        client.kody_result("failure", "Code Review Failed")
+        client.run()
+    comment = client.published_result(provider)
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps(
+            {
+                "repository": {"full_name": REPOSITORY, "default_branch": "main"},
+                "action": action,
+                "issue": {"number": 12, "pull_request": {"url": "synthetic"}},
+                "comment": comment,
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name, value in {
+        "GITHUB_EVENT_PATH": str(event_file),
+        "GITHUB_REPOSITORY": REPOSITORY,
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_TOKEN": "metadata-token",
+        "GITHUB_EVENT_NAME": "issue_comment",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(
+        review,
+        "GitHub",
+        lambda token: client.publisher if token == "synthetic-command-token" else client,
+    )
+    commands = client.provider_commands()
+    assert review.main() == 0
+    assert client.state()["phase"] == "complete"
+    assert client.provider_commands() == commands
+
+
+@pytest.mark.parametrize("channel", ["comment", "submitted-review", "pending-review"])
+@pytest.mark.parametrize("provider", ["greptile", "kody"])
+def test_technical_failure_cannot_bypass_partial_or_outside_diff_feedback(channel, provider):
+    """A terminal failure cannot switch away from newly published feedback in any review channel."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+    if provider == "kody":
+        client.greptile_timeout()
+    login = "greptile-apps[bot]" if provider == "greptile" else "kody-ai[bot]"
+    if channel == "comment":
+        client.comment("A partially published outside-diff finding", login)
+    else:
+        client.reviews.append(
+            {
+                "id": 17,
+                "commit_id": HEAD,
+                "user": {"login": login, "type": "Bot"},
+                "submitted_at": client.now.isoformat() if channel == "submitted-review" else None,
+                "state": "COMMENTED" if channel == "submitted-review" else "PENDING",
+            }
+        )
+    commands = client.provider_commands()
+    if provider == "greptile":
+        client.greptile_timeout()
+    else:
+        client.kody_result("failure", "Code Review Failed")
+        client.run()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == commands

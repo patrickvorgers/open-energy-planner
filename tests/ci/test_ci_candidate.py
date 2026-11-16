@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -81,6 +82,7 @@ class Evidence:
     def __init__(self, current, checks, changed=None):
         """Keep independent current identities and test-controlled check rows."""
         self.current = current
+        self.comments = []
         self.checks = checks
         self.changed = changed
         self.pr_reads = 0
@@ -139,6 +141,9 @@ class Evidence:
 
     def get_list(self, path):
         """Return every changed file without concealing additions, removals or binary changes."""
+        if "/issues/12/comments?" in path:
+            page = int(path.rsplit("=", 1)[1])
+            return deepcopy(self.comments[(page - 1) * 100 : page * 100])
         assert path == "repos/owner/planner/pulls/12/files?per_page=100&page=1"
         return [{"filename": f"file-{index}.py"} for index in range(3)]
 
@@ -602,3 +607,90 @@ def test_kody_metadata_skip_cannot_supply_or_hide_review_evidence(kody_candidate
     checks.append(metadata)
     with pytest.raises(VerificationError):
         check(event, REPOSITORY, Evidence(current, checks))
+
+
+@pytest.mark.parametrize("provider", ["greptile", "codex"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "none",
+        "bot-id",
+        "bot-login",
+        "bot-type",
+        "app-id",
+        "stale-head",
+        "missing-publication",
+        "duplicate-publication",
+        "incomplete",
+        "check-only",
+        "reaction-only",
+    ],
+)
+def test_new_provider_admission_requires_authentic_exact_head_publication(
+    candidate, provider, mutation
+):
+    """Only observed complete provider evidence can replace CodeRabbit, never spoofed or stale status."""
+    event, current, checks = candidate
+    checks[:] = [row for row in checks if row["name"] != "CodeRabbit"]
+    client = Evidence(current, checks)
+    fixtures = json.loads(
+        (Path(__file__).parent / "fixtures/review_providers.json")
+        .read_text(encoding="utf-8")
+        .replace("@HEAD@", HEAD)
+        .replace("@REPOSITORY@", REPOSITORY)
+    )
+    comment = fixtures[f"{provider}_comment"]
+    client.comments = [comment]
+    if provider == "greptile":
+        checks.append(fixtures["greptile_check"])
+    if mutation == "bot-id":
+        comment["user"]["id"] = 99
+    elif mutation == "bot-login":
+        comment["user"]["login"] = "impostor[bot]"
+    elif mutation == "bot-type":
+        comment["user"]["type"] = "User"
+    elif mutation == "app-id":
+        comment["performed_via_github_app"]["id"] = 99
+    elif mutation == "stale-head":
+        comment["body"] = comment["body"].replace(HEAD, "3" * 40)
+    elif mutation in {"missing-publication", "check-only"}:
+        client.comments = []
+    elif mutation == "duplicate-publication":
+        client.comments.append({**deepcopy(comment), "id": 202})
+    elif mutation == "incomplete":
+        if provider == "greptile":
+            checks[-1]["output"]["summary"] = "Review was skipped"
+        else:
+            comment["body"] = comment["body"].replace(
+                '"status":"completed"', '"status":"in_progress"'
+            )
+    elif mutation == "reaction-only":
+        comment["body"] = "Review received. No major issues."
+        comment["reactions"] = {"eyes": 1, "+1": 1}
+    if mutation == "none":
+        assert check(event, REPOSITORY, client) == HEAD
+    else:
+        with pytest.raises(VerificationError):
+            check(event, REPOSITORY, client)
+
+
+@pytest.mark.parametrize("provider", ["greptile", "codex"])
+def test_new_provider_success_cannot_bypass_formal_change_requests(candidate, provider):
+    """Authenticated provider completion never grants authority to ignore a formal objection."""
+    from tests.ci.test_formal_reviews import FormalEvidence, review_page
+
+    event, current, checks = candidate
+    checks[:] = [row for row in checks if row["name"] != "CodeRabbit"]
+    fixtures = json.loads(
+        (Path(__file__).parent / "fixtures/review_providers.json")
+        .read_text(encoding="utf-8")
+        .replace("@HEAD@", HEAD)
+        .replace("@REPOSITORY@", REPOSITORY)
+    )
+    if provider == "greptile":
+        checks.append(fixtures["greptile_check"])
+    response = review_page([{"id": "PRR_objection", "state": "CHANGES_REQUESTED"}])
+    client = FormalEvidence(current, checks, pages=[response])
+    client.comments = [fixtures[f"{provider}_comment"]]
+    with pytest.raises(VerificationError, match="CHANGES_REQUESTED"):
+        check(event, REPOSITORY, client)

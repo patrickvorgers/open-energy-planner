@@ -157,23 +157,31 @@ base and progress in an **OEP review** PR comment. It applies this order:
    Use the actual response for this request. Do not infer capacity from a fixed
    plan allowance, an earlier review or a stale reply from another PR.
 2. If included capacity is available, request one CodeRabbit review of the frozen head.
-3. If CodeRabbit explicitly reports no included capacity, request Kody-ai once
-   using `@kody start-review` with `<!-- oep-kody-head:<current-head-sha> -->`.
-   The exact merge-only skip instead selects `@kody review --force`, as described
-   in [Kody-ai alternative](#kody-ai-alternative).
-   A positive availability check does not reserve capacity. If the subsequent
-   CodeRabbit request is explicitly rate-limited, switch to the same Kody route
-   without immediately retrying CodeRabbit.
-4. If Kody completes its review, stop regardless of whether it found issues.
-   A substantive review is not a promise that the code is correct. The coding
-   agent still evaluates and addresses every finding before Ready for review.
-5. If Kody explicitly fails technically, wait until CodeRabbit's reported retry
-   time and query its capacity again. A completed `timed_out` check or a failed
-   check titled `Code Review Failed` is recognized as technical failure.
-   Skipped, ambiguous and incomplete results are not technical-failure evidence.
-   Only a fresh positive quota response permits another CodeRabbit review.
+3. If CodeRabbit explicitly reports no included capacity, request Greptile once
+   with `@greptileai review this draft` and an `oep-greptile-head` marker.
+   A confirmed rate limit on the actual CodeRabbit request or its authentic
+   terminal `timed_out` check follows the same route.
+4. A genuine current-head `Greptile Review` check from app `867647` with
+   `status: completed` and `conclusion: timed_out` permits one Kody-ai request.
+   Use `@kody start-review` with an `oep-kody-head` marker. The exact merge-only
+   Kody skip instead selects `@kody review --force`, as described below.
+5. A genuine terminal Kody `timed_out` check or failed check titled
+   `Code Review Failed` permits one final `@codex review` request with an
+   `oep-codex-head` marker. This uses the already authorized GitHub Codex
+   connection, not an OpenAI API key or another local reviewer.
+6. Stop after any substantive current-head review completes, even if it reports
+   findings. Evaluate every finding before Ready. Open discussions and effective
+   formal change requests block technical-failure fallback. Newly published provider
+   comments, submitted reviews and uncertain partial publications also require
+   operator inspection before fallback. No provider switch
+   disposes of a finding or clears an objection.
 
-Provider comments and completed provider checks resume requests. A short scheduled
+Only observed provider output formats are parsed. Greptile quota/failure prose
+has no verified parser and therefore stops the flow for inspection. An unknown
+failure, skip, warning, missing publication or local two-hour deadline never
+proves that provider work ended. Do not start an overlapping fallback.
+
+Created or edited provider summary comments and completed provider checks resume requests. A short scheduled
 check also runs at minutes 7, 22, 37 and 52 of each hour, so delayed retries do not
 hold a runner open and do not depend on a coding agent staying online. GitHub may
 delay scheduled runs. Fifteen minutes is the intended polling interval, not a
@@ -193,7 +201,7 @@ independently of the original request identity. A later push cannot revive an
 older duplicate as a new request.
 
 Each request permits at most eight quota queries, two actual CodeRabbit requests
-and one Kody request. It expires after seven days. Missing quota replies block
+and one request each to Greptile, Kody and Codex. It expires after seven days. Missing quota replies block
 after fifteen minutes. A genuine but stale quota reply triggers a fresh bounded
 quota query only when no provider is active. Its old availability never authorizes
 a review. Generic review acknowledgements are not quota evidence and do not
@@ -204,9 +212,9 @@ Substantive current-head completion is checked first. Scheduled execution determ
 when these limits are observed. A head/base change, a newer main, closure or a
 Ready transition supersedes pending work. Synchronize and validate an updated
 Draft, then explicitly request review of that revision.
-If a confirmed quota limit supplies no usable retry time, Kody may still review.
-If Kody then fails technically, the request blocks instead of inventing a
-CodeRabbit retry deadline.
+A confirmed CodeRabbit limit needs no invented retry time to enter Greptile.
+New requests do not loop back to CodeRabbit after the final fallback. Existing
+durable waiting requests remain readable and retain their bounded recovery.
 
 The controller writes a durable intent before each provider command. If a worker
 loses the publication response, it recovers a uniquely marked command from the PR
@@ -233,8 +241,8 @@ tested parser update rather than guessing availability or retrying blindly.
 
 The workflow separates two credentials. Its built-in workflow token reads
 repository metadata and owns the durable status comment. The
-`OEP_REVIEW_COMMAND_TOKEN` secret publishes only the fixed CodeRabbit and Kody
-commands. The workflow job and Python entrypoint both require trusted `main`.
+`OEP_REVIEW_COMMAND_TOKEN` secret publishes only the fixed provider commands
+in this chain. The workflow job and Python entrypoint both require trusted `main`.
 The checkout uses `refs/heads/main`, never contributor code, and does not persist
 credentials. External pull request code never runs in this job.
 
@@ -274,18 +282,44 @@ request after resolving existing work. It never authorizes paid credits or
 changes to provider billing.
 
 Record the availability reply and chosen reviewer in the PR. Recheck the frozen
-head and base before sending either review command. Never launch both reviews
-in parallel, repeat an uncertain request or enable usage billing or paid credits.
-An unavailable status reply, provider outage or generic failure is not evidence
-of quota exhaustion. Stop and report that condition instead of guessing or
-silently switching providers. The bounded delayed retry above is permitted only
-after Kody's explicit technical failure and fresh CodeRabbit quota evidence.
+head and base before every command. Never launch parallel reviews, repeat an
+uncertain request or enable usage billing or purchased credits.
 The existing Dependabot exception remains.
 
-This is the order agents use when requesting reviews. It does not change the
-candidate-admission rules. A completed substantive review of the current head
-from either CodeRabbit or Kody-ai remains valid for Ready, CI and merge. All
-findings from every reviewer still require evaluation, replies and resolution.
+### Greptile and Codex setup and completion
+
+Install and enable the Greptile GitHub App for this repository. The root
+`.greptile/config.json` disables automatic reviews and auto-approval, selects
+Base effort and preserves checks, summary comments and the reviewed-commit
+footer. Keep dashboard configuration consistent. Manual Draft requests use the
+[documented draft command](https://www.greptile.com/docs/code-review/developer-essentials).
+A successful `Greptile Review` check must report the observed substantive Base review with a positive reviewed-file count. The published summary must
+come from bot `165735046` through app `867647` and link the exact full head SHA.
+Both check completion and summary publication are required. A partial review or
+unreviewed exclusions still require operator assessment against the PR inventory.
+See the [configuration reference](https://www.greptile.com/docs/code-review/greptile-config-reference).
+
+The optional final Codex route requires the existing GitHub connection and code
+review access for the command publisher's linked account. Keep automatic Codex
+reviews disabled. The controller does not configure an account, buy credits,
+change billing or send an API request. Included GitHub Code Review usage is
+subscription usage. The controller cannot read remaining allowance or establish
+whether a previously purchased balance can be consumed. Check account usage and
+billing settings before enabling this final fallback. Do not claim guaranteed
+zero cost or that it shares the general weekly allowance. See the official
+[GitHub integration](https://learn.chatgpt.com/docs/third-party/github) and
+[pricing documentation](https://learn.chatgpt.com/docs/pricing#what-counts-as-code-review-usage).
+Codex's documented default focus is P0/P1 findings. It is a bounded last fallback,
+not a claim of identical coverage or an additional mandatory review stage.
+
+Codex completion requires an authentic summary from bot `199175422` through app
+`1144995`. Its `codex-review-state:v1` code-review record must identify the exact
+full head SHA, report `completed` and publish boolean finding flags. A security
+review, acknowledgement, eyes reaction or thumbs-up alone cannot satisfy the
+gate. Finding flags do not replace discussion and formal-review checks or the
+operator's evaluation of inline and outside-diff findings. Missing, malformed,
+stale and duplicate summaries fail closed. All providers retain the same
+readiness, candidate and merge gates.
 
 ## Prepare one final CodeRabbit review
 
@@ -307,8 +341,8 @@ First obtain successful current-head Quick checks, GitHub Verified PR commits an
 CodeQL. Evaluate genuine findings and document any evidence-based disposition.
 Inspect your own changes, batch corrections, run affected checks and reassess
 material scope changes before consuming an external review. CodeRabbit provides
-the independent PR review. Do not add a separate local Codex reviewer, reviewer
-subagent or Codex Cloud review stage. Existing findings from any reviewer still
+the independent PR review on this deliberate recovery route. Do not add a
+separate local Codex reviewer, reviewer subagent or extra Codex gate. Existing findings from any reviewer still
 require evidence-based disposition.
 
 After the preceding queued merge is complete, include and test the actual current
@@ -318,7 +352,7 @@ are dispositioned. No Codex review SHA or independent-Codex attestation is neede
 The preflight uses only
 trusted main code and read-only metadata. It checks the file inventory, current
 Quick/signature/CodeQL results, resolved discussions, existing CodeRabbit activity
-and trusted same-head CodeRabbit or Kody request markers, including commands
+and trusted same-head provider request markers, including commands
 already published by the Actions controller.
 
 The successful job summary contains the manual comment to post after rechecking
@@ -337,16 +371,10 @@ hardcoded hourly allowance. Keep this conservative procedure during paid months
 too. Never remove a request marker, push an empty commit or retry CodeRabbit
 automatically to evade the duplicate guard. The orchestrator's bounded delayed
 recovery is the documented exception, with a separate durable action marker.
-A confirmed rate limit selects the
-Kody-ai fallback described above after the frozen identities and prerequisites
-are rechecked.
-
-For that fallback, inspect the actual availability reply or rate-limit result
-and confirm that no substantive review ran. Recheck the exact current head and
-base, Quick/signature/CodeQL results, finding disposition and the absence of
-running or completed provider work. Request Kody-ai once with its own head
-marker. Do not repeat the existing CodeRabbit request or wait for its quota to
-refill when Kody-ai can review the frozen revision.
+A confirmed rate limit selects Greptile in the documented chain after the
+frozen identities and prerequisites are rechecked. For direct-provider recovery,
+inspect all existing commands and work before choosing another provider. Never
+repeat a pending or uncertain command to force progress.
 
 Native automatic, incremental, positive-label and description-keyword triggers
 are disabled. GitHub cannot prevent a person with access from directly posting a
@@ -354,7 +382,8 @@ CodeRabbit command. The operator attestation is not machine proof of finding
 correctness. No preflight receipt is a merge credential.
 Candidate admission separately enforces the file limit and actual current-head
 check evidence. It accepts either a substantive CodeRabbit result with completed scope,
-workspace, analysis, feedback and publication phases, or a substantive Kody-ai result. A green skipped or
+workspace, analysis, feedback and publication phases, a substantive Kody-ai result,
+or authenticated Greptile or Codex publication as specified above. A green skipped or
 rate-limited provider check does not meet that requirement. Unknown provider
 output fails closed and requires investigation instead of weakening the gate.
 Completed phases alone do not prove substantive coverage of every changed file;
@@ -384,7 +413,8 @@ request. It remains metadata only and never supplies substantive review evidence
 The exact completed current-head Kody skip `Only Merge Commits (All new commits
 identified as merge commits)` also permits the initial CodeRabbit quota check.
 Available CodeRabbit capacity still selects CodeRabbit. Only a confirmed quota
-limit permits one `@kody review --force` request backed by that exact Kody skip.
+limit enters Greptile. Only a recognized terminal Greptile timeout then permits
+one `@kody review --force` request backed by that exact Kody skip.
 The controller rechecks this evidence before publication and retains its one-Kody
 request limit and durable publication recovery. Unknown skips, active work and
 failed checks cannot authorize force. A skipped check never supplies a missing
@@ -393,14 +423,14 @@ A completed `Code Review Skipped` check whose summary is exactly
 `No New Commits (No changes detected since last review)` is metadata from the
 unchanged revision. It preserves an earlier substantive success on that same
 head, but cannot supply missing review evidence or hide a later pending or
-failed review. Other skipped or unknown results still fail admission. Either provider
-may satisfy admission independently of the other provider's availability.
+failed review. Other skipped or unknown results still fail admission. A completed provider
+may satisfy admission independently of another provider's availability.
 The CodeRabbit-specific preflight and manual command above remain specific to
 CodeRabbit. They are not prerequisites for choosing Kody-ai.
 
 The same independent local review, coordinated merge order, current-head cheap
-checks and finding-disposition requirements apply to either reviewer. Inspect
-actual scope and exclusions. Address findings from both providers when both ran.
+checks and finding-disposition requirements apply to every provider. Inspect
+actual scope and exclusions. Address findings from every provider that ran.
 A successful check does not prove that all findings have been addressed.
 
 ## Request candidate CI
@@ -413,14 +443,14 @@ history and rejects later pending or failed attempts from the selected provider.
 its own completed review before admission. A Ready transition must not be used to
 spend another review on an already reviewed, unchanged commit.
 
-First complete a CodeRabbit or Kody-ai review of the current head and address all findings,
+First complete an authenticated review from the documented chain of the current head and address all findings,
 including comments outside the diff. Resolve evaluated discussions, including
 outdated threads. Then select **Ready for review**. That transition automatically
 requests one candidate run without a CI label. For this repository Ready means
 ready for final candidate validation, rather than the start of bot review.
 The candidate gate requires a complete changed-file inventory within the 150-file
 limit, passing Quick checks, GitHub Verified PR commits, CodeQL and a substantive
-completed CodeRabbit or Kody-ai check from its actual GitHub App on that head.
+completed automated review with authenticated exact-head publication evidence.
 The established Dependabot review exception remains in effect. An API outage,
 missing evidence, pending review, wrong app or changed PR fails before image builds.
 The gate checks the current base and head before and after reading the evidence.
@@ -716,7 +746,7 @@ The trusted workflow activates after this change reaches main. Local regression
 tests cover classification, stale events, label replacement and its privilege
 boundary before activation.
 
-Candidate admission, latest-head CodeRabbit or Kody-ai review, evaluation and replies for
+Candidate admission, latest-head automated review from the documented chain, evaluation and replies for
 all findings, GitHub Verified commits and the final head/base identity checks
 are mandatory for every route. The matrix selects executable tests. It never
 weakens review or merge requirements. The Dependabot exception remains unchanged.

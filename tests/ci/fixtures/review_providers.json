@@ -1,0 +1,32 @@
+{
+  "provenance": {
+    "greptile": "https://api.github.com/repos/frappe/erpnext/commits/15868c916316e5babed3502fdf83c07c7a41fc16/check-runs",
+    "greptile_summary": "https://api.github.com/repos/frappe/erpnext/issues/67106/comments",
+    "codex": "https://api.github.com/repos/rig-c/create/issues/552/comments",
+    "normalization": "Public success wire fields observed on 2026-11-16. Repository and head placeholders replace the original identities. Unrelated presentation markup is omitted. No failure or quota format is inferred from these success records."
+  },
+  "greptile_check": {
+    "id": 10,
+    "name": "Greptile Review",
+    "head_sha": "@HEAD@",
+    "app": {"id": 867647},
+    "status": "completed",
+    "conclusion": "success",
+    "output": {
+      "title": "Base review",
+      "summary": "Greptile has reviewed the Pull Request.\n\n3 files reviewed, 0 comments added."
+    }
+  },
+  "greptile_comment": {
+    "id": 200,
+    "user": {"login": "greptile-apps[bot]", "id": 165735046, "type": "Bot"},
+    "performed_via_github_app": {"id": 867647},
+    "body": "<!-- greptile_summary -->\n\n<!-- greptile_confidence_score:5 -->\n\n<sub>Reviews (3) · Last reviewed commit: [\"Example change\"](https://github.com/@REPOSITORY@/commit/@HEAD@) · [Reviewed by Greptile](https://www.greptile.com/)</sub>"
+  },
+  "codex_comment": {
+    "id": 201,
+    "user": {"login": "chatgpt-codex-connector[bot]", "id": 199175422, "type": "Bot"},
+    "performed_via_github_app": {"id": 1144995},
+    "body": "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {\"code_review\":{\"commit_sha\":\"@HEAD@\",\"has_any_findings\":false,\"has_unresolved_findings\":false,\"status\":\"completed\"},\"security_review\":{\"commit_sha\":null,\"has_any_findings\":null,\"has_unresolved_findings\":null,\"status\":null}} -->\n\n<details>\n<summary><strong>Codex Review Summary</strong>: ✅ Completed</summary>\n</details>"
+  }
+}
