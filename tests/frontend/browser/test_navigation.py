@@ -884,3 +884,51 @@ def test_wiki_help_opens_external_guide_without_leaving_app(app_page):
     expect(popup).to_have_url("https://patrickvorgers.github.io/open-energy-planner/")
     expect(page).to_have_url(url + "/setup")
     popup.close()
+
+
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+def test_workspace_view_signal_survives_late_modules_hash_bursts_and_history(app_page):
+    """A delayed child initializes its selected view, then keeps parent navigation aligned through hash history."""
+    page, url = app_page
+    held = []
+
+    def hold(route):
+        """Delay an eager child dependency while the independently loaded parent accepts navigation."""
+        held.append(route)
+        page.evaluate("count => {window.heldViewModules = count;}", len(held))
+
+    page.route("**/chart_days.js", hold)
+    page.goto(url + "/workspace?page=%2Foverview%23planning", wait_until="domcontentloaded")
+    page.wait_for_function("() => window.heldViewModules > 0")
+    open_primary_navigation(page)
+    page.get_by_role("region", name="Energy", exact=True).get_by_role(
+        "link", name="Savings", exact=True
+    ).click()
+    page.unroute("**/chart_days.js")
+    content = page.frame_locator("#workspace-content")
+    expect(content.locator("h1")).to_have_text("Savings")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Savings")
+    page.locator("#workspace-content").evaluate(
+        "element => {element.contentWindow.retainedViewMarker = true;}"
+    )
+    for destination in ("Planning", "Savings", "Planning"):
+        open_primary_navigation(page)
+        page.get_by_role("region", name="Energy", exact=True).get_by_role(
+            "link", name=destination, exact=True
+        ).click()
+    expect(content.locator("h1")).to_have_text("Planning")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Planning")
+    page.locator("#workspace-content").evaluate("element => element.contentWindow.history.back()")
+    expect(content.locator("h1")).to_have_text("Savings")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Savings")
+    page.locator("#workspace-content").evaluate(
+        "element => element.contentWindow.history.forward()"
+    )
+    expect(content.locator("h1")).to_have_text("Planning")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Planning")
+    assert (
+        page.locator("#workspace-content").evaluate(
+            "element => element.contentWindow.retainedViewMarker"
+        )
+        is True
+    )

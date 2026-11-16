@@ -3,7 +3,7 @@ import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
-import {bindSettingsActions} from "./settings-actions.js";
+import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
 const CONNECTED_MESSAGE = "Connected: Historical views never change active commands.";
@@ -33,9 +33,9 @@ const statuses = {optimal: "Optimal", feasible: "Feasible"};
 async function api(path, signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)) {
     let response;
     try {
-        response = await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store", signal});
-    } catch {
-        throw new Error(signal?.aborted ? "This view took too long to load. Please retry." : "Cannot read this view: Check the connection and retry.");
+        response = path === "setup/session" ? await sessionResponse(base, signal) : await fetch(base + path, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "error", cache: "no-store", signal});
+    } catch (error) {
+        throw new Error(signal?.aborted || error?.name === "TimeoutError" ? "This view took too long to load. Please retry." : "Cannot read this view: Check the connection and retry.");
     }
     if (!response.ok) throw new Error(response.status === 401 ? "Enter the app administration token to continue." : `Cannot read this view (${response.status}).`);
     try { return await response.json(); }
@@ -600,6 +600,10 @@ function view() {
         $(`${name}-view`).hidden = name !== selected;
         document.querySelector(`[data-view="${name}"]`).setAttribute("aria-current", name === selected ? "page" : "false");
     }
+    try {
+        const host = parent !== window && parent.document.getElementById("workspace-content");
+        if (host?.contentWindow === window) host.dispatchEvent(new Event("oep-view-change"));
+    } catch { /* Standalone and cross-origin views have no shared navigation owner. */ }
     for (const instance of charts.values()) instance.resize();
     for (const tooltip of document.querySelectorAll(".chart-tooltip")) tooltip.hidden = true;
     if (overviewSessionReady && (overviewIngress || token)) {
@@ -766,7 +770,7 @@ function gridExchangeSeries(plan, comparison = null, baseline = null) {
 function renderPlanComparisons(data, plan, {deferRange = false} = {}) {
     const id = plan.plan_id, currency = plan.currency || "";
     const samePlan = renderedPlanId === id;
-    const comparison = data.comparison;
+    const comparison = data.comparison || data.scenarios?.self_consumption?.comparison;
     const confirmedProjection = periodCostPlan?.projection === data;
     const withoutBattery = data.scenarios?.without_battery;
     const selfConsumption = data.scenarios?.self_consumption;
@@ -798,7 +802,7 @@ function renderPlanComparisons(data, plan, {deferRange = false} = {}) {
 
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
- * Display the original plan before loading simulations. Evidence loads only on disclosure.
+ * Read plan and simulations concurrently, displaying the original as soon as it arrives. Evidence loads only on disclosure.
  * Preserve frozen reference balances and server-owned costs without optimization. Retain complete evidence during background refresh,
  * but clear it when explicitly selecting another plan. Version
  * requests so late responses cannot overwrite newer selections.
@@ -849,9 +853,13 @@ async function showPlan(signal, background = false) {
             return true;
         }
     }
+    const simulationController = new AbortController();
     try {
-        const data = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=plan`, signal);
-        if (request !== selectionRequest) return false;
+        const planRead = api(`v1/plans/${encodeURIComponent(id)}/comparison?view=plan`, signal);
+        const simulationRead = api(`v1/plans/${encodeURIComponent(id)}/comparison?view=simulations`, AbortSignal.any([simulationController.signal, AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)]))
+            .then(value => ({value}), error => ({error}));
+        const data = await planRead;
+        if (request !== selectionRequest) { simulationController.abort(); return false; }
         const plan = data.plan;
         if (plan?.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
         const samePlan = renderedPlanId === id;
@@ -933,7 +941,7 @@ async function showPlan(signal, background = false) {
             warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
             $("plan-chart-legend").append(warning);
         }
-        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
+        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison || periodCostPlan?.scenarios?.self_consumption?.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
         chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan, deferRange: true});
         const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
         if (tariffEvidence.length) {
@@ -965,7 +973,9 @@ async function showPlan(signal, background = false) {
         const evidenceRead = loadPlanEvidence();
         let simulationsLoaded = false;
         try {
-            const supplementary = await api(`v1/plans/${encodeURIComponent(id)}/comparison?view=simulations`);
+            const result = await simulationRead;
+            if (result.error) throw result.error;
+            const supplementary = result.value;
             if (request !== selectionRequest) return false;
             if (supplementary.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
             renderPlanComparisons(supplementary, plan);
@@ -987,6 +997,7 @@ async function showPlan(signal, background = false) {
             if (request === selectionRequest && simulationsLoaded) $("overview-status").textContent = CONNECTED_MESSAGE;
         }
     } catch (error) {
+        simulationController.abort();
         if (request === selectionRequest && retainDisplayedPlan) {
             planReadPending = true;
             $("overview-status").textContent = `${error.message} Showing the previously loaded plan. The update is not available yet.`;
@@ -1344,8 +1355,8 @@ async function initializeOverview() {
         if (!session.ingress) $("overview-status").textContent = "Connect to view your plans and savings.";
         overviewSessionReady = true;
         return session;
-    } catch {
-        $("overview-status").textContent = signal.aborted ? "This view took too long to load. Please retry." : "Cannot initialize this view: Check the connection and retry.";
+    } catch (error) {
+        $("overview-status").textContent = signal.aborted || error?.message === "This view took too long to load. Please retry." ? "This view took too long to load. Please retry." : "Cannot initialize this view: Check the connection and retry.";
         return null;
     }
 }

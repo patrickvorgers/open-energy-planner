@@ -1374,15 +1374,20 @@ def test_stale_initial_plan_success_cannot_hide_newer_selection_failure(app_page
         expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
     page.locator("#plan-version").select_option("second-plan")
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
-    assert len(held) == 1
+    original_reads = [
+        route for route in held if f"/{original['plan_id']}/comparison" in route.request.url
+    ]
+    assert len(original_reads) == 1
     with page.expect_response(
         lambda response_item: (
             response_item.url.endswith("/" + original["plan_id"] + "/comparison?view=plan")
             if late == "plan"
-            else response_item.url.endswith("/comparison?view=simulations")
+            else response_item.url.endswith(
+                "/" + original["plan_id"] + "/comparison?view=simulations"
+            )
         )
     ) as completed:
-        held[0].fulfill(json=details if late == "plan" else simulations)
+        original_reads[0].fulfill(json=details if late == "plan" else simulations)
     completed.value.finished()
     expect(page.locator("#overview-status")).to_have_text("Cannot read this view (503).")
 

@@ -1,4 +1,35 @@
 let notifications;
+const SESSION_READ_TIMEOUT_MILLISECONDS = 5000;
+
+/** Join concurrent public metadata reads within one same-origin workspace, never retaining settled data. */
+export async function sessionResponse(base, signal) {
+    signal?.throwIfAborted();
+    const url = new URL("setup/session", new URL(base, location.href)).href;
+    let owner = document;
+    try {
+        if (parent !== window && parent.document.getElementById("workspace-content")?.contentWindow === window
+            && new URL(parent.document.querySelector('meta[name="oep-api-base"]').content, parent.location.href).href === new URL(base, location.href).href) owner = parent.document;
+    } catch { /* Standalone and cross-origin frames own their separate requests. */ }
+    let pending = owner.oepSessionRequest;
+    if (!pending || pending.url !== url) {
+        pending = {url};
+        const current = pending;
+        const deadline = AbortSignal.timeout(SESSION_READ_TIMEOUT_MILLISECONDS);
+        pending.promise = fetch(url, {cache: "no-store", redirect: "error", signal: deadline})
+            .catch(error => { throw deadline.aborted ? new DOMException("Session read timed out", "TimeoutError") : error; })
+            .finally(() => { if (owner.oepSessionRequest === current) delete owner.oepSessionRequest; });
+        owner.oepSessionRequest = pending;
+    }
+    let response;
+    if (signal) {
+        response = await new Promise((resolve, reject) => {
+            const abort = () => reject(signal.reason);
+            signal.addEventListener("abort", abort, {once: true});
+            pending.promise.then(value => { signal.removeEventListener("abort", abort); resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
+        });
+    } else response = await pending.promise;
+    return response.clone();
+}
 
 /** Dismiss the shared mobile menu, including interactions originating in the content document. */
 export function closeSettingsNavigation(focus = false) {
@@ -29,13 +60,12 @@ export function bindSettingsActions() {
     const versionStatus = document.getElementById("integration-version-status");
     const integrationDetail = document.getElementById("integration-version-detail");
     const versionRefreshMilliseconds = 15000;
-    const versionReadTimeoutMilliseconds = 5000;
     /** Show only a current version/build mismatch, clearing stale warnings after a failed read. */
     async function refreshVersion() {
         if (!versionStatus) return;
         try {
             const base = new URL(document.querySelector('meta[name="oep-api-base"]').content, location.href);
-            const response = await fetch(new URL("setup/session", base), {cache: "no-store", redirect: "error", signal: AbortSignal.timeout(versionReadTimeoutMilliseconds)});
+            const response = await sessionResponse(base);
             if (!response.ok) throw new Error("Version status unavailable");
             const session = await response.json(), info = session.build_info;
             lastSession = session;

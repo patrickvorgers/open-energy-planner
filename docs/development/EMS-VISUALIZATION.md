@@ -166,6 +166,33 @@ physically verified before reuse. A newly computed no-battery reference supplies
 its own flows without another replay. Original numbers and displayed values are
 unchanged. See [archive validation and reuse](PLAN-ARCHIVE.md).
 
+Once a plan identity is selected, its plan and simulation reads start together.
+The original chart renders without waiting for simulations. An early simulation
+failure remains separate from original-plan availability. Stale selections cannot
+publish either response, and a failed original read cancels its speculative
+simulation read. Evidence still loads only when its disclosure needs it.
+
+Planning, Installation, Contract, Forecast quality and Activity join concurrent
+public session reads with their same-origin workspace shell. Each consumer gets
+its own response body. Cancelling one consumer does not cancel the shared read.
+The underlying request has a five-second deadline and is removed when settled.
+No completed metadata, credential, failed response or cross-origin request is
+cached. Later version and source-name checks still fetch fresh metadata.
+
+These pages preload their known eager module dependencies using the same frozen
+content-addressed URLs as ordinary imports. Immutable browser caching is retained.
+An explicit browser `no-cache` request can still force a network read. That alone
+does not establish an application cache defect.
+
+HTTP responses expose standard `Server-Timing` durations with fixed metric names.
+`app` covers event-loop dispatch through response preparation. Planning adds
+`archive`, `scenarios` and `json` for the corresponding awaited operations.
+These spans include worker admission and execution. They do not distinguish SQL
+execution from worker queueing, measure delay before event-loop dispatch, proxy
+latency, network transfer or browser painting. Cached responses retain their
+original header. Metrics contain no paths, plan/source identities, timestamps,
+credentials or exception messages, and no timing history is persisted.
+
 Planning renders the original optimizer chart immediately with its available
 bounds. Each synchronous rendering stage then applies the selected windows and
 legend visibility before computing the shared scenario extrema once. When the

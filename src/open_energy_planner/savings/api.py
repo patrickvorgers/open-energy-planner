@@ -13,6 +13,7 @@ from open_energy_planner.contracts.bonus_statistics import (
 )
 from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import display_plan, energy_source_names
+from open_energy_planner.runtime.diagnostics.http import phase
 from open_energy_planner.runtime.diagnostics.logging import (
     BackgroundLog,
     failure_trace,
@@ -118,6 +119,12 @@ def initial_plan_view(plan):
         result["input_snapshot"] = {
             field: snapshot[field] for field in PLAN_SNAPSHOT_FIELDS if field in snapshot
         }
+        if "problem" in snapshot:
+            result["input_snapshot"]["problem"] = {
+                field: value
+                for field, value in snapshot["problem"].items()
+                if field != "terminal_valuations"
+            }
         if snapshot.get("tariff_evidence") is not None:
             result["input_snapshot"]["tariff_evidence"] = [
                 {
@@ -136,6 +143,50 @@ def initial_plan_view(plan):
                 for tariff in snapshot["tariff_evidence"]
             ]
     return result
+
+
+def simulation_view(result):
+    """Send chart physics and original costs once, omitting unused replay and valuation inputs.
+
+    Complete originals and server-side period valuation retain all evidence.
+    Only this explicit browser projection removes duplicated reference flows.
+    """
+    view = {
+        field: value for field, value in result.items() if field not in {"comparison", "scenarios"}
+    }
+    view["scenarios"] = {}
+    for name, entry in result["scenarios"].items():
+        projected = dict(entry)
+        if entry.get("comparison") is not None:
+            reference = entry["comparison"]
+            projected["comparison"] = {
+                field: value
+                for field, value in reference.items()
+                if field not in {"intervals", "reference"}
+            }
+            projected["comparison"]["reference"] = [
+                {
+                    field: row[field]
+                    for field in ("start", "duration_h", "import_kwh", "export_kwh")
+                    if field in row
+                }
+                for row in reference.get("reference", ())
+            ]
+        if entry.get("chart") is not None:
+            chart = entry["chart"]
+            projected["chart"] = {
+                **chart,
+                "input_snapshot": {
+                    **chart["input_snapshot"],
+                    "problem": {
+                        field: value
+                        for field, value in chart["input_snapshot"]["problem"].items()
+                        if field != "terminal_valuations"
+                    },
+                },
+            }
+        view["scenarios"][name] = projected
+    return view
 
 
 SAVINGS_WORKER_SECONDS = 30
@@ -440,15 +491,16 @@ def register(
             if view == "simulations"
             else None
         )
-        plan = await asyncio.to_thread(
-            plans.get_plan,
-            request.match_info["plan_id"],
-            **(
-                {"fields": projection_fields, "snapshot_fields": PLAN_SNAPSHOT_FIELDS}
-                if projection_fields is not None
-                else {}
-            ),
-        )
+        with phase(request, "archive"):
+            plan = await asyncio.to_thread(
+                plans.get_plan,
+                request.match_info["plan_id"],
+                **(
+                    {"fields": projection_fields, "snapshot_fields": PLAN_SNAPSHOT_FIELDS}
+                    if projection_fields is not None
+                    else {}
+                ),
+            )
         if plan is None:
             raise web.HTTPNotFound(text="Original plan not found")
         plan = display_plan(plan, catalogue.value)
@@ -465,10 +517,12 @@ def register(
                     "evidence": await asyncio.to_thread(evidence, plan),
                 }
             )
-            return web.Response(
-                text=await asyncio.to_thread(
+            with phase(request, "json"):
+                payload = await asyncio.to_thread(
                     json.dumps, projection, default=encode, allow_nan=False
-                ),
+                )
+            return web.Response(
+                text=payload,
                 content_type="application/json",
                 headers={"Cache-Control": "no-store"},
             )
@@ -496,9 +550,10 @@ def register(
                 operation="Original plan comparison",
                 fallback="Original plan comparison is unavailable. Inspect application diagnostics. Measure-based settlement remains independent.",
             )
-        result["scenarios"] = await asyncio.to_thread(
-            scenario_views.read, plan, result.get("comparison")
-        )
+        with phase(request, "scenarios"):
+            result["scenarios"] = await asyncio.to_thread(
+                scenario_views.read, plan, result.get("comparison")
+            )
         if result.get("comparison_issue"):
             result["scenarios"]["self_consumption"]["issue"] = result["comparison_issue"]
         if window:
@@ -517,8 +572,12 @@ def register(
 
         from ..planning import encode
 
+        if view == "simulations":
+            result = await asyncio.to_thread(simulation_view, result)
+        with phase(request, "json"):
+            payload = await asyncio.to_thread(json.dumps, result, default=encode, allow_nan=False)
         return web.Response(
-            text=await asyncio.to_thread(json.dumps, result, default=encode, allow_nan=False),
+            text=payload,
             content_type="application/json",
             headers={"Cache-Control": "no-store"},
         )
