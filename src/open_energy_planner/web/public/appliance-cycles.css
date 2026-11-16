@@ -11,7 +11,7 @@
 .cycle-profile-header .settings-tag { background:#fff0cc; color:#805300; }
 .cycle-columns { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr); align-items:start; gap:var(--oep-panel-gap); }
 .cycle-columns > * { min-width:0; }
-.cycles-workspace #cycle-charts,.cycles-workspace #recorded-cycle .chart-grid { grid-template-columns:minmax(0,1fr); }
+.cycles-workspace #cycle-charts { grid-template-columns:minmax(0,1fr); }
 .cycles-workspace .chart-wrap { height:210px; }
 .cycles-workspace .cycle-columns > .chart-card > h2 { margin-top:0; }
 .cycles-workspace #profile-history { overflow-wrap:anywhere; }
@@ -19,7 +19,8 @@
 .cycles-workspace #profile-history dl { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 16px; margin:12px 0; }
 .cycles-workspace #profile-history dd { margin:0; text-align:right; }
 .cycles-workspace #profile-history p { font-size:13px; }
-.cycles-workspace #detected-cycles summary { display:grid; grid-template-columns:minmax(0,1fr) auto; }
+.cycles-workspace #detected-cycles > li { padding:12px 0; border-bottom:1px solid var(--oep-line); }
+.cycles-workspace #cycle-in-progress { display:grid; gap:4px; padding:12px; background:#e5f0f5; border-radius:8px; }
 .cycle-run-label { display:grid; gap:4px; }
 .cycle-run-label small { color:var(--oep-muted); }
 .cycles-workspace #learning-history { margin-top:20px; }

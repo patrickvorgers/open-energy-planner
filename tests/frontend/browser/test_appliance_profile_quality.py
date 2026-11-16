@@ -30,18 +30,8 @@ def test_profile_quality_explains_full_cycle_on_desktop_and_mobile(app_page, app
         path=f"results/ci/cycle-layout-{'statistics' if statistical else 'observed'}-{page.viewport_size['width']}.png",
         full_page=True,
     )
-    page.get_by_text("Recorded cycle measurements", exact=True).click()
     expect(page.locator("#profile-history")).to_contain_text(
         "Provisional statistical profile" if statistical else "Continuously followed profile"
-    )
-    expect(page.locator("#recorded-cycle-status")).to_contain_text(
-        "not continuously followed" if statistical else "Power and energy agree"
-    )
-    page.wait_for_function(
-        "() => Chart.getChart('recorded-power-chart')?.data.datasets[0].data.length > 18"
-    )
-    assert page.evaluate(
-        "Chart.getChart('recorded-power-chart').data.datasets[0].data.some(point => point.y === 3000)"
     )
     if not statistical:
         # Eighteen five-minute phases total 11800 W, plus a 900-W lift lasting twenty seconds.

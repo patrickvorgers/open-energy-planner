@@ -289,7 +289,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
             ],
         },
     ).ok
-    page.clock.fast_forward(10000)
+    page.clock.fast_forward(300000)
     expect(history).to_contain_text("50.0%")
     expect(history).to_contain_text("Hourly evidence: Simulated data")
     expect(history).to_contain_text("Hourly estimated cycles2")
@@ -388,7 +388,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     body["timezone"] = "Europe/London"
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
     with page.expect_response(url + "/setup/session") as metadata:
-        page.clock.fast_forward(20000)
+        page.clock.fast_forward(300000)
     assert metadata.value.json()["timezone"] == "Europe/London"
     page.clock.fast_forward(10000)
     expected_start = page.evaluate(
@@ -401,7 +401,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     page.route(
         "**/v1/appliances", lambda route: route.fulfill(status=503, body="Fixture evidence outage")
     )
-    page.clock.fast_forward(10000)
+    page.clock.fast_forward(300000)
     expect(page.locator("#status")).to_contain_text("Learning evidence refresh unavailable")
     expect(history).to_contain_text("Historical scan complete")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
