@@ -44,15 +44,17 @@ above the charts. **Average power** and **Energy per phase** describe the retain
 planning model. They are stacked on the left on wide screens, with **Detected
 cycles** on the right. On smaller screens, cycle history follows the charts.
 No recent complete cycle does not mean the existing model has been lost.
-**Model evidence** distinguishes fine cycles from hourly estimates. Open **Learning
-and usable history** for processing progress, import coverage and recency weights.
+The profile status distinguishes historical and manual estimates from a followed
+profile. A short note explains any relevant limitation. Open **Learning
+and usable history** for model cycle counts, processing progress, import coverage,
+recency weights and explanations of the underlying measurements.
 These details start collapsed and stay open during refreshes for the same appliance.
 Profile limitations and uncertain measured activity remain visible outside them.
 
 [![A retained learned profile remains usable when no complete cycles are present in recent observations.](../assets/appliance-cycles.png)](../assets/appliance-cycles.png)
 
-*This synthetic example retains 27 cycles in its learned model while its recent
-observation list is empty. These are separate evidence windows.*
+*This synthetic example retains a usable profile while its recent cycle list is
+empty. The saved model and recent observations cover separate evidence windows.*
 
 **Detected cycles** shows at most 25 rows at a time. Use **Previous** and **Next**
 and open a row for its completion time. The list reflects the recent cycles

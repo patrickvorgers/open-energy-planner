@@ -6,6 +6,8 @@
 .cycle-profile-header { display:flex; flex-wrap:wrap; align-items:center; gap:12px 24px; margin:0 0 24px; }
 .cycles-workspace .cycle-profile-header h2 { font-size:24px; margin:0; }
 .cycle-profile-header p { margin:6px 0 0; }
+.cycle-profile-header:has(+ .cycle-profile-note:not([hidden])) { margin-bottom:8px; }
+.cycle-profile-note { margin:0 0 24px; color:var(--oep-muted); max-width:70ch; }
 .cycle-profile-header .settings-tag { background:#fff0cc; color:#805300; }
 .cycle-columns { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr); align-items:start; gap:var(--oep-panel-gap); }
 .cycle-columns > * { min-width:0; }
