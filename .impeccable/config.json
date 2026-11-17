@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "space grotesk",
+        "files": [
+          "src/open_energy_planner/web/public/workspace.css"
+        ],
+        "createdAt": "2026-11-17T16:03:53.531Z",
+        "reason": "Agent: locally bundled Space Grotesk is the established Courtyard typography documented in docs/development/COURTYARD-THEME.md. The approved preview preserves that typography."
+      },
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "src/open_energy_planner/web/public/workspace.css"
+        ],
+        "createdAt": "2026-11-17T16:03:53.545Z",
+        "reason": "Agent: section-tabs explicitly use border-radius:0. Their blue selected underline is documented in docs/development/COURTYARD-THEME.md, so this rounded-card detection is a false positive."
+      }
+    ]
+  }
+}
