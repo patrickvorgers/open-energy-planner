@@ -133,7 +133,9 @@ def test_original_plan_price_scale_uses_the_same_zero_reference(app_page, negati
     page.goto(url + "/overview?plan=browser-original-plan")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#current-price-status")).to_contain_text("Selected plan")
+    expect(page.locator("#plan-version")).to_have_value("browser-original-plan")
+    expect(page.locator("#current-price-status")).to_be_empty()
+    expect(page.locator("#current-price-status")).to_be_hidden()
     bounds = page.evaluate(
         "() => {const axis=Chart.getChart(document.getElementById('price-chart')).scales.y; return [axis.min,axis.max];}"
     )
