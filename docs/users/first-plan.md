@@ -14,7 +14,7 @@ Once installed, start the app and open its Home Assistant ingress entry. Supervi
 
 Open **Settings > Installation**. An incomplete installation opens the five-stage wizard. An existing complete installation opens saved summaries instead. Choose **Edit installation** only for the values you need to change.
 
-The **Home Assistant** stage reuses the sources you already selected in **Home Assistant Settings > Dashboards > Energy**. Check the detected grid import/export channels, each solar source and each battery. Review current readings and the available household history. If something is missing, correct its Energy configuration and use **Refresh Home Assistant sources**. Do not recreate those meter identities in OEP.
+The **Home Assistant** stage reuses the sources you already selected in **Home Assistant Settings > Dashboards > Energy**. Check the detected grid import/export channels, each solar source and each battery. Review current readings and the available household history. If something is missing, correct its Energy configuration and use **Refresh Home Assistant data**. Do not recreate those meter identities in OEP.
 
 Solar and batteries are optional. A source can be detected before its readings or history are ready. [Before you start](before-you-start.md#prepare-home-assistant-energy) explains energy counters, power directions and avoiding overlapping meters.
 
