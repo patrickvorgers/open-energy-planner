@@ -1,6 +1,8 @@
 """One portable schema for every OEP database table. Migration and runtime share this registry."""
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     Double,
@@ -55,6 +57,17 @@ ACTIVITIES = archive_table(
 )
 Index("oep_activity_chronology", ACTIVITIES.c.started_at, ACTIVITIES.c.id)
 
+
+STORAGE_SAMPLES = archive_table(
+    "oep_storage_samples",
+    Column("day", String(TIMESTAMP_LENGTH), primary_key=True),
+    Column("observed_at", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("timezone", String(IDENTITY_LENGTH), nullable=False),
+    Column("backend", String(AREA_LENGTH), nullable=False),
+    Column("database_bytes", BigInteger),
+    Column("database_estimated", Boolean, nullable=False),
+    CheckConstraint("database_bytes >= 0", name="oep_storage_nonnegative_bytes"),
+)
 
 META = archive_table(
     "oep_archive_meta",

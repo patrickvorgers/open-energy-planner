@@ -70,7 +70,7 @@ The app-local single-result scenario cache does not bypass fresh archive reads,
 retention or current contract valuation. See [archive reads](PLAN-ARCHIVE.md).
 
 Settings > Data storage reads the active engine through authenticated
-`GET /v1/storage`. It adds no tables, writes, pruning or migration.
+`GET /v1/storage`. This live read does not write history or prune retained data.
 The separate authenticated `/v1/storage/migration` maintenance API manages
 cross-backend transfer from the same page. It adds no tables or columns. It copies
 and verifies the complete shared registry with writers stopped, then validates
@@ -106,6 +106,47 @@ page, not background monitoring or an HA notification. Refresh retries failures
 and removes stale evidence. This read endpoint deletes no data. Independent
 background plan/Savings retention follows the archive policy. No blocking
 automatic database-file compaction is performed.
+
+## Daily database size table
+
+### `oep_storage_samples`
+
+The storage sampler owns one permanent compact row per installation-local date.
+The active engine and shared lifecycle transaction guard serialize the probe and
+insert. The primary key prevents repeated daily observations after restart.
+All app tables, including this history, transfer through backend migration.
+No source connection is needed afterward. Adding this table is additive and
+startup creates it without rewriting existing evidence.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `day` | `String(40)`, PK | ISO installation-local sampling date. Ordered and queried inclusively by calendar date. |
+| `observed_at` | `String(40)` | Actual UTC observation timestamp with microseconds. Late starts keep their real time. |
+| `timezone` | `String(128)` | Home Assistant installation timezone at observation. Synthetic mode uses UTC. |
+| `backend` | `String(32)` | Active SQLAlchemy dialect: sqlite, postgresql, mariadb or mysql. |
+| `database_bytes` | `BigInteger`, **nullable** | Nonnegative measured logical bytes using the capacity read model above. Null means unavailable, never zero. The named `oep_storage_nonnegative_bytes` check rejects negative sizes. |
+| `database_estimated` | `Boolean` | True for estimated MariaDB/MySQL table/index statistics. |
+
+The daily worker checks every sixty seconds and samples after 04:00 in the
+installation timezone. It waits for HA timezone evidence. A late startup records
+only the current day, never an invented observation for offline days. Unknown size
+is retained once as null. Failed SQL writes retry on the next worker poll.
+Shutdown drains a pending write before closing the active engine or migrating.
+The observation clock is read after acquiring the shared engine guard. A wait
+across local midnight therefore uses the new date and its 04:00 eligibility.
+One writable app process is supported, as for other lifecycle writers.
+
+Authenticated `GET /v1/storage/history?period=month` returns `period`, inclusive
+ISO `start` and `end` dates, the current `timezone`, `sample_hour` and ordered
+`samples` containing the columns above. Supported periods are `week`, `month`,
+`quarter`, `year` and `all`. The default is one calendar month, with month-end
+clamping. Week includes seven local dates. Reads run in a worker and never
+sample. While the HA timezone is unavailable, the endpoint returns empty samples
+and null date bounds rather than guessing a UTC calendar window. The primary-key
+index supports the date window. There are no foreign
+keys or additional indexes. Missing days and nulls break chart lines. Backend
+changes also break lines and suppress cross-backend growth comparisons because
+the measurement scopes differ. History is not automatically thinned.
 
 ## Activity history table
 

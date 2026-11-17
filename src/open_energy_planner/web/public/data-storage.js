@@ -1,12 +1,14 @@
 /** Present read-only storage evidence using the shared authenticated app shell. */
 import {bindSettingsActions} from "./settings-actions.js";
 import {bindStorageMigration} from "./storage-migration.js";
+import {bindStorageHistory} from "./storage-history.js";
 bindSettingsActions();
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
 const READ_TIMEOUT_MILLISECONDS = 35000;
 let token = "", busy = false;
 const refreshMigration = bindStorageMigration(() => token, load);
+const refreshHistory = bindStorageHistory(() => token, bytes);
 
 /** Format byte measurements without converting unknown space into zero. */
 function bytes(value) {
@@ -44,6 +46,7 @@ async function load() {
         find("status").textContent = usage.measurement_failed ? "Some storage measurements are unavailable. Refresh to try again." : "Storage evidence refreshed.";
         find("connect").hidden = true;
         find("storage").hidden = false;
+        await refreshHistory();
     } catch {
         find("status").textContent = find("database-connection").dataset.running === "false" ? "The app is paused for database maintenance. Storage measurements return after restart." : "Storage evidence unavailable. Check the connection and try again.";
     } finally {
