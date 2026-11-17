@@ -21,9 +21,14 @@ Negative prices are valid inputs. An effective export rate can be negative, mean
 5. Inspect the server-evaluated examples at negative, zero and positive market prices.
 6. Save the contract and wait for confirmation.
 
-[![A dated synthetic price rule with import/export formulas and their evaluated example rates.](../assets/contract-rule.png)](../assets/contract-rule.png)
+[![A saved January 2027 bonus rule with separate base export and bonus formulas, monthly hours, annual allowance and battery-export protection.](../assets/contract-rule.png)](../assets/contract-rule.png)
 
-*Read the formula together with the rate examples. The bonus is a separate column and must not also be embedded in the base export formula.*
+*This synthetic Budget Energie-style example enables the export bonus. Read the saved extra rate, monthly paid-window choice, 5,000-kWh cap, contract-anniversary reset and battery-export protection alongside the rate examples. The bonus is separate from the base export formula. The import formula is illustrative, not a supplier tariff.*
+
+The January 2027 rule is scheduled before its start date. An inactive current
+bonus budget at that point does not mean the selected future rule has no bonus.
+The [phone screenshot](../assets/contract-rule-mobile.png) shows the same saved
+rule and rate examples in the single-column layout.
 
 OEP's [formula reference](../development/CONTRACT-PRICES.md#supported-formula-language) defines the actual supported syntax. Use [the worked Dutch contract examples](../development/CONTRACT-EXAMPLES-NL.md) to understand building blocks, then check them against your own contract. Opening an example does not change saved terms. Do not assume that annual netting, tax refunds, subscriptions or investment costs are included.
 
@@ -64,6 +69,10 @@ Use `market` as the base export formula and
 `0.30 * min(max(market, 0), 0.20)` as the separate extra rate. The twelve monthly
 clock windows, 5,000 kWh allowance and battery restriction are listed there.
 Copy your import formula from your signed terms. No 2027 import tariff is assumed.
+At a market price of EUR 0.10/kWh, an eligible kWh earns EUR 0.10 base export
+income and EUR 0.03 bonus. At EUR 0.25/kWh, the bonus is capped at EUR 0.06.
+The preview tests only the rate and price condition. Actual payment also needs
+an eligible paid hour and remaining allowance. See the [complete worked example](../development/CONTRACT-EXAMPLES-NL.md#budget-energie-zonnebonus).
 
 For a contract that started on 1 June 2026, keep that **Contract starts** date
 and add a price rule starting on 1 January 2027 with the bonus enabled.

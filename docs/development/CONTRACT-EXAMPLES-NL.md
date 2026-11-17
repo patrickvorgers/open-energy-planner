@@ -53,7 +53,7 @@ period dates and `expected_version` as described in [contract settings](CONTRACT
 
 The `2027-01-01` effective dates illustrate the user's contract configuration.
 They are not claimed supplier launch dates. Use the customer's actual start date.
-The two suppliers are alternatives, not two rewards to enable on one contract.
+The supplier examples are alternatives, not rewards to enable together on one contract.
 
 ## Zonneplan Zonnebonus
 
@@ -192,9 +192,125 @@ counter and tax/VAT terms before actual use. The fragment does not claim exact
 supplier settlement where those conditions differ. Source:
 [NextEnergy terms index](https://www.nextenergy.nl/meer-info/voorwaarden).
 
+## Budget Energie ZonneBonus
+
+### What the bonus means
+
+The [Budget Thuis action terms dated 20 October 2026](https://www.budgetthuis.nl/docs/Actievoorwaarden_ZonneBonus.pdf),
+checked on **17 November 2026**, describe a bonus from 1 January 2027. It adds
+30.0% of a positive wholesale price, with that price capped at EUR 0.20/kWh for
+the bonus calculation. The extra rate therefore cannot exceed EUR 0.06/kWh.
+The allowance is 5,000 kWh per supply year. Payment uses a different daytime
+window each month. Battery use to obtain more bonus is prohibited.
+
+### Translation into OEP rules
+
+| Component | OEP configuration |
+|---|---|
+| Base export price | `export_formula: market` |
+| Separate bonus rate | `rate_formula: 0.30 * min(max(market, 0), 0.20)` |
+| Nonpositive wholesale price | The formula returns zero. No separate price condition is needed |
+| Payment window | `window: monthly_schedule`, using all twelve ranges below |
+| Annual allowance | `cap_kwh: 5000` |
+| Annual reset | **Contract anniversary**, derived from **Contract starts** |
+| Battery protection | `prevent_battery_export: true` |
+| Import formula | Copy the signed tariff. The bonus terms do not define an import tariff |
+
+The app's **Bonus examples > Budget Energie** panel describes these same fields.
+Use local hours in the Home Assistant installation timezone. OEP includes the
+start and excludes the end of each window.
+
+| Month | Start | End |
+|---|---|---|
+| January | 09:00 | 17:00 |
+| February | 08:00 | 18:00 |
+| March | 07:00 | 19:00 |
+| April | 07:00 | 21:00 |
+| May | 06:00 | 21:00 |
+| June | 05:00 | 22:00 |
+| July | 06:00 | 22:00 |
+| August | 06:00 | 21:00 |
+| September | 07:00 | 20:00 |
+| October | 08:00 | 19:00 |
+| November | 08:00 | 17:00 |
+| December | 09:00 | 17:00 |
+
+For example, keep **Contract starts** at 1 June 2026 and add a price rule
+starting on 1 January 2027 with the bonus enabled. The earlier June rule has no
+bonus. The first bonus allowance covers 1 January to 1 June 2027. Export before
+January is excluded. The next allowance starts on 1 June 2027 and ends on
+1 June 2028. A later price-rule revision does not restart consumed allowance.
+
+This fragment belongs to that January rule. Its June reset comes from the
+original contract start. Include the earlier base-price period and complete
+request fields described above when reproducing the two-rule example.
+
+```json
+{
+  "export_formula": "market",
+  "bonuses": [{
+    "rule_id": "budget-zonnebonus",
+    "effective_from": "2027-01-01T00:00:00+01:00",
+    "rate_formula": "0.30 * min(max(market, 0), 0.20)",
+    "price_condition": null,
+    "cap_kwh": 5000,
+    "timezone": "Europe/Amsterdam",
+    "reset_month": 6,
+    "reset_day": 1,
+    "prevent_battery_export": true,
+    "window": "monthly_schedule",
+    "monthly_schedule": [
+      {"start_time": "09:00", "end_time": "17:00"},
+      {"start_time": "08:00", "end_time": "18:00"},
+      {"start_time": "07:00", "end_time": "19:00"},
+      {"start_time": "07:00", "end_time": "21:00"},
+      {"start_time": "06:00", "end_time": "21:00"},
+      {"start_time": "05:00", "end_time": "22:00"},
+      {"start_time": "06:00", "end_time": "22:00"},
+      {"start_time": "06:00", "end_time": "21:00"},
+      {"start_time": "07:00", "end_time": "20:00"},
+      {"start_time": "08:00", "end_time": "19:00"},
+      {"start_time": "08:00", "end_time": "17:00"},
+      {"start_time": "09:00", "end_time": "17:00"}
+    ]
+  }]
+}
+```
+
+### Worked calculation
+
+Assume one exported kWh during that month's paid window with allowance remaining:
+
+| Market | Base income | Separate bonus income | Total income |
+|---:|---:|---:|---:|
+| -0.10 | -0.10 | 0.00 | -0.10 |
+| 0.00 | 0.00 | 0.00 | 0.00 |
+| 0.10 | 0.10 | 0.03 | 0.13 |
+| 0.20 | 0.20 | 0.06 | 0.26 |
+| 0.25 | 0.25 | 0.06 | 0.31 |
+
+Outside the paid window or after the allowance is exhausted, only base income
+remains. If 0.2 kWh remains and the market price is EUR 0.25/kWh, one exported
+kWh earns `0.25 + 0.2 * 0.06 = 0.262` EUR before display rounding. Keep the bonus
+outside the base export formula so that it is not paid twice or outside its
+conditions.
+
+### Exactness boundary
+
+OEP advances its allowance with all grid export, including unpaid hours and
+battery export. It does not identify direct solar export. Battery protection
+prevents planned battery discharge alongside grid export during paid windows
+while allowance remains at the interval start. It allows discharge for residual
+local demand. It does not enforce physical equipment behavior or reproduce
+supplier source exclusions. See [battery-export protection](BONUS-RULES.md).
+
+Budget settles on the annual or final bill and can change or end the action.
+OEP does not reproduce supplier estimates for missing meter data or guarantee
+settlement. Confirm eligibility, current signed terms and the tax/VAT basis.
+
 ## Starting counters and later rule changes
 
-Both examples require a confirmed seed for the corresponding `rule_id` and active
+All examples require a confirmed seed for the corresponding `rule_id` and active
 period, tied to the same cumulative HA grid-export sensor. If period exports were
 1,200 kWh when that meter read 4,500 kWh, a current reading of 4,700 means 1,400
 kWh has been counted. Candidate plans never update that actual counter. See the
