@@ -40,6 +40,31 @@ preserved without rounding. Reconstruction verifies hashes and bounds record dep
 Retention follows the age policy below. Schema version 1 identifies the content-addressed graph.
 An unsupported version fails startup instead of clearing or guessing at history.
 
+Planning's `view=plan` and `view=simulations` reads select their required top-level
+and snapshot fields in SQL before decoding payloads. Omitted model/training and
+other evidence stays in the archive until a full or evidence read requests it.
+Each selected leaf and complete selected child record is hash-checked on every
+request. A projection does not verify the complete root or omitted snapshot
+fields. Full reads, restart and backend transfer retain complete reconstruction
+and hash verification. Projections never substitute for complete originals.
+
+The Savings route retains one detached scenario result per app instance, keyed by
+the exact freshly read plan and reference contents. Changed inputs replace it.
+Restart clears it. Concurrent requests share the calculation under a worker lock
+and receive separate copies. Database reads and current valuation are never skipped.
+The fresh no-battery comparison supplies its own physical flows without a second
+dispatch. Archived self-consumption references still undergo physical replay and
+outcome validation before their chart can be reused.
+
+The first-chart response omits terminal valuation curves because the browser does
+not calculate financial valuation. The simulation wire view includes each scenario
+comparison once, with grid reference quantities and separate physical chart bars.
+It omits the duplicate top-level comparison, unused comparison intervals and
+reference converter/stock details already represented in the physical bars.
+Full comparison reads, original archives and server-side financial-period reads
+retain complete evidence and exact original amounts. Wire projections never
+change stored JSON, hash verification or the cache's validated physical inputs.
+
 ## Retention and payload representation
 
 `lifecycle/retention.py` preserves all original plans for 24 hours, one first publication per UTC quarter until age three days, one per UTC hour until age fourteen days, and one per HA local calendar day thereafter. Active state is always protected. The worker processes at most 32 plan candidates per round with a durable timestamp/ID cursor.

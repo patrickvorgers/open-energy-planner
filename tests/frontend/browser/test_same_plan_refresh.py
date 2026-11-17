@@ -20,7 +20,7 @@ def test_scenario_legend_choices_follow_scenarios_when_a_comparison_recovers(app
         response = route.fetch().json()
         if not simulations:
             if missing == "self_consumption":
-                response["comparison"] = None
+                response["scenarios"]["self_consumption"]["comparison"] = None
             else:
                 response["scenarios"]["without_battery"]["comparison"] = None
         simulations.append(response)

@@ -13,6 +13,48 @@ from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
+@pytest.mark.parametrize("simulation_fails", [False, True])
+def test_simulation_starts_before_plan_arrives_and_early_result_preserves_plan(
+    app_page, simulation_fails
+):
+    """Concurrent reads overlap. An early simulation result cannot render or replace the pending original plan."""
+    page, url = app_page
+    held = {}
+
+    def hold(route):
+        """Retain both actual responses while exposing which requests reached the server boundary."""
+        view = parse_qs(urlsplit(route.request.url).query)["view"][0]
+        held[view] = route
+        page.evaluate(
+            "name => {window.overlappingReads ||= {}; window.overlappingReads[name] = true;}", view
+        )
+
+    page.route("**/comparison?view=plan", hold)
+    page.route("**/comparison?view=simulations", hold)
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.wait_for_function(
+        "() => window.overlappingReads?.plan && window.overlappingReads?.simulations"
+    )
+    expect(page.locator("#plan-description")).to_have_text("Loading selected plan…")
+    if simulation_fails:
+        held["simulations"].fulfill(status=503)
+    else:
+        held["simulations"].fulfill(response=held["simulations"].fetch())
+    expect(page.locator("#plan-description")).to_have_text("Loading selected plan…")
+    held["plan"].fulfill(response=held["plan"].fetch())
+    expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
+    if simulation_fails:
+        expect(page.locator("#overview-status")).to_contain_text(
+            "Plan loaded. Simulations are unavailable"
+        )
+    else:
+        expect(page.locator("#overview-status")).to_contain_text("Connected")
+
+
+@pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
 def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     """A complete synthetic horizon appears before held simulations and remains usable during lazy evidence."""
     page, url = app_page

@@ -100,7 +100,7 @@ def test_first_cycle_exact_timing_and_measured_activity_are_visible(app_page):
         headers=headers,
         data={**pair, "rows": coarse, "resolution": "hour"},
     ).ok
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#profile-evidence")).to_contain_text("Historical estimate")
@@ -153,7 +153,7 @@ def test_first_cycle_exact_timing_and_measured_activity_are_visible(app_page):
             "end": (now - timedelta(hours=1)).isoformat(),
         },
     ).ok
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#profile-evidence")).to_contain_text("Cycle time: 35 minutes")
@@ -261,11 +261,12 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     assert response.ok, response.text()
     pending = response.json()["appliances"]["devices"][0]["history_request"]
     page.clock.install()
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     history = page.locator("#profile-history")
     expect(history).to_contain_text("Processing hourly history")
+    page.get_by_text("Learning and usable history", exact=True).click()
     expect(history).to_contain_text("0.0%")
     expect(page.locator("#cycle-charts")).to_be_hidden()
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_have_count(0)
@@ -288,7 +289,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
             ],
         },
     ).ok
-    page.clock.fast_forward(10000)
+    page.clock.fast_forward(300000)
     expect(history).to_contain_text("50.0%")
     expect(history).to_contain_text("Hourly evidence: Simulated data")
     expect(history).to_contain_text("Hourly estimated cycles2")
@@ -368,7 +369,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     expect(evidence).to_contain_text("Learning evidence refresh unavailable")
     expect(evidence).to_contain_text("Historical estimate")
     page.unroute("**/v1/appliances")
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     history = page.locator("#profile-history")
@@ -384,14 +385,14 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     )
     chart_id = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
     page.locator("#profile-device").focus()
-    body["timezone"] = "Pacific/Auckland"
+    body["timezone"] = "Europe/London"
     assert page.request.post(url + "/v1/ha/catalogue", headers=headers, data=body).ok
     with page.expect_response(url + "/setup/session") as metadata:
-        page.clock.fast_forward(20000)
-    assert metadata.value.json()["timezone"] == "Pacific/Auckland"
+        page.clock.fast_forward(300000)
+    assert metadata.value.json()["timezone"] == "Europe/London"
     page.clock.fast_forward(10000)
     expected_start = page.evaluate(
-        "value => new Date(value).toLocaleString(undefined, {timeZone: 'Pacific/Auckland', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'})",
+        "value => new Date(value).toLocaleString(undefined, {timeZone: 'Europe/London', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'})",
         start.isoformat(),
     )
     expect(history).to_contain_text(expected_start)
@@ -400,7 +401,7 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     page.route(
         "**/v1/appliances", lambda route: route.fulfill(status=503, body="Fixture evidence outage")
     )
-    page.clock.fast_forward(10000)
+    page.clock.fast_forward(300000)
     expect(page.locator("#status")).to_contain_text("Learning evidence refresh unavailable")
     expect(history).to_contain_text("Historical scan complete")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
@@ -920,6 +921,10 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.get_by_role("heading", name="Wallbox", exact=True)).to_have_count(0)
+    expect(page.locator("#appliance-profiles")).to_have_count(0)
+    page.get_by_role("link", name="View cycle insights", exact=True).click()
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#profile-device option")).to_have_text(["Dishwasher"])
     expect(page.locator("#profile-evidence")).to_contain_text("0.83 kWh")
     energy = page.locator("#cycle-energy-chart").evaluate(
@@ -931,11 +936,7 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     assert sum(energy) == pytest.approx(0.83)
     power_bounds = page.locator("#cycle-chart").bounding_box()
     energy_bounds = page.locator("#cycle-energy-chart").bounding_box()
-    if page.viewport_size["width"] > 1000:
-        assert energy_bounds["x"] > power_bounds["x"]
-        assert energy_bounds["y"] == power_bounds["y"]
-    else:
-        assert energy_bounds["y"] >= power_bounds["y"] + power_bounds["height"]
+    assert energy_bounds["y"] >= power_bounds["y"] + power_bounds["height"]
     assert page.evaluate("""() => {
         const chart = Chart.getChart(document.getElementById('cycle-chart'));
         return chart.config.type === 'line' && chart.data.datasets[0].stepped === true;
@@ -953,6 +954,9 @@ def test_appliance_profile_task_request_and_unknown_execution_are_visible(app_pa
     assert page.evaluate(
         "Chart.getChart(document.getElementById('cycle-chart')).data.datasets[0].data"
     ) == [power for power in [1800, 80, 80, 0, 80, 1200, 80, 0] for _ in range(3)]
+    page.get_by_role("link", name="Open appliance planning", exact=True).click()
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
     page.get_by_label("Finish before (Home Assistant time)").fill("2026-10-26T18:00")
     with page.expect_response(url + "/v1/appliances"):
         page.clock.fast_forward(10000)
@@ -1688,7 +1692,7 @@ def test_appliance_evidence_waits_for_all_reads_before_next_poll(app_page):
     page.goto(url + "/appliances")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#profile-device")).to_have_value(device["entity_id"])
+    expect(page.locator("#appliance-list")).to_contain_text("Washer")
     draft = page.get_by_label("Finish before (Home Assistant time)")
     draft.fill("2026-11-07T12:00")
     draft.focus()

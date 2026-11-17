@@ -6,46 +6,83 @@
 
 **Understand your energy. Plan how to use it.**
 
-Local energy planning for Home Assistant, combining household and solar forecasts, electricity prices, batteries and supported appliances in one checked plan.
+Local energy planning for Home Assistant. Turn your existing Energy configuration, measured history, solar forecasts and electricity contract into a checked plan for batteries and supported appliances.
 
-[User guide](https://patrickvorgers.github.io/open-energy-planner/) | [Developer guide](docs/development/README.md) | [Dev Container setup](https://patrickvorgers.github.io/open-energy-planner/provisioning/) | [Report an issue](https://github.com/patrickvorgers/open-energy-planner/issues)
+[Set up your first plan](https://patrickvorgers.github.io/open-energy-planner/docs/users/first-plan/) | [User guide](https://patrickvorgers.github.io/open-energy-planner/) | [Optional demo](docs/users/demo.md) | [Developer guide](docs/development/README.md) | [Report an issue](https://github.com/patrickvorgers/open-energy-planner/issues)
 
 [![Checks](https://github.com/patrickvorgers/open-energy-planner/actions/workflows/checks.yaml/badge.svg?branch=main)](https://github.com/patrickvorgers/open-energy-planner/actions/workflows/checks.yaml)
 [![Documentation](https://github.com/patrickvorgers/open-energy-planner/actions/workflows/pages.yaml/badge.svg?branch=main)](https://patrickvorgers.github.io/open-energy-planner/)
 
-![A populated OEP planning chart with solar production, battery charging and discharging, and changing electricity demand over a complete example day.](docs/assets/planning-example.png)
+[![Planning shows household demand, solar production, battery flows and state of charge over a complete example day.](docs/assets/planning-example.png)](docs/assets/planning-example.png)
 
-*The actual app with synthetic teaching data. Forecasts and proposed actions are separate from measured results and physical execution.*
+*Follow the same expected day through the optimizer, ordinary battery self-consumption and a without-battery baseline. All screenshots show the actual interface with synthetic examples. They do not demonstrate physical execution or measured savings. Click an image to inspect it at full size.*
 
 > [!IMPORTANT]
-> **Development preview.** OEP has not reached a stable product release. Public HACS installation is not available yet. Start with the isolated examples, preserve your data and check the [release boundaries](design/FIRST-RELEASE-SCOPE.md). Physical control and equipment protection remain in your own Home Assistant automations and local controllers.
+> **Development preview.** OEP has not reached a stable product release. Public HACS installation is not available yet. Administrator-managed installations require a matching accepted app/integration package. The [setup guide](docs/users/first-plan.md) explains that boundary and the configuration steps. Physical control and equipment protection remain in your own Home Assistant automations and local controllers.
 
-## Choose your route
+## What makes OEP different?
 
-| I want to use OEP | I want to contribute |
-|---|---|
-| [Understand how OEP works](docs/users/how-oep-works.md) | [Start developing](docs/development/README.md) |
-| [Try a plan without connecting equipment](docs/users/first-plan.md) | [Prepare the Dev Container](https://patrickvorgers.github.io/open-energy-planner/provisioning/) |
-| [Prepare Home Assistant and configure OEP](docs/users/configuration.md) | [Find the responsible subsystem](docs/development/ARCHITECTURE-OVERVIEW.md) |
-| [Read a plan and understand costs](docs/users/read-your-plan.md) | [Run checks and prepare a PR](CONTRIBUTING.md) |
-| [Troubleshoot a missing result or warning](docs/users/troubleshooting.md) | [Browse technical references](docs/development/REFERENCE-INDEX.md) |
+OEP brings the following choices together in one Home Assistant workflow. These are implemented capabilities, not a claim that every other EMS lacks them.
 
-## What goes into a plan?
+| What you already have or need | How OEP uses it | What you can do with it |
+|---|---|---|
+| A configured Home Assistant Energy dashboard | Reuses selected grid, solar, battery and individual-consumer sources and supported panel metadata | Confirm detected sources and add planning limits instead of entering every meter again |
+| Energy-sensor history | Reconstructs household use, builds weekday/hour demand patterns, learns supported appliance cycles and evaluates weather-sensitive candidates | Start with an annual estimate, then inspect predictions and their measured evidence as history becomes usable |
+| A dynamic electricity contract | Applies dated import/export formulas, negative prices and separate conditional export bonuses | Model the marginal rates and bonus restrictions that actually influence your plan |
+| Batteries and solar on different inverters | Models separate batteries, shared hybrid converters, AC/DC routes, losses, reserves and connection limits | Plan with your installation topology rather than treating every battery as an ideal energy bucket |
+| A choice between cost and consumption | Offers **Minimize cost** and **Minimize consumption**, with explicit priorities and constraints | Choose the goal and inspect how it changes expected grid exchange |
+| A need to check the result | Retains original plans and forecasts, independently checks balances and costs, and exposes comparisons and missing evidence | Distinguish proposed benefit, prediction accuracy and evaluated savings |
 
-1. **Your installation:** Energy sources from Home Assistant, measured starting state and confirmed equipment limits.
-2. **Your expected day:** Household demand, solar production and published or forecast electricity prices.
-3. **Your choices:** Dated contract rules, optimization goal, planning permissions and explicit appliance requests.
-4. **A checked result:** Optimized flows, independent physical/cost validation and an immutable original plan.
+## Start with what Home Assistant already knows
 
-The app runs separately from Home Assistant. Its integration exchanges measurements and publishes virtual advice. Native solver packages stay in the app. Missing inputs remain unknown, and a received command does not prove that a device followed it.
+OEP reads the sources you configured in Energy. It does not ask you to build a second energy dashboard. You confirm the information Energy does not define, such as permitted grid import/export, equipment ratings, inverter relationships and planning permissions.
 
-## Start with one complete example
+[![Saved connection settings with import/export limits and an annual household consumption estimate.](docs/assets/installation-connection.png)](docs/assets/installation-connection.png)
 
-[Try your first plan](docs/users/first-plan.md) runs the real planner with synthetic inputs and no Home Assistant connection. Then follow the user guide in order:
+*Power limits use kW. Annual household demand uses kWh. The synthetic example disables feed-in. A zero-export plan still requires enough consumption, storage or explicitly controllable solar to handle surplus.*
 
-**[Understand](docs/users/how-oep-works.md) → [Prepare](docs/users/before-you-start.md) → [Configure](docs/users/configuration.md) → [Read Planning](docs/users/read-your-plan.md) → [Evaluate](docs/users/savings.md)**
+Existing history can supply an annual-use estimate. Without enough usable history, you can confirm your own annual whole-home estimate and obtain a provisional demand profile. Solar and batteries are optional. See [installation settings](docs/users/installation.md).
 
-Planning compares the optimizer, ordinary battery self-consumption and a without-battery baseline. Savings evaluates retained measurements against a separate continuous reference. Forecast quality compares fixed predictions with later comparable measurements. These are different questions and remain separately labelled.
+## Forecast from measurements and inspect the evidence
+
+Household and individual-consumer history inform expected demand. Supported weather-sensitive devices can learn from consumption and temperature history. Solar forecasting combines configured geometry and weather, with independently evaluated learned alternatives. Suitable evidence is required before a learned model is selected. Missing history does not become zero demand.
+
+[![Forecast quality compares saved predictions with later measurements and shows their coverage.](docs/assets/forecast-quality.png)](docs/assets/forecast-quality.png)
+
+*Inspect where a prediction matched the measurement and where coverage is missing. This synthetic teaching example is not a measured model-performance claim.*
+
+For cycle appliances, OEP can learn the shape and energy of completed runs from available measurements. You can inspect the average profile and recent activity before allowing supported scheduling.
+
+[![Appliance cycles shows an average power profile, energy per phase and recent completed cycles.](docs/assets/appliance-cycles.png)](docs/assets/appliance-cycles.png)
+
+*The synthetic cycle example shows why an appliance needs a time-varying profile rather than only a nominal wattage. Following consumption does not authorize control.*
+
+Read [forecasts](docs/users/forecasts.md) and [appliances](docs/users/appliances.md) for source selection, startup behavior and learning boundaries.
+
+## Plan against your actual contract rules
+
+A market-price feed alone does not describe your bill. OEP separates market prices, effective import/export formulas and additional qualifying export revenue. Rules have effective dates. Bonus conditions can include price gates, paid hours, an annual volume allowance, reset dates and battery-export restrictions.
+
+[![Contract settings show dated import/export formulas and evaluated example rates.](docs/assets/contract-rule.png)](docs/assets/contract-rule.png)
+
+*Check negative, zero and positive market-price examples. Keep an extra bonus outside the base export formula so it is not counted twice.*
+
+Worked Dutch examples cover Zonneplan, NextEnergy and Budget Energie bonus structures. They illustrate configurable rules, not automatic supplier integration or a guarantee that your current signed terms match. Measured export history can establish opening allowance usage. Proposed export does not consume that measured counter. See [contract configuration](docs/users/contract.md) and the [worked formulas](docs/development/CONTRACT-EXAMPLES-NL.md). Fixed subscriptions, annual netting and a complete supplier invoice are outside this marginal planning calculation.
+
+## Read the plan, then decide how to act
+
+The target horizon is 48 hours when inputs cover it. Planning compares the optimizer with ordinary battery self-consumption and a without-battery baseline under the same original inputs. It accounts for configured losses, wear and remaining stored-energy value. Separate **Savings** and **Forecast quality** views answer different questions using retained evidence.
+
+The calculation app runs separately from Home Assistant. The integration exchanges measurements and publishes virtual advice. Your automation/controller implements physical actions. An accepted command proves receipt, not execution. Missing measurements remain unknown and expired commands become unavailable.
+
+## Get your first plan
+
+1. [Check availability and prepare Energy](docs/users/before-you-start.md).
+2. [Install the matched preview and complete setup](docs/users/first-plan.md). Review detected sources, connection limits, solar, batteries and the final installation summary.
+3. [Confirm contract rules and price sources](docs/users/contract.md), then add [optional appliances](docs/users/appliances.md).
+4. Open **Energy > Planning** and [check your first result](docs/users/read-your-plan.md).
+
+For a separate synthetic sandbox, use the [optional standalone demo](docs/users/demo.md). A [persistent simulated Home Assistant laboratory](docs/development/USER-TEST-ENVIRONMENT.md) is available for integration testing. Neither is a prerequisite for configuring an installed OEP app.
 
 ## Develop against real boundaries
 

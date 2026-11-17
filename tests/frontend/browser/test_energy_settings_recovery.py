@@ -33,14 +33,18 @@ def test_appliance_session_failures_never_display_private_diagnostics(app_page, 
                 const response=new Response('PRIVATE-SESSION-BODY',{
                     status:failure==='unauthorized'?401:failure==='http'?503:200
                 });
-                const responseIndex=window.sessionBodyReads.push(0)-1;
-                const parse=response.json.bind(response);
-                response.json=()=>{
-                    ++window.sessionBodyReads[responseIndex];
-                    if(failure==='decoder')return Promise.reject(new Error('PRIVATE-SESSION-DECODER'));
-                    return parse();
+                const observe=response=>{
+                    const responseIndex=window.sessionBodyReads.push(0)-1;
+                    const parse=response.json.bind(response),clone=response.clone.bind(response);
+                    response.json=()=>{
+                        ++window.sessionBodyReads[responseIndex];
+                        if(failure==='decoder')return Promise.reject(new Error('PRIVATE-SESSION-DECODER'));
+                        return parse();
+                    };
+                    response.clone=()=>observe(clone());
+                    return response;
                 };
-                return Promise.resolve(response);
+                return Promise.resolve(observe(response));
             };
         })();""".replace("FAILURE", repr(failure))
     )
@@ -53,7 +57,8 @@ def test_appliance_session_failures_never_display_private_diagnostics(app_page, 
     expect(page.locator("body")).not_to_contain_text("PRIVATE-SESSION-")
     body_reads = page.evaluate("window.sessionBodyReads")
     if failure in ("json", "decoder"):
-        assert body_reads and all(reads == 1 for reads in body_reads)
+        assert any(reads == 1 for reads in body_reads)
+        assert all(reads in (0, 1) for reads in body_reads)
     else:
         assert not any(body_reads)
     expect(page.get_by_role("button", name="Connect", exact=True)).to_be_enabled()

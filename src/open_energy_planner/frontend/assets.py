@@ -16,6 +16,20 @@ PARTIALS = WEB / "partials"
 PUBLIC_RESOURCES = web.AppKey("public-page-resources", set)
 PAGE_ALIASES = {"/": "/workspace", "/setup/": "/setup", "/consumers": "/quality"}
 STATIC_ASSET_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
+MODULE_PRELOADS = {
+    "workspace.html": ("settings-actions.js", "save-bar.js", "confirmation.js"),
+    "overview.html": (
+        "chart_theme.js",
+        "chart_days.js",
+        "display.js",
+        "balance.js",
+        "settings-actions.js",
+    ),
+    "setup.html": ("display.js", "save-bar.js", "settings-actions.js", "confirmation.js"),
+    "contract.html": ("display.js", "settings-actions.js", "save-bar.js", "confirmation.js"),
+    "quality.html": ("display.js", "chart_theme.js", "chart_days.js", "settings-actions.js"),
+    "activity.html": ("display.js", "settings-actions.js", "events.js", "price-sources.js"),
+}
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
     "X-Content-Type-Options": "nosniff",
@@ -91,6 +105,14 @@ def register(app, installation, demand, solar):
 
             base = prefix(request) or ""
             html = page.read_text(encoding="utf-8")
+            html = html.replace(
+                "</head>",
+                "".join(
+                    f'<link rel="modulepreload" href="/setup/{name}">'
+                    for name in MODULE_PRELOADS.get(filename, ())
+                )
+                + "</head>",
+            )
             page_routes = {
                 path for path, page_path in routes.items() if page_path.name != "workspace.html"
             }
@@ -160,6 +182,7 @@ def register(app, installation, demand, solar):
                 .replace('href="/contract"', 'href="' + base + '/contract"')
                 .replace('href="/data-storage"', 'href="' + base + '/data-storage"')
                 .replace('href="/consumers"', 'href="' + base + '/consumers"')
+                .replace('href="/appliance-cycles"', 'href="' + base + '/appliance-cycles"')
                 .replace('href="/appliances"', 'href="' + base + '/appliances"')
                 .replace('href="/appliance-settings"', 'href="' + base + '/appliance-settings"')
                 .replace('href="/appliance-settings/', 'href="' + base + "/appliance-settings/")

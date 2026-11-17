@@ -98,7 +98,7 @@ def test_review_preflight_owns_only_trusted_main_metadata_reads():
 
 REVIEW_ORCHESTRATION_PROTOCOL = """on:
   issue_comment:
-    types: [created]
+    types: [created, edited]
   check_run:
     types: [completed]
   schedule:
@@ -119,12 +119,15 @@ jobs:
       github.repository == 'patrickvorgers/open-energy-planner' &&
       github.event.repository.default_branch == 'main' &&
       (github.event_name != 'check_run' ||
-       github.event.check_run.app.id == 347564 || github.event.check_run.app.id == 413034) &&
+       github.event.check_run.app.id == 347564 || github.event.check_run.app.id == 413034 ||
+       github.event.check_run.app.id == 867647 || github.event.check_run.app.id == 1144995) &&
       (github.event_name != 'issue_comment' ||
        (github.event.issue.pull_request &&
-        (contains(github.event.comment.body, '/oep-reviewer review') ||
+        ((github.event.action == 'created' && contains(github.event.comment.body, '/oep-reviewer review')) ||
          github.event.comment.user.login == 'coderabbitai[bot]' ||
-         github.event.comment.user.login == 'kody-ai[bot]')))
+         github.event.comment.user.login == 'kody-ai[bot]' ||
+         github.event.comment.user.login == 'greptile-apps[bot]' ||
+         github.event.comment.user.login == 'chatgpt-codex-connector[bot]')))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -153,6 +156,9 @@ def test_review_orchestration_has_only_trusted_metadata_and_comment_capabilities
         ("steps:", "steps:\n      - run: docker compose up"),
         ("cancel-in-progress: false", "cancel-in-progress: true"),
         ("run: python3 -m script.ci.review_orchestration", "run: bash arbitrary.sh"),
+        ("github.event.check_run.app.id == 867647", "github.event.check_run.app.id == 999999"),
+        ("github.event.check_run.app.id == 1144995", "true"),
+        ("github.event.action == 'created' && ", ""),
     ],
 )
 def test_review_orchestration_rejects_unreviewed_execution_capabilities(before, after):

@@ -1,7 +1,7 @@
 import "./chart_theme.js";
 import {qualityChart} from "./quality-chart.js";
-import {when, dateLabel, percentage, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
-import {bindSettingsActions} from "./settings-actions.js";
+import {when, dateLabel, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
+import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 import {currentModelRows, renderCurrentModel} from "./quality-models.js";
 bindSettingsActions();
 
@@ -30,7 +30,7 @@ function paragraph(parent, value, className = "") {
 /** Dispose previous graphs before presenting a new day or device. */
 function clearGraphs() { for (const detail of document.querySelectorAll(".quality-current-model")) { if (detail.open) expandedModels.add(detail.dataset.modelSource); else expandedModels.delete(detail.dataset.modelSource); } for (const chart of charts) chart.destroy(); charts = []; find("quality-charts").replaceChildren(); }
 /** Remove stale evidence while a new request is pending or failed. */
-function clear() { clearGraphs(); displayedDay = null; find("quality-source").disabled = true; currentRows = new Map(); for (const id of ["quality-models", "quality-policy", "quality-model-issue"]) find(id).replaceChildren(); }
+function clear() { clearGraphs(); displayedDay = null; find("quality-source").disabled = true; currentRows = new Map(); for (const id of ["quality-models", "quality-model-issue"]) find(id).replaceChildren(); }
 
 /** Filter the same frozen daily evidence without changing the date or fetching a newer prediction. */
 function renderSources() {
@@ -63,6 +63,7 @@ function devices(data) {
     selections[subject] = input.value;
     input.disabled = !available.size;
     find("quality-source-label").hidden = subject === "household";
+    find("quality-appliance-settings").hidden = subject === "solar";
     find("quality-source-title").textContent = subject === "solar" ? "Solar source" : "Device";
     input.setAttribute("aria-label", find("quality-source-title").textContent);
     for (const button of document.querySelectorAll("#quality-subjects button")) button.setAttribute("aria-pressed", String(button.dataset.subject === subject));
@@ -107,28 +108,14 @@ function graph(source, index, inProgress) {
     const plot = document.createElement("div"); plot.className = "chart-plot";
     wrap.className = "chart-wrap"; wrap.append(canvas); plot.append(wrap); article.append(plot); find("quality-charts").append(article);
     charts.push(qualityChart(canvas, plot, source, displayedDay, evidenceTime));
-    const details = document.createElement("details"), summary = document.createElement("summary"), scroll = document.createElement("div"), table = document.createElement("table"), header = document.createElement("thead"), body = document.createElement("tbody");
-    summary.textContent = "Hourly evidence and provenance"; details.append(summary);
-    paragraph(details, `Original model: ${source.model_label}: Issued: ${when(source.issued_at)}${source.measurement_boundary ? `: Measurement boundary: ${source.measurement_boundary}` : ""}`);
-    paragraph(details, `Measured hours: ${source.coverage.measured_hours} of ${source.coverage.hours}: Comparable pairs: ${source.coverage.paired_hours}: MAE: ${quantity(source.metrics.mae_kwh)} kWh/hour: Bias: ${quantity(source.metrics.bias_kwh)} kWh/hour: RMSE: ${quantity(source.metrics.rmse_kwh)} kWh/hour: WAPE: ${percentage(source.metrics.wape_percent)}`, "quality-metrics");
-    if (source.comparison_issue && source.comparison_issue !== daily.evaluation_issue) paragraph(details, source.comparison_issue, "balance-warning");
-    if (source.weather_sensitive != null) paragraph(details, `Weather influence: ${source.weather_sensitive ? "Requested" : "Not requested"}: Temperature features: ${source.weather_features_used ? "Used" : "Not used"}: Individual forecast: ${source.composition_selected ? "Included in the active household composition" : "Retained as a shadow component"}`);
-    if (daily.relative_error_percent != null) paragraph(details, `Relative daily error: ${percentage(daily.relative_error_percent)}`);
-
-    const headerRow = document.createElement("tr"); for (const title of ["Hour starts", "Predicted kWh", "Measured kWh", "Error kWh", "Evaluation"]) { const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = title; headerRow.append(cell); } header.append(headerRow);
-    for (const row of source.rows) { const line = document.createElement("tr"); for (const value of [evidenceTime(row.start), quantity(row.predicted_kwh), quantity(row.measured_kwh), quantity(row.error_kwh), row.evaluation_issue || "Eligible"]) { const cell = document.createElement("td"); cell.textContent = value; line.append(cell); } body.append(line); }
-    table.append(header, body); scroll.className = "table-scroll"; scroll.append(table); details.append(scroll);
-    paragraph(details, `Original forecast version: ${source.forecast_version}`, "quality-version");
-    paragraph(details, `Latest measurement receipt: ${source.last_received_at ? when(source.last_received_at) : "Unavailable"}`);
-    article.append(details);
-    const comparison = document.createElement("div"); comparison.className = "table-scroll quality-comparison"; comparison.tabIndex = 0; comparison.setAttribute("role", "region"); comparison.setAttribute("aria-label", "Original forecast comparison");
-    const modelsTable = document.createElement("table"), caption = document.createElement("caption"); caption.textContent = "Original forecast comparison"; modelsTable.append(caption);
+    const comparison = document.createElement("div"); comparison.className = "table-scroll quality-comparison"; comparison.tabIndex = 0; comparison.setAttribute("role", "region"); comparison.setAttribute("aria-label", "Model comparison for this day");
+    const modelsTable = document.createElement("table"), caption = document.createElement("caption"); caption.textContent = "Model comparison for this day"; modelsTable.append(caption);
     const modelHead = document.createElement("tr");
     for (const label of ["Model", "Day forecast (kWh)", "Difference (kWh)", "MAE (kWh/hour)"]) {const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; modelHead.append(cell);}
     const modelHeader = document.createElement("thead"); modelHeader.append(modelHead); modelsTable.append(modelHeader);
     const modelBody = document.createElement("tbody");
     for (const [index, model] of [source, ...(source.alternatives || [])].entries()) {const line = document.createElement("tr"); for (const value of [model.model_label + (index ? "" : ": Original choice"), quantity(model.daily?.predicted_kwh), quantity(model.daily?.error_kwh), quantity(model.metrics.mae_kwh)]) {const cell = document.createElement("td"); cell.textContent = value; line.append(cell);} modelBody.append(line);}
-    modelsTable.append(modelBody); comparison.append(modelsTable); article.insertBefore(comparison, details);
+    modelsTable.append(modelBody); comparison.append(modelsTable); article.append(comparison);
     const current = currentRows.get(source.id);
     if (current) renderCurrentModel(article, current, expandedModels.has(source.id));
 }
@@ -140,7 +127,6 @@ async function show() {
         const [data, selection] = await Promise.all([day ? api(`v1/forecast-quality/days/${encodeURIComponent(day)}`) : Promise.resolve(indexData), api("v1/models")]);
         if (version !== requestVersion) return false;
         useHomeAssistantTimezone(data.timezone); currentRows = currentModelRows(data.current_models, selection);
-        find("quality-policy").textContent = selection.explanation;
         find("quality-model-issue").textContent = selection.issue === "model_selection_archive_unreadable" ? "Model selection archive is unreadable. Baseline retained. Inspect application logs." : selection.issue || "";
         solarIds = new Set((data.current_models?.solar?.configuration?.sources || []).map(source => source.source_id));
         displayedDay = day ? data : null; devices({...data, series: data.series || []}); renderSources();
@@ -170,4 +156,4 @@ find("connect").onsubmit = (event) => { event.preventDefault(); token = find("to
 find("quality-source").onchange = () => {selections[subject] = find("quality-source").value; remember(); renderSources();};
 for (const button of document.querySelectorAll("#quality-subjects button")) button.onclick = () => {subject = button.dataset.subject; devices(displayedDay || {}); remember(); renderSources();};
 find("quality-day").onchange = show; find("quality-refresh").onclick = () => load(); find("quality-older").onclick = () => load(true);
-fetch(base + "setup/session", {redirect: "error"}).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); watchSourceNames(() => api("setup/session"), show, session.source_names_revision); find("connect").hidden = Boolean(session.ingress); if (session.ingress) load(); }).catch((error) => { find("quality-status").textContent = error.message; });
+sessionResponse(base).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); watchSourceNames(() => sessionResponse(base).then(response => response.json()), show, session.source_names_revision); find("connect").hidden = Boolean(session.ingress); if (session.ingress) load(); }).catch((error) => { find("quality-status").textContent = error.message; });

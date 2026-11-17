@@ -382,5 +382,13 @@
 .quality-line-swatch { display:inline-block; width:24px; border-top:3px solid var(--series-color); flex-shrink:0; }
 .quality-radiation-status,.quality-radiation-source { line-height:1.6; max-width:85ch; }
 .quality-comparison { margin:24px 0; }
+.forecast-workspace .chart-plot { position:relative; }
+.quality-tooltip { position:absolute; z-index:10; top:12px; right:12px; width:min(32rem,calc(100% - 24px)); max-height:60vh; overflow:auto; overflow-wrap:anywhere; padding:12px; border:1px solid var(--oep-line); border-radius:8px; background:var(--oep-surface,#fff); color:var(--oep-text,#172b4d); box-shadow:0 4px 16px #0003; font:12px/1.5 monospace; }
+.quality-tooltip p { margin:0 0 8px; }
+.quality-tooltip > button { float:right; position:sticky; top:0; min-width:44px; min-height:44px; margin:0 0 8px 12px; }
+.quality-tooltip p:first-of-type,.quality-current-summary p:first-child { font-weight:700; }
+.quality-current-summary { margin:12px 0 20px; }
+.quality-current-summary p { margin:6px 0; }
+@media(max-width:640px) { .quality-tooltip { position:fixed; top:84px; left:12px; right:12px; width:auto; max-height:calc(100dvh - 108px); } }
 
 @media(max-width:640px) { .forecast-workspace .quality-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }.forecast-workspace .quality-summary div { min-width:0; }.forecast-workspace .quality-summary dd { font-size:16px; overflow-wrap:anywhere; } }

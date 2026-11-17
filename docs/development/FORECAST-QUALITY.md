@@ -1,6 +1,6 @@
 # Forecast quality
 
-The Forecast quality page compares one fixed midnight prediction with the actual energy of the same Home Assistant calendar day. Select a day rather than a planning round. Household consumption, individual consumer components and each PV source retain their original forecast identities. Interactive hourly graphs expose timing errors that can cancel in a daily total. The expandable table retains gaps, eligibility and provenance.
+The Forecast quality page compares one fixed midnight prediction with the actual energy of the same Home Assistant calendar day. Select a day rather than a planning round. Household consumption, individual consumer components and each PV source retain their original forecast identities. Interactive hourly graphs expose timing errors that can cancel in a daily total. Hourly tooltips retain gaps, eligibility and provenance without a second evidence table.
 
 Each graph shows measured hourly kWh as fill-only bars and original model forecasts
 as lines. The model selected at the frozen cutoff uses a solid line. Retained
@@ -8,6 +8,18 @@ alternatives use dashed or dotted lines. The comparison table uses the same
 original values and whole-day eligibility rules. Hiding a series changes only
 its visibility. Lines stop at missing hours. A measured zero remains zero.
 The accessible legend sits beside the graph on desktop and below it on mobile.
+
+The current active model and a short selection reason appear above the daily
+totals. They describe current status, independently of the frozen model in the
+graph. Training and historical assessment remain inside Current model and learning.
+Model comparison for this day retains the original per-model day totals and scores.
+The general model-selection and accuracy explanations belong in the wiki. The
+Appliances settings link is hidden for Solar.
+
+Hover or tap an hour for its measured and predicted energy, error, exclusion
+reason, original model/version, issue time, measurement receipt and score context.
+The scrollable popup wraps long provenance on small screens. The focusable chart
+also opens evidence with Left/Right, Home and End. Escape closes the popup.
 
 Refresh evidence updates measurements and current model readiness for the selected day. It never switches to a newer day or replaces the original prediction with an intraday plan. Load older days pages the retained day index. Forecast creation, automatic model selection and ordinary operational replanning remain unchanged.
 
@@ -58,8 +70,9 @@ simpler model. Current model updates never rewrite the fixed midnight graph.
 
 ## Verification
 
-Forecast quality presents current model status beside the corresponding device's
-fixed daily graph, inside Current model and learning. Current observations never
+Forecast quality presents the active model and selection reason above the corresponding
+device's fixed daily graph. Current model and learning retains the expandable training
+and assessment detail. Current observations never
 replace the midnight model or prediction. Matching uses household, solar source
 and consumer entity identities, never display names. The day index also returns
 cached current model readiness so a first installation can inspect models before

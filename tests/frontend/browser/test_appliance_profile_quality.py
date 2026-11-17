@@ -21,17 +21,17 @@ def test_profile_quality_explains_full_cycle_on_desktop_and_mobile(app_page, app
     """Actual charts show the complete wash and pause with honest provenance after storage restart."""
     page, url = app_page
     connect_profile(page, url)
+    expect(page.locator("#cycle-charts")).to_be_visible()
+    page.wait_for_function("""() => ['cycle-chart', 'cycle-energy-chart'].every(id => {
+        const chart = Chart.getChart(id), meta = chart?.getDatasetMeta(0);
+        return meta?.data.length && meta.data.every((element, index) => Math.abs(element.y - chart.scales.y.getPixelForValue(meta._parsed[index].y)) < .1);
+    })""")
+    page.screenshot(
+        path=f"results/ci/cycle-layout-{'statistics' if statistical else 'observed'}-{page.viewport_size['width']}.png",
+        full_page=True,
+    )
     expect(page.locator("#profile-history")).to_contain_text(
         "Provisional statistical profile" if statistical else "Continuously followed profile"
-    )
-    expect(page.locator("#recorded-cycle-status")).to_contain_text(
-        "not continuously followed" if statistical else "Power and energy agree"
-    )
-    page.wait_for_function(
-        "() => Chart.getChart('recorded-power-chart')?.data.datasets[0].data.length > 18"
-    )
-    assert page.evaluate(
-        "Chart.getChart('recorded-power-chart').data.datasets[0].data.some(point => point.y === 3000)"
     )
     if not statistical:
         # Eighteen five-minute phases total 11800 W, plus a 900-W lift lasting twenty seconds.
@@ -103,6 +103,6 @@ def connect_profile(page, url):
     assert page.request.post(
         url + "/v1/ha/catalogue", headers={"Authorization": "Bearer " + TOKEN}, data=catalogue
     ).ok
-    page.goto(url + "/appliances")
+    page.goto(url + "/appliance-cycles")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()

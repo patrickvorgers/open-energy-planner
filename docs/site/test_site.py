@@ -3,6 +3,7 @@
 import re
 import unittest
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 import hooks
 from mkdocs.config import load_config
@@ -66,6 +67,50 @@ class DocumentationSiteTests(unittest.TestCase):
             for target in re.findall(r"\]\(([^)]+)\)", index.read_text(encoding="utf-8"))
         }
         self.assertFalse(set(directory.glob("*.md")) - {index} - destinations)
+
+    def test_every_diagram_has_a_current_self_contained_svg(self):
+        """Publish current diagram images without scripts or external image dependencies."""
+        expected = set()
+        for guide in self.files:
+            if not guide.src_uri.endswith(".md"):
+                continue
+            for block in hooks.mermaid_blocks(guide.content_string):
+                image = hooks.diagram_path(block.source)
+                expected.add(image)
+                self.assertTrue(image.is_file(), guide.src_uri)
+                document = ElementTree.parse(image).getroot()
+                self.assertEqual(document.tag, "{http://www.w3.org/2000/svg}svg")
+                self.assertTrue(document.get("viewBox"))
+                self.assertTrue("".join(document.itertext()).strip())
+                for node in document.iter():
+                    self.assertNotEqual(node.tag.rsplit("}", 1)[-1], "script")
+                    for attribute, value in node.attrib.items():
+                        if attribute.rsplit("}", 1)[-1] in {"href", "src"}:
+                            self.assertTrue(value.startswith("#"), value)
+        self.assertGreater(len(expected), 0)
+        self.assertEqual(expected, set((hooks.ROOT / "docs/assets/diagrams").glob("*.svg")))
+
+    def test_diagram_source_changes_require_a_new_image(self):
+        """Never reuse a stale figure when the canonical relationship changes."""
+        page = SimpleNamespace(file=SimpleNamespace(src_uri="docs/users/first-plan.md"))
+        with self.assertRaisesRegex(ValueError, "Render the Mermaid diagram"):
+            hooks.render_diagrams("```mermaid\ngraph TD\nMissing --> New\n```", page)
+
+    def test_nested_mermaid_examples_remain_literal(self):
+        """Preserve examples inside longer backtick or tilde fences, including their links."""
+        page = SimpleNamespace(file=SimpleNamespace(src_uri="docs/development/README.md"))
+        for fence in ("````", "~~~~"):
+            source = f"{fence}markdown\n```mermaid\ngraph TD\nA --> B\n```\n[code](../../src/open_energy_planner/app.py)\n{fence}\n"
+            self.assertEqual(list(hooks.mermaid_blocks(source)), [])
+            self.assertEqual(hooks.on_page_markdown(source, page, self.config, self.files), source)
+
+    def test_fences_require_matching_character_and_sufficient_length(self):
+        """Wrong or shorter fences stay inside the diagram until a valid closure."""
+        source = "````mermaid\ngraph TD\nA --> B\n```\n~~~~\n`````\n"
+        blocks = list(hooks.mermaid_blocks(source))
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].source, "graph TD\nA --> B\n```\n~~~~\n")
+        self.assertEqual(list(hooks.mermaid_blocks("```mermaid\nA --> B\n")), [])
 
     def test_source_links_use_github_and_guide_links_stay_local(self):
         """Keep rendered documentation internal while resolving unpublished code and directories externally."""

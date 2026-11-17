@@ -1,12 +1,12 @@
 # Appliances and daily requests
 
-Use **Settings > Appliances** to configure what a device is and what OEP may plan. Use its **Energy** page for today's request. Forecasting, scheduling permission and physical execution are separate choices.
+Use **Settings > Appliances** to configure what a device is and what OEP may plan. Use its **Energy** page for today's request and **Insights > Appliance cycles** to understand learned cycle behaviour. Forecasting, scheduling permission and physical execution are separate choices.
 
 ## Choose the right category
 
 | Category | Configure | Use each day |
 |---|---|---|
-| Consumption and cycles | Energy consumer, weather sensitivity, cycle-shifting permission and any manual fallback | **Energy > Appliances** for cycle evidence, readiness and deadline |
+| Consumption and cycles | Energy consumer, weather sensitivity, cycle-shifting permission and any manual fallback | **Energy > Appliance planning** for readiness, deadline and task status |
 | EV charging | Vehicles, charge points, permitted assignments, power limits and charging assumptions | **Energy > EV charging** for sessions, target and departure |
 | Electric boilers | Source, temperature/power measurements, tank model and planning permission | **Energy > Thermal storage** for comfort and pause/resume |
 
@@ -17,8 +17,8 @@ Home Assistant Energy owns consumer meters and their relationships. Do not selec
 1. Configure the appliance's energy and power measurement in Home Assistant Energy.
 2. Select it under **Settings > Appliances** and save its forecast membership.
 3. Enable complete-cycle shifting only when the appliance can be started through a suitable automation.
-4. Inspect its cycle evidence under **Energy > Appliances**. The first complete detected cycle establishes a provisional profile. Hourly history supplies an initial estimate, refined with available five-minute history. Detected evidence stays saved after Home Assistant removes older fine history. Both cycle charts show five-minute intervals. With only hourly data, power is flat within each hour and each energy bar estimates one twelfth of that hour's consumption. Fine measurements refine that shape without losing the measured total. A manual duration and energy estimate can serve as an explicitly labelled fallback before enough evidence exists.
-5. Load and prepare the appliance, choose the finish date/time and explicitly declare it ready.
+4. Inspect its cycle evidence under **Insights > Appliance cycles**. The first complete detected cycle establishes a provisional profile. Hourly history supplies an initial estimate, refined with available five-minute history. Detected evidence stays saved after Home Assistant removes older fine history. With only hourly data, power is flat within each hour and each five-minute energy bar estimates one twelfth of that hour's consumption. Fine measurements refine that shape without losing the measured total. Profiles with irregular recorded phases preserve their actual durations. A manual duration and energy estimate can serve as an explicitly labelled fallback before enough evidence exists.
+5. Open **Energy > Appliance planning**. Load and prepare the appliance, choose the finish date/time and explicitly declare it ready.
 6. Inspect task status and the proposed start. A deadline alone does not declare readiness or start equipment.
 
 [![An appliance with a populated cycle profile and explicit finish-time and readiness controls.](../assets/appliance-request.png)](../assets/appliance-request.png)
@@ -30,6 +30,49 @@ The planned start is information. Physical execution needs the supported claim-a
 Removing a consumption appliance asks for confirmation and applies the removal
 immediately. Its Home Assistant source and history remain available. An open
 cycle must be resolved before removal is permitted.
+
+## Understand learned appliance cycles
+
+Open **Insights > Appliance cycles** and choose an appliance in the toolbar above
+the page content. This selection controls both the profile and its history. **View cycle insights**
+on its planning card selects that same appliance directly. Followed cycle appliances
+remain available here when complete-cycle shifting is disabled. EV and thermal
+equipment use their own workspaces.
+
+The selected appliance name, typical energy, duration and profile provenance appear
+above the charts. **Average power** and **Energy per phase** describe the retained
+planning model. They are stacked on the left on wide screens, with **Detected
+cycles** on the right. On smaller screens, cycle history follows the charts.
+No recent complete cycle does not mean the existing model has been lost.
+The profile status distinguishes historical and manual estimates from a followed
+profile. A short note explains any relevant limitation. Open **Learning
+and usable history** for model cycle counts, processing progress, import coverage,
+recency weights and explanations of the underlying measurements.
+These details start collapsed and stay open during refreshes for the same appliance.
+Profile limitations and uncertain measured activity remain visible outside them.
+
+[![A learned cycle profile with active activity and eight recent completed cycles.](../assets/appliance-cycles.png)](../assets/appliance-cycles.png)
+
+[View the mobile layout.](../assets/appliance-cycles-mobile.png)
+
+*This synthetic example shows a complete average profile, a running cycle and
+eight recent completions. Learning details remain collapsed below the list.*
+
+**Detected cycles** shows the eight most recent completed cycles, newest first.
+Each row includes its start, completion, duration and energy without expanding it.
+Start and completion each stay on one line. Taller profile charts give the power
+and phase energy patterns more room beside the recent cycles.
+A detected running cycle appears above the completed cycles with its start time
+and energy measured so far. Uncertain execution remains explicit. Only complete
+accepted cycles refine the model. The page refreshes automatically every five
+minutes while visible. Live activity can therefore lag by up to five minutes.
+The list reflects recent evidence, rather than every cycle ever used to train
+the retained model. Limiting the display does not discard saved evidence.
+
+Learning validates source coverage, counter continuity and physical limits.
+It does not reject an otherwise valid cycle solely because its duration or
+energy differs from previous cycles. Different appliance programs can have
+different consumption. Historical statistics cannot establish continuous reporting.
 
 ## Prepare EV charging
 

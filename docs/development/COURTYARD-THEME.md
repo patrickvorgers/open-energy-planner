@@ -11,8 +11,8 @@ signed values under Production and Consumption, with SoC under Battery state.
 Production means supply and includes grid import and battery discharge. No planning, evaluation or device-control behaviour is added.
 
 The left sidebar keeps destinations visible in three labelled groups.
-Energy contains Planning, Appliances, EV charging, Thermal storage and Savings. Insights contains
-Forecast quality. Settings contains Installation, Appliances, Contract and Data storage, in that order. Page headings use Appliances settings, Contract settings and Installation settings.
+Energy contains Planning, Appliance planning, EV charging, Thermal storage and Savings. Insights contains Appliance cycles,
+Forecast quality, Planning performance and Activity. Settings contains Installation, Appliances, Contract and Data storage, in that order. Page headings use Appliances settings, Contract settings and Installation settings.
 Page headings use the matching task icon and navigation label. The shared
 overview changes its heading between Planning and Savings. Links use
 existing routes, including the trusted Home Assistant ingress prefix. Desktop groups
@@ -141,9 +141,11 @@ when saving. Forecast quality is read-only daily analysis with a link to these s
 Home Assistant Energy remains the authority for meter registration and upstream
 relationships. Existing configuration APIs and version checks are retained.
 
-Energy > Appliances contains only readiness, deadlines, schedules, execution
-evidence and the learned cycle charts. Setup and learning instructions live with
-the configuration. Both pages link to one another and retain ingress prefixes.
+Energy > Appliance planning contains readiness, deadlines, schedules and execution
+evidence with concise cycle energy/duration. Insights > Appliance cycles contains
+the learned cycle charts, recent detected cycles and recorded measurements.
+Setup and learning instructions live with the configuration. The pages link to
+one another and retain ingress prefixes and device selection where applicable.
 
 ## Consistent configuration actions
 

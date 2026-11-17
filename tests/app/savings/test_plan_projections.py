@@ -10,6 +10,7 @@ import pytest
 from aiohttp import ClientSession
 
 from open_energy_planner.savings import api
+from open_energy_planner.savings import scenarios as scenario_module
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 from tests.app.contract.test_contract_app import running
 from tests.app.savings.support.scenarios import START, problem
@@ -58,7 +59,7 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
     calls = []
     original_evidence, original_scenarios, original_latest = (
         api.evidence,
-        api.scenarios,
+        scenario_module.scenarios,
         api.PlanValuations.latest,
     )
 
@@ -78,7 +79,7 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
         return original_latest(*arguments)
 
     monkeypatch.setattr(api, "evidence", evidence)
-    monkeypatch.setattr(api, "scenarios", scenarios)
+    monkeypatch.setattr(scenario_module, "scenarios", scenarios)
     monkeypatch.setattr(api.PlanValuations, "latest", latest)
 
     async def check():
@@ -123,6 +124,11 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                             }
                         ],
                     }
+                    expected["input_snapshot"]["problem"] = {
+                        key: value
+                        for key, value in expected["input_snapshot"]["problem"].items()
+                        if key != "terminal_valuations"
+                    }
                     assert projected == {"plan": expected}
                     assert len(json.dumps(projected)) < len(json.dumps(complete["plan"]))
                 elif view == "simulations":
@@ -131,7 +137,7 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                         **{
                             key: value
                             for key, value in complete.items()
-                            if key not in ("plan", "evidence")
+                            if key not in ("plan", "evidence", "comparison")
                         },
                     }
                 else:
@@ -139,6 +145,11 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                         "plan_id": "projection-original",
                         "evidence": complete["evidence"],
                     }
+            calls.clear()
+            async with session.get(path, params={"view": "simulations"}) as response:
+                assert response.status == 200
+                assert (await response.json())["scenarios"] == complete["scenarios"]
+            assert calls == ["valuation"]
             for query in ({"view": "unknown"}, {"view": "plan", "start": START.isoformat()}):
                 async with session.get(path, params=query) as response:
                     assert response.status == 400
@@ -148,6 +159,59 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                 url + "/v1/plans/missing/comparison", params={"view": "evidence"}
             ) as response:
                 assert response.status == 404
+
+    asyncio.run(check())
+
+
+def test_simulation_projection_preserves_costs_physical_bars_and_complete_originals(tmp_path):
+    """A .5-kWh export costs .05 while storage retains .5 kWh. Compact reads retain both outcomes."""
+    from open_energy_planner.savings.forecast import comparison
+    from tests.app.savings.test_reference_scenarios import plan_document
+
+    plan = plan_document(problem(pv_kwh=1, load_kwh=0.5))
+    plan.update(plan_id="compact-simulation", generated_at=START.isoformat())
+    plan["reference_forecast"] = comparison(plan)
+    original = deepcopy(plan)
+    with closing(SqlPlanRepository(tmp_path)) as repository:
+        repository.state["plan"] = plan
+        repository.save()
+
+    async def check():
+        """Read both actual routes and prove only duplicate wire evidence is omitted."""
+        async with running(tmp_path) as (session, url):
+            path = url + "/v1/plans/compact-simulation/comparison"
+            async with session.get(path) as response:
+                complete = await response.json()
+            async with session.get(path + "?view=simulations") as response:
+                compact = await response.json()
+            assert "comparison" not in compact
+            assert len(json.dumps(compact)) < len(json.dumps(complete))
+            for name in ("without_battery", "self_consumption"):
+                expected = complete["scenarios"][name]
+                actual = compact["scenarios"][name]
+                assert (
+                    actual["comparison"]["reference_costs"]
+                    == expected["comparison"]["reference_costs"]
+                )
+                assert actual["chart"]["expected_flows"] == expected["chart"]["expected_flows"]
+                assert "intervals" not in actual["comparison"]
+                assert "terminal_valuations" not in actual["chart"]["input_snapshot"]["problem"]
+                assert (
+                    actual["comparison"]["reference"][0]["export_kwh"]
+                    == expected["comparison"]["reference"][0]["export_kwh"]
+                )
+                assert "stored" not in actual["comparison"]["reference"][0]
+            assert compact["scenarios"]["without_battery"]["comparison"]["reference_costs"][
+                "economic_cost"
+            ] == pytest.approx(0.05)
+            assert (
+                compact["scenarios"]["self_consumption"]["chart"]["expected_flows"][0]["batteries"][
+                    0
+                ]["end_kwh"]
+                == 2.5
+            )
+            async with session.get(url + "/v1/plans/compact-simulation") as response:
+                assert await response.json() == original
 
     asyncio.run(check())
 

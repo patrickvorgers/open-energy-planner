@@ -124,6 +124,30 @@ environment. MkDocs and Lunr notices accompany the static search assets in
 `docs/assets/SITE-LICENSES.txt`. The bundled OEP fonts retain their original
 license files and source/hash metadata in the generated `assets/fonts` directory.
 
+## Static flowcharts
+
+The canonical guides keep fenced Mermaid source so GitHub can render it. The wiki
+build replaces each block with a local SVG and an expandable text source. Images
+are bound to the normalized source with a SHA-256-derived filename. A missing or
+changed diagram fails the build instead of publishing a stale figure. No external
+rendering service, CDN script or browser JavaScript is required to read diagrams.
+
+To refresh them, install the pinned authoring tool outside tracked sources:
+
+```console
+npm install --prefix .local/diagram-tools --no-audit --no-fund @mermaid-js/mermaid-cli@12.2.0
+python docs/site/render_diagrams.py --cli .local/diagram-tools/node_modules/@mermaid-js/mermaid-cli/src/cli.js
+```
+
+Mermaid CLI requires Node.js 22.13 or newer and a compatible Chromium. If using
+an existing browser, pass a Puppeteer JSON file through `--puppeteer-config`.
+Keep machine-specific paths in that local file. Inspect every refreshed SVG for
+readable labels and correct relationships. Commit the images under
+`docs/assets/diagrams/` alongside their source changes. Remove unused images when
+a diagram changes. CI builds from committed images and does not need Node.js or
+Chromium to generate them. Run the publication tests, strict build and diagram
+browser checks after changes. Generated diagrams contain no Mermaid runtime.
+
 ## GitHub Pages publishing
 
 The public guide is hosted at `https://patrickvorgers.github.io/open-energy-planner/`.

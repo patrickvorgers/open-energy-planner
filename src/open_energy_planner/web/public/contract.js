@@ -1,5 +1,5 @@
 import {money, when, dateLabel, localDate, localInstant, optionLabel, useHomeAssistantTimezone} from "./display.js";
-import {bindSettingsActions} from "./settings-actions.js";
+import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 import {SaveBar} from "./save-bar.js";
 import {confirmAction} from "./confirmation.js";
 import {refreshNotifications} from "./notifications.js";
@@ -585,7 +585,7 @@ find("contract-editor").onsubmit = async (event) => {
 };
 
 try {
-    const response = await fetch(base + "setup/session", {redirect: "error", cache: "no-store"});
+    const response = await sessionResponse(base);
     if (response.ok && (await response.json()).ingress) await load();
     else say("Connect with the app administration token.");
 } catch (error) { say(error.message); }

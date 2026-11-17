@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from math import isclose, isfinite
+from threading import Lock
 
 from .context import appliance_schedule, physical_context
 from .forecast import comparison
@@ -9,12 +10,40 @@ from .model import ENERGY_TOLERANCE_KWH
 from .reference import dispatch
 
 
-def scenario(plan, reference, *, without_battery=False):
+class ScenarioViews:
+    """Reuse one detached read-only result after fresh archive validation.
+
+    Exact plan and reference contents own invalidation, including original stocks,
+    tariffs, service loads and physics. The app owns this bounded cache. Restart
+    discards it. Current valuations are read separately on every request. A lock
+    joins simultaneous reads without exposing mutable cached documents.
+    """
+
+    def __init__(self):
+        """Start empty without retaining another app or database's evidence."""
+        self._lock = Lock()
+        self._inputs = None
+        self._result = None
+
+    def read(self, plan, reference):
+        """Return isolated chart data, recalculating when any frozen input changes."""
+        inputs = plan, reference
+        with self._lock:
+            if inputs != self._inputs:
+                result = scenarios(plan, reference)
+                self._inputs = deepcopy(inputs)
+                self._result = result
+            return deepcopy(self._result)
+
+
+def scenario(plan, reference, *, without_battery=False, calculated=False):
     """Expose physical bars only when deterministic replay matches retained reference quantities.
 
     Old reference documents lack converter flows. Replay their original starting
     stocks and validate every retained grid/stock outcome before presenting them.
     Never overwrite original plans, costs, counters or continuous reference state.
+    Only a reference just returned by comparison may set calculated to reuse its
+    complete physical flows. Archived references always retain replay validation.
     """
     view = {
         "input_snapshot": {
@@ -44,7 +73,7 @@ def scenario(plan, reference, *, without_battery=False):
     stored = {unit.device_id: unit.battery.initial_kwh for unit in physics.batteries}
     physical_flows = []
     for step, recorded in zip(physics.intervals, reference["reference"], strict=True):
-        flow = dispatch(physics, step, stored)
+        flow = recorded if calculated else dispatch(physics, step, stored)
         if (
             any(
                 not isclose(flow[key], recorded[key], rel_tol=0, abs_tol=ENERGY_TOLERANCE_KWH)
@@ -115,7 +144,12 @@ def scenarios(plan, self_consumption):
             )
             if reference is None:
                 raise ValueError("Continuous self-consumption reference is unavailable")
-            result[name] = scenario(plan, reference, without_battery=name == "without_battery")
+            result[name] = scenario(
+                plan,
+                reference,
+                without_battery=name == "without_battery",
+                calculated=name == "without_battery",
+            )
         except (ValueError, KeyError, TypeError, OverflowError) as error:
             result[name] = {"issue": str(error)}
     baseline = result["without_battery"].get("comparison")

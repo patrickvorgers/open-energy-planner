@@ -84,6 +84,7 @@ def test_storage_navigation_authentication_refresh_and_warning(app_page, monkeyp
     [
         "/overview",
         "/appliances",
+        "/appliance-cycles",
         "/ev",
         "/thermal",
         "/quality",
@@ -483,14 +484,15 @@ def test_grouped_navigation_is_consistent_accessible_with_courtyard_theme(app_pa
     """
     page, url = app_page
     groups = {
-        "Energy": ["Planning", "Appliances", "EV charging", "Thermal storage", "Savings"],
-        "Insights": ["Forecast quality", "Planning performance", "Activity"],
+        "Energy": ["Planning", "Appliance planning", "EV charging", "Thermal storage", "Savings"],
+        "Insights": ["Appliance cycles", "Forecast quality", "Planning performance", "Activity"],
         "Settings": ["Installation", "Appliances", "Contract", "Data storage"],
     }
     destinations = (
         ("/overview#planning", "Planning"),
         ("/overview#savings", "Savings"),
-        ("/appliances", "Appliances"),
+        ("/appliances", "Appliance planning"),
+        ("/appliance-cycles", "Appliance cycles"),
         ("/appliance-settings", "Appliances"),
         ("/ev", "EV charging"),
         ("/thermal", "Thermal storage"),
@@ -635,7 +637,6 @@ def test_appliance_workspace_filters_permission_and_handles_empty_refresh(app_pa
     expect(page.get_by_label("Finish before (Home Assistant time)")).to_have_count(
         1 if shiftable else 0
     )
-    expect(page.locator("#profile-device option")).to_have_text(["Dishwasher", "Heat pump"])
     if shiftable:
         expect(page.locator("#appliance-empty")).to_be_hidden()
     else:
@@ -649,14 +650,7 @@ def test_appliance_workspace_filters_permission_and_handles_empty_refresh(app_pa
     expect(page.locator("#appliance-list")).to_be_empty()
     expect(page.get_by_label("Finish before (Home Assistant time)")).to_have_count(0)
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_have_count(0)
-    expect(page.locator("#appliance-profiles")).to_be_visible()
-    expect(page.locator("#profile-device option")).to_have_text(["Dishwasher", "Heat pump"])
-    original_members = consumers["selected"]
-    consumers["selected"] = []
-    page.get_by_role("button", name="Refresh task evidence", exact=True).click()
-    expect(page.locator("#appliance-profiles")).to_be_hidden()
-    assert page.locator("#cycle-chart").evaluate("canvas => !Chart.getChart(canvas)")
-    assert page.locator("#cycle-energy-chart").evaluate("canvas => !Chart.getChart(canvas)")
+    expect(page.locator("#appliance-profiles")).to_have_count(0)
     prefix = urlsplit(url).path
     expect(
         page.locator("#appliance-empty").get_by_role("link", name="Appliances settings")
@@ -666,18 +660,11 @@ def test_appliance_workspace_filters_permission_and_handles_empty_refresh(app_pa
     ).to_have_attribute("href", prefix + "/quality")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
-    consumers["selected"] = original_members
     devices[0]["shiftable"] = True
     page.get_by_role("button", name="Refresh task evidence", exact=True).click()
     expect(page.get_by_role("heading", name="Dishwasher", exact=True)).to_be_visible()
     expect(page.locator("#appliance-empty")).to_be_hidden()
-    expect(page.locator("#appliance-profiles")).to_be_visible()
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_be_enabled()
-    expect(page.locator("#profile-device option")).to_have_text(["Dishwasher", "Heat pump"])
-    page.wait_for_function(
-        "() => ['cycle-chart', 'cycle-energy-chart'].every(id => "
-        "Boolean(Chart.getChart(document.getElementById(id))))"
-    )
     page.goto(url + "/appliance-settings")
     if "/api/hassio_ingress/" not in url:
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
@@ -897,3 +884,55 @@ def test_wiki_help_opens_external_guide_without_leaving_app(app_page):
     expect(popup).to_have_url("https://patrickvorgers.github.io/open-energy-planner/")
     expect(page).to_have_url(url + "/setup")
     popup.close()
+
+
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+def test_workspace_view_signal_survives_late_modules_hash_bursts_and_history(app_page):
+    """A delayed child initializes its selected view, then keeps parent navigation aligned through hash history."""
+    page, url = app_page
+    held = []
+
+    def hold(route):
+        """Delay an eager child dependency while the independently loaded parent accepts navigation."""
+        held.append(route)
+        page.evaluate("count => {window.heldViewModules = count;}", len(held))
+
+    page.route("**/chart_days.js", hold)
+    page.goto(url + "/workspace?page=%2Foverview%23planning", wait_until="domcontentloaded")
+    page.wait_for_function("() => window.heldViewModules > 0")
+    assert len(held) == 1
+    page.locator("#workspace-content").evaluate("""element => {
+        element.contentWindow.retainedViewMarker = true;
+        element.contentWindow.location.hash = 'savings';
+    }""")
+    with page.expect_response(lambda response: response.url.endswith("/chart_days.js")) as loaded:
+        held[0].continue_()
+    assert loaded.value.ok
+    page.unroute("**/chart_days.js", hold)
+    content = page.frame_locator("#workspace-content")
+    expect(content.locator("h1")).to_have_text("Savings")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Savings")
+    page.wait_for_function(
+        "() => document.getElementById('workspace-content').contentDocument.readyState === 'complete'"
+    )
+    for destination in ("Planning", "Savings", "Planning"):
+        open_primary_navigation(page)
+        page.get_by_role("region", name="Energy", exact=True).get_by_role(
+            "link", name=destination, exact=True
+        ).click()
+    expect(content.locator("h1")).to_have_text("Planning")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Planning")
+    page.locator("#workspace-content").evaluate("element => element.contentWindow.history.back()")
+    expect(content.locator("h1")).to_have_text("Savings")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Savings")
+    page.locator("#workspace-content").evaluate(
+        "element => element.contentWindow.history.forward()"
+    )
+    expect(content.locator("h1")).to_have_text("Planning")
+    expect(page.locator('.sidebar [aria-current="page"]')).to_have_text("Planning")
+    assert (
+        page.locator("#workspace-content").evaluate(
+            "element => element.contentWindow.retainedViewMarker"
+        )
+        is True
+    )

@@ -2,9 +2,9 @@
 
 Understand what OEP plans, configure the inputs it needs and learn how to read the result. Choose the user route for operating the app or the developer route for changing it.
 
-[Start the user guide](users/how-oep-works.md){ .primary }
+[Set up your first plan](users/first-plan.md){ .primary }
 
-OEP is a development preview. Public HACS installation and a stable product release are not available yet. You can explore a real plan with synthetic data before connecting an installation.
+OEP is a development preview. Public HACS installation and a stable product release are not available yet. The first-plan guide takes you through the current installation boundary and the Home Assistant setup. A separate synthetic demo is optional.
 
 <figure><a href="assets/planning-example.png" aria-label="Open the populated example plan at full size"><img src="assets/planning-example.png" alt="The actual Planning page with a populated synthetic day showing household demand, solar production and battery charging and discharging."></a><figcaption>Follow the energy through a complete example day. These are synthetic inputs in the actual app, not physical execution or measured savings.</figcaption></figure>
 
@@ -14,13 +14,17 @@ Follow this route in order the first time. Each guide explains what to do, what 
 
 1. [How OEP works](users/how-oep-works.md): Measurements, forecasts, constraints, checked plans and virtual commands.
 2. [Before you start](users/before-you-start.md): Availability, units and Home Assistant Energy prerequisites.
-3. [Try your first plan](users/first-plan.md): A local synthetic example without connecting equipment.
-4. [Connect Home Assistant](users/home-assistant.md): The matched app/integration pair and the actual app entry point.
-5. [Configure OEP](users/configuration.md): Installation, strategy, prices, contract and optional appliances.
+3. [Set up your first plan](users/first-plan.md): Install the matched preview and work through the Home Assistant wizard, contract and first result.
+4. [Connect Home Assistant](users/home-assistant.md): Connection details, virtual-device groups and recovery.
+5. [Configure OEP](users/configuration.md): Return to installation, strategy, prices, contract and optional appliances.
 6. [Read your plan](users/read-your-plan.md): Energy balances, the three scenarios and original evidence.
 7. [Understand Savings](users/savings.md): Coverage, measured operation, simulated references and costs.
 
 Return to [forecast quality](users/forecasts.md), [appliance requests](users/appliances.md), [data preservation](users/data-storage.md) and [troubleshooting](users/troubleshooting.md) as needed. The [glossary](users/glossary.md) explains unfamiliar energy and planning terms.
+
+## Explore an optional demo
+
+The [standalone demo](users/demo.md) uses synthetic inputs without Home Assistant. The [persistent laboratory](development/USER-TEST-ENVIRONMENT.md) adds simulated Home Assistant devices for integration tests. Choose these only when you want a separate test environment. They are not the normal setup route.
 
 ## Develop OEP
 

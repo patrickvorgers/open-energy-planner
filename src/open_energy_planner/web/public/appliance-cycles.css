@@ -1,0 +1,36 @@
+/* The selected appliance owns the whole insight page, independently of its charts. */
+.cycles-workspace .workspace-main { max-width:1500px; }
+.cycles-workspace .settings-toolbar { position:static; align-items:center; }
+.cycles-workspace .settings-toolbar > label { width:300px; max-width:100%; }
+.cycles-workspace .settings-actions { gap:12px 20px; margin:0; padding:0; border:0; }
+.cycle-profile-header { display:flex; flex-wrap:wrap; align-items:center; gap:12px 24px; margin:0 0 24px; }
+.cycles-workspace .cycle-profile-header h2 { font-size:24px; margin:0; }
+.cycle-profile-header p { margin:6px 0 0; }
+.cycle-profile-header:has(+ .cycle-profile-note:not([hidden])) { margin-bottom:8px; }
+.cycle-profile-note { margin:0 0 24px; color:var(--oep-muted); max-width:70ch; }
+.cycle-profile-header .settings-tag { background:#fff0cc; color:#805300; }
+.cycle-columns { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr); align-items:start; gap:var(--oep-panel-gap); }
+.cycle-columns > * { min-width:0; }
+.cycles-workspace #cycle-charts { grid-template-columns:minmax(0,1fr); }
+.cycles-workspace .chart-wrap { height:440px; }
+.cycles-workspace .cycle-columns > .chart-card > h2 { margin-top:0; }
+.cycles-workspace #profile-history { overflow-wrap:anywhere; }
+.cycles-workspace #profile-history .evidence-card { border:0; border-top:1px solid var(--oep-line); border-radius:0; padding:16px 0 0; margin-top:20px; }
+.cycles-workspace #profile-history dl { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 16px; margin:12px 0; }
+.cycles-workspace #profile-history dd { margin:0; text-align:right; }
+.cycles-workspace #profile-history p { font-size:13px; }
+.cycles-workspace #detected-cycles > li { padding:12px 0; border-bottom:1px solid var(--oep-line); }
+.cycles-workspace #cycle-in-progress { display:grid; gap:4px; padding:12px; background:#e5f0f5; border-radius:8px; }
+.cycle-run-label { display:grid; gap:4px; }
+.cycle-run-label > span { white-space:nowrap; font-size:13px; }
+.cycle-run-label small { color:var(--oep-muted); }
+.cycles-workspace #learning-history { margin-top:20px; }
+@media(max-width:1100px) {
+    .cycle-columns { grid-template-columns:minmax(0,1fr); }
+}
+@media(max-width:640px) {
+    .cycles-workspace .page-header { flex-wrap:wrap; }
+    .cycles-workspace .settings-toolbar > label { width:100%; }
+    .cycles-workspace .settings-actions { justify-content:flex-start; }
+    .cycles-workspace .chart-wrap { height:280px; }
+}

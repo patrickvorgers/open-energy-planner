@@ -352,6 +352,10 @@ def create_app(
         middlewares=[authentication, persist_invalidations],
         client_max_size=DEFAULT_REQUEST_LIMIT_KIB * BYTES_PER_KIB,
     )
+    from .runtime.diagnostics.http import phase
+    from .runtime.diagnostics.http import register as register_request_timing
+
+    register_request_timing(app)
     from .build_info import register as register_build_info
 
     register_notifications(app, notification_center)
@@ -1071,9 +1075,10 @@ def create_app(
         """List bounded immutable archive summaries without changing the active plan."""
         try:
             limit = int(request.query.get("limit", DEFAULT_HISTORY_LIMIT))
-            items = await asyncio.to_thread(
-                repository.list_plans, limit=limit, before=request.query.get("before")
-            )
+            with phase(request, "archive"):
+                items = await asyncio.to_thread(
+                    repository.list_plans, limit=limit, before=request.query.get("before")
+                )
         except (ValueError, TypeError):
             raise web.HTTPBadRequest(text="Invalid plan history query") from None
         except OSError:
