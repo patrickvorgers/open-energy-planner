@@ -367,8 +367,9 @@
     .workspace .scenario-costs > dl { gap:14px 24px; }
 }
 
-.workspace .scenario-chart-help { border:0; padding:0; margin:12px 0; }
-.workspace .scenario-chart-help summary { min-height:32px; font-size:14px; }
+.workspace #plan-description:empty,
+.workspace #expected-benefit:empty,
+.workspace #current-price-status:empty { display:none; }
 
 /* Shared section navigation keeps selection distinct from keyboard focus. */
 .section-tabs { display:flex; flex-wrap:wrap; gap:0 24px; margin:0 0 24px; padding:0; border:0; background:transparent; font-size:14px; line-height:1.5; }
