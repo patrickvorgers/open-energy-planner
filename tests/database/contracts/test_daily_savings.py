@@ -23,6 +23,92 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
 
 
+@pytest.mark.parametrize("day_offset", [0, 20])
+def test_permanent_first_gap_does_not_starve_later_recovery_after_restart(
+    settlement, monkeypatch, day_offset
+):
+    """An empty first retry rotates to a recoverable later gap, within a day or across upgrade days."""
+    runtime, store, documents, engine, plans = settlement
+    later = START + timedelta(days=day_offset, minutes=30 if day_offset == 0 else 0)
+    gaps = {START, later}
+    context = {"bindings": bindings(), "seeds": [], "location": None}
+    day_names = sorted({instant.date().isoformat() for instant in gaps})
+    with engine.begin() as connection:
+        connection.execute(SETTLEMENT_FRAMES.delete())
+    for day in day_names:
+        first, last = day_window(day, "UTC")
+        first = max(first, START)
+        count = int((last - first).total_seconds() / 900)
+        measured = [first + timedelta(minutes=15 * index) for index in range(count)]
+        store.put_frames(
+            tuple(frame(start=instant) for instant in measured if instant not in gaps), context
+        )
+        report = DailySavings(runtime).calculate(day, "UTC", contract(), None, last, START, None)
+        report["finalized_at"] = None
+        store.put_day(report, documents, (last.date()).isoformat())
+    original_context = plans.get_context
+
+    def historical_context(identity):
+        """Supply the fixture's frozen source binding without modifying the archived original plan."""
+        original = original_context(identity)
+        return {**original, "comparison_bindings": bindings()} if original else None
+
+    monkeypatch.setattr(plans, "get_context", historical_context)
+    now = later + timedelta(days=1)
+    forward = now - timedelta(minutes=15)
+    documents.write("capture.json", {"end": forward.isoformat()})
+    arguments = (
+        now,
+        SimpleNamespace(batteries=[]),
+        SimpleNamespace(sources=[]),
+        SimpleNamespace(terms=[]),
+        (),
+        SiteLocation(52, 5, "UTC"),
+    )
+    first_request = runtime.request(*arguments)
+    assert first_request["start"] == START.isoformat()
+    assert first_request["end"] == END.isoformat()
+    runtime.receive(
+        first_request,
+        {
+            "request_version": first_request["version"],
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [],
+            "scanned_until": END.isoformat(),
+        },
+        now,
+        (),
+        None,
+    )
+    runtime = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), plans)
+    later_request = runtime.request(*arguments)
+    assert later_request["start"] == later.isoformat()
+    assert later_request["end"] == (later + timedelta(minutes=15)).isoformat()
+    # Repeated snapshot/receipt selection must stay stable until the attempt is accepted.
+    assert runtime.request(*arguments) == later_request
+    runtime.receive(
+        later_request,
+        {
+            "request_version": later_request["version"],
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [frame(start=later).record()],
+            "scanned_until": later_request["end"],
+        },
+        now,
+        (),
+        None,
+    )
+    assert documents.read("capture.json")["end"] == forward.isoformat()
+    assert store.frames(START, end=END) == []
+    assert (
+        store.frames(later, end=later + timedelta(minutes=15))[0]["frame"]
+        == frame(start=later).record()
+    )
+    assert runtime.request(*arguments)["start"] == START.isoformat()
+
+
 @pytest.mark.parametrize("age_days", [1, 20])
 def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarter(
     settlement, age_days

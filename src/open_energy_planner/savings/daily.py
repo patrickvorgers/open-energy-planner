@@ -32,7 +32,6 @@ from .context import physical_context
 from .model import (
     MISSING_MEASUREMENTS,
     POLICY_VERSION,
-    RECOVERY_CALENDAR_DAYS,
     PendingSettlement,
     parse_frame,
 )
@@ -41,6 +40,7 @@ from .repricing import corrected_problem
 from .runtime import capture_start, settlement_issue, version
 from .storage.adapters.sqlalchemy import TOTAL_KEYS, stamp
 
+RECOVERY_CALENDAR_DAYS = 3
 DAILY_POLICY_VERSION = "daily-savings-v1"
 SCENARIOS = ("actual", "reference", "without_battery")
 MISSING_CONTEXT = "The historical installation context is unavailable."

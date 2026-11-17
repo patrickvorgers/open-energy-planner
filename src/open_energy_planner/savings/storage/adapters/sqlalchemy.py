@@ -72,9 +72,11 @@ class SettlementStore:
         """Keep native connections inside the storage boundary."""
         self.engine = engine
 
-    def day(self, *, before=None, finalized=None, latest=False):
+    def day(self, *, after=None, before=None, finalized=None, latest=False):
         """Read one calendar checkpoint, with its independently verified report and continuation."""
         query = select(SAVINGS_DAYS)
+        if after is not None:
+            query = query.where(SAVINGS_DAYS.c.start >= stamp(after))
         if before is not None:
             query = query.where(SAVINGS_DAYS.c.start < stamp(before))
         if finalized is not None:

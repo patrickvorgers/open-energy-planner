@@ -55,6 +55,8 @@ recovery window. Hourly reconstruction uses both bounding hourly readings,
 including when an import resumes partway through an hour. A permanent gap can
 still leave a continuous battery or bonus comparison unavailable. Independently
 recoverable actual costs and measured energy continue where their evidence allows.
+Recovery attempts rotate across gaps and provisional days, so one permanent gap
+cannot keep later recoverable measurements waiting until finalization.
 
 A contract may start after the earliest available Home Assistant history. For example, a June contract can use recorded statistics even when those statistics begin in January. Historical bonus evaluation keeps the contract start and annual reset separate. If a newer bonus checkpoint cannot be traced back through stored measurements, the app automatically requests a historical statistics endpoint using the same confirmed reference and any manual missing-period export. It then needs only the local measurements between that completed hour and the requested interval. Do not change a valid contract date or enter an estimated bonus total to bypass a wait.
 

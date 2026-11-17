@@ -19,6 +19,7 @@ STATISTIC_SECONDS = 300
 HOUR_SECONDS = 3600
 MAX_CAPTURE_DAYS = 1
 MAX_CAPTURE_INTERVALS = 96
+MAX_CAPTURE_REQUEST_BACKOFFS = MAX_CAPTURE_INTERVALS
 MAX_SETTLEMENT_REPORT_BYTES = 192 * 1024
 CAPTURE_TIMEOUT_SECONDS = 30
 RETRY_MINUTES = 15
@@ -37,14 +38,19 @@ class SettlementBridge:
 
     def __init__(self, hass):
         """Keep retry bookkeeping local. Financial arithmetic and persistence belong to the app."""
-        self.hass, self.version, self.retry_after = hass, None, None
+        self.hass, self.retry_after = hass, {}
 
     async def capture(self, request):
         """Read at most a day. Prefer five-minute sums and label hourly interpolation explicitly."""
         now = dt_util.utcnow()
-        if self.version == request["version"] and self.retry_after and now < self.retry_after:
+        self.retry_after = {
+            version: deadline for version, deadline in self.retry_after.items() if now < deadline
+        }
+        if request["version"] in self.retry_after:
             return None
-        self.version, self.retry_after = request["version"], now + timedelta(minutes=RETRY_MINUTES)
+        if len(self.retry_after) >= MAX_CAPTURE_REQUEST_BACKOFFS:
+            self.retry_after.pop(next(iter(self.retry_after)))
+        self.retry_after[request["version"]] = now + timedelta(minutes=RETRY_MINUTES)
         start, end = (datetime.fromisoformat(request[key]) for key in ("start", "end"))
         if (
             start.utcoffset() is None

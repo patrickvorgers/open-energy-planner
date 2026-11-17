@@ -125,10 +125,17 @@ boundaries within the frozen request and scanned range. Legacy reports without
 
 The atomically committed capture cursor records examined time, including gaps,
 and never rewinds. Daily finalization may also advance it past a closed incomplete
-day. The cursor never proves complete coverage. Once forward capture catches up, unfinalized daily missing-meter
-ranges schedule bounded retries during the existing recovery window. Already
+day. The cursor never proves complete coverage. Once forward capture catches up,
+unfinalized daily missing-meter ranges schedule bounded retries during the existing recovery window. Already
 retained frames are excluded even if the daily report has not yet been replayed.
-The oldest older provisional day is also eligible during upgrade recovery.
+An independent `recovery.json` cursor rotates acknowledged attempts, including
+empty replies, across gaps and provisional days. It commits with accepted frames
+and the forward cursor in the same transaction. Later gaps and older upgrade days
+cannot be starved by an unavailable first gap. Selection wraps after the latest
+eligible day. Each read examines at most four provisional day reports, with a
+read-only continuation cache for intervening gap-free days. Selecting a request
+does not advance its durable cursor. Request-version backoffs remain fifteen
+minutes in the integration, with at most 96 retained backoffs across rotation.
 Recovered intervals fill absent rows without replacing original evidence.
 Finalized days remain immutable. Missing measurements never become zero, fresh
 reference stock or a new simulated bonus allowance.

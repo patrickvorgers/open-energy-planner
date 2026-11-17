@@ -48,7 +48,9 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
     """Moving any supported backend into SQLite retains meters, evaluations, continuation and original plans."""
     from open_energy_planner.storage.adapters.lifecycle.migration import migrate_archive
 
-    runtime, _store, _docs, engine, plans = settlement
+    runtime, _store, docs, engine, plans = settlement
+    docs.write("capture.json", {"end": (END + timedelta(minutes=15)).isoformat()})
+    docs.write("recovery.json", {"end": END.isoformat()})
     runtime.process(contract(), END + timedelta(hours=1))
     before = runtime.overview(START, END + timedelta(minutes=15))
     target_directory = tmp_path / "settlement-target"
@@ -59,6 +61,10 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
         restored = SavingsRuntime(
             SettlementStore(target), SqlDocuments(target, "savings"), restored_plans
         )
+        assert restored.documents.read("capture.json") == {
+            "end": (END + timedelta(minutes=15)).isoformat()
+        }
+        assert restored.documents.read("recovery.json") == {"end": END.isoformat()}
         assert restored.documents.read("physical-reference.json") == runtime.documents.read(
             "physical-reference.json"
         )

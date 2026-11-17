@@ -102,6 +102,45 @@ def test_empty_scanned_batch_advances_without_inventing_measurements(settlement)
     assert len(store.frames()) == 2
 
 
+def test_recovery_receipt_commits_frames_and_both_cursors_atomically(settlement, monkeypatch):
+    """Failure writing recovery progress rolls back new frames and the forward cursor on every backend."""
+    runtime, store, documents, _engine, _plans = settlement
+    start, end = END + timedelta(minutes=15), END + timedelta(minutes=30)
+    documents.write("capture.json", {"end": end.isoformat()})
+    pending = {
+        "version": "atomic-recovery",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "bindings": bindings(),
+    }
+    response = {
+        "request_version": pending["version"],
+        "imports": ["sensor.import"],
+        "exports": ["sensor.export"],
+        "frames": [frame(start=start).record()],
+        "scanned_until": end.isoformat(),
+    }
+    original_write = documents.write
+
+    def fail_recovery(name, value):
+        """Fail only the final recovery-cursor write after the earlier transaction writes have executed."""
+        if name == "recovery.json":
+            raise OSError("Synthetic recovery storage failure")
+        return original_write(name, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(documents, "write", fail_recovery)
+        with pytest.raises(OSError, match="Synthetic recovery storage failure"):
+            runtime.receive(pending, response, end, (), None)
+    assert len(store.frames()) == 2
+    assert documents.read("capture.json") == {"end": end.isoformat()}
+    assert not documents.exists("recovery.json")
+    runtime.receive(pending, response, end, (), None)
+    assert len(store.frames()) == 3
+    assert documents.read("capture.json") == {"end": end.isoformat()}
+    assert documents.read("recovery.json") == {"end": end.isoformat()}
+
+
 @pytest.mark.parametrize(
     "damage", ["future", "outside", "naive", "off_grid", "overlap", "before", "after"]
 )

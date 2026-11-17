@@ -1384,6 +1384,10 @@ boundary. The capture cursor records examined time rather than complete coverage
 After forward capture catches up, missing intervals in unfinalized daily reports
 are retried within the existing recovery window. Original evidence remains
 immutable and unknown simulated stock or bonus usage is never reset.
+An independent recovery cursor rotates acknowledged attempts across gaps and
+provisional days, including empty replies. It is committed atomically with frames
+and the forward cursor and survives restart and database transfer. Recovery
+selection is bounded and does not advance a request before receipt.
 
 ### Historical bonus evidence
 

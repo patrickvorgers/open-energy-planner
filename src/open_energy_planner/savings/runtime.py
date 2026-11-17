@@ -21,7 +21,6 @@ from .model import (
     MAX_BATCH_INTERVALS,
     MISSING_MEASUREMENTS,
     POLICY_VERSION,
-    RECOVERY_CALENDAR_DAYS,
     SETTLEMENT_INTERVAL,
     PendingSettlement,
     parse_frame,
@@ -30,6 +29,7 @@ from .physical import advance
 from .repricing import corrected_problem
 
 SETTLEMENT_RECORDER_DELAY = timedelta(minutes=10)
+MAX_RECOVERY_DAYS_PER_READ = 4
 MAX_EVALUATION_VERSIONS = 20
 SHA256_HEX_LENGTH = 64
 
@@ -194,6 +194,7 @@ class SavingsRuntime:
         self.events = None
         self.physical_issue = None
         self._request_bindings = None, None
+        self._recovery_search = None, None
 
     def request(self, now, settings, solar, demand, seeds, location):
         """Request at most one day after first publication. Wait for completed Recorder statistics."""
@@ -235,28 +236,57 @@ class SavingsRuntime:
         return request
 
     def _missing_capture(self, now, location):
-        """Retry an unfinalized day's absent measurements after forward capture catches up.
+        """Rotate bounded recovery reads after acknowledged attempts, including empty replies.
 
         Daily reports own the recovery window and distinguish absent metering from
         accounting failures. Retained frames remain immutable. A retry fills only
         missing intervals and never moves the forward capture cursor backwards.
+        The independent durable recovery cursor prevents a permanent first gap
+        from starving later gaps. A read-only cache pages past days without gaps.
+        It does not advance a selected attempt before its receipt commits.
         """
         if location is None:
             return None
         today = now.astimezone(ZoneInfo(location.timezone)).date()
-        first, _ = day_window(
-            (today - timedelta(days=RECOVERY_CALENDAR_DAYS + 1)).isoformat(), location.timezone
-        )
         last, _ = day_window(today.isoformat(), location.timezone)
-        older = self.store.day(before=first, finalized=False)
-        reports = ([older] if older else []) + self.store.days(first, last)
-        for report in reports:
-            if report["finalized_at"] is not None:
-                continue
+        initial = capture_start(datetime.fromisoformat(self.store.first_activation()))
+        checkpoint = (
+            self.documents.read("recovery.json")["end"]
+            if self.documents.exists("recovery.json")
+            else initial.isoformat()
+        )
+        cached_checkpoint, cached_cursor = self._recovery_search
+        cursor = (
+            cached_cursor if cached_checkpoint == checkpoint else datetime.fromisoformat(checkpoint)
+        )
+        wrapped = False
+        for _ in range(MAX_RECOVERY_DAYS_PER_READ):
+            first, _ = day_window(
+                cursor.astimezone(ZoneInfo(location.timezone)).date().isoformat(), location.timezone
+            )
+            report = self.store.day(after=first, before=last, finalized=False)
+            if report is None:
+                if wrapped:
+                    return None
+                cursor, wrapped = initial, True
+                first, _ = day_window(
+                    initial.astimezone(ZoneInfo(location.timezone)).date().isoformat(),
+                    location.timezone,
+                )
+                report = self.store.day(after=first, before=last, finalized=False)
+                if report is None:
+                    return None
             for gap in report["scenarios"]["actual"]["missing"]:
                 if gap["reason"] == MISSING_MEASUREMENTS:
                     start, end = (datetime.fromisoformat(gap[key]) for key in ("start", "end"))
-                    end = min(end, start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS)
+                    start = max(start, cursor)
+                    end = min(
+                        end,
+                        quarter(now - SETTLEMENT_RECORDER_DELAY),
+                        start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS,
+                    )
+                    if start >= end:
+                        continue
                     for retained in self.store.frames(start, end=end):
                         frame = parse_frame(retained["frame"])
                         if frame.start > start:
@@ -264,6 +294,8 @@ class SavingsRuntime:
                         start = max(start, frame.end)
                     if start < end:
                         return start, end
+            cursor = datetime.fromisoformat(report["end"])
+            self._recovery_search = checkpoint, cursor
         return None
 
     def receive(
@@ -400,6 +432,8 @@ class SavingsRuntime:
                 else start
             )
             self.documents.write("capture.json", {"end": max(previous, scanned).isoformat()})
+            if start < previous:
+                self.documents.write("recovery.json", {"end": scanned.isoformat()})
 
     def advance_reference(self):
         """Persist counter-free physical progress before attempting financial settlement.

@@ -1337,6 +1337,7 @@ def test_settlement_bridge_reads_native_recorder_and_labels_hourly_reconstructio
             retried = await bridge.capture({**capture_request, "version": "capture-2"})
             assert retried is not None
             assert retried["request_version"] == "capture-2"
+            assert await bridge.capture(capture_request) is None
             assert report["imports"] == ["sensor.settlement_import"]
             assert len(report["frames"]) == 2
             assert [flow["channels"]["sensor.settlement_import"] for flow in report["frames"]] == [
