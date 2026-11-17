@@ -1,4 +1,4 @@
-"""Resume release publication from one immutable tested CI bundle without replacing assets."""
+"""Publish a staged matched release only after its original tested artifacts are ready."""
 
 import hashlib
 import json
@@ -24,9 +24,15 @@ def publish(tag, run_id, run_number, attempt):
     """
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     release = json.loads(
-        subprocess.check_output(["gh", "release", "view", tag, "--json", "assets"], text=True)
+        subprocess.check_output(
+            ["gh", "release", "view", tag, "--json", "assets,isDraft,isPrerelease"], text=True
+        )
     )
+    if "-" in version_from_tag(tag) and not release["isPrerelease"]:
+        raise ValueError("Mark a semantic prerelease as a GitHub prerelease before publication")
     existing = {asset["name"] for asset in release["assets"]} & set(ASSET_NAMES)
+    if not release["isDraft"] and existing != set(ASSET_NAMES):
+        raise ValueError("Create a draft release before publishing its installation channels")
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
         previous = root / "previous"
@@ -83,7 +89,18 @@ def publish(tag, run_id, run_number, attempt):
         for name in ASSET_NAMES:
             if name not in existing:
                 subprocess.run(["gh", "release", "upload", tag, str(bundle / name)], check=True)
-        publish_app_repository(bundle, os.environ["GH_REPO"])
+        if not release["isPrerelease"]:
+            publish_app_repository(bundle, os.environ["GH_REPO"])
+        if release["isDraft"]:
+            subprocess.run(["gh", "release", "edit", tag, "--draft=false"], check=True)
+            published = json.loads(
+                subprocess.check_output(
+                    ["gh", "release", "view", tag, "--json", "assets,isDraft,isPrerelease"],
+                    text=True,
+                )
+            )
+            if published["isDraft"]:
+                raise ValueError("GitHub has not completed release publication")
 
 
 if __name__ == "__main__":
