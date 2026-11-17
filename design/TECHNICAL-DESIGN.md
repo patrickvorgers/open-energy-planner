@@ -1378,7 +1378,12 @@ five-minute boundaries. Accepted frames carry `estimated_soc` quality, including
 when energy endpoints require hourly interpolation. Never use current SoC or
 integrate guessed flows. Normalize negative counter deltas within `1e-9` kWh
 to zero for unit-conversion roundoff only. Other decreases and missing evidence
-stop the contiguous prefix and log the source and boundary for diagnosis.
+leave the affected interval uncovered and log the source and boundary for diagnosis.
+Later valid intervals continue importing through a validated `scanned_until`
+boundary. The capture cursor records examined time rather than complete coverage.
+After forward capture catches up, missing intervals in unfinalized daily reports
+are retried within the existing recovery window. Original evidence remains
+immutable and unknown simulated stock or bonus usage is never reset.
 
 ### Historical bonus evidence
 

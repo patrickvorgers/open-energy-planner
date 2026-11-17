@@ -107,13 +107,27 @@ reconstructed only when valid percentage readings before and after agree and
 both configured battery charge/discharge cumulative sums prove no energy moved
 throughout the enclosing five-minute boundaries. Missing counters, active
 battery flows, changed SoC, invalid readings and an absent return sample still
-block capture. Current SoC never substitutes for historical evidence. Such
+leave affected intervals uncovered. Current SoC never substitutes for historical evidence. Such
 frames are `estimated_soc`, including when their energy also uses hourly
 reconstruction. Every non-recorded quality remains estimated downstream.
 A negative counter delta no greater than `1e-9` kWh (one micro-Wh) is treated
 as unit-conversion roundoff and normalized to zero. Larger decreases and
-nonfinite values remain invalid. Capture logs the first blocked boundary and
-the missing or invalid source, then retries without skipping that boundary.
+nonfinite values remain invalid. Recorder reads align their lookback to the
+statistics period before subtracting one hour, preserving both hourly endpoints
+when a capture resumes inside an hour. Capture logs the first unavailable boundary
+and source in a batch and continues examining later intervals. It returns only
+complete valid frames plus aware `scanned_until`. An empty frame list may still
+acknowledge an examined range. Intake validates ordered, nonoverlapping quarter
+boundaries within the frozen request and scanned range. Legacy reports without
+`scanned_until` must retain their contiguous-prefix contract.
+
+The atomically committed capture cursor records examined time, including gaps,
+and never rewinds. Once forward capture catches up, unfinalized daily missing-meter
+ranges schedule bounded retries during the existing recovery window. Already
+retained frames are excluded even if the daily report has not yet been replayed.
+Recovered intervals fill absent rows without replacing original evidence.
+Finalized days remain immutable. Missing measurements never become zero, fresh
+reference stock or a new simulated bonus allowance.
 Sub-quarter tariff/window splits also retain an estimate flag because the
 measured interval total does not reveal its internal power profile.
 

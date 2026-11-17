@@ -6,8 +6,10 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
+from zoneinfo import ZoneInfo
 
 from open_energy_planner.contracts.wire import parse_counters
+from open_energy_planner.core.calendar import day_window
 from open_energy_planner.installation.location import SiteLocation
 
 from ..contracts.bonus import CounterSeed
@@ -17,7 +19,9 @@ from .bonus import HistoricalBonuses
 from .context import physical_context
 from .model import (
     MAX_BATCH_INTERVALS,
+    MISSING_MEASUREMENTS,
     POLICY_VERSION,
+    RECOVERY_CALENDAR_DAYS,
     SETTLEMENT_INTERVAL,
     PendingSettlement,
     parse_frame,
@@ -206,7 +210,10 @@ class SavingsRuntime:
             start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS,
         )
         if start >= end:
-            return None
+            recovery = self._missing_capture(now, location)
+            if recovery is None:
+                return None
+            start, end = recovery
         bindings = {
             "terms": [asdict(energy_term) for energy_term in demand.terms],
             "solar": [asdict(source) for source in solar.sources],
@@ -227,6 +234,36 @@ class SavingsRuntime:
         request["version"] = version(request)
         return request
 
+    def _missing_capture(self, now, location):
+        """Retry an unfinalized day's absent measurements after forward capture catches up.
+
+        Daily reports own the recovery window and distinguish absent metering from
+        accounting failures. Retained frames remain immutable. A retry fills only
+        missing intervals and never moves the forward capture cursor backwards.
+        """
+        if location is None:
+            return None
+        today = now.astimezone(ZoneInfo(location.timezone)).date()
+        first, _ = day_window(
+            (today - timedelta(days=RECOVERY_CALENDAR_DAYS + 1)).isoformat(), location.timezone
+        )
+        last, _ = day_window(today.isoformat(), location.timezone)
+        for report in self.store.days(first, last):
+            if report["finalized_at"] is not None:
+                continue
+            for gap in report["scenarios"]["actual"]["missing"]:
+                if gap["reason"] == MISSING_MEASUREMENTS:
+                    start, end = (datetime.fromisoformat(gap[key]) for key in ("start", "end"))
+                    end = min(end, start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS)
+                    for retained in self.store.frames(start, end=end):
+                        frame = parse_frame(retained["frame"])
+                        if frame.start > start:
+                            return start, frame.start
+                        start = max(start, frame.end)
+                    if start < end:
+                        return start, end
+        return None
+
     def receive(
         self,
         pending: dict,
@@ -235,15 +272,16 @@ class SavingsRuntime:
         seeds: tuple[CounterSeed, ...],
         location: SiteLocation | None,
     ) -> None:
-        """Validate a requested contiguous prefix before atomically archiving it.
+        """Validate scanned coverage and measured intervals before atomically archiving them.
 
         Each frame spans at most SETTLEMENT_INTERVAL (a timedelta representing
-        fifteen minutes). The first start must match the requested start, which
-        may be off-grid after a configuration change. Interior frame ends must
-        align to the UTC quarters returned by quarter(). A prefix may stop at a
-        complete quarter before the requested end. Only the final frame may end
-        off-grid, and only at that requested end (a possible configuration-change
-        instant). Frame documents kWh units, sign rules and reconstruction quality.
+        fifteen minutes). With scanned_until, absent intervals remain unmeasured
+        while later frames advance capture. Legacy reports require a contiguous
+        prefix. Only request edges may be off-grid after a configuration change.
+        Interior boundaries align to UTC quarters. A scan may stop at a complete
+        quarter before the requested end. Recovery fills absent evidence without
+        rewinding the cursor or replacing retained frames. Frame documents kWh
+        units, sign rules and reconstruction quality.
 
         Args:
             pending: App-owned versioned request with aware bounds and frozen
@@ -271,25 +309,41 @@ class SavingsRuntime:
         """
         if not isinstance(body, dict) or body.get("request_version") != pending["version"]:
             raise ValueError("Settlement request changed")
-        if set(body) != {"request_version", "frames", "imports", "exports"}:
+        sparse = "scanned_until" in body
+        if set(body) != {"request_version", "frames", "imports", "exports"} | (
+            {"scanned_until"} if sparse else set()
+        ):
             raise ValueError("Invalid settlement response")
         frames = body["frames"]
-        if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_BATCH_INTERVALS:
+        if (
+            not isinstance(frames, list)
+            or not (0 if sparse else 1) <= len(frames) <= MAX_BATCH_INTERVALS
+        ):
             raise ValueError("Invalid settlement batch")
         frames = tuple(parse_frame(row) for row in frames)
         start, end = (
             datetime.fromisoformat(pending["start"]),
             datetime.fromisoformat(pending["end"]),
         )
-        if frames[0].start != start or frames[-1].end > end or frames[-1].end > now:
+        scanned = datetime.fromisoformat(body["scanned_until"]) if sparse else frames[-1].end
+        if (
+            scanned.utcoffset() is None
+            or not start < scanned <= min(end, now)
+            or any(frame.start < start or frame.end > scanned for frame in frames)
+            or (not sparse and frames[0].start != start)
+        ):
             raise ValueError("Settlement response outside requested coverage")
         if any(
-            previous_item.end != next_item.start for previous_item, next_item in pairwise(frames)
+            previous_item.end > next_item.start
+            or (not sparse and previous_item.end != next_item.start)
+            for previous_item, next_item in pairwise(frames)
         ):
             raise ValueError("Settlement batch has gaps or overlaps")
         # Only request edges may split a quarter when physical configuration changes.
-        if any(row.end != quarter(row.end) for row in frames[:-1]) or (
-            frames[-1].end != end and frames[-1].end != quarter(frames[-1].end)
+        if (scanned != end and scanned != quarter(scanned)) or any(
+            (frame.start != start and frame.start != quarter(frame.start))
+            or (frame.end != end and frame.end != quarter(frame.end))
+            for frame in frames
         ):
             raise ValueError("Settlement frame does not end on a requested quarter boundary")
         terms = {
@@ -338,7 +392,12 @@ class SavingsRuntime:
         # Raw capture and pointer share the same database transaction.
         with self.documents.transaction():
             self.store.put_frames(frames, context, self.documents.pending.connection)
-            self.documents.write("capture.json", {"end": frames[-1].end.isoformat()})
+            previous = (
+                datetime.fromisoformat(self.documents.read("capture.json")["end"])
+                if self.documents.exists("capture.json")
+                else start
+            )
+            self.documents.write("capture.json", {"end": max(previous, scanned).isoformat()})
 
     def advance_reference(self):
         """Persist counter-free physical progress before attempting financial settlement.

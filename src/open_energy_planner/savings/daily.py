@@ -29,16 +29,20 @@ from .accounting import (
 )
 from .advice import active_advice
 from .context import physical_context
-from .model import POLICY_VERSION, PendingSettlement, parse_frame
+from .model import (
+    MISSING_MEASUREMENTS,
+    POLICY_VERSION,
+    RECOVERY_CALENDAR_DAYS,
+    PendingSettlement,
+    parse_frame,
+)
 from .physical import advance
 from .repricing import corrected_problem
 from .runtime import capture_start, settlement_issue, version
 from .storage.adapters.sqlalchemy import TOTAL_KEYS, stamp
 
-RECOVERY_CALENDAR_DAYS = 3
 DAILY_POLICY_VERSION = "daily-savings-v1"
 SCENARIOS = ("actual", "reference", "without_battery")
-MISSING_MEASUREMENTS = "Required measurements are missing. Missing energy is not treated as zero."
 MISSING_CONTEXT = "The historical installation context is unavailable."
 MISSING_ACCOUNT = "Required prices, counters or physical evidence are unavailable."
 UNKNOWN_REFERENCE = "Earlier missing evidence prevents a continuous battery or bonus comparison. No state was reset."

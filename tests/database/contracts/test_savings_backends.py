@@ -74,6 +74,83 @@ def test_ingestion_retries_do_not_duplicate_or_replace_meter_evidence(settlement
     assert store.frames()[0]["frame"]["channels"]["sensor.import"] == 1
 
 
+def test_empty_scanned_batch_advances_without_inventing_measurements(settlement):
+    """A whole unavailable day can be passed without zero frames or costs being fabricated."""
+    runtime, store, documents, _engine, _plans = settlement
+    start = END + timedelta(minutes=15)
+    end = start + timedelta(days=1)
+    pending = {
+        "version": "empty",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "bindings": bindings(),
+    }
+    runtime.receive(
+        pending,
+        {
+            "request_version": "empty",
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [],
+            "scanned_until": end.isoformat(),
+        },
+        end,
+        (),
+        None,
+    )
+    assert documents.read("capture.json") == {"end": end.isoformat()}
+    assert len(store.frames()) == 2
+
+
+@pytest.mark.parametrize(
+    "damage", ["future", "outside", "naive", "off_grid", "overlap", "before", "after"]
+)
+def test_sparse_capture_rejects_invalid_scan_or_frame_boundaries_atomically(settlement, damage):
+    """Sparse transport never permits future, overlapping, off-grid or out-of-request evidence."""
+    runtime, store, documents, _engine, _plans = settlement
+    start = END + timedelta(minutes=15)
+    end = start + timedelta(hours=1)
+    scanned = end
+    now = end
+    captured = [frame(start=start).record()]
+    if damage == "future":
+        now = end - timedelta(minutes=15)
+    elif damage == "outside":
+        scanned += timedelta(minutes=15)
+    elif damage == "naive":
+        scanned = scanned.replace(tzinfo=None)
+    elif damage == "off_grid":
+        captured = [frame(start=start + timedelta(minutes=1)).record()]
+    elif damage == "overlap":
+        captured *= 2
+    elif damage == "before":
+        captured = [frame(start=start - timedelta(minutes=15)).record()]
+    else:
+        captured = [frame(start=end).record()]
+    pending = {
+        "version": "invalid",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "bindings": bindings(),
+    }
+    with pytest.raises(ValueError):
+        runtime.receive(
+            pending,
+            {
+                "request_version": "invalid",
+                "imports": ["sensor.import"],
+                "exports": ["sensor.export"],
+                "frames": captured,
+                "scanned_until": scanned.isoformat(),
+            },
+            now,
+            (),
+            None,
+        )
+    assert len(store.frames()) == 2
+    assert not documents.exists("capture.json")
+
+
 def test_new_published_correction_reprices_without_reoptimizing(settlement):
     """A changed published source starts a new assessment generation even when fixed retail formulas keep costs equal."""
     runtime, _store, _docs, engine, _plans = settlement

@@ -1031,7 +1031,7 @@ def test_setup_reuses_actual_energy_preferences_and_recorder_history(
 def test_settlement_bridge_counter_roundoff_never_admits_resets(
     monkeypatch, delta, accepted, caplog, period
 ):
-    """Sub-micro-Wh unit-conversion noise becomes zero. Real decreases and nonfinite sums stop capture."""
+    """Sub-micro-Wh noise becomes zero. Real decreases and nonfinite sums remain uncovered."""
     from custom_components.open_energy_planner import settlement as bridge_module
 
     async def scenario():
@@ -1089,7 +1089,8 @@ def test_settlement_bridge_counter_roundoff_never_admits_resets(
                     "estimated_hourly" if period == "hour" else "recorded"
                 )
             else:
-                assert report is None
+                assert report["frames"] == []
+                assert report["scanned_until"] == (start + timedelta(minutes=15)).isoformat()
                 assert (
                     "Settlement statistics have a gap: sensor.settlement_import"
                     if period == "hour"
@@ -1122,7 +1123,7 @@ def test_settlement_bridge_counter_roundoff_never_admits_resets(
     ],
 )
 def test_settlement_bridge_only_reconstructs_bounded_proven_idle_soc(monkeypatch, case, caplog):
-    """A restart gap needs equal valid bounding SoC and two unchanged counters. Every missing proof blocks intake."""
+    """A restart gap needs equal valid bounding SoC and unchanged counters. Later valid intervals remain usable."""
     from homeassistant.core import State
 
     from custom_components.open_energy_planner import settlement as bridge_module
@@ -1227,7 +1228,27 @@ def test_settlement_bridge_only_reconstructs_bounded_proven_idle_soc(monkeypatch
                     "recorded"
                 ] * 5
             else:
-                assert report is None
+                if case == "missing_discharge":
+                    assert report is None
+                else:
+                    first_valid = {
+                        "charge": 45,
+                        "discharge": 45,
+                        "changed_soc": 45,
+                        "too_long": 90,
+                        "missing_charge": 45,
+                        "invalid_unit": 45,
+                        "invalid_value": 45,
+                        "nonfinite_value": 45,
+                        "out_of_range": 45,
+                        "missing_meter": 60,
+                        "no_prior": 45,
+                    }.get(case, 120)
+                    assert [row["start"] for row in report["frames"]] == [
+                        (start + timedelta(minutes=offset)).isoformat()
+                        for offset in range(first_valid, 120, 15)
+                    ]
+                    assert report["scanned_until"] == (start + timedelta(hours=2)).isoformat()
                 expected = {
                     "charge": "Battery energy changed during unavailable SoC: sensor.charge",
                     "discharge": "Battery energy changed during unavailable SoC: sensor.discharge",
@@ -1245,7 +1266,8 @@ def test_settlement_bridge_only_reconstructs_bounded_proven_idle_soc(monkeypatch
     asyncio.run(scenario())
 
 
-def test_settlement_bridge_reads_native_recorder_and_labels_hourly_reconstruction():
+@pytest.mark.parametrize("minute", [0, 15, 30, 45])
+def test_settlement_bridge_reads_native_recorder_and_labels_hourly_reconstruction(minute):
     """Real Recorder hourly sums produce two 1-kWh quarters, explicitly estimated, without touching Energy or physical devices."""
     from homeassistant.auth import auth_manager_from_config
     from homeassistant.components.energy.data import async_get_manager
@@ -1273,7 +1295,8 @@ def test_settlement_bridge_reads_native_recorder_and_labels_hourly_reconstructio
                     "device_consumption": [],
                 }
             )
-            start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+            hour = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=3)
+            start = hour + timedelta(minutes=minute)
             async_import_statistics(
                 hass,
                 {
@@ -1287,7 +1310,7 @@ def test_settlement_bridge_reads_native_recorder_and_labels_hourly_reconstructio
                 },
                 [
                     {
-                        "start": start - timedelta(hours=1) + timedelta(hours=index_item),
+                        "start": hour - timedelta(hours=1) + timedelta(hours=index_item),
                         "sum": 100 + 4 * index_item,
                         "state": 100 + 4 * index_item,
                     }

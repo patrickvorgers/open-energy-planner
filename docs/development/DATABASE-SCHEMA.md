@@ -931,6 +931,15 @@ See [savings](SAVINGS.md) for the reference scenario, valuation and quality poli
 
 ### `oep_settlement_frames`
 
+Only valid measured intervals have rows. Missing or rejected intervals remain
+absent, including when later intervals have been captured. The `savings`
+namespace's `capture.json` contains `{end: aware UTC ISO instant}`. This monotone
+cursor records examined time, not complete measurement coverage. A sparse capture
+commits its valid rows and scanned cursor in one transaction. Recovery inserts
+only missing intervals from unfinalized days and never replaces existing rows or
+rewinds the cursor. Daily reports retain missing ranges and own the recovery and
+finalization window. No table or column changes are required.
+
 Immutable measured/estimated evidence at up-to-quarter-hour intervals, including
 fragments at configuration boundaries. Conflicting replacement fails explicitly.
 
