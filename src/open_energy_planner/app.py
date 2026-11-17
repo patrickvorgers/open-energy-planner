@@ -373,18 +373,6 @@ def create_app(
             )
 
         notification_center.register("versions", version_notices)
-    from dataclasses import asdict
-
-    from .storage.adapters import usage as storage_capacity
-
-    async def data_storage(request):
-        """Return authenticated capacity evidence without blocking planning or exposing paths."""
-        usage = await asyncio.to_thread(storage_capacity.storage_usage, repository.engine)
-        return web.json_response(
-            {**asdict(usage), "status": usage.status}, headers={"Cache-Control": "no-store"}
-        )
-
-    app.router.add_get("/v1/storage", data_storage)
     from .ingress import INGRESS_PEER
 
     if ingress_peer:
@@ -459,6 +447,10 @@ def create_app(
         return (setup_catalogue.value or {}).get("timezone") or (
             "UTC" if source == "synthetic" else None
         )
+
+    from .storage.api import register as register_storage
+
+    register_storage(app, repository.engine, price_timezone)
 
     contract_basis = ContractBasisSource(
         basis_source, lambda: prices, lambda: contracts.current, lambda: bonus_counters.current

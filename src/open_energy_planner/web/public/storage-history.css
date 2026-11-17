@@ -1,0 +1,10 @@
+/* Daily history shares the storage cards and Courtyard controls. */
+.storage-history {margin-block:24px}
+.storage-history-heading {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}
+.storage-history-heading h2 {margin:0}
+.storage-history-heading label {margin:0;min-width:150px}
+.storage-history-heading select {min-height:44px}
+.storage-history-plot {height:280px;position:relative;min-width:0}
+#storage-history-chart:focus-visible {outline:2px solid var(--oep-teal,#21836d);outline-offset:4px}
+#storage-history-selected {min-height:1.5em;font-variant-numeric:tabular-nums}
+@media(max-width:640px) {.storage-history-heading label {width:100%}.storage-history-plot {height:240px}}
