@@ -15,11 +15,12 @@ ASSET_NAMES = ("release-manifest.json", "SHA256SUMS", *ARTIFACT_NAMES)
 
 
 def publish(tag, run_id, run_number, attempt):
-    """Validate existing assets and upload only missing files from the first published bundle.
+    """Publish a matched release after preserving its original tested assets.
 
     The manifest is uploaded first and binds retries to its original workflow
     attempt. Recovery requires that attempt's retained Actions artifact. A
     different workflow run, changed tag or conflicting asset fails before writes.
+    The stable app channel is verified before the draft release becomes public.
     GitHub CLI supplies authentication through its existing environment.
     """
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()

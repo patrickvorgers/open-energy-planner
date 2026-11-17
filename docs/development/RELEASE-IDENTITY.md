@@ -25,14 +25,14 @@ No deployment to HA is automatic.
 1. Create an immutable version tag on the intended verified commit on `main`.
    Push that tag without moving an existing tag. Prepare a GitHub **draft release**
    for that existing tag, including its release notes and intended prerelease flag.
-2. Open **Actions > Checks > Run workflow**. Select that same tag as the workflow
-   ref and enter it in **release_tag**. For example, with an authenticated GitHub CLI:
+2. Dispatch **Checks** on that same tag with the matching **release_tag** input.
+   With an authenticated GitHub CLI, run:
 
    ```console
    gh workflow run checks.yaml --ref v0.3.0 -f release_tag=v0.3.0
    ```
 
-3. Wait for full validation, the matched installation bundle and publication.
+3. Open **Actions > Checks** and wait for full validation, the matched installation bundle and publication.
    The workflow rejects a different selected ref/tag. A manual run without
    `release_tag` performs validation only and cannot publish a release.
 4. The publisher attaches or verifies every original asset while the release is
