@@ -48,8 +48,11 @@ def render_diagrams(markdown, page):
         if not image.is_file():
             raise ValueError(f"Render the Mermaid diagram in {page.file.src_uri} first")
         relative = os.path.relpath(image, (ROOT / page.file.src_uri).parent).replace("\\", "/")
+        headings = re.findall(r"^#{1,6} (.+)$", markdown[: match.start()], re.MULTILINE)
+        title = headings[-1] if headings else "Planning relationships"
         return (
-            f"[![Diagram. Open the full-size image for details.]({relative})]({relative})\n\n"
+            f"[![{title}: Diagram.]({relative})]({relative})\n\n"
+            f"[Open full-size diagram]({relative}).\n\n"
             "<details>\n<summary>Diagram source (Mermaid)</summary>\n\n"
             f"```text\n{match.group(1).strip()}\n```\n\n</details>"
         )

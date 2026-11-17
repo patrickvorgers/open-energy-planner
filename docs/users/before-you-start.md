@@ -6,6 +6,7 @@ Start by understanding the inputs and the current installation boundary. The nor
 
 | Your goal | What you need | Continue with |
 |---|---|---|
+| Install and configure OEP with Home Assistant | The matched preview package, administrator access and configured Energy sources | [Set up your first plan](first-plan.md) |
 | Understand the model and interface | This guide and the energy glossary | [How OEP works](how-oep-works.md) |
 | Run a plan without equipment | Git, a supported 64-bit Python environment and a browser | [Optional standalone demo](demo.md) |
 | Configure an existing OEP installation | The matched app/integration pair and access to Home Assistant Energy | [Connect Home Assistant](home-assistant.md) |
