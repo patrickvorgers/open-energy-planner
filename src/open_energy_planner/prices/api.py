@@ -145,7 +145,12 @@ def register(app, current_prices, contracts, live, lock, daily_prices, price_tim
     async def daily_price_inputs(request):
         """Read precomputed daily rankings without repricing a plan or fetching a provider."""
         prices, timezone = current_prices(), price_timezone()
-        if prices is None or not timezone or not prices.market_area:
+        if (
+            prices is None
+            or not timezone
+            or not prices.market_area
+            or getattr(prices, "configuration_issue", None)
+        ):
             return web.json_response({"days": [], "issue": "daily_prices_unavailable"})
         now = datetime.now(UTC)
         try:
