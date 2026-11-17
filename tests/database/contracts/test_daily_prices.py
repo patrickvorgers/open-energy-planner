@@ -161,14 +161,26 @@ def test_expired_forecast_is_not_resurrected_by_midnight_projection(selection_st
 
 
 def test_daily_reads_bound_calendar_range_and_do_not_write(selection_store):
-    """Reading an absent day stays empty and periods beyond four days are refused."""
+    """Absent-day reads and rejected ranges preserve existing records in shared backend storage."""
     adapter, area = selection_store
     _, daily = service_for(adapter, area, ())
     now = datetime(2026, 11, 17, tzinfo=UTC)
-    assert daily.read(area, "UTC", now, now + timedelta(days=1))[0]["status"] == "incomplete"
-    assert list(daily.documents.iter_prefix("daily-")) == []
+    retained_area = area + "retained"
+    service, _ = service_for(adapter, retained_area, (source(retained_area, now.date()),))
+    daily.update(service.daily_timeline(now), retained_area, "Europe/Amsterdam", now)
+    before = {
+        (document["market_area"], document["timezone"], document["day"]): document
+        for document in daily.documents.iter_prefix("daily-")
+    }
+    assert daily.read(area, "UTC", now, now + timedelta(days=1)) == [
+        {"day": "2026-11-17", "status": "incomplete", "quarters": []}
+    ]
     with pytest.raises(ValueError, match="four calendar days"):
         daily.read(area, "UTC", now, now + timedelta(days=5))
+    assert {
+        (document["market_area"], document["timezone"], document["day"]): document
+        for document in daily.documents.iter_prefix("daily-")
+    } == before
 
 
 def test_published_corrections_are_accepted_until_the_whole_installation_day_is_final(
