@@ -47,6 +47,11 @@ failure leaves the integration asset in its draft rather than exposing a newer
 integration with an old app. GitHub prereleases retain their flag and do not
 advance the stable app channel, including when their tag is numeric.
 
+Publication jobs share a repository-wide concurrency group with cancellation
+disabled. Different release tags cannot interleave their asset, app-channel and
+final GitHub publication steps. The app channel's downgrade guard still rejects
+an older version when a newer version has already been published.
+
 The two stores do not provide a cross-store atomic transaction. The app channel
 is updated before final GitHub release visibility. If that final API call fails,
 the job fails and must be resumed before announcing the release. Users keep

@@ -294,6 +294,10 @@ def test_release_workflow_requires_explicit_tag_request_after_quality():
     assert "workflow_dispatch:" in triggers and "release_tag:" in triggers
     assert "if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''" in publication
     assert "needs: quality" in publication
+    assert (
+        "concurrency:\n      group: oep-release-publication\n      cancel-in-progress: false"
+        in publication
+    )
     assert "OEP_RELEASE_TAG: ${{ inputs.release_tag }}" in publication
     assert 'test "$GITHUB_REF" = "refs/tags/$OEP_RELEASE_TAG"' in workflow
     assert "refs/tags/$OEP_RELEASE_TAG^{commit}" in workflow

@@ -456,6 +456,9 @@ jobs:
     name: Publish the tested draft release and app channel
     if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
     needs: quality
+    concurrency:
+      group: oep-release-publication
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     permissions:
       contents: write
