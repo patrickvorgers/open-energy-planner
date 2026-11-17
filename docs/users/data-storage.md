@@ -31,9 +31,39 @@ Keep a consistent backup before upgrading or downgrading. Older app versions can
 
 For local SQLite, the page can show database size and available volume space. It warns below 1 GiB or 5.0% free. External database server free space remains unknown. OEP's local free-space figure must not be read as that server's capacity.
 
-[![The Data storage screen showing an active local SQLite database and capacity evidence.](../assets/data-storage.png)](../assets/data-storage.png)
+[![The Data storage screen showing SQLite capacity, one month of daily database size and the database connection controls.](../assets/data-storage.png)](../assets/data-storage.png)
+
+[View the mobile Data storage screen.](../assets/data-storage-mobile.png)
 
 *Check the active backend and the measurement scope. Unknown external capacity is not a measured zero and does not establish sufficient space.*
+
+## Follow database growth
+
+**Database growth** shows daily database size, with **1 month** selected by default.
+Use **Period** to choose one week, three months, one year or all retained history.
+The summary shows the change between the first and last available observation
+and the average change per elapsed day. A decrease can reflect database
+maintenance. It is not a prediction of when storage will run out.
+
+The app records one measurement each day after **04:00 in the Home Assistant
+installation timezone**, checked every minute. No browser page needs to be open.
+Collection and the history window wait until the installation timezone is available. If the app starts
+later, it records the current day at the actual observation time. Days while the
+app was stopped remain gaps. The first point appears after the first eligible
+measurement. Two observations are needed to calculate growth.
+
+Hover a point or focus the chart and use the Left and Right arrow keys to inspect
+its timestamp, size, backend and estimation status. Home and End reach the first
+and last retained observation in the selected period. Unknown size never becomes
+zero. When every size is unavailable, use **Observation** to inspect the recorded
+timestamps, backends and estimation status. Refresh updates the view without
+creating another daily point.
+
+Measurements use the same scope as the capacity cards. SQLite includes WAL and
+shared-memory sidecars, so file activity can change the total even when the
+retained dataset shrinks. MariaDB and MySQL sizes are estimates. History moves
+with the database when using **Change database**. Lines stop at a backend change
+and growth is not compared across different backends.
 
 ## Change database deliberately
 

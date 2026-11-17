@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="oep-api-base" content="__OEP_BASE__"><title>Open Energy Planner: Data storage</title><link rel="stylesheet" href="/setup/style.css"><link rel="stylesheet" href="/setup/workspace.css"><link rel="stylesheet" href="/setup/storage-migration.css"><script type="module" src="/setup/data-storage.js"></script><link rel="icon" type="image/svg+xml" href="/setup/icons/app.svg"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="oep-api-base" content="__OEP_BASE__"><title>Open Energy Planner: Data storage</title><link rel="stylesheet" href="/setup/style.css"><link rel="stylesheet" href="/setup/workspace.css"><link rel="stylesheet" href="/setup/storage-migration.css"><link rel="stylesheet" href="/setup/storage-history.css"><script src="/setup/chart.umd.min.js"></script><script type="module" src="/setup/data-storage.js"></script><link rel="icon" type="image/svg+xml" href="/setup/icons/app.svg"></head>
 <body class="workspace storage-workspace"><!-- OEP_NAVIGATION -->
 <main class="workspace-main"><header class="page-header"><div><h1 class="page-heading"><img class="page-icon" src="/setup/icons/settings.svg" alt="" width="32" height="32"><span>Data storage</span></h1></div></header>
 <form id="connect"><label>Installation API token<input id="token" type="password" autocomplete="off" required></label><button>Connect</button></form>
@@ -10,6 +10,14 @@
 <section class="evidence-card"><h2>Database</h2><dl><dt>Backend</dt><dd id="backend"></dd><dt>Database size</dt><dd id="database-size"></dd></dl><p id="size-scope" class="muted"></p></section>
 <section class="evidence-card"><h2>Available space</h2><dl><dt>Free space</dt><dd id="free-space"></dd><dt>Volume size</dt><dd id="volume-size"></dd><dt>Capacity status</dt><dd id="capacity-status"></dd></dl><p id="capacity-note" class="muted"></p></section>
 </div>
+<section class="evidence-card storage-history" aria-labelledby="storage-history-title">
+<div class="storage-history-heading"><h2 id="storage-history-title">Database growth</h2><label>Period<select id="storage-period"><option value="week">1 week</option><option value="month" selected>1 month</option><option value="quarter">3 months</option><option value="year">1 year</option><option value="all">All history</option></select></label></div>
+<p id="storage-history-summary" role="status" aria-live="polite"></p>
+<div class="storage-history-plot" id="storage-history-plot" hidden><canvas id="storage-history-chart" tabindex="0" role="img" aria-label="Daily database size. Use Left and Right arrow keys to inspect measurements." aria-describedby="storage-history-selected"></canvas></div>
+<div id="storage-observation-field" hidden><label for="storage-observation">Observation</label><select id="storage-observation"></select></div>
+<p id="storage-history-selected" aria-live="polite"></p>
+<p id="storage-history-note" class="muted">One measurement each day at 04:00 in the Home Assistant installation timezone. Missing days remain gaps.</p>
+</section>
 <p>Low space means less than 1 GiB or 5.0% free on the database volume. Other applications may share this space. Storage quotas may impose additional limits.</p>
 <p>Historical evidence is retained. This overview does not delete data.</p>
 </section>
