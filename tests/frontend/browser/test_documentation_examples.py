@@ -1,5 +1,6 @@
 """Capture useful guide figures from real pages with explicitly synthetic example data."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from playwright.sync_api import expect
 from tests.frontend.browser.documentation_fixture import START, quality_document
 from tests.frontend.browser.helpers import (
     TOKEN,
+    add_price_rule,
     connect,
     discover,
     edit_price_rule,
@@ -120,20 +122,88 @@ def test_documentation_installation_shows_saved_limits_and_real_source_relations
 
 
 def test_documentation_contract_explains_actual_formula_preview(app_page):
-    """Save dated formulas whose 0.10-EUR market example has 0.24 import and 0.08 export rates."""
+    """Save the Budget bonus example with separate rates, monthly hours and battery protection."""
     page, url = app_page
     discover(page, url)
     authenticate(page, url, "/contract")
     edit_price_rule(page)
-    page.get_by_label("Contract starts", exact=True).fill("2026-01-01")
-    page.get_by_label("Price rule starts", exact=True).fill("2026-01-01")
+    page.get_by_label("Contract starts", exact=True).fill("2026-06-01")
+    page.get_by_label("Price rule starts", exact=True).fill("2026-06-01")
     page.get_by_label("Import formula", exact=True).fill("(market + 0.10) * 1.21")
-    page.get_by_label("Export formula", exact=True).fill("market - 0.02")
-    page.get_by_role("button", name="Preview rates", exact=True).click()
-    expect(page.locator("#contract-preview")).to_contain_text("0.24")
-    expect(page.locator("#contract-preview")).to_contain_text("0.08")
+    page.get_by_label("Export formula", exact=True).fill("market")
     page.get_by_role("button", name="Save contract", exact=True).click()
     expect(page.locator("#contract-status")).to_contain_text("Contract saved")
+    add_price_rule(page)
+    rule = page.locator("#contract-periods > details:not([hidden])")
+    rule.get_by_label("Price rule starts", exact=True).fill("2027-01-01")
+    rule.get_by_role("checkbox", name="Include export bonus", exact=True).check()
+    rule.get_by_label("Extra export rate", exact=True).fill("0.30 * min(max(market, 0), 0.20)")
+    rule.get_by_label("Annual export cap (kWh)", exact=True).fill("5000")
+    rule.get_by_label("Annual reset", exact=True).select_option("contract_anniversary")
+    rule.get_by_label("Paid window", exact=True).select_option("monthly_schedule")
+    rule.get_by_text("Monthly hours", exact=True).click()
+    monthly_hours = (
+        ("January", "09:00", "17:00"),
+        ("February", "08:00", "18:00"),
+        ("March", "07:00", "19:00"),
+        ("April", "07:00", "21:00"),
+        ("May", "06:00", "21:00"),
+        ("June", "05:00", "22:00"),
+        ("July", "06:00", "22:00"),
+        ("August", "06:00", "21:00"),
+        ("September", "07:00", "20:00"),
+        ("October", "08:00", "19:00"),
+        ("November", "08:00", "17:00"),
+        ("December", "09:00", "17:00"),
+    )
+    for month, start, end in monthly_hours:
+        rule.get_by_label(f"{month} start", exact=True).fill(start)
+        rule.get_by_label(f"{month} end", exact=True).fill(end)
+    rule.get_by_role(
+        "checkbox", name="Prevent battery export during paid window", exact=True
+    ).check()
+    page.get_by_role("button", name="Preview rates", exact=True).click()
+    expect(page.locator("#contract-preview")).to_contain_text("0.24")
+    expect(page.locator("#contract-preview")).to_contain_text("0.03")
+    page.get_by_role("button", name="Save contract", exact=True).click()
+    expect(page.locator("#contract-status")).to_contain_text("Contract saved")
+    saved = page.request.get(
+        url + "/v1/contracts", headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
+    assert len(saved["periods"]) == 2
+    assert saved["periods"][1]["export_formula"] == "market"
+    bonus = next(rule for rule in saved["bonuses"] if rule["rate_formula"] != "0")
+    assert bonus["rate_formula"] == "0.30 * min(max(market, 0), 0.20)"
+    assert bonus["cap_kwh"] == 5000
+    assert (bonus["reset_month"], bonus["reset_day"]) == (6, 1)
+    assert bonus["prevent_battery_export"] is True
+    assert bonus["window"] == "monthly_schedule"
+    assert bonus["monthly_schedule"] == [
+        {"start_time": start, "end_time": end} for _, start, end in monthly_hours
+    ]
+    catalogue = (
+        Path(__file__).resolve().parents[3] / "docs/development/CONTRACT-EXAMPLES-NL.md"
+    ).read_text(encoding="utf-8")
+    budget_example = catalogue.split("## Budget Energie ZonneBonus\n", 1)[1]
+    fragment = json.loads(budget_example.split("```json\n", 1)[1].split("```", 1)[0])
+    assert fragment["export_formula"] == saved["periods"][1]["export_formula"]
+    for field, value in fragment["bonuses"][0].items():
+        if field not in {"rule_id", "effective_from"}:
+            assert bonus[field] == value, field
+    preview = next(item for item in saved["bonus_preview"] if item["rule_id"] == bonus["rule_id"])
+    for sample in preview["samples"]:
+        market = sample["market"]
+        assert sample["extra_rate"] == pytest.approx(0 if market <= 0 else min(market * 0.30, 0.06))
+    summary = page.locator("#contract-summary")
+    for expected in (
+        "0.30 * min(max(market, 0), 0.20)",
+        "5,000.00 kWh",
+        "Contract anniversary",
+        "Monthly schedule",
+        "Prevented in planning",
+    ):
+        expect(summary).to_contain_text(expected)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     capture(page, "contract-rule")
 
 
