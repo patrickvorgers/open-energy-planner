@@ -192,6 +192,7 @@ def combine(
     currency: str = "EUR",
     hours: float = PLANNING_HORIZON_HOURS,
     preferred: tuple[str | None, ...] = (),
+    as_of: datetime | None = None,
 ) -> PriceTimeline:
     """Prefer published prices per subinterval and stop at the first uncovered gap.
 
@@ -213,12 +214,15 @@ def combine(
         hours: Positive floating-point horizon length in hours, including DST days.
         preferred: Optional forecast source IDs per successive 24-hour lead bucket.
             Missing/expired preferred coverage falls back to another usable source.
+        as_of: Optional source-admission clock for full-day retrospective projection.
+            Expiry and forecast lead buckets use this clock instead of the delivery start.
 
     Published prices win, followed by newer issue time (receipt when unknown),
     then source ID for deterministic ties. ValueError rejects non-positive
     horizons, naive timestamps and mismatched area/currency.
     """
     start = aware(start)
+    as_of = aware(as_of) if as_of is not None else start
     end = start + timedelta(hours=hours)
     if hours <= 0:
         raise ValueError("Positive horizon required")
@@ -239,7 +243,7 @@ def combine(
     for source_index, source in enumerate(sources):
         if source.market_area != market_area or source.currency != currency:
             raise ValueError("Price area/currency mismatch")
-        if source.expires_at is not None and source.expires_at <= start:
+        if source.expires_at is not None and source.expires_at <= as_of:
             continue
         for point in source.points:
             # Expiry bounds when a forecast may be USED, not its delivery horizon.
@@ -266,9 +270,12 @@ def combine(
                 == (
                     preferred[
                         min(
-                            int(
-                                (left - start).total_seconds()
-                                // (LEAD_BUCKET_HOURS * SECONDS_PER_HOUR)
+                            max(
+                                0,
+                                int(
+                                    (left - as_of).total_seconds()
+                                    // (LEAD_BUCKET_HOURS * SECONDS_PER_HOUR)
+                                ),
                             ),
                             len(preferred) - 1,
                         )

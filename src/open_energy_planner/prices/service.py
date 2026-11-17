@@ -7,6 +7,7 @@ import logging
 import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, time, timedelta
+from functools import partial
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -306,6 +307,16 @@ class PriceService:
             market_area=self.market_area,
             hours=hours,
             preferred=self.selection.preferred if self.selection else (),
+        )
+
+    def daily_timeline(self, now):
+        """Capture immutable source/preference evidence for off-loop calendar-day processing."""
+        return partial(
+            combine,
+            self.series,
+            market_area=self.market_area,
+            preferred=self.selection.preferred if self.selection else (),
+            as_of=now,
         )
 
     async def _accept(self, candidate, day=None):

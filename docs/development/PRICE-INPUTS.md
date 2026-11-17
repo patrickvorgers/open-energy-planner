@@ -50,6 +50,37 @@ This source timeline is separate from the planner's 96 quarter-hour plus 24 hour
 
 ## Fetching is not replanning
 
+### Daily price extremes
+
+The price-refresh worker maintains `prices/daily.py`'s `DailyPrices` projection
+in the active database. It captures the source tuple and forecast preferences once.
+Expiry and lead buckets use the refresh instant independently of the delivery
+day's start. Each touched installation-calendar day is sampled on UTC quarters,
+preserving 23/25-hour DST days. Elapsed quarter evidence survives rolling source
+replacement. Expired forecasts cannot fill future quarters. Gaps never become zero.
+A complete day selects twelve lowest and twelve highest spot market quarters.
+Equal prices use chronological order, excluding the selected lowest quarters from
+the highest set. Source edges inside a quarter use its duration-weighted rate.
+Contract formulas, bonuses and browser calculations do not affect this ranking.
+
+Incomplete days retain available quarters without a ranking. Complete days with
+forecast quarters remain provisional and update as usable sources change. The
+first entirely published day becomes final and is never overwritten, including
+by later published corrections. Corrections still update the ordinary price and
+settlement projections. Daily evidence survives restart and current-source
+eviction. Keys include area, EUR currency, installation timezone and date.
+
+Authenticated `GET /v1/prices/daily?start=<instant>&end=<instant>` reads precomputed
+documents for at most four touched local dates. Both instants require timezones.
+Defaults cover the current planning horizon. The route does not fetch, write,
+rank or reprice plans. The Planning chart paints the returned selections and
+includes selected quarters in its screen-reader description. The existing overview
+poll refreshes daily selections even when the selected current or historical plan
+does not change. Unchanged daily evidence preserves the chart. Existing plan prices
+and window controls remain unchanged. Rankings represent retained whole-day market evidence,
+not the original plan's forecast. Historical days without retained complete
+evidence explicitly have no ranking.
+
 Every planning round reads the latest usable cached inputs. Fetching a source is independent of quarter-hour planned transitions and PLAN-15's five-minute ordinary-recalculation bound. A new plan does not imply another network request. This increment does not change the existing planner cadence or automatically shorten command validity to a source's polling interval.
 
 The following automatic market policy is confirmed. The scheduler checks due work every 30 seconds. Those checks do **not** perform network requests every 30 seconds.

@@ -1,4 +1,10 @@
 /* Shared workspace shell. Setup retains its existing progressive form behaviour. */
+.price-daily-description { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.price-daily-key { display:flex; flex-wrap:wrap; gap:.5rem 1.5rem; font-size:.875rem; }
+.price-daily-key span { display:inline-flex; align-items:center; gap:.5rem; }
+.price-daily-key i { width:1.25rem; height:.35rem; }
+.price-daily-low { background:#16816b; }
+.price-daily-high { background:#bf5c32; }
 .workspace { background:#f4f6f9; color:#1d2b42; }
 .sidebar { position:fixed; inset:0 auto 0 0; width:224px; padding:32px 20px; background:#102b33; color:#b8cbd0; display:flex; flex-direction:column; z-index:10; }
 .brand { display:flex; gap:12px; align-items:center; color:white; text-decoration:none; font-size:16px; line-height:1.25; }

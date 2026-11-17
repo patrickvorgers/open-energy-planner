@@ -64,6 +64,7 @@ const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
 const MAX_TIME_AXIS_LABELS = 6;
 const DAILY_DATE_LABEL_MIN_WIDTH_PX = 120;
 const FORECAST_PRICE_DASH = [2, 4];
+const PRICE_EXTREME_COLORS = {cheapest: "#16816b", most_expensive: "#bf5c32"};
 const DEVICE_PATTERN_SIZE_PX = 8;
 let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0, priceInputPlanId = null;
 
@@ -275,6 +276,61 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
         });
     });
 }};
+/** Paint backend-selected quarters. Placement and labels distinguish the two sets without color. */
+const dailyPriceExtremes = {id: "dailyPriceExtremes", beforeDatasetsDraw(instance) {
+    const {ctx, chartArea, scales: {x}} = instance;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height); ctx.clip();
+    for (const quarter of instance.dailyPriceQuarters || []) {
+        const left = x.getPixelForValue(quarter.start), right = x.getPixelForValue(quarter.end);
+        ctx.fillStyle = PRICE_EXTREME_COLORS[quarter.extreme];
+        ctx.globalAlpha = 0.10; ctx.fillRect(left, chartArea.top, right - left, chartArea.height);
+        ctx.globalAlpha = 1;
+        ctx.fillRect(left, quarter.extreme === "cheapest" ? chartArea.bottom - 5 : chartArea.top, right - left, 5);
+    }
+    ctx.restore();
+}};
+/** Read daily selections separately from immutable plan prices. Discard responses for replaced charts. */
+async function loadDailyPrices(instance) {
+    const timestamps = instance.data.datasets.flatMap(dataset => dataset.data.map(point => point.x)).filter(Number.isFinite);
+    const status = $("price-daily-status");
+    if (instance.dailyPricePending) return;
+    if (!timestamps.length) { status.textContent = "Whole-day price rankings unavailable."; return; }
+    instance.dailyPricePending = true;
+    try {
+        const start = new Date(Math.min(...timestamps)).toISOString(), end = new Date(Math.max(...timestamps)).toISOString();
+        const data = await api(`v1/prices/daily?${new URLSearchParams({start, end})}`);
+        if (charts.get("price-chart") !== instance) return;
+        const days = data.days || [];
+        const dailyDocument = JSON.stringify(days);
+        if (dailyDocument === instance.dailyPriceDocument) { status.textContent = instance.dailyPriceStatus; return; }
+        const descriptions = [];
+        instance.dailyPriceQuarters = [];
+        for (const day of days) {
+            if (day.status === "incomplete") continue;
+            for (const [extreme, label] of [["cheapest", "12 cheapest quarters"], ["most_expensive", "12 most expensive quarters"]]) {
+                const heading = `${dateLabel(day.day)}: ${label}: ${day.status === "final" ? "Final" : "Provisional"}`;
+                const intervals = [];
+                for (const selected of day[extreme] || []) {
+                    const quarter = day.quarters.find(quarter => quarter.start === selected);
+                    if (!quarter) continue;
+                    instance.dailyPriceQuarters.push({start: Date.parse(quarter.start), end: Date.parse(quarter.end), extreme, status: day.status});
+                    intervals.push(`${when(quarter.start)} to ${when(quarter.end)}: ${money(quarter.market_price)} ${day.currency}/kWh`);
+                }
+                descriptions.push(`${heading}: ${intervals.join(": ")}`);
+            }
+        }
+        const provisional = days.some(day => day.status === "provisional"), incomplete = !days.length || days.some(day => day.status === "incomplete");
+        status.textContent = `Spot market prices ranked across each complete installation day, including elapsed quarters. ${provisional ? "Provisional selections can change with new prices. " : ""}${days.some(day => day.status === "final") ? "Final selections are retained. " : ""}${incomplete ? "Incomplete days have no ranking. " : ""}${descriptions.join(": ")}`;
+        instance.dailyPriceDocument = dailyDocument;
+        instance.dailyPriceStatus = status.textContent;
+        instance.update("none");
+    } catch {
+        if (charts.get("price-chart") === instance) status.textContent = "Whole-day price rankings could not be loaded. Refresh to retry.";
+    } finally {
+        instance.dailyPricePending = false;
+    }
+}
 /**
  * Render series into canvas id, destroying its previous chart, removing its tooltip
  * and rebuilding its accessible legend. Current-price series retain their visibility.
@@ -292,7 +348,7 @@ const intervalWidths = {id: "intervalWidths", afterDatasetsUpdate(instance) {
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
 function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false} = {}) {
-    let balanceTime = null;
+    let balanceTime = null, priceHoverTime = null;
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
     $(`${id}-tooltip`)?.remove();
@@ -362,13 +418,14 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(calendarDates ? [] : [calendarDays]), {
+        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), {
             id: "deviceLegend",
             beforeUpdate: syncLegend
         }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
             interaction: {mode: "nearest", axis: "x", intersect: false},
             onHover: (event, _elements, instance) => {
+                if (id === "price-chart") priceHoverTime = instance.scales.x.getValueForPixel(event.x);
                 if (balance) {
                     const hits = instance.getElementsAtEventForMode(event, "nearest", {axis: "xy", intersect: true}, false);
                     balanceTime = hits.some(hit => instance.data.datasets[hit.datasetIndex].tooltipGroup === "Battery state")
@@ -390,7 +447,12 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                     }
                     if (!items.length || ["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart"].includes(id)) return "";
                     const step = inspectSteps.find((step) => step.start <= items[0].parsed.x && items[0].parsed.x < step.end);
-                    return id === "price-chart" ? priceInputPlanId ? step?.priceStatus || "" : [] : step?.commands || [];
+                    if (id === "price-chart") {
+                        const time = Number.isFinite(priceHoverTime) ? priceHoverTime : items[0].parsed.x;
+                        const quarter = items[0].chart.dailyPriceQuarters?.find(quarter => quarter.start <= time && time < quarter.end);
+                        return [priceInputPlanId ? step?.priceStatus : "", quarter ? `${quarter.extreme === "cheapest" ? "One of this day's 12 cheapest spot-price quarters" : "One of this day's 12 most expensive spot-price quarters"}: ${optionLabel(quarter.status)}` : ""].filter(Boolean);
+                    }
+                    return step?.commands || [];
                 }
             }}},
             scales: {x: {type: "linear", offset: false, grid: {display: false},
@@ -478,6 +540,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         $("savings-chart-range").textContent = points.length ? `From ${axisTime(Math.min(...points.map((p) => p[0])))} to ${axisTime(Math.max(...points.map((p) => p[0])))}` : "";
     }
     if (!deferRange) applyRange();
+    if (id === "price-chart") loadDailyPrices(result);
 }
 /**
  * Set shared axes without changing frozen data: the latest plan starts at the
@@ -1061,7 +1124,10 @@ async function refreshLatestPlan() {
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
     finally {
         if (!priceRead && priceRefreshPending && !overviewLoads) priceRead = currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
-        await Promise.allSettled([priceRead]); planRefreshBusy = false;
+        await Promise.allSettled([priceRead]);
+        const priceChart = charts.get("price-chart");
+        if (!overviewLoads && priceChart) await loadDailyPrices(priceChart);
+        planRefreshBusy = false;
     }
 }
 /** Use local calendar boundaries as aware API instants. Absent coverage never becomes zero savings. */
