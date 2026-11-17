@@ -8,7 +8,7 @@
 
 Local energy planning for Home Assistant. Turn your existing Energy configuration, measured history, solar forecasts and electricity contract into a checked plan for batteries and supported appliances.
 
-[Set up your first plan](https://patrickvorgers.github.io/open-energy-planner/docs/users/first-plan/) | [User guide](https://patrickvorgers.github.io/open-energy-planner/) | [Optional demo](docs/users/demo.md) | [Developer guide](docs/development/README.md) | [Report an issue](https://github.com/patrickvorgers/open-energy-planner/issues)
+[Install in Home Assistant](#install-in-home-assistant) | [Set up your first plan](https://patrickvorgers.github.io/open-energy-planner/docs/users/first-plan/) | [User guide](https://patrickvorgers.github.io/open-energy-planner/) | [Optional demo](docs/users/demo.md) | [Developer guide](docs/development/README.md) | [Report an issue](https://github.com/patrickvorgers/open-energy-planner/issues)
 
 [![Checks](https://github.com/patrickvorgers/open-energy-planner/actions/workflows/checks.yaml/badge.svg?branch=main)](https://github.com/patrickvorgers/open-energy-planner/actions/workflows/checks.yaml)
 [![Documentation](https://github.com/patrickvorgers/open-energy-planner/actions/workflows/pages.yaml/badge.svg?branch=main)](https://patrickvorgers.github.io/open-energy-planner/)
@@ -19,6 +19,54 @@ Local energy planning for Home Assistant. Turn your existing Energy configuratio
 
 > [!IMPORTANT]
 > **Development preview.** OEP targets Home Assistant 2026.11 or newer. Install the integration through the built-in Marketplace and the matching planner through its separate app repository on AMD64 Home Assistant OS. These channels require a published tested release. Follow [Install OEP](docs/users/install.md) and its availability check. Physical control and equipment protection remain in your own Home Assistant automations and local controllers. See the [release boundaries](design/FIRST-RELEASE-SCOPE.md).
+
+## Install in Home Assistant
+
+OEP needs two parts: the **integration** connects to Home Assistant, and the **app** runs the planner and its interface. Install both using the steps below. You do not need HACS, Python, a source checkout or a manually created Home Assistant access token.
+
+### Before you start
+
+- Use **Home Assistant OS 2026.11.0 or newer on AMD64 hardware**, with administrator access. The current app package does not support ARM devices such as Raspberry Pi or Home Assistant Green. For Home Assistant Container, see the [separate planner setup](docs/development/AUTOMATIC-PAIRING.md).
+- Have a **GitHub account** ready for Marketplace sign-in.
+- Check the [releases page](https://github.com/patrickvorgers/open-energy-planner/releases). A stable release must include `open_energy_planner.zip`, `ha-app-repository.tar.gz`, `release-manifest.json` and `SHA256SUMS`. **If no stable release with these files is available, installation is not available yet. Stop here.**
+- Configure your meters under **Settings > Dashboards > Energy** in Home Assistant. OEP reuses these sources. Solar panels and batteries are optional.
+
+### 1. Install the integration
+
+1. Open **Settings > Marketplace** in Home Assistant. Accept the community-content notice if prompted.
+2. Choose **Add from link** and paste:
+
+   ```text
+   https://github.com/patrickvorgers/open-energy-planner
+   ```
+
+3. If prompted, follow the GitHub device-sign-in instructions and return to Home Assistant. Select **Add**. If asked for a type, choose **Integration** and select **Add** again.
+4. Open **Open Energy Planner**, select **Install**, check the release version and confirm **Install**.
+5. **Restart Home Assistant.** If an advanced standalone setup form opens, close it. The app will connect automatically.
+
+### 2. Install the planner app
+
+1. Open **Settings > Apps > App store**. Open the three dots menu and choose **Repositories**.
+2. Add this URL, including `#ha-app-store`:
+
+   ```text
+   https://github.com/patrickvorgers/open-energy-planner#ha-app-store
+   ```
+
+3. Close the dialog and find **Open Energy Planner** in the store. Reload the store if it has not appeared.
+4. Open the app, confirm its version matches the integration, then select **Install**. Wait for the build to finish. The first installation downloads the planner dependencies.
+5. Leave the app options empty to use the default SQLite database. Enable **Start on boot** and, optionally, **Show in sidebar**. Select **Start**.
+
+### 3. Open OEP and make your first plan
+
+1. Check **Settings > Devices & services** in Home Assistant. The **Open Energy Planner** integration entry appears automatically after the app connects. No manual pairing is needed.
+2. Select **Open Web UI** on the app page, or open its sidebar entry. Check that the connection is ready and that the app and integration show the same version and build as the release manifest.
+3. Complete the installation wizard. Review your detected sources, connection limits, optional solar and batteries, then choose **Save installation** on the final review.
+4. In OEP, open **Settings > Contract**, enter and save your electricity contract rules. Check **Settings > Installation > Price sources**, then open **Energy > Planning** for your first plan.
+
+The [first-plan guide](docs/users/first-plan.md) walks through configuration with screenshots. If the connection or plan does not appear, follow [troubleshooting](docs/users/troubleshooting.md). OEP provides planning advice. Your own Home Assistant automations and local equipment remain responsible for physical control and safety.
+
+**Updating later:** back up Home Assistant and the OEP database, stop the planner, update both components to the same release, restart Home Assistant, then start the app. Disable independent automatic updates of either component. Keep the existing integration and data. See the [full installation guide](docs/users/install.md#updates-and-existing-installations) for update and recovery details.
 
 ## What makes OEP different?
 
