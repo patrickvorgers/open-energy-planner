@@ -125,11 +125,10 @@ def automatic_plan_overview(app_page, request):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#current-price-status")).to_contain_text(
-        "Current tariff preview"
-        if getattr(request, "param", None) == "preview"
-        else "Selected plan:"
-    )
+    if getattr(request, "param", None) == "preview":
+        expect(page.locator("#current-price-status")).to_contain_text("Current tariff preview")
+    else:
+        expect(page.locator("#current-price-status")).to_be_empty()
     wait_for_product_reads(page)
     page.evaluate("window.initialPlanChart = Chart.getChart(document.getElementById('plan-chart'))")
     return state
@@ -177,7 +176,7 @@ def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
     held.fulfill(json=state["comparisons"][plan_id])
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     if refresh == "publication":
-        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -211,7 +210,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
     else:
         held.fulfill(json=state["comparisons"]["older-plan"])
         expect(page.locator("#overview-status")).to_contain_text("Connected")
-        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
         expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
 
 
@@ -254,7 +253,7 @@ def test_late_current_preview_cannot_replace_selected_plan_prices(
     state["plans"].insert(0, state["newer"])
     with page.expect_response("**/v1/plans/newly-published-plan/comparison?view=plan"):
         page.get_by_role("button", name="Refresh overview", exact=True).click()
-    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#current-price-status")).to_be_empty()
     if late_response == "failure":
         state["held_prices"][0].fulfill(status=503, body="Late preview failure")
     else:
@@ -272,7 +271,7 @@ def test_late_current_preview_cannot_replace_selected_plan_prices(
         )
         == 0.91
     )
-    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#current-price-status")).to_be_empty()
     expect(page.get_by_role("heading", name="Price inputs", exact=True)).to_have_count(1)
     expect(page.get_by_role("heading", name="Original plan prices", exact=True)).to_have_count(0)
 
@@ -289,7 +288,7 @@ def test_completed_publication_refreshes_plan_and_prices_without_manual_refresh(
     state["current_buy_price"] = 0.88
     page.clock.run_for(15000)
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     page.wait_for_function("""() => Chart.getChart(document.getElementById('price-chart'))
         ?.data.datasets[1]?.data[0]?.y === 0.91""")
     assert page.evaluate("""() => ['price-chart'].map(id =>
@@ -338,8 +337,8 @@ def test_current_prices_recover_independently_of_plan_selection(automatic_plan_o
             page.locator("#plan-version").select_option("older-plan")
         assert selected.value.json()["plan"]["strategy"] == "minimize consumption"
         expect(page.locator("#plan-version")).to_have_value("older-plan")
-        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
-        expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+        expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
+        expect(page.locator("#current-price-status")).to_be_empty()
     else:
         expect(page.locator("#current-price-status")).to_have_text("Cannot read this view (503).")
         expect(page.locator("#plan-version option")).to_have_count(0)
@@ -353,9 +352,10 @@ def test_current_prices_recover_independently_of_plan_selection(automatic_plan_o
         ?.data.datasets[1]?.data[0]?.y === expected""",
         arg=0.17 if plan_view == "historical" else 0.88,
     )
-    expect(page.locator("#current-price-status")).to_contain_text(
-        "Selected plan:" if plan_view == "historical" else "Current tariff preview"
-    )
+    if plan_view == "historical":
+        expect(page.locator("#current-price-status")).to_be_empty()
+    else:
+        expect(page.locator("#current-price-status")).to_contain_text("Current tariff preview")
     assert state["comparison_reads"] == comparisons
     expect(page.locator("#plan-version")).to_have_value(
         "older-plan" if plan_view == "historical" else ""
@@ -391,9 +391,10 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
     state["failed_prices"] = False
     page.clock.run_for(15000)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#current-price-status")).to_contain_text(
-        "Selected plan:" if failed_view == "plan" else "Current tariff preview"
-    )
+    if failed_view == "plan":
+        expect(page.locator("#current-price-status")).to_be_empty()
+    else:
+        expect(page.locator("#current-price-status")).to_contain_text("Current tariff preview")
     expect(page.locator("#plan-evidence-status")).not_to_contain_text("could not be loaded")
     expect(page.locator("#plan-version")).to_have_value(current if failed_view == "plan" else "")
     expect(
@@ -571,7 +572,7 @@ def test_initial_plan_lookup_never_flashes_current_tariff_preview(app_page):
     assert preview_reads == []
     expect(page.locator("#current-price-status")).not_to_contain_text("Current tariff preview")
     held[0].fulfill(json=listing)
-    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#current-price-status")).to_be_empty()
     expect(page.locator("#price-chart-legend")).to_contain_text("Import rate")
     assert preview_reads == []
 
@@ -631,7 +632,7 @@ def test_stalled_overview_load_cancels_before_publication_poll(automatic_plan_ov
     with page.expect_response("**/v1/plans/newly-published-plan/comparison?view=plan"):
         page.clock.run_for(15000 - 5001)
     expect(page.locator("#plan-version")).to_have_value("newly-published-plan")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
 
 
@@ -641,7 +642,7 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     state = automatic_plan_overview
     page = state["page"]
     page.locator("#plan-version").select_option("older-plan")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     page.locator("#price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
     before = page.evaluate("""() => {
         window.historicalChart = Chart.getChart(document.getElementById('plan-chart'));
@@ -707,17 +708,17 @@ def test_failed_new_plan_comparison_retries_without_another_publication(
             "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
         )
     else:
-        expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
-        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        expect(page.locator("#current-price-status")).to_be_empty()
+        expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
         page.evaluate(
             "window.publishedPlanChart = Chart.getChart(document.getElementById('plan-chart'))"
         )
     state["failed_plans"].clear()
     state["failed_prices"] = False
     page.clock.run_for(15000)
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#current-price-status")).to_be_empty()
     assert (
         page.evaluate(
             "Chart.getChart(document.getElementById('price-chart')).data.datasets[1].data[0].y"
@@ -747,7 +748,7 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
         with page.expect_response("**/v1/plans/newly-published-plan/comparison?view=plan"):
             page.clock.run_for(15000)
         expect(page.locator("#overview-status")).to_contain_text("Connected")
-        expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+        expect(page.locator("#current-price-status")).to_be_empty()
         assert state["held_prices"] == []
         assert (
             page.evaluate(
@@ -791,7 +792,7 @@ def test_hung_publication_read_times_out_before_the_next_completed_plan(
         # Reach the next poll without skipping past that request's new deadline.
         page.clock.run_for(15000 - 5001)
     expect(page.locator("#plan-version")).to_have_value("later-completed-plan")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize cost")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     assert (
         page.evaluate(
@@ -820,7 +821,7 @@ def test_hidden_page_resumes_once_and_slow_poll_keeps_user_selection(automatic_p
     assert len(state["held_polls"]) == 1
     assert state["poll_reads"] == 1
     page.locator("#plan-version").select_option("older-plan")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     reads = list(state["comparison_reads"])
     state["held_polls"][0].fulfill(json={"plans": state["plans"][:1], "next_before": None})
     expect(page.locator("#plan-version option")).to_have_count(3)
@@ -870,12 +871,7 @@ def test_future_strategy_choice_shares_measured_soc_and_shows_baseline_benefit(a
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#self-consumption-chart")).to_be_visible()
-    expect(page.locator("#expected-benefit")).to_have_text(
-        "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. "
-        "Expected benefits include the difference in remaining battery value. "
-        "Benefits versus no battery include storage and smart planning. Excludes investment costs. "
-        "Not evaluated lifetime savings. See Savings for evaluated results."
-    )
+    expect(page.locator("#expected-benefit")).to_be_empty()
     expect(page.locator("#self-consumption-issue")).to_be_empty()
     for cost_id in ("ems-costs", "self-consumption-costs"):
         expect(page.locator(f"#{cost_id} > dl dd")).to_have_text(["0.40 EUR", "0.20 EUR"])
@@ -883,7 +879,7 @@ def test_future_strategy_choice_shares_measured_soc_and_shows_baseline_benefit(a
             "data-benefit-state", "positive"
         )
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-    page.locator("#expected-benefit").scroll_into_view_if_needed()
+    page.locator("#ems-costs").scroll_into_view_if_needed()
     Path("results/ci").mkdir(parents=True, exist_ok=True)
     page.screenshot(path=f"results/ci/common-soc-choice-{page.viewport_size['width']}.png")
 
@@ -1006,7 +1002,7 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
     ]
     page.unroute("**/v1/plans?**")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
-    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#current-price-status")).to_be_empty()
     assert rendered_intervals("price-chart") == expected
     if kinds == ("published", "forecast"):
         page.locator('[data-hours="0"]').click()

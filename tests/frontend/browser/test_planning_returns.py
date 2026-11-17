@@ -194,13 +194,7 @@ def test_cost_breakdown_is_keyboard_accessible_and_survives_refresh(financial_pa
         "**/v1/plans/*/comparison?view=simulations", lambda route: comparison_response(route)
     )
     connect(page, url)
-    chart_help = page.get_by_text("Read this chart", exact=True)
-    chart_help.focus()
-    page.keyboard.press("Enter")
-    expect(page.locator(".scenario-chart-help")).to_have_attribute("open", "")
-    expect(page.locator(".scenario-chart-help")).to_contain_text(
-        "The complete balance sums to zero before visual rounding or hiding series."
-    )
+    expect(page.get_by_text("Read this chart", exact=True)).to_have_count(0)
     disclosure = page.locator("#ems-costs summary")
     disclosure.focus()
     page.keyboard.press("Enter")

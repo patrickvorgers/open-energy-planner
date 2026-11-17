@@ -350,7 +350,7 @@ def test_activity_plan_link_reads_exact_archive_without_mutation_or_fallback(app
         expect(page.locator("#plan-description")).to_have_text("Selected plan could not be loaded.")
     else:
         expect(page.locator("#overview-status")).to_contain_text("Connected")
-        expect(page.locator("#plan-description")).to_contain_text("Generated:")
+        expect(page.locator("#plan-description")).to_be_empty()
         expect(page.locator("#plan-version option:checked")).not_to_have_text(
             "Selected archived plan"
         )

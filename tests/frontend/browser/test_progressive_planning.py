@@ -119,7 +119,7 @@ def test_simulation_failure_keeps_plan_and_evidence_can_retry_independently(app_
         "Plan loaded. Simulations are unavailable"
     )
     expect(page.locator("#plan-chart-legend")).to_contain_text("Grid import")
-    expect(page.locator("#current-price-status")).to_contain_text("Selected plan:")
+    expect(page.locator("#current-price-status")).to_be_empty()
     page.get_by_text("Understand this plan", exact=True).click()
     expect(page.locator("#plan-evidence-status")).to_contain_text(
         "Close and reopen this panel to retry"
@@ -192,7 +192,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#plan-description")).to_contain_text("Generated:")
+    expect(page.locator("#plan-description")).to_be_empty()
     if stage == "evidence":
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         page.get_by_text("Understand this plan", exact=True).click()
@@ -204,7 +204,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
     page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
     page.locator("#plan-version").select_option("selected-plan")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     if stage == "simulations":
         page.get_by_text("Understand this plan", exact=True).click()
     expect(page.locator("#plan-evidence")).to_contain_text("Selected plan evidence")
@@ -223,7 +223,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         held[0].fulfill(json=late)
     wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     expect(page.locator("#plan-evidence")).to_contain_text("Selected plan evidence")
     expect(page.locator("body")).not_to_contain_text("Old plan evidence")
     expect(page.locator("body")).not_to_contain_text("Old plan simulation")

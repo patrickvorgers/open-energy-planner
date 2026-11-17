@@ -18,7 +18,7 @@ def test_supplemental_render_errors_never_expose_private_exception_values(app_pa
         const text=Object.getOwnPropertyDescriptor(Node.prototype,'textContent');let fail=true;
         Object.defineProperty(Node.prototype,'textContent',{...text,set(value){
             const evidence=window.failedProjection==='evidence'&&this.id==='evidence-period'&&String(value).startsWith('From ');
-            const simulation=window.failedProjection==='simulations'&&this.id==='expected-benefit'&&String(value).includes('Not evaluated lifetime savings');
+            const simulation=window.failedProjection==='simulations'&&this.id==='expected-benefit'&&String(value)===''&&Chart.getChart(document.getElementById('self-consumption-chart'))?.data.datasets.length;
             if(fail&&(evidence||simulation)){fail=false;throw new Error('PRIVATE-PROJECTION-RENDER-SENTINEL');}
             text.set.call(this,value);
         }});
@@ -134,13 +134,13 @@ def test_linked_plan_success_survives_simulation_failure_and_preserves_retry_sel
     expect(page.locator("#overview-status")).to_contain_text(
         "Plan loaded. Simulations are unavailable"
     )
-    expect(page.locator("#plan-description")).to_contain_text("Generated:")
+    expect(page.locator("#plan-description")).to_be_empty()
     page.unroute(failed)
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-version")).to_have_value(original_id)
     page.locator("#plan-version").select_option("newer-plan")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-version")).to_have_value("newer-plan")

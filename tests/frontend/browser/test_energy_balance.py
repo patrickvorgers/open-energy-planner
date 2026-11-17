@@ -40,11 +40,12 @@ def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(ap
     expect(page.locator("#reference-scenario")).to_have_count(0)
     expect(page.locator("#reference-heading")).to_contain_text("Without battery")
     expect(page.locator("#reference-issue")).to_have_text("")
-    expect(page.locator("#expected-benefit")).to_have_text(
-        "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. "
-        "Expected benefits include the difference in remaining battery value. "
-        "Benefits versus no battery include storage and smart planning. Excludes investment costs. "
-        f"{correction}Not evaluated lifetime savings. See Savings for evaluated results."
+    expect(page.locator("#expected-benefit")).to_have_text(correction.strip())
+    expect(page.locator("#plan-description")).to_be_empty()
+    expect(page.locator("#current-price-status")).to_be_empty()
+    expect(page.get_by_text("Read this chart", exact=True)).to_have_count(0)
+    expect(page.locator("#energy-chart").locator("..").locator("..")).not_to_contain_text(
+        "These are net grid flows, not a whole-installation balance."
     )
     expect(page.locator("#reference-costs")).to_contain_text("Expected economic cost")
     expect(page.locator("#self-consumption-costs")).to_contain_text(

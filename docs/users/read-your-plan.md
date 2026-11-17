@@ -1,6 +1,6 @@
 # Read your plan
 
-Open **Energy > Planning** to inspect one original calculation. Begin with its version, generated time and strategy. Then follow the same energy through the three scenarios. The page explains proposed behavior, not proof that physical equipment followed it.
+Open **Energy > Planning** to inspect one original calculation. Use **Plan version** to check its generated time and strategy. Then follow the same energy through the three scenarios. The page explains proposed behavior, not proof that physical equipment followed it.
 
 ## Check which plan you are looking at
 
@@ -25,6 +25,7 @@ For duration and solver-progress questions, use [Planning performance](planning-
 The scenarios share a time range, units and kW scale. The value-axis bounds combine visible data across all three charts, so the same bar height represents the same power. Zooming, toggling a series or resizing updates their shared scale. The baseline retains planned EV and thermal loads. Self-consumption aims for zero on the meter within physical limits, rather than guaranteeing it.
 
 **Grid exchange comparison** shows the net grid power for these scenarios in W.
+These are net grid flows, not a whole-installation balance.
 Its legend uses the same names and order as the three scenario charts above.
 All three lines are solid. Positive power is import and negative power is export.
 
@@ -35,6 +36,8 @@ All three lines are solid. Positive power is import and negative power is export
 ## Read the energy balance
 
 Above zero is supply to the modeled balance: used solar, grid import and battery discharge. Below zero is use: household demand, grid export, battery charge and conversion losses. These signs describe this chart's balance. They are not interchangeable with every device's command sign.
+
+The complete balance sums to zero before visual rounding or hiding series. Lines show SoC on the right axis. Bars show mean kW per quarter. Partial quarters identify their covered period in the tooltip.
 
 ### Solar AC, Solar DC and conversion losses
 
