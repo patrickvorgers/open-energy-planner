@@ -34,14 +34,14 @@ def test_root_article_search_and_provisioning(documentation_page, documentation_
     page.get_by_role("button", name="Search", exact=True).click()
     result = (
         page.locator("#search-results")
-        .get_by_role("link", name="Try your first plan", exact=True)
+        .get_by_role("link", name="Set up your first plan", exact=True)
         .first
     )
     expect(result).to_be_visible()
     result.click()
-    expect(page.get_by_role("heading", name="Try your first plan")).to_be_visible()
+    expect(page.get_by_role("heading", name="Set up your first plan")).to_be_visible()
     page.reload()
-    expect(page.get_by_role("heading", name="Try your first plan")).to_be_visible()
+    expect(page.get_by_role("heading", name="Set up your first plan")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.goto(documentation_url + "provisioning/")
     expect(page.get_by_role("link", name="Clone in VS Code", exact=True)).to_have_attribute(
@@ -64,11 +64,46 @@ def test_articles_remain_readable_without_javascript(documentation_url, browser)
         page = context.new_page()
         response = page.goto(documentation_url + "docs/users/first-plan/")
         assert response.status == 200
-        expect(page.get_by_role("heading", name="Try your first plan")).to_be_visible()
+        expect(page.get_by_role("heading", name="Set up your first plan")).to_be_visible()
         page.get_by_role("navigation", name="Documentation", exact=True).get_by_role(
             "link", name="Before you start", exact=True
         ).click()
         expect(page.get_by_role("heading", name="Before you start")).to_be_visible()
+        page.goto(documentation_url + "docs/development/AUTOMATIC-PAIRING/")
+        figure = page.locator('main img[src*="/diagrams/"]')
+        expect(figure).to_have_count(1)
+        expect(figure).to_be_visible()
+        expect(figure).to_have_js_property("complete", True)
+        assert figure.evaluate("image => image.naturalWidth > 0")
+
+
+def test_all_flowcharts_render_at_each_reading_width(documentation_page, documentation_url):
+    """Load every guide with diagrams and follow a full-size image without an external renderer."""
+    page = documentation_page
+    routes = (
+        "design/DEVELOPMENT-FOUNDATION",
+        "design/TECHNICAL-DESIGN",
+        "docs/development/APPLIANCE-ARCHITECTURE",
+        "docs/development/AUTOMATIC-PAIRING",
+        "docs/development/CONTRACT-PRICES",
+        "docs/development/DATABASE-SCHEMA",
+        "docs/development/PRICE-INPUTS",
+        "docs/development/SAVINGS",
+        "docs/development/SHIFTABLE-APPLIANCES",
+        "docs/development/THERMAL-STORAGE",
+    )
+    for route in routes:
+        page.goto(documentation_url + route + "/")
+        figures = page.locator('main img[src*="/diagrams/"]')
+        assert figures.count() > 0
+        for figure in figures.all():
+            expect(figure).to_be_visible()
+            expect(figure).to_have_js_property("complete", True)
+            assert figure.evaluate("image => image.naturalWidth > 0")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    image_url = figures.first.evaluate("image => image.src")
+    figures.first.click()
+    expect(page).to_have_url(image_url)
 
 
 def test_user_journey_and_developer_entry_have_readable_figures(
@@ -82,6 +117,7 @@ def test_user_journey_and_developer_entry_have_readable_figures(
     navigation.get_by_role("link", name="How OEP works", exact=True).click()
     expect(page.get_by_role("heading", name="How OEP works")).to_be_visible()
     for route in (
+        "first-plan",
         "installation",
         "contract",
         "forecasts",
@@ -184,7 +220,7 @@ def test_search_submission_closes_menu_before_worker_results(documentation_url, 
         expect(page.locator("#search-panel")).to_be_visible()
         expect(
             page.locator("#search-results")
-            .get_by_role("link", name="Try your first plan", exact=True)
+            .get_by_role("link", name="Set up your first plan", exact=True)
             .first
         ).to_be_visible()
         page.screenshot(path="results/ci/documentation-search-pending-390.png", full_page=True)

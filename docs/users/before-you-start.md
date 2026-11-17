@@ -1,13 +1,14 @@
 # Before you start
 
-Start by understanding the inputs and the current installation boundary. You can try a real synthetic plan without Home Assistant, then prepare an isolated installation before using your own measurements.
+Start by understanding the inputs and the current installation boundary. The normal route reuses Home Assistant Energy and takes you through installation, configuration and a first plan. A separate synthetic demo is optional.
 
 ## Choose the first experience
 
 | Your goal | What you need | Continue with |
 |---|---|---|
+| Install and configure OEP with Home Assistant | The matched preview package, administrator access and configured Energy sources | [Set up your first plan](first-plan.md) |
 | Understand the model and interface | This guide and the energy glossary | [How OEP works](how-oep-works.md) |
-| Run a plan without equipment | Git, a supported 64-bit Python environment and a browser | [Try your first plan](first-plan.md) |
+| Run a plan without equipment | Git, a supported 64-bit Python environment and a browser | [Optional standalone demo](demo.md) |
 | Configure an existing OEP installation | The matched app/integration pair and access to Home Assistant Energy | [Connect Home Assistant](home-assistant.md) |
 | Contribute code or test actual Supervisor behavior | The pinned tools and an accepted numbered package | [Developer start](../development/README.md) |
 
@@ -48,4 +49,4 @@ Open **Help > Wiki help** in the app navigation. On a phone, open **Menu** first
 
 Keep tokens, private entity details, measurements and location data out of public screenshots or issue reports. Use the [troubleshooting guide](troubleshooting.md) for a specific failure rather than replacing missing inputs with invented values.
 
-**Next:** [Try your first plan](first-plan.md), or [connect an existing installation](home-assistant.md).
+**Next:** [Set up your first plan](first-plan.md).
