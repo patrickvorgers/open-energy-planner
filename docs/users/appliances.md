@@ -63,8 +63,15 @@ Each row includes its start, completion, duration and energy without expanding i
 Start and completion each stay on one line. Taller profile charts give the power
 and phase energy patterns more room beside the recent cycles.
 A detected running cycle appears above the completed cycles with its start time
-and energy measured so far. Uncertain execution remains explicit. Only complete
-accepted cycles refine the model. The page refreshes automatically every five
+and energy measured so far. **Cycle in progress** means recent measurements
+confirm ongoing activity. **Cycle detected** with **Current state unconfirmed**
+means a start was observed, but recent power and energy measurements cannot
+confirm whether that cycle is still running or has finished. An interrupted
+measurement stream, including a restart during a cycle,
+can cause this status even while the appliance continues running. The previously
+observed start is retained, and new starts remain blocked until fresh evidence
+confirms an idle appliance. Only complete accepted cycles refine the model.
+The page refreshes automatically every five
 minutes while visible. Live activity can therefore lag by up to five minutes.
 The list reflects recent evidence, rather than every cycle ever used to train
 the retained model. Limiting the display does not discard saved evidence.
