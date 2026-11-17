@@ -1,5 +1,6 @@
 *
 !pyproject.toml
+!hacs.json
 !requirements.lock
 !Dockerfile.chain-test
 !Dockerfile.ui-test
