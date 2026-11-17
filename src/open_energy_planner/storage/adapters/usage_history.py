@@ -1,5 +1,6 @@
 """Retain one compact daily capacity observation in the active transferable schema."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -20,22 +21,25 @@ class StorageHistory:
         """Share the app's single active engine and mutation guard."""
         self.engine = engine
 
-    def sample(self, now: datetime, timezone: str | None):
+    def sample(self, clock: Callable[[], datetime], timezone: str | None):
         """Measure once after 04:00 local, including a late startup on the current day.
 
         Missing installation timezone defers sampling. Offline days are never
         backfilled. Failed/unknown size probes retain null, never a fictional zero.
         The engine guard orders the existence check, measurement and durable insert
-        against all other app writers. Only one writable app process is supported.
+        against all other app writers. Read the observation clock after acquiring
+        that guard so waiting across midnight cannot backdate a measurement.
+        Only one writable app process is supported.
         """
         if not timezone:
             return
-        local = now.astimezone(ZoneInfo(timezone))
-        if local.hour < DAILY_SAMPLE_HOUR:
-            return
-        day = local.date().isoformat()
         try:
             with lifecycle_transaction(self.engine) as connection:
+                now = clock()
+                local = now.astimezone(ZoneInfo(timezone))
+                if local.hour < DAILY_SAMPLE_HOUR:
+                    return
+                day = local.date().isoformat()
                 if connection.scalar(
                     select(STORAGE_SAMPLES.c.day).where(STORAGE_SAMPLES.c.day == day)
                 ):

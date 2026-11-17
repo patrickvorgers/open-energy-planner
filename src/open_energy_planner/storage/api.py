@@ -107,7 +107,7 @@ def register(app, engine, timezone):
             while True:
                 try:
                     cancellation = await complete_write(
-                        history.sample, datetime.now(UTC), timezone()
+                        history.sample, lambda: datetime.now(UTC), timezone()
                     )
                     if cancellation is not None:
                         raise cancellation

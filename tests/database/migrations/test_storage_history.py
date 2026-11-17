@@ -34,7 +34,9 @@ def test_transfer_retains_daily_history_and_resumes_on_destination(
         ),
     )
     try:
-        StorageHistory(source).sample(datetime(2026, 10, 24, 2, tzinfo=UTC), "Europe/Amsterdam")
+        StorageHistory(source).sample(
+            lambda: datetime(2026, 10, 24, 2, tzinfo=UTC), "Europe/Amsterdam"
+        )
         original = StorageHistory(source).read(None, "2026-10-24")
         assert migrate_archive(source, target, overwrite_target=True)["oep_storage_samples"] == 1
         source_repository.close()
@@ -43,7 +45,7 @@ def test_transfer_retains_daily_history_and_resumes_on_destination(
         try:
             store = StorageHistory(target)
             assert store.read(None, "2026-10-24") == original
-            store.sample(datetime(2026, 10, 25, 3, tzinfo=UTC), "Europe/Amsterdam")
+            store.sample(lambda: datetime(2026, 10, 25, 3, tzinfo=UTC), "Europe/Amsterdam")
             expected = store.read(None, "2026-10-25")
             assert [row["backend"] for row in expected] == ["sqlite", backend]
             assert (

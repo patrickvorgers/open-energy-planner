@@ -132,6 +132,8 @@ installation timezone. It waits for HA timezone evidence. A late startup records
 only the current day, never an invented observation for offline days. Unknown size
 is retained once as null. Failed SQL writes retry on the next worker poll.
 Shutdown drains a pending write before closing the active engine or migrating.
+The observation clock is read after acquiring the shared engine guard. A wait
+across local midnight therefore uses the new date and its 04:00 eligibility.
 One writable app process is supported, as for other lifecycle writers.
 
 Authenticated `GET /v1/storage/history?period=month` returns `period`, inclusive
