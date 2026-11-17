@@ -3,6 +3,7 @@
 import re
 import unittest
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 import hooks
 from mkdocs.config import load_config
@@ -66,6 +67,34 @@ class DocumentationSiteTests(unittest.TestCase):
             for target in re.findall(r"\]\(([^)]+)\)", index.read_text(encoding="utf-8"))
         }
         self.assertFalse(set(directory.glob("*.md")) - {index} - destinations)
+
+    def test_every_diagram_has_a_current_self_contained_svg(self):
+        """Publish current diagram images without scripts or external image dependencies."""
+        expected = set()
+        for guide in self.files:
+            if not guide.src_uri.endswith(".md"):
+                continue
+            for match in hooks.MERMAID.finditer(guide.content_string):
+                image = hooks.diagram_path(match.group(1))
+                expected.add(image)
+                self.assertTrue(image.is_file(), guide.src_uri)
+                document = ElementTree.parse(image).getroot()
+                self.assertEqual(document.tag, "{http://www.w3.org/2000/svg}svg")
+                self.assertTrue(document.get("viewBox"))
+                self.assertTrue("".join(document.itertext()).strip())
+                for node in document.iter():
+                    self.assertNotEqual(node.tag.rsplit("}", 1)[-1], "script")
+                    for attribute, value in node.attrib.items():
+                        if attribute.rsplit("}", 1)[-1] in {"href", "src"}:
+                            self.assertTrue(value.startswith("#"), value)
+        self.assertGreater(len(expected), 0)
+        self.assertEqual(expected, set((hooks.ROOT / "docs/assets/diagrams").glob("*.svg")))
+
+    def test_diagram_source_changes_require_a_new_image(self):
+        """Never reuse a stale figure when the canonical relationship changes."""
+        page = SimpleNamespace(file=SimpleNamespace(src_uri="docs/users/first-plan.md"))
+        with self.assertRaisesRegex(ValueError, "Render the Mermaid diagram"):
+            hooks.render_diagrams("```mermaid\ngraph TD\nMissing --> New\n```", page)
 
     def test_source_links_use_github_and_guide_links_stay_local(self):
         """Keep rendered documentation internal while resolving unpublished code and directories externally."""

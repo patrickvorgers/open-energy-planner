@@ -1,5 +1,7 @@
 """Build the site from maintained sources without publishing the application tree."""
 
+import hashlib
+import os
 import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -23,10 +25,36 @@ SOURCE_PATTERNS = (
     "docs/assets/*.css",
     "docs/assets/*.js",
     "docs/assets/*.png",
+    "docs/assets/diagrams/*.svg",
     "docs/assets/SITE-LICENSES.txt",
     "design/*.md",
 )
 LINK = re.compile(r"(?<![!`])\[(!\[[^\]]*\]\([^)]*\)|[^\[\]]+)\]\(([^)]+)\)")
+MERMAID = re.compile(r"^```mermaid\r?\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+
+
+def diagram_path(source):
+    """Bind a diagram image to the exact normalized Mermaid source it illustrates."""
+    digest = hashlib.sha256(source.replace("\r\n", "\n").strip().encode()).hexdigest()[:16]
+    return ROOT / "docs/assets/diagrams" / f"{digest}.svg"
+
+
+def render_diagrams(markdown, page):
+    """Use committed SVGs so diagrams work offline and without browser JavaScript."""
+
+    def replace(match):
+        """Reject missing or stale diagrams rather than silently publishing raw code."""
+        image = diagram_path(match.group(1))
+        if not image.is_file():
+            raise ValueError(f"Render the Mermaid diagram in {page.file.src_uri} first")
+        relative = os.path.relpath(image, (ROOT / page.file.src_uri).parent).replace("\\", "/")
+        return (
+            f"[![Diagram. Open the full-size image for details.]({relative})]({relative})\n\n"
+            "<details>\n<summary>Diagram source (Mermaid)</summary>\n\n"
+            f"```text\n{match.group(1).strip()}\n```\n\n</details>"
+        )
+
+    return MERMAID.sub(replace, markdown)
 
 
 def on_files(files, config):
@@ -94,7 +122,7 @@ def on_page_markdown(markdown, page, config, files):
         source_url = SOURCE_URL if resolved.is_file() else SOURCE_URL.replace("/blob/", "/tree/")
         return f"[{label}]({source_url}{relative}{fragment})"
 
-    sections = re.split(r"(```[\s\S]*?```)", markdown)
+    sections = re.split(r"(```[\s\S]*?```)", render_diagrams(markdown, page))
     return "".join(
         section if section.startswith("```") else LINK.sub(source_link, section)
         for section in sections

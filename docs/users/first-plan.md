@@ -1,74 +1,98 @@
-# Try your first plan
+# Set up your first plan
 
-Run the actual planner with synthetic inputs on your computer. This route does not connect Home Assistant, change your installation or operate physical devices.
+Follow this route to install the preview, reuse your Home Assistant Energy configuration and obtain a plan for your own installation. You do not need a development environment or a Python demo to configure an installed app.
 
-## Get the development preview
+## 1. Install and open the matched app and integration
 
-You need repository access, Git, Python 3.12 or later, and a terminal. If you already have a checkout, open a terminal at its root and skip the clone.
+OEP is a development preview. There is no public HACS installation or stable one-click release yet. An administrator must install the matching packaged Home Assistant app and integration from the same accepted numbered artifact set. Follow [Connect Home Assistant](home-assistant.md#install-a-matched-pair) for the current installation procedure and identity checks. If you do not have that package, stop at this availability boundary rather than substituting an arbitrary source checkout.
 
-```console
-git clone https://github.com/patrickvorgers/open-energy-planner.git
-cd open-energy-planner
-python -m venv .venv
-```
+Once installed, start the app and open its Home Assistant ingress entry. Supervisor connects the components automatically. This route does not require copying an app token or a server address. A standalone deployment has its own [explicit pairing procedure](home-assistant.md#open-the-app).
 
-Activate that environment. On Windows PowerShell:
+**Check:** the app opens and the matching integration is connected. A token prompt inside trusted ingress is a connection problem to investigate.
 
-```powershell
-.venv\Scripts\Activate.ps1
-```
+## 2. Check the Home Assistant stage
 
-On Linux or macOS:
+Open **Settings > Installation**. An incomplete installation opens the five-stage wizard. An existing complete installation opens saved summaries instead. Choose **Edit installation** only for the values you need to change.
 
-```sh
-. .venv/bin/activate
-```
+The **Home Assistant** stage reuses the sources you already selected in **Home Assistant Settings > Dashboards > Energy**. Check the detected grid import/export channels, each solar source and each battery. Review current readings and the available household history. If something is missing, correct its Energy configuration and use **Refresh Home Assistant sources**. Do not recreate those meter identities in OEP.
 
-Install the pinned runtime and the local package without resolving its dependencies again:
+Solar and batteries are optional. A source can be detected before its readings or history are ready. [Before you start](before-you-start.md#prepare-home-assistant-energy) explains energy counters, power directions and avoiding overlapping meters.
 
-```console
-python -m pip install -r requirements.lock
-python -m pip install --no-deps -e .
-```
+**Check:** the listed sources represent your installation, with no duplicated totals or missing required readings.
 
-**Check:** installation finishes without an error. If cloning fails, check the public repository URL and your network access. If a native package has no compatible wheel, stop and use the [isolated developer environment](home-assistant.md). Do not change dependency versions to make the command pass.
+## 3. Confirm connection and household
 
-## Start without Home Assistant
+| Field | What to enter or confirm |
+|---|---|
+| **Maximum grid import (kW)** | The permitted aggregate import limit for the whole connection. This is power, not annual energy. |
+| **Allow grid feed-in** | Whether the plan may export. Disabling it stores a zero export limit. |
+| **Maximum grid export (kW)** | Your permitted export limit when feed-in is allowed. It can differ from import. |
+| **Annual whole-home consumption (kWh)** | Check the estimate from common complete meter history. If history is insufficient, confirm your own annual household estimate. |
 
-In the same terminal, run:
+[![Connection settings showing separate power limits and annual household energy.](../assets/installation-connection.png)](../assets/installation-connection.png)
 
-```console
-python -m open_energy_planner.app --demo --host 127.0.0.1 --port 18765 --data .local/first-plan
-```
+*This synthetic example disables feed-in. It illustrates the fields, not recommended connection limits. Annual household use includes normal background consumption.*
 
-Keep the terminal open. The app writes its demo database and its generated administration token only under `.local/first-plan`. Later starts with that directory reuse those local records. No external price or weather provider is requested by this command.
+Do not copy the screenshot's limits. With zero export, fixed solar surplus can make a plan impossible when consumption and storage cannot absorb it. [Connection settings](installation.md#connection-and-household) explains the physical assumptions.
 
-**Check:** the terminal reports that Open Energy Planner started. If the port is occupied, stop your own earlier demo or choose another unused port and use that port in the browser URL too.
+**Check:** you have confirmed the permitted import/export limits and a credible household scale. Missing history has not become zero consumption.
 
-## Open Planning
+## 4. Review solar production
 
-Open [the local Planning page](http://127.0.0.1:18765/overview#planning). Use this direct URL for the demo. The installation wizard requires Home Assistant mode and is not part of this route.
+For each detected production source, confirm its inverter relationship, capacity and panel geometry. **Tilt (°)** is panel inclination. **Azimuth (° clockwise from north)** describes direction. Use the actual array rather than assuming every roof faces south.
 
-Open `.local/first-plan/administration-token` in a local text editor. Paste its contents into **Installation API token**, then choose **Connect**. This token grants access to this local app. Keep it out of screenshots, chat messages, Git and URLs. The standalone page holds it only until the page closes.
+When Energy links supported Forecast.Solar panel metadata, the panel groups are read-only in OEP. Confirm them at their Home Assistant owner. Without that link, enter the required geometry in the app. Sources sharing a hybrid or standalone inverter share its physical capacity. Do not assign that capacity independently to every array.
 
-**Check:** the page shows **Connected: Historical views never change active commands.** If it does not, verify that you used the token from the directory belonging to this running app. If a token was already supplied through `OEP_API_TOKEN`, that environment value takes precedence over the generated file.
+Allow curtailment only when your own automation can switch that source. Price conditions alone do not create a physical control capability. Skip solar when none is installed.
 
-## Recognize the first result
+**Check:** every solar source has the correct production boundary and physical relationship. See [Solar production](installation.md#solar-production) and [solar forecasts](forecasts.md#solar-production) for details.
 
-Wait for the first calculation, then choose **Refresh overview**. Under **Original plan**, expect a plan version and a generated timestamp. The synthetic demo normally shows **Status: Optimal**.
+## 5. Review batteries and save the installation
 
-Start with the **Optimizer** chart, followed by **Battery self-consumption** and **Without battery: Baseline**. Use **Next 6 hours**, **Next 24 hours** and **Full period** to inspect the same plan at different scales. Tap or hover over the chart to read an interval.
+For each battery, confirm the Energy-owned usable capacity, SoC and power sources. Correct missing source configuration in Energy. In OEP, confirm charge/discharge power limits, reserve, conversion losses and its standalone or shared inverter connection. Optional wear cost and periodic calibration need your own deliberate values. Skip this stage if you have no battery.
 
-[![The actual Planning interface with populated synthetic energy flows, battery state and a visible day transition.](../assets/planning-example.png)](../assets/planning-example.png)
+[![Battery configuration with reserve and charge and discharge limits.](../assets/installation-battery.png)](../assets/installation-battery.png)
 
-The screenshot uses a richer synthetic teaching scenario with solar and household variation. The basic command-line demo is deliberately smaller: its first quarters illustrate charging cheaply and exporting later, with little activity afterward. Different synthetic input does not mean your installation is misconfigured.
+*These synthetic ratings describe one example. A planning reserve does not replace your battery's protection settings.*
 
-**First success:** an original plan has a version and timestamp, the planned balance contains values, and changing the displayed horizon works. This establishes that the local planner and browser view work with synthetic inputs. It does not establish that your own installation is configured or that physical energy flowed as proposed.
+Inspect the final **Review** stage and choose **Save installation**. Advancing wizard stages does not save the complete installation. Wait for confirmation, then check the saved summary. Under **Planning strategy**, confirm **Minimize cost** or **Minimize consumption**. [Compare the goals](how-oep-works.md#choose-the-optimization-goal) before changing the default.
 
-If **No plan available** remains, use [the missing-plan checks](troubleshooting.md#no-plan-available). Do not fill missing measurements with zero to hide a warning.
+**Check:** the saved sources, topology, limits and goal match your intent.
 
-## Stop and continue
+## 6. Enter your contract and check price sources
 
-Press Ctrl+C in the terminal to stop the demo. Your local demo records remain in `.local/first-plan`. Restart with the same command when needed. Nothing was installed into Home Assistant.
+Open **Settings > Contract**. Add or edit the applicable dated price rule. Enter the import and base-export formulas from your contract, check the evaluated examples and save. Keep an extra export bonus separate from the base export formula.
 
-Continue with [reading the plan](read-your-plan.md). To explore the actual setup wizard, follow [Connect Home Assistant](home-assistant.md).
+[![Dated import and export formulas with evaluated rate examples.](../assets/contract-rule.png)](../assets/contract-rule.png)
+
+*Inspect negative, zero and positive market-price examples before saving. This is synthetic teaching data, not a supplier offer.*
+
+If your contract includes a bonus, confirm eligibility, paid hours, volume allowance, reset date and any battery-export restriction. Check the opening-counter evidence. The [contract guide](contract.md) explains the supplied examples and recovery for incomplete history.
+
+Under **Settings > Installation > Price sources**, check source availability and preference. Market prices and your effective contract rates are separate inputs.
+
+**Check:** the rule's effective date covers the first plan, the formulas have the intended units and price coverage is available.
+
+## 7. Add optional appliances
+
+A first plan does not require every appliance to be configured. Add the equipment you want to follow under **Settings > Appliances**. Reuse detected Home Assistant devices and measurements, then confirm their physical capabilities and planning permissions.
+
+Following consumption or enabling weather-sensitive prediction does not grant control permission. A cycle deadline or EV departure belongs on the relevant **Energy** page after setup. See [Appliances and requests](appliances.md).
+
+## 8. Recognize your first plan
+
+Open **Energy > Planning** and wait for the original plan. Confirm its generated time, version, selected strategy and expected installation sources. Check current warnings before interpreting the chart. Providers and usable input coverage can shorten the target 48-hour horizon. Missing live inputs are not silently replaced with demo values.
+
+[![The Planning page showing a complete synthetic example day.](../assets/planning-example.png)](../assets/planning-example.png)
+
+*Look for solar production, household demand and battery charging/discharging in the same balance. Your own plan will reflect your meters, forecasts and contract.*
+
+**First success:** a current original plan is available with the intended inputs and strategy. Compare **Optimizer**, **Battery self-consumption** and **Without battery: Baseline**, then follow [Read your plan](read-your-plan.md). Predicted benefit is separate from [evaluated savings](savings.md).
+
+If no plan appears, use the [missing-plan checks](troubleshooting.md#no-plan-available) and the named recovery action. Do not hide a missing sensor with zero. Historical measurements can improve forecasts over time, but sufficient history is not required for every startup estimate.
+
+Physical operation is a separate step. OEP publishes virtual advice. Your own Home Assistant automations and controllers must implement it and enforce equipment protections. See [virtual-device sensors](virtual-device-sensors.md) before connecting those actions.
+
+## Optional: explore separately
+
+Use the [standalone demo](demo.md) only if you want to explore synthetic plans without Home Assistant. The [persistent laboratory](../development/USER-TEST-ENVIRONMENT.md) provides simulated Home Assistant devices for integration testing. Neither is a prerequisite for the installation route above.

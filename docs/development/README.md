@@ -6,7 +6,7 @@ Start here if you want to change Open Energy Planner. For installation settings 
 
 | Task | Environment | Start with |
 |---|---|---|
-| Understand a user-visible plan | Local synthetic app, no HA connection | [First plan](../users/first-plan.md) |
+| Understand a user-visible plan | Local synthetic app, no HA connection | [Standalone demo](../users/demo.md) |
 | Edit prose or inspect code | Ordinary checkout and the relevant local dependencies | [Documentation preview](DOCUMENTATION-SITE.md#local-build-and-preview) or the subsystem reference |
 | Change a pure calculation or app behavior | Focused tests with the pinned native dependencies | [Local checks](#run-the-smallest-sufficient-checks) |
 | Exercise actual HA, pairing, ingress and lifecycle | Isolated real Supervisor developer environment with an accepted numbered package | [First start](#first-start) |
