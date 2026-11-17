@@ -938,7 +938,9 @@ cursor records examined time, not complete measurement coverage. A sparse captur
 commits its valid rows and scanned cursor in one transaction. Recovery inserts
 only missing intervals from unfinalized days and never replaces existing rows or
 rewinds the cursor. Daily reports retain missing ranges and own the recovery and
-finalization window. No table or column changes are required.
+finalization window. Finalization may also advance the cursor past a closed
+incomplete day. Neither operation establishes complete measurement coverage.
+No table or column changes are required.
 
 Immutable measured/estimated evidence at up-to-quarter-hour intervals, including
 fragments at configuration boundaries. Conflicting replacement fails explicitly.

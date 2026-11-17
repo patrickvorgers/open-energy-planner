@@ -23,7 +23,10 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
 
 
-def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarter(settlement):
+@pytest.mark.parametrize("age_days", [1, 20])
+def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarter(
+    settlement, age_days
+):
     """A missing middle quarter leaves 1800 seconds and .60 actual cost, then fills without cursor rewind."""
     runtime, store, documents, engine, plans = settlement
     third = END + timedelta(minutes=15)
@@ -78,7 +81,7 @@ def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarte
     } in report["scenarios"]["actual"]["missing"]
     report["finalized_at"] = None
     store.put_day(report, documents, "2026-10-23")
-    now = START + timedelta(days=1)
+    now = START + timedelta(days=age_days)
     forward = now - timedelta(minutes=15)
     arguments = (
         now,

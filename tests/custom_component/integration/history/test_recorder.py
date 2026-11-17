@@ -1025,7 +1025,8 @@ def test_setup_reuses_actual_energy_preferences_and_recorder_history(
 
 
 @pytest.mark.parametrize(
-    "delta,accepted", [(-4.7e-10, True), (-1e-7, False), (0.25, True), (float("nan"), False)]
+    "delta,accepted",
+    [(-4.7e-10, True), (-1e-7, False), (0.25, True), (float("nan"), False), (4_000_001, False)],
 )
 @pytest.mark.parametrize("period", ["5minute", "hour"])
 def test_settlement_bridge_counter_roundoff_never_admits_resets(
@@ -1093,7 +1094,7 @@ def test_settlement_bridge_counter_roundoff_never_admits_resets(
                 assert report["scanned_until"] == (start + timedelta(minutes=15)).isoformat()
                 assert (
                     "Settlement statistics have a gap: sensor.settlement_import"
-                    if period == "hour"
+                    if period == "hour" and delta != 4_000_001
                     else "Invalid settlement sum: sensor.settlement_import"
                 ) in caplog.text
 

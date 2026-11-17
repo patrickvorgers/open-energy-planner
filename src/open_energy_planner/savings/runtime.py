@@ -248,7 +248,9 @@ class SavingsRuntime:
             (today - timedelta(days=RECOVERY_CALENDAR_DAYS + 1)).isoformat(), location.timezone
         )
         last, _ = day_window(today.isoformat(), location.timezone)
-        for report in self.store.days(first, last):
+        older = self.store.day(before=first, finalized=False)
+        reports = ([older] if older else []) + self.store.days(first, last)
+        for report in reports:
             if report["finalized_at"] is not None:
                 continue
             for gap in report["scenarios"]["actual"]["missing"]:

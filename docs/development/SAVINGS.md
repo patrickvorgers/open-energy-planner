@@ -112,7 +112,9 @@ frames are `estimated_soc`, including when their energy also uses hourly
 reconstruction. Every non-recorded quality remains estimated downstream.
 A negative counter delta no greater than `1e-9` kWh (one micro-Wh) is treated
 as unit-conversion roundoff and normalized to zero. Larger decreases and
-nonfinite values remain invalid. Recorder reads align their lookback to the
+nonfinite values remain invalid. Measurements outside the app's settlement wire
+bounds are rejected per interval before upload, so one outlier cannot reject an
+otherwise usable batch. Recorder reads align their lookback to the
 statistics period before subtracting one hour, preserving both hourly endpoints
 when a capture resumes inside an hour. Capture logs the first unavailable boundary
 and source in a batch and continues examining later intervals. It returns only
@@ -122,9 +124,11 @@ boundaries within the frozen request and scanned range. Legacy reports without
 `scanned_until` must retain their contiguous-prefix contract.
 
 The atomically committed capture cursor records examined time, including gaps,
-and never rewinds. Once forward capture catches up, unfinalized daily missing-meter
+and never rewinds. Daily finalization may also advance it past a closed incomplete
+day. The cursor never proves complete coverage. Once forward capture catches up, unfinalized daily missing-meter
 ranges schedule bounded retries during the existing recovery window. Already
 retained frames are excluded even if the daily report has not yet been replayed.
+The oldest older provisional day is also eligible during upgrade recovery.
 Recovered intervals fill absent rows without replacing original evidence.
 Finalized days remain immutable. Missing measurements never become zero, fresh
 reference stock or a new simulated bonus allowance.

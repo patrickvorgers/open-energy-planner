@@ -25,6 +25,9 @@ RETRY_MINUTES = 15
 FULL_SOC_PERCENT = 100
 # One micro-Wh absorbs unit-conversion roundoff without admitting real counter resets.
 COUNTER_ROUNDING_KWH = 1e-9
+# Match the app's settlement wire bounds before accepting a frame into the batch.
+MAX_SETTLEMENT_ENERGY_KWH = 1_000_000
+MAX_SETTLEMENT_METER_KWH = 1_000_000_000
 MAX_IDLE_SOC_GAP = timedelta(hours=1)
 _LOGGER = logging.getLogger(__name__)
 
@@ -338,8 +341,15 @@ class SettlementBridge:
                         delta = end_counter - start_counter
                         if (
                             delta < -COUNTER_ROUNDING_KWH
+                            or delta > MAX_SETTLEMENT_ENERGY_KWH
                             or not isfinite(delta)
-                            or (meter is not None and (not isfinite(meter) or meter < 0))
+                            or (
+                                meter is not None
+                                and (
+                                    not isfinite(meter)
+                                    or not 0 <= meter <= MAX_SETTLEMENT_METER_KWH
+                                )
+                            )
                         ):
                             raise ValueError(f"Invalid settlement sum: {entity}")
                         channels[entity] = max(0, delta)
