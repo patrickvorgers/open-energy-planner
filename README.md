@@ -26,7 +26,7 @@ OEP needs two parts: the **integration** connects to Home Assistant, and the **a
 
 ### Before you start
 
-- Use **Home Assistant OS 2026.11.0 or newer on AMD64 hardware**, with administrator access. The current app package does not support ARM devices such as Raspberry Pi or Home Assistant Green. For Home Assistant Container, see the [separate planner setup](docs/development/AUTOMATIC-PAIRING.md).
+- Use **Home Assistant OS 2026.11.0 or newer on AMD64 hardware**, with administrator access. The current app package does not support ARM devices such as Raspberry Pi or Home Assistant Green. Home Assistant Container has no app store and requires a separately managed planner. A beginner installation guide for that route is not available yet.
 - Have a **GitHub account** ready for Marketplace sign-in.
 - Check the [releases page](https://github.com/patrickvorgers/open-energy-planner/releases). A stable release must include `open_energy_planner.zip`, `ha-app-repository.tar.gz`, `release-manifest.json` and `SHA256SUMS`. **If no stable release with these files is available, installation is not available yet. Stop here.**
 - Configure your meters under **Settings > Dashboards > Energy** in Home Assistant. OEP reuses these sources. Solar panels and batteries are optional.
@@ -60,7 +60,7 @@ OEP needs two parts: the **integration** connects to Home Assistant, and the **a
 ### 3. Open OEP and make your first plan
 
 1. Check **Settings > Devices & services** in Home Assistant. The **Open Energy Planner** integration entry appears automatically after the app connects. No manual pairing is needed.
-2. Select **Open Web UI** on the app page, or open its sidebar entry. Check that the connection is ready and that the app and integration show the same version and build as the release manifest.
+2. Select **Open Web UI** on the app page, or open its sidebar entry. Check that the connection is ready. Compare the app build shown in the sidebar with `release-manifest.json` from the release. In Home Assistant, open the **Open Energy Planner** device and check that its integration version matches the app version.
 3. Complete the installation wizard. Review your detected sources, connection limits, optional solar and batteries, then choose **Save installation** on the final review.
 4. In OEP, open **Settings > Contract**, enter and save your electricity contract rules. Check **Settings > Installation > Price sources**, then open **Energy > Planning** for your first plan.
 
