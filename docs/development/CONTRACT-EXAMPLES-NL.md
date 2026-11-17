@@ -51,8 +51,9 @@ API requests: put `export_formula` in the applicable base-price period and
 `bonuses` at the contract root. Supply contract identity, import formula, base
 period dates and `expected_version` as described in [contract settings](CONTRACT-PRICES.md#configuration-api).
 
-The `2027-01-01` effective dates illustrate the user's contract configuration.
-They are not claimed supplier launch dates. Use the customer's actual start date.
+The Zonneplan and NextEnergy `2027-01-01` effective dates illustrate the user's
+configuration, not supplier launch dates. Budget's example starts on its stated
+1 January 2027 launch date. Always retain the customer's actual contract start.
 The supplier examples are alternatives, not rewards to enable together on one contract.
 
 ## Zonneplan Zonnebonus
