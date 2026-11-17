@@ -135,6 +135,80 @@ def automatic_plan_overview(app_page, request):
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+@pytest.mark.parametrize("historical", [False, True])
+def test_daily_price_poll_updates_markers_without_rebuilding_frozen_plan(
+    automatic_plan_overview, historical
+):
+    """An unchanged latest or historical plan receives new daily labels while retaining chart identity and rates."""
+    state = automatic_plan_overview
+    page = state["page"]
+    ranking = {"final": False}
+    first = state["beginning"]
+    second = first + timedelta(minutes=15)
+
+    def daily_prices(route):
+        """Change only backend-selected quarters and status, independently of the selected original plan."""
+        route.fulfill(
+            json={
+                "days": [
+                    {
+                        "day": first.date().isoformat(),
+                        "currency": "EUR",
+                        "status": "final" if ranking["final"] else "provisional",
+                        "cheapest": [] if ranking["final"] else [first.isoformat()],
+                        "most_expensive": [second.isoformat()] if ranking["final"] else [],
+                        "quarters": [
+                            {
+                                "start": at.isoformat(),
+                                "end": (at + timedelta(minutes=15)).isoformat(),
+                                "market_price": 0.1,
+                            }
+                            for at in (first, second)
+                        ],
+                    }
+                ]
+            }
+        )
+
+    page.route("**/v1/prices/daily?*", daily_prices)
+    if historical:
+        page.locator("#plan-version").select_option("older-plan")
+    else:
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+    wait_for_product_reads(page)
+    expect(page.locator("#price-daily-status")).to_contain_text("12 cheapest quarters: Provisional")
+    page.evaluate(
+        "window.originalPriceChart = Chart.getChart(document.getElementById('price-chart'))"
+    )
+    original_rates = page.evaluate(
+        "window.originalPriceChart.data.datasets.map(dataset => dataset.data)"
+    )
+    detail_reads = list(state["comparison_reads"])
+    ranking["final"] = True
+    with page.expect_response("**/v1/prices/daily?*"):
+        page.clock.run_for(15000)
+    wait_for_product_reads(page)
+    expect(page.locator("#price-daily-status")).to_contain_text("12 most expensive quarters: Final")
+    assert page.evaluate(
+        "Chart.getChart(document.getElementById('price-chart')) === window.originalPriceChart"
+    )
+    assert (
+        page.evaluate("window.originalPriceChart.data.datasets.map(dataset => dataset.data)")
+        == original_rates
+    )
+    marks = page.evaluate("window.originalPriceChart.dailyPriceQuarters")
+    assert marks == [
+        {
+            "start": second.timestamp() * 1000,
+            "end": (second + timedelta(minutes=15)).timestamp() * 1000,
+            "extreme": "most_expensive",
+            "status": "final",
+        }
+    ]
+    assert state["comparison_reads"] == detail_reads
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("refresh", ["publication", "manual"])
 def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
     automatic_plan_overview, refresh

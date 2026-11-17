@@ -88,7 +88,7 @@ def failure_route(kind, reject_operation, *, project_document=None):
         reject_operation(*arguments)
 
     service.save_preferences = save_preferences
-    prices_api.register(app, lambda: service, None, None, lock)
+    prices_api.register(app, lambda: service, None, None, lock, None, lambda: None)
     return (
         app,
         "PUT",

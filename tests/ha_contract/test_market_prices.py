@@ -154,7 +154,7 @@ def test_unreadable_configuration_hides_retained_route_until_recovery():
         }
         source.receive(body, datetime.now(UTC))
         app = web.Application()
-        register_prices(app, lambda: runtime, None, None, asyncio.Lock())
+        register_prices(app, lambda: runtime, None, None, asyncio.Lock(), None, lambda: None)
         try:
             async with server(app) as url, ClientSession() as client:
                 async with client.get(url + "/v1/prices") as result:
