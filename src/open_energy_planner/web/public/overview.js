@@ -1,7 +1,7 @@
 // Read-only views never activate an archived plan or reset the reference scenario.
 import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
-import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, planStrategy, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
+import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 bindSettingsActions();
@@ -28,7 +28,6 @@ const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
 const number = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "-";
 /** Share numeric precision across evidence cards, tooltip columns and chart axes. Units remain separate. */
 const valueText = (value, unit) => unit === "%" ? percentage(value, false) : unit === "W" ? Math.round(value).toLocaleString() : (isMoneyUnit(unit) ? money : number)(value);
-const statuses = {optimal: "Optimal", feasible: "Feasible"};
 /** Read JSON with owned guidance and a default deadline. An explicit signal owns its request group. */
 async function api(path, signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)) {
     let response;
@@ -783,15 +782,13 @@ function renderPlanComparisons(data, plan, {deferRange = false} = {}) {
         }
     }
     const baseline = withoutBattery?.comparison;
-    const self = selfConsumption?.comparison;
     const period = inspectSteps.length ? {start: new Date(inspectSteps[0].start).toISOString(), end: new Date(inspectSteps.at(-1).end).toISOString(), duration_h: (plan.input_snapshot?.problem?.intervals || []).reduce((total, interval) => total + interval.duration_h, 0)} : null;
-    let message = "Benefits versus no battery include storage and smart planning. Excludes investment costs.";
-    if (self?.reference_start?.status === "measured_common_start") message = "Self-consumption and smart planning start from the same measured SoC and opening bonus budgets. Expected benefits include the difference in remaining battery value. " + message;
+    let message = "";
     if (data.valuation) message += " Contract updated. Self-consumption costs were repriced without re-optimization.";
     if (data.valuation_status?.issue) message += ` Repricing unavailable: ${data.valuation_status.issue}.`;
     if (comparison?.reference_start?.status === "provisional_common_start") message += " Self-consumption reference initialization is provisional.";
     if (comparison?.reference_start?.estimated) message += " Self-consumption reference start is estimated.";
-    $("expected-benefit").textContent = message + " Not evaluated lifetime savings. See Savings for evaluated results.";
+    $("expected-benefit").textContent = message.trim();
     if (!confirmedProjection) {
         chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W", preserveVisibility: samePlan, deferRange: true});
         periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
@@ -868,10 +865,10 @@ async function showPlan(signal, background = false) {
         if (selectedOption) selectedOption.textContent = planName(plan);
         $("inspect-time").disabled = false;
         const currency = plan.currency || "";
-        $("plan-description").textContent = `Generated: ${when(plan.generated_at)}: Strategy: ${planStrategy(plan.strategy)}: Status: ${statuses[plan.solution_status] || "Unknown"}: Advice does not prove execution`;
+        $("plan-description").textContent = "";
         if (plan.consumption_objective) {
             const objective = plan.consumption_objective;
-            $("plan-description").textContent += `: Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
+            $("plan-description").textContent = `Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
         }
         const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
         const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
@@ -961,7 +958,7 @@ async function showPlan(signal, background = false) {
         priceInputPlanId = id;
         currentPriceWindow = null;
         $("price-chart").closest(".chart-wrap").hidden = false;
-        $("current-price-status").textContent = `Selected plan: ${when(plan.generated_at)}: Original contract rates. ${bonusRules.length ? "Potential export bonus is shown before the volume cap." : "No bonus applies in this plan."}`;
+        $("current-price-status").textContent = "";
         chart("price-chart", priceSeries, {unit: `${currency}/kWh`, deferRange: true});
         if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan, {deferRange: true});
         $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();

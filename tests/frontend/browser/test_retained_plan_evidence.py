@@ -122,7 +122,7 @@ def test_old_evidence_cannot_replace_a_new_read_after_a_b_a_selection(app_page, 
     page.wait_for_function("window.revisitedEvidenceReadCaptured === true")
     assert len(held) == 1
     page.locator("#plan-version").select_option("plan-b")
-    expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     page.locator("#plan-version").select_option(identity)
     expect(page.locator("#overview-status")).to_contain_text("Connected")

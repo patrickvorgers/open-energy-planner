@@ -47,7 +47,7 @@ def test_archived_plan_uses_current_energy_name_without_rewriting_archive(
     page.goto(url + "/overview#planning")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize cost")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Garage battery")
     selected = page.locator("#plan-version").input_value()
     before = page.evaluate(
@@ -205,7 +205,7 @@ def test_savings_overview_compares_realized_costs_and_original_plan(app_page):
     )
     page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
     page.get_by_role("button", name="View original plan").first.click()
-    expect(page.locator("#plan-description")).to_contain_text("Minimize cost")
+    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize cost")
     expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 

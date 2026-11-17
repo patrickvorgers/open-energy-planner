@@ -69,7 +69,7 @@ def test_delayed_linked_plan_listing_preserves_newer_selection(app_page, newer_s
         with page.expect_response(f"**/v1/plans/{other_id}/comparison?view=simulations"):
             page.locator("#plan-version").select_option(other_id)
         expect(page.locator("#overview-status")).to_contain_text("Connected")
-        expect(page.locator("#plan-description")).to_contain_text("Minimize consumption")
+        expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
         page.evaluate(
             "window.selectedPlanChart=Chart.getChart(document.getElementById('plan-chart'))"
         )
