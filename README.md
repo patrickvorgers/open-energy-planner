@@ -111,9 +111,9 @@ Read [forecasts](docs/users/forecasts.md) and [appliances](docs/users/appliances
 
 A market-price feed alone does not describe your bill. OEP separates market prices, effective import/export formulas and additional qualifying export revenue. Rules have effective dates. Bonus conditions can include price gates, paid hours, an annual volume allowance, reset dates and battery-export restrictions.
 
-[![Contract settings show dated import/export formulas and evaluated example rates.](docs/assets/contract-rule.png)](docs/assets/contract-rule.png)
+[![Contract settings show a saved Budget Energie-style bonus rule with separate rates, monthly paid hours, a 5,000-kWh cap and battery-export protection.](docs/assets/contract-rule.png)](docs/assets/contract-rule.png)
 
-*Check negative, zero and positive market-price examples. Keep an extra bonus outside the base export formula so it is not counted twice.*
+*The synthetic January 2027 rule keeps base export at `market` and adds the bonus separately. Its summary shows the monthly schedule, 5,000-kWh allowance, contract-anniversary reset and battery-export protection. The import formula is illustrative. Check negative, zero and positive rate examples, and never count the bonus twice.*
 
 Worked Dutch examples cover Zonneplan, NextEnergy and Budget Energie bonus structures. They illustrate configurable rules, not automatic supplier integration or a guarantee that your current signed terms match. Measured export history can establish opening allowance usage. Proposed export does not consume that measured counter. See [contract configuration](docs/users/contract.md) and the [worked formulas](docs/development/CONTRACT-EXAMPLES-NL.md). Fixed subscriptions, annual netting and a complete supplier invoice are outside this marginal planning calculation.
 
