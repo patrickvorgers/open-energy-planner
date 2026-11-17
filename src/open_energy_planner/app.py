@@ -792,12 +792,13 @@ def create_app(
                                 and not getattr(prices, "configuration_issue", None)
                             ):
                                 async with savings_mutation_lock:
+                                    daily_now = datetime.now(UTC)
                                     cancellation = await complete_write(
                                         daily_prices.update,
-                                        prices.daily_timeline(now),
+                                        prices.daily_timeline(daily_now),
                                         prices.market_area,
                                         timezone,
-                                        now,
+                                        daily_now,
                                     )
                                     if cancellation is not None:
                                         raise cancellation

@@ -151,3 +151,75 @@ def test_daily_price_api_requires_authentication_and_bounded_aware_periods(tmp_p
             await runner.cleanup()
 
     asyncio.run(scenario())
+
+
+def test_daily_refresh_withdraws_forecast_that_expires_during_provider_wait(tmp_path, monkeypatch):
+    """A provider wait crossing expiry cannot preserve future provisional rankings with an old clock."""
+    current = datetime(2026, 11, 17, 12, tzinfo=UTC)
+
+    class Clock(datetime):
+        """Advance app wall time deterministically without changing source delivery times."""
+
+        @classmethod
+        def now(cls, zone=None):
+            """Return the scenario clock in the requested timezone."""
+            return current.astimezone(zone)
+
+    monkeypatch.setattr("open_energy_planner.app.datetime", Clock)
+    monkeypatch.setattr("open_energy_planner.app.PRICE_SCHEDULE_POLL_SECONDS", 3600)
+
+    async def scenario():
+        """Run the actual refresh lifecycle once across expiry and inspect its durable result."""
+        nonlocal current
+        started, release = asyncio.Event(), asyncio.Event()
+        daily = None
+        published_day = published(current.date() + timedelta(days=1), current)
+        forecast = replace(
+            published_day,
+            expires_at=current + timedelta(minutes=5),
+            points=tuple(
+                replace(
+                    point,
+                    start=point.start + timedelta(hours=1),
+                    end=point.end + timedelta(hours=1),
+                    kind=PriceKind.FORECAST,
+                )
+                for point in published_day.points
+            ),
+        )
+        start, end = forecast.points[0].start, forecast.points[-1].end
+
+        @asynccontextmanager
+        async def factory(engine):
+            """Retain tomorrow's provisional day before an offline provider wait crosses expiry."""
+            nonlocal daily
+            documents = SqlDocuments(engine, "prices")
+            service = PriceService("NL", None, None, PriceStore(documents))
+            service.series = (forecast,)
+            daily = DailyPrices(documents)
+            daily.update(service.daily_timeline(current), "NL", "UTC", current)
+
+            async def refresh(_now):
+                """Hold the original refresh clock while the provider is awaiting a response."""
+                started.set()
+                await release.wait()
+
+            monkeypatch.setattr(service, "refresh", refresh)
+            yield service
+
+        runner = web.AppRunner(create_app(tmp_path, TOKEN, price_factory=factory))
+        await runner.setup()
+        try:
+            await asyncio.wait_for(started.wait(), timeout=3)
+            assert daily.read("NL", "UTC", start, end)[0]["status"] == "provisional"
+            current = forecast.expires_at + timedelta(minutes=1)
+            release.set()
+            async with asyncio.timeout(3):
+                while daily.read("NL", "UTC", start, end)[0]["status"] != "incomplete":
+                    await asyncio.sleep(0.01)
+            result = daily.read("NL", "UTC", start, end)[0]
+            assert result["quarters"] == result["cheapest"] == result["most_expensive"] == []
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(scenario())
