@@ -368,7 +368,7 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `installation` | `InstallationStore`: Energy-bound virtual devices, limits, relations and settings. `BatteryCalibration`: measured periodic full-charge progress. | Immutable `<version>.json`. `current.json` selects settings. Mutable bounded `battery-calibration.json` stores schema 1 and per-device progress. |
 | `demand` | `DemandStore`: selected consumption sources/settings. Forecast values and fitted model parameters. | `configuration-<version>.json`, `forecast-<version>.json`. `current.json` selects configuration. |
 | `solar` | `SolarStore`: per-source configuration, forecasts/models, weather/history blocks and receipt times. | Content-addressed kind/version documents. Unchanged daily `block-<hash>.json` reused by manifests. `current.json` selects configuration. |
-| `prices` | `PriceStore`: normalized source series with original receipt/issue/expiry times, published/forecast flags and resolution. | Immutable `<version>.json`. `current.json` is the list of current series references. No raw provider payloads or API secrets. |
+| `prices` | `PriceStore`: normalized source series with original receipt/issue/expiry times, published/forecast flags and resolution. `DailyPrices`: calendar quarter prices and extreme selections. | Immutable `<version>.json`. `current.json` is the list of current series references. `daily-<identity>.json` retains daily spot-price evidence. No raw provider payloads or API secrets. |
 | `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
 | `savings` | `SavingsRuntime` and `PlanValuations`: capture cursor, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
 
@@ -1601,6 +1601,28 @@ limit one. Retention is indefinite. Scoring still reads only the completed
 30-day window and does not rewrite historical assessments.
 
 ### Price selection document contracts
+
+`DailyPrices` in `prices/daily.py` owns `daily-<identity>.json` in the `prices`
+namespace. Identity is the SHA-256 of area, EUR currency, installation timezone
+and local ISO date. Each document contains `day` (ISO calendar date), `start` and
+`end` (aware ISO UTC instants), `timezone` (IANA name), `market_area`, `currency`,
+`status` (`incomplete`, `provisional` or `final`), `quarters` (ordered records with
+aware UTC `start`/`end`, finite `market_price` in EUR/kWh and `price_kind`), and
+`cheapest`/`most_expensive` (arrays of twelve selected quarter-start instants when
+coverage is complete, otherwise empty). Each UTC quarter lasts fifteen minutes.
+A local DST day therefore contains 92 or 100 quarters. No SQL columns, indexes or
+constraints change. Shared document transactions and engine lifecycle guards own
+atomicity. The refresh worker serializes these writes with financial publication.
+Unchanged documents are not rewritten. Reads are bounded to four keyed local dates.
+
+Retained elapsed quarters preserve full-day context when forecasts roll forward.
+Future forecast quarters require currently usable source coverage. Provisional
+rankings may change. The first completely published document is final and remains
+immutable, including after published corrections. Equal prices break ties by UTC
+start, with the cheapest twelve excluded from the most-expensive selection.
+Retention is indefinite. Ordinary shared-schema backup and cross-backend transfer
+include these documents. HTTP and browser consumers only read the selections.
+Original plan evidence and current settlement-price corrections are independent.
 
 Within `oep_documents`, namespace `prices`, `SourceSelection` owns
 `source-selection-<area>.json` and daily

@@ -201,6 +201,10 @@ def app_site(request, savings_now):
                                 ("jeroen_nl", 72, PriceKind.FORECAST, 15, 0.1),
                             )
                         )
+                        if getattr(request, "param", None) == "prices_daily":
+                            from tests.frontend.browser.price_daily_fixture import seed
+
+                            seed(service, database_engine)
                         await service.refresh(datetime.now(UTC))
                         yield service
 

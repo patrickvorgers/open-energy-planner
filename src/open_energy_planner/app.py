@@ -67,6 +67,7 @@ from .notifications.collection import NotificationCenter
 from .optimization.storage import StrategyStore
 from .optimization.strategy_api import register as register_strategy
 from .prices.api import register as register_prices
+from .prices.daily import DailyPrices
 from .runtime.diagnostics.planning_notifications import (
     PlanningStatus,
     explain_planning_problem,
@@ -451,6 +452,14 @@ def create_app(
 
         advertise(app, pairing, directory, token, **discovery_options)
     prices = None
+    daily_prices = DailyPrices(SqlDocuments(repository.engine, "prices"))
+
+    def price_timezone():
+        """Use the installation calendar, allowing UTC only for explicit synthetic mode."""
+        return (setup_catalogue.value or {}).get("timezone") or (
+            "UTC" if source == "synthetic" else None
+        )
+
     contract_basis = ContractBasisSource(
         basis_source, lambda: prices, lambda: contracts.current, lambda: bonus_counters.current
     )
@@ -774,7 +783,20 @@ def create_app(
                     """Check due source requests without blocking HTTP. Diagnose unexpected failures."""
                     while True:
                         try:
-                            await prices.refresh(datetime.now(UTC))
+                            now = datetime.now(UTC)
+                            await prices.refresh(now)
+                            timezone = price_timezone()
+                            if timezone and prices.series:
+                                async with savings_mutation_lock:
+                                    cancellation = await complete_write(
+                                        daily_prices.update,
+                                        prices.daily_timeline(now),
+                                        prices.market_area,
+                                        timezone,
+                                        now,
+                                    )
+                                    if cancellation is not None:
+                                        raise cancellation
                             if price_logger.failure_key is not None:
                                 price_logger.success("Price refresh processing is running again.")
                         except Exception:
@@ -794,7 +816,7 @@ def create_app(
 
         app.cleanup_ctx.append(price_lifecycle)
 
-    register_prices(app, lambda: prices, contracts, live, lock)
+    register_prices(app, lambda: prices, contracts, live, lock, daily_prices, price_timezone)
 
     async def snapshot(request):
         """Capture settlement inputs under the state lock and await their archive read outside it.

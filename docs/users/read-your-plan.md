@@ -166,6 +166,17 @@ Household demand and available solar describe original forecast inputs before th
 
 The **Price inputs** chart follows the selected latest or historical plan and shows its frozen prices. Newly received prices and changed contract rules appear when a new plan uses them. Without a plan, the same graph is explicitly labelled **Current tariff preview** and uses cached market prices with saved rules. Solid lines identify published prices and dotted lines identify forecast prices. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
 
+The green lower edge marks each day's twelve cheapest spot-price quarters. The
+orange upper edge marks its twelve most expensive quarters. Selection covers the
+complete calendar day in the installation timezone, including elapsed quarters.
+Use **Whole-day spot-price selections** to inspect any selected quarter with the
+keyboard, including those outside the chart's visible window. Forecast-based
+selections are provisional and can change. The first complete day of published
+prices fixes both selections permanently, including after restart. Equal prices
+use chronological order with no quarter in both sets. Incomplete days and older
+days without retained full-day evidence have no ranking. These daily market
+selections do not change the selected plan's original prices.
+
 The price scale always includes zero. With nonnegative visible prices, its lower
 bound is exactly zero. Negative prices receive clearance below the lowest
 visible price equal to ten percent of the total axis height. If all visible

@@ -1,7 +1,8 @@
 """Register cached price and contract projections without fetching providers in HTTP requests."""
 
+import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
@@ -23,7 +24,7 @@ PUBLIC_VALIDATION_MESSAGES = (
 )
 
 
-def register(app, current_prices, contracts, live, lock):
+def register(app, current_prices, contracts, live, lock, daily_prices, price_timezone):
     """Register cached price projections and the peer market-price input route.
 
     HTTP requests never fetch upstream providers.
@@ -141,9 +142,38 @@ def register(app, current_prices, contracts, live, lock):
                 }
             )
 
+    async def daily_price_inputs(request):
+        """Read precomputed daily rankings without repricing a plan or fetching a provider."""
+        prices, timezone = current_prices(), price_timezone()
+        if prices is None or not timezone or not prices.market_area:
+            return web.json_response({"days": [], "issue": "daily_prices_unavailable"})
+        now = datetime.now(UTC)
+        try:
+            start = datetime.fromisoformat(request.query.get("start", now.isoformat()))
+            end = datetime.fromisoformat(
+                request.query.get(
+                    "end", (now + timedelta(hours=PLANNING_HORIZON_HOURS)).isoformat()
+                )
+            )
+            if start.utcoffset() is None or end.utcoffset() is None:
+                raise ValueError("Price timestamps require a timezone")
+            days = await asyncio.to_thread(
+                daily_prices.read, prices.market_area, timezone, start, end
+            )
+        except (ValueError, TypeError, KeyError, OverflowError):
+            raise web.HTTPBadRequest(
+                text="Choose a valid price period of at most four calendar days"
+            ) from None
+        except OSError:
+            raise web.HTTPServiceUnavailable(
+                text="Daily price rankings could not be read. Retry after checking storage."
+            ) from None
+        return web.json_response({"days": days, "issue": None})
+
     from open_energy_planner.home_assistant.market_prices import register as register_market_prices
 
     register_market_prices(app, current_prices)
     app.router.add_get("/v1/prices", price_snapshot)
     app.router.add_put("/v1/prices/preferences", save_price_preferences)
     app.router.add_get("/v1/prices/inputs", current_price_inputs)
+    app.router.add_get("/v1/prices/daily", daily_price_inputs)

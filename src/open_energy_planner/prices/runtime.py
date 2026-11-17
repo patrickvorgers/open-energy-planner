@@ -149,6 +149,12 @@ class ConfiguredPrices:
             }
         return self.service.document(now)
 
+    def daily_timeline(self, now):
+        """Capture only the currently admitted market's sources for daily rankings."""
+        if self.service is None or self.configuration_issue:
+            raise PricesUnavailable("market_prices_not_configured")
+        return self.service.daily_timeline(now)
+
     async def save_preferences(self, preferences, expected_version, expected_area):
         """Serialize preference writes with source refresh and keep its owned writer alive."""
         async with self.lock:
