@@ -14,7 +14,7 @@ from tests.frontend.browser.helpers import TOKEN
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
 def test_planning_links_select_device_and_insights_retain_unshiftable_history(app_page):
-    """Device identity, ten recent cycles, retained models and narrow screens survive the page split."""
+    """Device identity, eight recent cycles, retained models and narrow screens survive the page split."""
     page, url = app_page
     page.clock.install()
     start = datetime(2026, 11, 1, tzinfo=UTC)
@@ -72,7 +72,7 @@ def test_planning_links_select_device_and_insights_retain_unshiftable_history(ap
     authenticate(page, url)
     expect(page.locator("#profile-device")).to_have_value("sensor.dishwasher")
     expect(page.get_by_role("button", name="Appliance is ready", exact=True)).to_have_count(0)
-    expect(page.locator("#detected-cycles > li")).to_have_count(10)
+    expect(page.locator("#detected-cycles > li")).to_have_count(8)
     expect(page.get_by_role("button", name="Next", exact=True)).to_have_count(0)
     expect(page.get_by_role("button", name="Previous", exact=True)).to_have_count(0)
     expect(page.locator("#detected-cycles details")).to_have_count(0)
@@ -81,7 +81,7 @@ def test_planning_links_select_device_and_insights_retain_unshiftable_history(ap
     expect(first).to_contain_text("Completed:")
     with page.expect_response("**/v1/appliances"):
         page.clock.fast_forward(300000)
-    expect(page.locator("#detected-cycles > li")).to_have_count(10)
+    expect(page.locator("#detected-cycles > li")).to_have_count(8)
     page.locator("#profile-device").select_option("sensor.washer")
     expect(page.locator("#profile-history")).to_contain_text("The learned profile is retained")
     expect(page.locator("#profile-history")).to_contain_text("Fine cycles in model")
@@ -185,7 +185,7 @@ def review_evidence(app_page):
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
 def test_poll_updates_active_and_completed_cycles_without_replacing_profile(review_evidence):
-    """Running and uncertain activity stays above ten completed runs while unchanged charts retain identity."""
+    """Running and uncertain activity stays above eight completed runs while unchanged charts retain identity."""
     page, devices, _ = review_evidence
     first = page.locator("#detected-cycles > li").first
     chart_identity = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
@@ -203,7 +203,7 @@ def test_poll_updates_active_and_completed_cycles_without_replacing_profile(revi
     expect(active).to_contain_text("Cycle in progress")
     expect(active).to_contain_text("Started:")
     expect(first).to_contain_text("1.23 kWh")
-    expect(page.locator("#detected-cycles > li")).to_have_count(10)
+    expect(page.locator("#detected-cycles > li")).to_have_count(8)
     assert active.bounding_box()["y"] < first.bounding_box()["y"]
     assert (
         page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
@@ -232,6 +232,8 @@ def test_page_selection_controls_profile_and_right_hand_history(review_evidence)
     energy = page.locator("#cycle-energy-chart").bounding_box()
     assert selector["y"] + selector["height"] <= profile["y"]
     assert energy["y"] >= power["y"] + power["height"]
+    assert power["height"] >= (400 if page.viewport_size["width"] > 640 else 280)
+    assert energy["height"] >= (400 if page.viewport_size["width"] > 640 else 280)
     if page.viewport_size["width"] > 1100:
         assert history["x"] > power["x"] + power["width"]
         assert abs(history["y"] - profile["y"]) < 2
@@ -365,8 +367,8 @@ def test_back_to_empty_entity_fragment_restores_initial_device(review_evidence):
 @pytest.mark.parametrize(
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
-def test_cycle_history_uses_five_minute_poll_and_latest_ten_by_completion(review_evidence):
-    """No reads happen before five minutes and unordered evidence still shows the ten newest completions."""
+def test_cycle_history_uses_five_minute_poll_and_latest_eight_by_completion(review_evidence):
+    """No reads happen before five minutes and unordered evidence still shows the eight newest completions."""
     page, devices, _ = review_evidence
     requests = []
     page.on("request", lambda request: requests.append(request.url))
@@ -379,10 +381,10 @@ def test_cycle_history_uses_five_minute_poll_and_latest_ten_by_completion(review
     with page.expect_response("**/v1/appliances"):
         page.clock.fast_forward(1)
     rows = page.locator("#detected-cycles > li")
-    expect(rows).to_have_count(10)
+    expect(rows).to_have_count(8)
     expect(rows.first).to_contain_text("7/13/2026, 9:00 PM")
     expect(rows.first).to_contain_text("7/13/2026, 10:00 PM")
-    expect(rows.last).to_contain_text("7/12/2026, 9:00 AM")
+    expect(rows.last).to_contain_text("7/12/2026, 5:00 PM")
     expect(page.locator("#detected-cycles details")).to_have_count(0)
     assert not any("raw_entity=" in address for address in requests)
 
@@ -429,7 +431,7 @@ def test_initial_cycle_read_failure_retries_without_manual_refresh(review_eviden
     "app_page", [{"width": 1280, "height": 1000}, {"width": 390, "height": 844}], indirect=True
 )
 def test_cycle_rows_follow_installation_timezone_and_capture_compact_history(review_evidence):
-    """A representative complete profile, ten inline runs and active status stay readable in the HA timezone."""
+    """A representative complete profile, eight inline runs and active status stay readable in the HA timezone."""
     page, devices, session = review_evidence
     devices[0]["profile"] = {
         "power_w": [
@@ -466,8 +468,14 @@ def test_cycle_rows_follow_installation_timezone_and_capture_compact_history(rev
     first = page.locator("#detected-cycles > li").first
     expect(first).to_contain_text("7/13/2026, 10:00 PM")
     expect(first).to_contain_text("7/13/2026, 11:00 PM")
+    for timestamp in page.locator("#detected-cycles > li > span").all():
+        assert timestamp.evaluate("""element => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return range.getClientRects().length === 1 && element.scrollWidth <= element.clientWidth;
+        }""")
     expect(page.locator("#cycle-in-progress")).to_contain_text("11:00 AM")
-    expect(page.locator("#detected-cycles > li")).to_have_count(10)
+    expect(page.locator("#detected-cycles > li")).to_have_count(8)
     expect(page.locator("#learning-history")).not_to_have_attribute("open", "")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.evaluate("""() => {

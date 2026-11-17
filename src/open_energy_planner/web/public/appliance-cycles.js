@@ -7,7 +7,7 @@ import {applianceApi, readApplianceEvidence, followedDevices} from "./appliance-
 bindSettingsActions();
 const find = id => document.getElementById(id);
 let token = "", chart, energyChart, current, renderedProfile;
-const RECENT_CYCLE_LIMIT = 10;
+const RECENT_CYCLE_LIMIT = 8;
 const CYCLE_EVIDENCE_REFRESH_MS = 5 * 60 * 1000;
 let evidenceRefreshing = false, evidenceStarted = false;
 let historyEntity, renderedHistory, historyTimezone, initialEntity;

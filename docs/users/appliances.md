@@ -51,13 +51,17 @@ recency weights and explanations of the underlying measurements.
 These details start collapsed and stay open during refreshes for the same appliance.
 Profile limitations and uncertain measured activity remain visible outside them.
 
-[![A learned cycle profile with active activity and ten recent completed cycles.](../assets/appliance-cycles.png)](../assets/appliance-cycles.png)
+[![A learned cycle profile with active activity and eight recent completed cycles.](../assets/appliance-cycles.png)](../assets/appliance-cycles.png)
+
+[View the mobile layout.](../assets/appliance-cycles-mobile.png)
 
 *This synthetic example shows a complete average profile, a running cycle and
-ten recent completions. Learning details remain collapsed below the list.*
+eight recent completions. Learning details remain collapsed below the list.*
 
-**Detected cycles** shows the ten most recent completed cycles, newest first.
+**Detected cycles** shows the eight most recent completed cycles, newest first.
 Each row includes its start, completion, duration and energy without expanding it.
+Start and completion each stay on one line. Taller profile charts give the power
+and phase energy patterns more room beside the recent cycles.
 A detected running cycle appears above the completed cycles with its start time
 and energy measured so far. Uncertain execution remains explicit. Only complete
 accepted cycles refine the model. The page refreshes automatically every five
