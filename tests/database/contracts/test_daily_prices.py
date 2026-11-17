@@ -169,3 +169,53 @@ def test_daily_reads_bound_calendar_range_and_do_not_write(selection_store):
     assert list(daily.documents.iter_prefix("daily-")) == []
     with pytest.raises(ValueError, match="four calendar days"):
         daily.read(area, "UTC", now, now + timedelta(days=5))
+
+
+def test_published_corrections_are_accepted_until_the_whole_installation_day_is_final(
+    selection_store,
+):
+    """A London day spanning two Amsterdam publications accepts a correction before its final hour arrives."""
+    adapter, area = selection_store
+    published_day = source(area, date(2026, 11, 17))
+    forecast_day = source(area, date(2026, 11, 17), kind=PriceKind.FORECAST)
+    forecast_day = replace(
+        forecast_day,
+        source_id="forecast",
+        points=tuple(
+            replace(
+                point, start=point.start + timedelta(hours=1), end=point.end + timedelta(hours=1)
+            )
+            for point in forecast_day.points
+        ),
+    )
+    now = datetime(2026, 11, 17, tzinfo=UTC)
+    end = now + timedelta(days=1)
+    service, daily = service_for(adapter, area, (published_day, forecast_day))
+    daily.update(service.daily_timeline(now), area, "Europe/London", now)
+    original = daily.read(area, "Europe/London", now, end)[0]
+    assert original["status"] == "provisional"
+    assert original["cheapest"] == [point.start.isoformat() for point in published_day.points[4:16]]
+    corrected = replace(
+        published_day,
+        points=tuple(
+            replace(point, value=10.0) if 4 <= index < 16 else point
+            for index, point in enumerate(published_day.points)
+        ),
+    )
+    service.series = (corrected, forecast_day)
+    daily.update(service.daily_timeline(now), area, "Europe/London", now)
+    revised = daily.read(area, "Europe/London", now, end)[0]
+    assert revised["status"] == "provisional"
+    assert revised["cheapest"] == [point.start.isoformat() for point in published_day.points[16:28]]
+    assert revised["quarters"][0]["market_price"] == 10.0
+    final_hour = replace(
+        published_day,
+        source_id="next-day",
+        points=tuple(
+            replace(point, kind=PriceKind.PUBLISHED) for point in forecast_day.points[-4:]
+        ),
+    )
+    service.series = (corrected, final_hour)
+    daily.update(service.daily_timeline(now), area, "Europe/London", now)
+    final = daily.read(area, "Europe/London", now, end)[0]
+    assert final["status"] == "final" and final["cheapest"] == revised["cheapest"]

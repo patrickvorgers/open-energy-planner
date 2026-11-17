@@ -1,5 +1,6 @@
 """Prove that responsive price charts render backend whole-day selections without ranking prices."""
 
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from tests.frontend.browser.helpers import TOKEN, discover
 
 
 @pytest.mark.parametrize("app_site", ["prices_daily"], indirect=True)
-def test_price_daily_marks_and_keyboard_details_follow_backend(app_page):
+def test_price_daily_marks_and_accessible_description_follow_backend(app_page):
     """Complete-day selections stay identical when the visible window shrinks, with desktop/mobile evidence."""
     page, url = app_page
     discover(page, url)
@@ -22,8 +23,6 @@ def test_price_daily_marks_and_keyboard_details_follow_backend(app_page):
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    selector = page.get_by_label("Whole-day spot-price selections", exact=True)
-    expect(selector).to_be_enabled()
     expect(page.locator("#price-daily-status")).to_contain_text("including elapsed quarters")
     expect(page.locator("#price-daily-status")).to_contain_text("Final selections are retained")
     actual = page.evaluate(
@@ -40,9 +39,10 @@ def test_price_daily_marks_and_keyboard_details_follow_backend(app_page):
         for start in day[extreme]
     }
     assert {(row["start"], row["extreme"]) for row in actual} == expected
-    selector.focus()
-    page.keyboard.press("End")
-    expect(page.locator("#price-daily-detail")).to_contain_text("12 most expensive quarters")
+    expect(page.get_by_label("Whole-day spot-price selections", exact=True)).to_have_count(0)
+    expect(page.locator("#price-daily-detail")).to_have_count(0)
+    description = page.get_by_role("img", name="Price inputs", exact=True)
+    expect(description).to_have_accessible_description(re.compile("12 most expensive quarters"))
     page.get_by_role("button", name="Full period", exact=True).click()
     directory = Path("results/ci")
     directory.mkdir(parents=True, exist_ok=True)
@@ -99,12 +99,11 @@ def test_original_plan_keeps_frozen_prices_and_uses_only_returned_daily_labels(a
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.get_by_label("Whole-day spot-price selections", exact=True)).to_be_enabled()
+    expect(page.locator("#price-daily-status")).to_contain_text("12 most expensive quarters")
     marks = page.evaluate(
         "Chart.getChart(document.getElementById('price-chart')).dailyPriceQuarters"
     )
     assert marks[0]["start"] == captured["start"] and marks[0]["extreme"] == "most_expensive"
-    expect(page.locator("#price-daily-detail")).to_contain_text("12 most expensive quarters")
     assert (
         page.evaluate(
             "Chart.getChart(document.getElementById('price-chart')).data.datasets[0].data[0].y"

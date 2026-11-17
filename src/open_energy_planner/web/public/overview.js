@@ -293,44 +293,42 @@ const dailyPriceExtremes = {id: "dailyPriceExtremes", beforeDatasetsDraw(instanc
 /** Read daily selections separately from immutable plan prices. Discard responses for replaced charts. */
 async function loadDailyPrices(instance) {
     const timestamps = instance.data.datasets.flatMap(dataset => dataset.data.map(point => point.x)).filter(Number.isFinite);
-    const status = $("price-daily-status"), selector = $("price-daily-quarter");
-    selector.replaceChildren(); selector.disabled = true;
-    status.textContent = "Loading whole-day price rankings…";
-    $("price-daily-detail").textContent = "";
+    const status = $("price-daily-status");
+    if (instance.dailyPricePending) return;
     if (!timestamps.length) { status.textContent = "Whole-day price rankings unavailable."; return; }
+    instance.dailyPricePending = true;
     try {
         const start = new Date(Math.min(...timestamps)).toISOString(), end = new Date(Math.max(...timestamps)).toISOString();
         const data = await api(`v1/prices/daily?${new URLSearchParams({start, end})}`);
         if (charts.get("price-chart") !== instance) return;
         const days = data.days || [];
+        const dailyDocument = JSON.stringify(days);
+        if (dailyDocument === instance.dailyPriceDocument) { status.textContent = instance.dailyPriceStatus; return; }
+        const descriptions = [];
         instance.dailyPriceQuarters = [];
         for (const day of days) {
             if (day.status === "incomplete") continue;
             for (const [extreme, label] of [["cheapest", "12 cheapest quarters"], ["most_expensive", "12 most expensive quarters"]]) {
-                const group = document.createElement("optgroup");
-                group.label = `${dateLabel(day.day)}: ${label}: ${day.status === "final" ? "Final" : "Provisional"}`;
+                const heading = `${dateLabel(day.day)}: ${label}: ${day.status === "final" ? "Final" : "Provisional"}`;
+                const intervals = [];
                 for (const selected of day[extreme] || []) {
                     const quarter = day.quarters.find(quarter => quarter.start === selected);
                     if (!quarter) continue;
-                    instance.dailyPriceQuarters.push({start: Date.parse(quarter.start), end: Date.parse(quarter.end), extreme});
-                    const option = document.createElement("option"); option.value = quarter.start;
-                    option.textContent = `${when(quarter.start)} to ${when(quarter.end)}: ${money(quarter.market_price)} ${day.currency}/kWh`;
-                    group.append(option);
+                    instance.dailyPriceQuarters.push({start: Date.parse(quarter.start), end: Date.parse(quarter.end), extreme, status: day.status});
+                    intervals.push(`${when(quarter.start)} to ${when(quarter.end)}: ${money(quarter.market_price)} ${day.currency}/kWh`);
                 }
-                selector.append(group);
+                descriptions.push(`${heading}. ${intervals.join(". ")}`);
             }
         }
-        selector.disabled = !instance.dailyPriceQuarters.length;
         const provisional = days.some(day => day.status === "provisional"), incomplete = !days.length || days.some(day => day.status === "incomplete");
-        status.textContent = `Spot market prices ranked across each complete installation day, including elapsed quarters. ${provisional ? "Provisional selections can change with new prices. " : ""}${days.some(day => day.status === "final") ? "Final selections are retained. " : ""}${incomplete ? "Incomplete days have no ranking." : ""}`;
-        selector.onchange = () => {
-            const option = selector.selectedOptions[0];
-            $("price-daily-detail").textContent = option ? `${option.parentElement.label}: ${option.textContent}` : "";
-        };
-        selector.onchange();
+        status.textContent = `Spot market prices ranked across each complete installation day, including elapsed quarters. ${provisional ? "Provisional selections can change with new prices. " : ""}${days.some(day => day.status === "final") ? "Final selections are retained. " : ""}${incomplete ? "Incomplete days have no ranking. " : ""}${descriptions.join(" ")}`;
+        instance.dailyPriceDocument = dailyDocument;
+        instance.dailyPriceStatus = status.textContent;
         instance.update("none");
     } catch {
         if (charts.get("price-chart") === instance) status.textContent = "Whole-day price rankings could not be loaded. Refresh to retry.";
+    } finally {
+        instance.dailyPricePending = false;
     }
 }
 /**
@@ -451,7 +449,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                     if (id === "price-chart") {
                         const time = items[0].parsed.x;
                         const quarter = items[0].chart.dailyPriceQuarters?.find(quarter => quarter.start <= time && time < quarter.end);
-                        return [priceInputPlanId ? step?.priceStatus : "", quarter ? quarter.extreme === "cheapest" ? "One of this day's 12 cheapest spot-price quarters" : "One of this day's 12 most expensive spot-price quarters" : ""].filter(Boolean);
+                        return [priceInputPlanId ? step?.priceStatus : "", quarter ? `${quarter.extreme === "cheapest" ? "One of this day's 12 cheapest spot-price quarters" : "One of this day's 12 most expensive spot-price quarters"}: ${optionLabel(quarter.status)}` : ""].filter(Boolean);
                     }
                     return step?.commands || [];
                 }
@@ -1125,7 +1123,10 @@ async function refreshLatestPlan() {
     } catch { /* Retain the last usable plan and retry after a transient archive read failure. */ }
     finally {
         if (!priceRead && priceRefreshPending && !overviewLoads) priceRead = currentPrices(AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
-        await Promise.allSettled([priceRead]); planRefreshBusy = false;
+        await Promise.allSettled([priceRead]);
+        const priceChart = charts.get("price-chart");
+        if (!overviewLoads && priceChart) await loadDailyPrices(priceChart);
+        planRefreshBusy = false;
     }
 }
 /** Use local calendar boundaries as aware API instants. Absent coverage never becomes zero savings. */

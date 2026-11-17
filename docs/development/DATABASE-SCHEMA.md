@@ -1617,7 +1617,9 @@ Unchanged documents are not rewritten. Reads are bounded to four keyed local dat
 
 Retained elapsed quarters preserve full-day context when forecasts roll forward.
 Future forecast quarters require currently usable source coverage. Provisional
-rankings may change. The first completely published document is final and remains
+rankings may change. Published corrections replace earlier published quarters until
+the whole day is final. Forecasts never replace published quarters. The first
+completely published document is final and remains
 immutable, including after published corrections. Equal prices break ties by UTC
 start, with the cheapest twelve excluded from the most-expensive selection.
 Retention is indefinite. Ordinary shared-schema backup and cross-backend transfer

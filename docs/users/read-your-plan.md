@@ -169,10 +169,11 @@ The **Price inputs** chart follows the selected latest or historical plan and sh
 The green lower edge marks each day's twelve cheapest spot-price quarters. The
 orange upper edge marks its twelve most expensive quarters. Selection covers the
 complete calendar day in the installation timezone, including elapsed quarters.
-Use **Whole-day spot-price selections** to inspect any selected quarter with the
-keyboard, including those outside the chart's visible window. Forecast-based
-selections are provisional and can change. The first complete day of published
-prices fixes both selections permanently, including after restart. Equal prices
+Hover over a marked quarter for its selection and price provenance. The chart's
+screen-reader description also includes selected elapsed quarters outside the
+visible window. Forecast-based selections are provisional and can change. The
+first complete day of published prices fixes both selections permanently,
+including after restart. Equal prices
 use chronological order with no quarter in both sets. Incomplete days and older
 days without retained full-day evidence have no ranking. These daily market
 selections do not change the selected plan's original prices.

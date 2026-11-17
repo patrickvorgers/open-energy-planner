@@ -74,8 +74,10 @@ Authenticated `GET /v1/prices/daily?start=<instant>&end=<instant>` reads precomp
 documents for at most four touched local dates. Both instants require timezones.
 Defaults cover the current planning horizon. The route does not fetch, write,
 rank or reprice plans. The Planning chart paints the returned selections and
-offers keyboard-accessible quarter inspection. Existing plan prices and window
-controls remain unchanged. Rankings represent retained whole-day market evidence,
+includes selected quarters in its screen-reader description. The existing overview
+poll refreshes daily selections even when the selected current or historical plan
+does not change. Unchanged daily evidence preserves the chart. Existing plan prices
+and window controls remain unchanged. Rankings represent retained whole-day market evidence,
 not the original plan's forecast. Historical days without retained complete
 evidence explicitly have no ranking.
 

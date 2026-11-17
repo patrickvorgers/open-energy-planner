@@ -107,7 +107,11 @@ class DailyPrices:
                             "price_kind": kind,
                         }
                         quarters.append(
-                            old if old and old["price_kind"] == PriceKind.PUBLISHED else row
+                            old
+                            if old
+                            and old["price_kind"] == PriceKind.PUBLISHED
+                            and kind != PriceKind.PUBLISHED
+                            else row
                         )
                     elif old and (old["price_kind"] == PriceKind.PUBLISHED or following <= now):
                         quarters.append(old)

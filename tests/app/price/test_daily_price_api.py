@@ -13,7 +13,9 @@ from open_energy_planner.prices.service import PriceService
 from open_energy_planner.prices.storage.adapters.store import PriceStore
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from tests.app.price.test_prices import published
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.ha_contract.support.metadata import setup_metadata
+
+TOKEN = "local-daily-price-test-0123456789abcdef"
 
 
 def test_daily_price_api_requires_authentication_and_bounded_aware_periods(tmp_path):
@@ -49,7 +51,7 @@ def test_daily_price_api_requires_authentication_and_bounded_aware_periods(tmp_p
                 headers = {"Authorization": "Bearer " + TOKEN}
                 async with session.post(
                     url + "/v1/ha/catalogue",
-                    json=discover(None, None, publish=False),
+                    json={**setup_metadata(), "timezone": "Europe/Amsterdam"},
                     headers=headers,
                 ) as response:
                     assert response.status == 200
