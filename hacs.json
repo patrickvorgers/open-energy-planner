@@ -1,1 +1,7 @@
-{"name":"Open Energy Planner","zip_release":true,"filename":"open_energy_planner.zip","hide_default_branch":true,"homeassistant":"2026.10.2"}
+{
+  "name": "Open Energy Planner",
+  "zip_release": true,
+  "filename": "open_energy_planner.zip",
+  "hide_default_branch": true,
+  "homeassistant": "2026.11.0"
+}

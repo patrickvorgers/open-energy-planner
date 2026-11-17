@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from script.release.package_release import version_from_tag
+from script.release.publish_app_repository import publish_app_repository
 
 ARTIFACT_NAMES = ("open_energy_planner.zip", "ha-app-repository.tar.gz")
 ASSET_NAMES = ("release-manifest.json", "SHA256SUMS", *ARTIFACT_NAMES)
@@ -82,6 +83,7 @@ def publish(tag, run_id, run_number, attempt):
         for name in ASSET_NAMES:
             if name not in existing:
                 subprocess.run(["gh", "release", "upload", tag, str(bundle / name)], check=True)
+        publish_app_repository(bundle, os.environ["GH_REPO"])
 
 
 if __name__ == "__main__":

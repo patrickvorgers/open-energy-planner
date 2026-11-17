@@ -72,6 +72,17 @@ def release_cli(tmp_path, monkeypatch):
 
     monkeypatch.setattr(publish_release.subprocess, "check_output", output)
     monkeypatch.setattr(publish_release.subprocess, "run", run)
+    monkeypatch.setenv("GH_REPO", "example/planner")
+    state["app_publications"] = []
+
+    def publish_app(bundle, repository):
+        """Record publication only after the complete original bundle has been uploaded."""
+        state["app_publications"].append(
+            (json.loads((bundle / "release-manifest.json").read_text())["build"], repository)
+        )
+
+    monkeypatch.setattr(publish_release, "publish_app_repository", publish_app)
+    monkeypatch.setattr("script.release.publish_app_repository.publish_app_repository", publish_app)
     return state, bundles
 
 
@@ -115,6 +126,7 @@ def test_release_publication_resumes_same_bytes_even_after_full_workflow_retry(
     assert state["assets"] == {
         name: (bundles["1"] / name).read_bytes() for name in state["uploads"]
     }
+    assert state["app_publications"][-1] == ("42.1", "example/planner")
 
 
 @pytest.mark.parametrize(
@@ -148,3 +160,4 @@ def test_release_conflicts_fail_before_any_upload(release_cli, failure):
         publish_release.publish("v1.2.3", "1001", "42", "1")
     assert not state["uploads"]
     assert state["assets"] == before
+    assert not state["app_publications"]

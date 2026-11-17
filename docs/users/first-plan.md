@@ -4,7 +4,12 @@ Follow this route to install the preview, reuse your Home Assistant Energy confi
 
 ## 1. Install and open the matched app and integration
 
-OEP is a development preview. There is no public HACS installation or stable one-click release yet. An administrator must install the matching packaged Home Assistant app and integration from the same accepted numbered artifact set. Follow [Connect Home Assistant](home-assistant.md#install-a-matched-pair) for the current installation procedure and identity checks. If you do not have that package, stop at this availability boundary rather than substituting an arbitrary source checkout.
+OEP targets Home Assistant 2026.11 or newer. Follow [Install OEP](install.md) to
+add the custom Marketplace repository, install the integration and install the
+matching planner through the separate app repository on AMD64 Home Assistant OS.
+Both require a published tested release. Check availability in that guide before
+continuing. A source checkout or an integration without its matching app cannot
+replace this installation.
 
 Once installed, start the app and open its Home Assistant ingress entry. Supervisor connects the components automatically. This route does not require copying an app token or a server address. A standalone deployment has its own [explicit pairing procedure](home-assistant.md#open-the-app).
 

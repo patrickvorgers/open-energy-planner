@@ -18,6 +18,50 @@ The release tag must include this workflow. Tags on older code cannot gain a
 workflow that did not exist at that commit. Publication starts the build. Assets
 appear only after checks pass. No deployment to HA is automatic.
 
+## Marketplace and app-store publication
+
+Home Assistant 2026.11 or newer uses its built-in Marketplace. The repository's
+`hacs.json` retains that required filename and selects the release asset
+`open_energy_planner.zip`. Its minimum HA version is `2026.11.0`. Marketplace
+installs only the integration, never the planner app. The
+[user installation guide](../users/install.md) owns the two installation routes.
+
+After every asset has been uploaded or verified, `publish_release` publishes
+stable releases to the `ha-app-store` branch in this same repository. Users add
+`https://github.com/patrickvorgers/open-energy-planner#ha-app-store` to the
+Supervisor app store. No extra repository, image registry or access credential
+is required. Supervisor builds the original packaged Docker context locally.
+Pre-releases keep their downloadable assets but never advance this stable channel.
+
+The publisher checks the archive hash and matched app identity before writing.
+It copies `repository.json`, the complete packaged `open-energy-planner` directory
+and the original release manifest without rebuilding or restamping them. The
+branch starts from the first published source revision. Its original source
+scaffold and workflow files remain unchanged. The source `ha_app/config.yaml`
+is removed so Supervisor sees only the generated app, whose Docker build context
+contains exactly the tested package files. Later publications replace that
+directory and remove obsolete app files.
+
+GitHub's `createCommitOnBranch` signs generated publication commits using the
+existing workflow identity. This branch is a generated distribution channel,
+not an implementation PR or a replacement for `main`. Publication checks GitHub's
+Verified result and the full intended remote file identities after writing.
+The expected branch head guards concurrent publishers. Retrying the identical
+bundle makes no new commit and rechecks its signature and files. A different
+bundle for the same version or an older stable version fails. Existing release
+assets remain unchanged if app publication fails. Rerun the failed publication
+job to resume from the original retained bundle. Never force-push this channel
+or replace tested assets to make a retry succeed.
+
+Merging this distribution support does not create a release or install OEP on
+any Home Assistant instance. The first stable release must finish full release
+CI and publication before either user installation channel is advertised as
+available. Integration and app updates remain separate HA actions. Users must
+keep both components on the same release and preserve their data when changing
+from a local administrator-managed app to the public repository identity.
+
+## Bundle contents and recovery
+
 The app repository includes `icon.png` and `logo.png` beside `config.yaml` so
 Home Assistant can display its artwork in Apps. Both files reuse the integration's
 canonical `custom_components/open_energy_planner/brand/icon.png`. The package

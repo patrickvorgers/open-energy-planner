@@ -28,9 +28,11 @@ Install the HA integration once and connect it to the app. Its Configure flow
 and virtual-device configuration link open the app's `/setup` interface. The
 integration has no installation, source-selection, battery or PV wizard.
 
-The intended public onboarding uses a one-time HACS integration installation.
-Public HACS distribution is not available in the development preview. Install a
-matched app/integration pair through the [installation acceptance route](HAOS-ACCEPTANCE.md).
+Public onboarding targets Home Assistant 2026.11 or newer. Install the integration
+through the built-in Marketplace and the planner through the custom app repository.
+The [user installation guide](../users/install.md) covers both channels and their
+tested-release prerequisite. Administrator-managed candidates retain the matched
+app/integration [installation acceptance route](HAOS-ACCEPTANCE.md).
 On HA OS,
 Supervisor performs authenticated discovery and connection, while HA ingress
 provides browser authentication. No copied address, token or pairing approval is
