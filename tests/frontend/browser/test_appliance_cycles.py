@@ -201,6 +201,7 @@ def test_poll_updates_active_and_completed_cycles_without_replacing_profile(revi
     active = page.locator("#cycle-in-progress")
     expect(active).to_be_visible()
     expect(active).to_contain_text("Cycle in progress")
+    expect(active).not_to_contain_text("cannot confirm whether this cycle")
     expect(active).to_contain_text("Started:")
     expect(first).to_contain_text("1.23 kWh")
     expect(page.locator("#detected-cycles > li")).to_have_count(8)
@@ -211,7 +212,13 @@ def test_poll_updates_active_and_completed_cycles_without_replacing_profile(revi
     )
     devices[0]["observed_run"]["status"] = "uncertain"
     page.clock.fast_forward(300000)
-    expect(active).to_contain_text("Execution uncertain")
+    expect(active).to_contain_text("Cycle detected")
+    expect(active).to_contain_text("Current state unconfirmed")
+    expect(active).not_to_contain_text("Execution uncertain")
+    expect(active).to_contain_text(
+        "Recent power and energy measurements cannot confirm whether this cycle is still running or has finished."
+    )
+    expect(active).to_contain_text("Pending starts are blocked.")
     devices[0]["observed_run"]["status"] = "complete"
     page.clock.fast_forward(300000)
     expect(active).to_have_count(0)
@@ -232,8 +239,9 @@ def test_page_selection_controls_profile_and_right_hand_history(review_evidence)
     energy = page.locator("#cycle-energy-chart").bounding_box()
     assert selector["y"] + selector["height"] <= profile["y"]
     assert energy["y"] >= power["y"] + power["height"]
-    assert power["height"] >= (400 if page.viewport_size["width"] > 640 else 280)
-    assert energy["height"] >= (400 if page.viewport_size["width"] > 640 else 280)
+    expected_height = 330 if page.viewport_size["width"] > 640 else 210
+    assert power["height"] == pytest.approx(expected_height, abs=1)
+    assert energy["height"] == pytest.approx(expected_height, abs=1)
     if page.viewport_size["width"] > 1100:
         assert history["x"] > power["x"] + power["width"]
         assert abs(history["y"] - profile["y"]) < 2
