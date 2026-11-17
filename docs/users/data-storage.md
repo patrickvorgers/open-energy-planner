@@ -47,7 +47,7 @@ maintenance. It is not a prediction of when storage will run out.
 
 The app records one measurement each day after **04:00 in the Home Assistant
 installation timezone**, checked every minute. No browser page needs to be open.
-Collection waits until the installation timezone is available. If the app starts
+Collection and the history window wait until the installation timezone is available. If the app starts
 later, it records the current day at the actual observation time. Days while the
 app was stopped remain gaps. The first point appears after the first eligible
 measurement. Two observations are needed to calculate growth.

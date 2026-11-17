@@ -139,10 +139,16 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
         "sample_hour": 4,
         "samples": [],
     }
+    body["timezone"] = None
     page.route("**/v1/storage/history?*", lambda route: route.fulfill(json=body))
     page.goto(url + "/data-storage")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#storage-history-summary")).to_contain_text(
+        "Waiting for the Home Assistant installation timezone"
+    )
+    body["timezone"] = "Europe/Amsterdam"
+    page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#storage-history-summary")).to_contain_text(
         "No database size measurements"
     )
@@ -169,11 +175,15 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
             **body["samples"][0],
             "day": "2026-11-16",
             "observed_at": "2026-11-16T03:00:00Z",
-            "backend": "mysql",
+            "backend": "sqlite",
             "database_bytes": 400 * 1024**2,
-            "database_estimated": True,
+            "database_estimated": False,
         }
     )
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#storage-history-summary")).to_contain_text("Decrease: 112 MiB")
+    expect(page.locator("#storage-history-summary")).to_contain_text("Average: −112 MiB per day")
+    body["samples"][-1].update(backend="mysql", database_estimated=True)
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#storage-history-summary")).to_contain_text(
         "not compared across different"

@@ -1,9 +1,11 @@
 """Daily capacity evidence stays compact, restart-safe and portable on all supported engines."""
 
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import (
@@ -40,6 +42,23 @@ def test_daily_measurement_calendar_restart_gaps_and_large_bytes(
         store.sample(datetime(2026, 10, 25, 4, tzinfo=UTC), None)
         assert calls == []
         now = datetime(2026, 10, 25, 3, tzinfo=UTC)
+
+        def failed(_engine):
+            """Reject a transaction with private driver details, leaving the day available for retry."""
+            raise OperationalError(
+                "private-database-password", {}, Exception("private-database-password")
+            )
+
+        monkeypatch.setattr(
+            "open_energy_planner.storage.adapters.usage_history.storage_usage", failed
+        )
+        with pytest.raises(OSError) as failure:
+            store.sample(now, "Europe/Amsterdam")
+        assert "private-database-password" not in "".join(traceback.format_exception(failure.value))
+        assert store.read(None, "2026-10-25") == []
+        monkeypatch.setattr(
+            "open_energy_planner.storage.adapters.usage_history.storage_usage", probe
+        )
         with ThreadPoolExecutor(max_workers=2) as workers:
             list(
                 workers.map(

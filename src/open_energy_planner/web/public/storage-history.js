@@ -34,6 +34,10 @@ export function bindStorageHistory(readToken, bytes) {
             samples = history.samples;
             const sampleTime = `${String(history.sample_hour).padStart(2, "0")}:00`;
             find("storage-history-note").textContent = history.timezone ? `Measured daily after ${sampleTime} (${history.timezone}). Late starts record today's actual observation. Missing days and backend changes break the line.` : "Daily measurements start when the Home Assistant installation timezone is available. Missing days remain gaps.";
+            if (!history.timezone) {
+                find("storage-history-summary").textContent = "Waiting for the Home Assistant installation timezone. Refresh after the connection is restored.";
+                return;
+            }
             const known = samples.filter(row => Number.isFinite(row.database_bytes));
             const first = known[0], last = known.at(-1);
             let summary = samples.length ? "Daily observations were recorded, but database size was unavailable. Missing sizes remain gaps." : `No database size measurements in this period. The first daily measurement appears after ${sampleTime} when the app is running.`;

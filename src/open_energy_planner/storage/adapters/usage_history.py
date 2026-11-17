@@ -51,8 +51,8 @@ class StorageHistory:
                         database_estimated=usage.database_estimated,
                     )
                 )
-        except SQLAlchemyError as error:
-            raise OSError("Daily database measurement could not be saved") from error
+        except SQLAlchemyError:
+            raise OSError("Daily database measurement could not be saved") from None
 
     def read(self, start: str | None, end: str):
         """Read ordered local sampling dates inclusively, without measuring on page refresh."""
@@ -67,5 +67,5 @@ class StorageHistory:
                         statement.order_by(STORAGE_SAMPLES.c.day)
                     ).mappings()
                 ]
-        except SQLAlchemyError as error:
-            raise OSError("Database growth history could not be read") from error
+        except SQLAlchemyError:
+            raise OSError("Database growth history could not be read") from None

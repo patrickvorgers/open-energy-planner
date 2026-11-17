@@ -139,7 +139,9 @@ ISO `start` and `end` dates, the current `timezone`, `sample_hour` and ordered
 `samples` containing the columns above. Supported periods are `week`, `month`,
 `quarter`, `year` and `all`. The default is one calendar month, with month-end
 clamping. Week includes seven local dates. Reads run in a worker and never
-sample. The primary-key index supports the date window. There are no foreign
+sample. While the HA timezone is unavailable, the endpoint returns empty samples
+and null date bounds rather than guessing a UTC calendar window. The primary-key
+index supports the date window. There are no foreign
 keys or additional indexes. Missing days and nulls break chart lines. Backend
 changes also break lines and suppress cross-backend growth comparisons because
 the measurement scopes differ. History is not automatically thinned.

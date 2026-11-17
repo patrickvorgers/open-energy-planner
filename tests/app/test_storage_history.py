@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from contextlib import suppress
 from datetime import UTC, date, datetime
 
 import pytest
@@ -9,6 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from open_energy_planner.app import create_app
 from open_energy_planner.storage.api import period_start
+from tests.ha_contract.support.metadata import setup_metadata
 
 
 @pytest.mark.parametrize(
@@ -79,7 +81,47 @@ def test_history_authentication_background_sampling_and_safe_failures(tmp_path, 
     asyncio.run(scenario())
 
 
-def test_shutdown_drains_daily_measurement_before_repository_close(tmp_path, monkeypatch):
+def test_history_waits_for_ha_timezone_and_uses_its_calendar(tmp_path, monkeypatch):
+    """An unavailable HA timezone never becomes UTC, and Auckland's next day owns the returned month."""
+    import open_energy_planner.storage.api as storage_api
+
+    class Clock(datetime):
+        """Place the app at an instant that crosses the Auckland date boundary."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Return UTC while the installation is already in the following calendar day."""
+            return datetime(2026, 11, 17, 23, 30, tzinfo=UTC)
+
+    monkeypatch.setattr(storage_api, "datetime", Clock)
+
+    async def scenario():
+        """Admit actual HA metadata before selecting the installation-local month window."""
+        token = "storage-calendar-test-token-0123456789"
+        headers = {"Authorization": f"Bearer {token}"}
+        async with TestClient(
+            TestServer(create_app(tmp_path, token, source="home_assistant"))
+        ) as client:
+            pending = await (await client.get("/v1/storage/history", headers=headers)).json()
+            assert (
+                pending["timezone"] is None and pending["start"] is None and pending["end"] is None
+            )
+            assert pending["samples"] == []
+            metadata = {**setup_metadata(), "timezone": "Pacific/Auckland"}
+            assert (
+                await client.post("/v1/ha/catalogue", headers=headers, json=metadata)
+            ).status == 200
+            ready = await (await client.get("/v1/storage/history", headers=headers)).json()
+            assert ready["timezone"] == "Pacific/Auckland"
+            assert ready["end"] == "2026-11-18" and ready["start"] == "2026-10-18"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("write_fails", [False, True])
+def test_shutdown_drains_daily_measurement_before_repository_close(
+    tmp_path, monkeypatch, write_fails
+):
     """Migration/shutdown waits for an in-flight daily SQL writer before disposing its engine."""
     from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
     from open_energy_planner.storage.adapters.usage_history import StorageHistory
@@ -91,8 +133,10 @@ def test_shutdown_drains_daily_measurement_before_repository_close(tmp_path, mon
     def sample(_self, _now, _timezone):
         """Hold the off-loop sampler until shutdown is actively waiting on it."""
         entered.set()
-        assert release.wait(5)
+        assert release.wait(10)
         order.append("measurement finished")
+        if write_fails:
+            raise OSError("synthetic write failed during shutdown")
 
     def close(self):
         """Observe the actual shared repository cleanup after its sampler drains."""
@@ -105,17 +149,33 @@ def test_shutdown_drains_daily_measurement_before_repository_close(tmp_path, mon
     async def scenario():
         """Begin normal app cleanup while a real worker is inside a blocking storage operation."""
         client = TestClient(TestServer(create_app(tmp_path, "storage-drain-test-token-0123456789")))
+        cleanup = None
         await client.start_server()
         try:
             assert await asyncio.to_thread(entered.wait, 2)
+            worker = next(
+                task
+                for task in asyncio.all_tasks()
+                if task.get_coro().__qualname__.endswith(
+                    "register.<locals>.lifecycle.<locals>.collect"
+                )
+            )
             cleanup = asyncio.create_task(client.close())
-            await asyncio.sleep(0.01)
+            for _ in range(200):
+                if worker.cancelling():
+                    break
+                await asyncio.sleep(0.01)
+            assert worker.cancelling()
             assert "repository closed" not in order
             release.set()
-            await cleanup
+            await asyncio.wait_for(asyncio.shield(cleanup), 1)
             assert order == ["measurement finished", "repository closed"]
         finally:
             release.set()
+            if cleanup is not None and not cleanup.done():
+                cleanup.cancel()
+                with suppress(asyncio.CancelledError):
+                    await cleanup
             await client.close()
 
     asyncio.run(scenario())

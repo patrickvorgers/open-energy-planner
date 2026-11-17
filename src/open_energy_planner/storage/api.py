@@ -54,11 +54,19 @@ def register(app, engine, timezone):
             if period not in HISTORY_PERIODS:
                 raise ValueError(INVALID_PERIOD)
             zone = timezone()
-            today = (
-                datetime.now(UTC).astimezone(ZoneInfo(zone)).date()
-                if zone
-                else datetime.now(UTC).date()
-            )
+            if not zone:
+                return web.json_response(
+                    {
+                        "period": period,
+                        "start": None,
+                        "end": None,
+                        "timezone": None,
+                        "sample_hour": DAILY_SAMPLE_HOUR,
+                        "samples": [],
+                    },
+                    headers={"Cache-Control": "no-store"},
+                )
+            today = datetime.now(UTC).astimezone(ZoneInfo(zone)).date()
             start = period_start(today, period)
             rows = await asyncio.to_thread(
                 history.read, start.isoformat() if start else None, today.isoformat()
@@ -105,10 +113,13 @@ def register(app, engine, timezone):
                         raise cancellation
                     diagnostics.success("Daily database measurement worker is available.")
                 except (OSError, ValueError, TypeError, KeyError):
+                    stopping = asyncio.current_task().cancelling()
                     diagnostics.exception(
                         "Database growth history may have a gap. Live capacity and planning remain available.",
-                        retry_seconds=SAMPLE_POLL_SECONDS,
+                        retry_seconds=None if stopping else SAMPLE_POLL_SECONDS,
                     )
+                    if stopping:
+                        raise asyncio.CancelledError from None
                 await asyncio.sleep(SAMPLE_POLL_SECONDS)
 
         worker = asyncio.create_task(collect())
