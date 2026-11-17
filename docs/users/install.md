@@ -23,9 +23,10 @@ exists, stop here. Adding the source repository cannot substitute for a release.
 Publishing a release is separate from merging a pull request.
 
 The Marketplace works on Home Assistant Container too, but Container has no
-Supervisor app store. Its planner container must be managed separately.
-See [standalone discovery and pairing](../development/AUTOMATIC-PAIRING.md).
-The following steps describe Home Assistant OS.
+Supervisor app store. Its planner container must be managed separately. A beginner
+installation guide for that route is not available yet. The developer guide covers
+[standalone discovery and pairing](../development/AUTOMATIC-PAIRING.md), not
+container deployment. The following steps describe Home Assistant OS.
 
 ## 1. Install the integration through Marketplace
 
@@ -90,8 +91,10 @@ app's identity.
    to finish, then use [connection troubleshooting](troubleshooting.md).
    Do not enter a made-up address or copy another installation's credentials.
 3. Open the app's **Open Web UI** action or its sidebar entry.
-4. Check that the connection is ready and that the app and integration report
-   the same version and build as the published release manifest.
+4. Check that the connection is ready. Compare the app build shown in the sidebar
+   with `release-manifest.json` from the release. In Home Assistant, open the
+   **Open Energy Planner** device and check that its integration version matches
+   the app version.
 
 Supervisor establishes the authenticated connection. The app interface uses your
 existing Home Assistant browser session. There is no general HA access token to
