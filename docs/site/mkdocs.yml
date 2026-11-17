@@ -31,6 +31,7 @@ nav:
   - Use OEP:
       - How OEP works: docs/users/how-oep-works.md
       - Before you start: docs/users/before-you-start.md
+      - Install OEP: docs/users/install.md
       - Set up your first plan: docs/users/first-plan.md
       - Connect Home Assistant: docs/users/home-assistant.md
       - Virtual-device sensors: docs/users/virtual-device-sensors.md

@@ -1028,7 +1028,7 @@ writes reuse stable identities and saved cycle evidence. No task is submitted.
 
 ### Installable artifacts and multi-device control projection
 
-The [HA OS acceptance route](../docs/development/HAOS-ACCEPTANCE.md) uses matching app/integration artifacts from one verified source tree. Preserve their original numbered manifests and hashes. The repository is public, but public HACS installation remains a separate release gate. Development-preview acceptance uses the matched integration ZIP and packaged app. The app never installs integration files.
+The [HA OS acceptance route](../docs/development/HAOS-ACCEPTANCE.md) uses matching app/integration artifacts from one verified source tree. Preserve their original numbered manifests and hashes. Home Assistant 2026.11 or newer installs the integration through Marketplace and the planner through the custom app repository after tested release publication. See the [user installation guide](../docs/users/install.md). Development-preview acceptance uses the matched integration ZIP and packaged app. The app never installs integration files.
 
 The [virtual-device contract](../docs/development/VIRTUAL-DEVICES.md) adds per-battery enum modes, an explicit grid mode and retained non-applicable power sensors. Optional `can_follow_grid` defaults false. Canonical omission of false preserves existing immutable configuration hashes/files. Only validated zero-import/export intervals can select this permission-gated execution mode. Nominal flows/costs remain unchanged. HA rejects follower commands without the configured capability or an active grid goal. Physical execution remains user-owned.
 

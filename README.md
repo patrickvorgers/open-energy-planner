@@ -18,7 +18,7 @@ Local energy planning for Home Assistant. Turn your existing Energy configuratio
 *Follow the same expected day through the optimizer, ordinary battery self-consumption and a without-battery baseline. All screenshots show the actual interface with synthetic examples. They do not demonstrate physical execution or measured savings. Click an image to inspect it at full size.*
 
 > [!IMPORTANT]
-> **Development preview.** OEP has not reached a stable product release. Public HACS installation is not available yet. Administrator-managed installations require a matching accepted app/integration package. The [setup guide](docs/users/first-plan.md) explains that boundary and the configuration steps. Physical control and equipment protection remain in your own Home Assistant automations and local controllers.
+> **Development preview.** OEP targets Home Assistant 2026.11 or newer. Install the integration through the built-in Marketplace and the matching planner through its separate app repository on AMD64 Home Assistant OS. These channels require a published tested release. Follow [Install OEP](docs/users/install.md) and its availability check. Physical control and equipment protection remain in your own Home Assistant automations and local controllers. See the [release boundaries](design/FIRST-RELEASE-SCOPE.md).
 
 ## What makes OEP different?
 
@@ -78,7 +78,7 @@ The calculation app runs separately from Home Assistant. The integration exchang
 ## Get your first plan
 
 1. [Check availability and prepare Energy](docs/users/before-you-start.md).
-2. [Install the matched preview and complete setup](docs/users/first-plan.md). Review detected sources, connection limits, solar, batteries and the final installation summary.
+2. [Install through Marketplace and the app store](docs/users/install.md), then [complete setup](docs/users/first-plan.md). Review detected sources, connection limits, solar, batteries and the final installation summary.
 3. [Confirm contract rules and price sources](docs/users/contract.md), then add [optional appliances](docs/users/appliances.md).
 4. Open **Energy > Planning** and [check your first result](docs/users/read-your-plan.md).
 

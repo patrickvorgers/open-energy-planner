@@ -1532,10 +1532,11 @@ contract without invoking focused first-parent selection.
 An older policy without that function cannot authorize focused product reuse.
 Strict test-only merges retain their separate report-only proof. Direct main
 pushes, force pushes, differing trees, widened required profiles and missing
-proof run the full pipeline. Manual workflows and published releases
-always retain full checks. The quick stage still fails before expensive image
+proof run the full pipeline. Manual workflow runs, including explicit draft-release
+requests, always retain full checks. The quick stage still fails before expensive image
 builds. Main reuse never replaces the required pre-merge candidate result or manual review of findings. Release
-publication remains unchanged. This check verifies an already merged result.
+publication follows [the staged release procedure](RELEASE-IDENTITY.md#prepare-and-publish-a-release).
+This check verifies an already merged result.
 It does not add server-enforced merge protection or authorize deploying an
 untested combination before its full run succeeds.
 

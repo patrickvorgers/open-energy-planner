@@ -1,10 +1,13 @@
 # Connect Home Assistant
 
-OEP needs two matching components: the calculation app and the Home Assistant integration. If both are already installed, start at [Open the app](#open-the-app). New installation remains an administrator-managed preview procedure rather than a public one-click HACS flow.
+OEP needs two matching components: the calculation app and the Home Assistant integration. For a new installation on Home Assistant 2026.11 or newer, follow [Install OEP](install.md). If both components are already installed, start at [Open the app](#open-the-app).
 
 ## Install a matched pair
 
-Use the original app/integration artifacts from the same successful numbered candidate or release. Verify their expected version, build and source together. A successful Quick check or an arbitrary current source checkout is not an accepted installation package.
+Marketplace installs the integration from the published release ZIP. The separate
+Supervisor app repository installs the matching planner. Use the same release
+for both and verify their expected version, build and source together. A successful
+Quick check or an arbitrary source checkout is not an accepted installation package.
 
 The [installation acceptance guide](../development/HAOS-ACCEPTANCE.md#install-a-matched-product-release) owns administrator installation and update checks. Preserve Home Assistant Energy preferences, device/entity identities and existing OEP data. The app does not copy integration files into HA or request a general HA user token.
 

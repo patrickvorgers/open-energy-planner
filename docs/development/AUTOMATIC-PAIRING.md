@@ -1,6 +1,6 @@
 # Automatic HA OS connection
 
-HA OS is the default installation route. After installing the app and the HACS integration, **no pairing code, approval, address, token or extra app login is required**. Installation settings still belong to the app wizard. Physical control remains in user-owned HA automations.
+HA OS is the default installation route. After installing the app and the Marketplace integration on Home Assistant 2026.11 or newer, **no pairing code, approval, address, token or extra app login is required**. Follow [Install OEP](../users/install.md). Installation settings still belong to the app wizard. Physical control remains in user-owned HA automations.
 
 ## Trusted connection
 

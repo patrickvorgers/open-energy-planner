@@ -13,10 +13,11 @@ Use the original successful numbered CI/release artifacts described in
 from the same artifact set. Never stamp a source overlay with a numbered build.
 Developer source builds remain unnumbered and need no transfer bundle.
 
-The development preview does not yet offer public HACS installation. Install the
-matching integration ZIP through an administrator-managed workflow and use the
-matching packaged Home Assistant app. A public source repository alone does not
-establish a supported product installation channel. The app does not
+For Home Assistant 2026.11 or newer, the [user installation guide](../users/install.md)
+owns the Marketplace integration and custom app-repository steps. Both require
+a published tested release. A public source repository alone does not establish
+an installable release. Administrator-managed candidate installations continue
+to use the original matching integration ZIP and packaged app. The app does not
 write integration files. Preserve existing app options, the integration entry,
 entity/device identities, database and Recorder history when updating.
 

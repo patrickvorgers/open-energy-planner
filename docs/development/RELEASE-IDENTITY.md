@@ -1,22 +1,111 @@
 # Joint release identity
 
-The app and integration form one release. The user creates and publishes a GitHub
-release. Its tag determines the semantic version, for example `v0.3.0` becomes
+The app and integration form one release. The user prepares a draft GitHub
+release and explicitly runs its checked publication workflow. Its existing tag
+determines the semantic version, for example `v0.3.0` becomes
 `0.3.0`. The title and release notes do not determine the number. Tags may omit
 the v prefix and may contain semantic prerelease identifiers. Tags with `+`
 build metadata are rejected because HA uses the version as a Docker image tag.
 The version after removing the optional v prefix must not exceed 128 characters.
 CI never increments a release number automatically.
 
-The Checks workflow runs the full suite for a published release. It stamps the
+The Checks workflow runs the full suite for a requested draft release. It stamps the
 tag's version into both HA manifests and both packaged identity files without
 editing repository sources. Packaging verifies that the tag identifies the
 actual checked-out commit. A release-only job attaches the tested app repository,
 integration ZIP, manifest and hashes to that existing GitHub release. It cannot
 run for pull requests and does not replace existing release assets on retries.
 The release tag must include this workflow. Tags on older code cannot gain a
-workflow that did not exist at that commit. Publication starts the build. Assets
-appear only after checks pass. No deployment to HA is automatic.
+workflow that did not exist at that commit. Full checks run before distribution.
+Assets remain in the draft until checks and app-channel publication succeed.
+No deployment to HA is automatic.
+
+## Prepare and publish a release
+
+1. Create an immutable version tag on the intended verified commit on `main`.
+   Push that tag without moving an existing tag. Prepare a GitHub **draft release**
+   for that existing tag, including its release notes and intended prerelease flag.
+2. Dispatch **Checks** on that same tag with the matching **release_tag** input.
+   With an authenticated GitHub CLI, run:
+
+   ```console
+   gh workflow run checks.yaml --ref v0.3.0 -f release_tag=v0.3.0
+   ```
+
+3. Open **Actions > Checks** and wait for full validation, the matched installation bundle and publication.
+   The workflow rejects a different selected ref/tag. A manual run without
+   `release_tag` performs validation only and cannot publish a release.
+4. The publisher attaches or verifies every original asset while the release is
+   still a draft. For stable releases, it then publishes and verifies the app
+   channel. Only afterward does it make the GitHub release public, allowing
+   Marketplace to offer the integration. Notify users only after the complete
+   publication job succeeds and both channels show the matching release.
+
+Do not publish the GitHub release manually before running this procedure.
+Publishing a release in the GitHub UI does not start Checks. An app publication
+failure leaves the integration asset in its draft rather than exposing a newer
+integration with an old app. GitHub prereleases retain their flag and do not
+advance the stable app channel, including when their tag is numeric.
+
+Publication jobs share a repository-wide concurrency group with cancellation
+disabled. Different release tags cannot interleave their asset, app-channel and
+final GitHub publication steps. The app channel's downgrade guard still rejects
+an older version when a newer version has already been published.
+
+The two stores do not provide a cross-store atomic transaction. The app channel
+is updated before final GitHub release visibility. If that final API call fails,
+the job fails and must be resumed before announcing the release. Users keep
+paired updates under their own control rather than enabling independent automatic
+updates. Existing version/build mismatch checks continue to refuse an unmatched
+connection during an incomplete update.
+
+## Marketplace and app-store publication
+
+Home Assistant 2026.11 or newer uses its built-in Marketplace. The repository's
+`hacs.json` retains that required filename and selects the release asset
+`open_energy_planner.zip`. Its minimum HA version is `2026.11.0`. Marketplace
+installs only the integration, never the planner app. The
+[user installation guide](../users/install.md) owns the two installation routes.
+
+After every draft asset has been uploaded or verified, `publish_release` publishes
+stable releases to the `ha-app-store` branch in this same repository. Users add
+`https://github.com/patrickvorgers/open-energy-planner#ha-app-store` to the
+Supervisor app store. No extra repository, image registry or access credential
+is required. Supervisor builds the original packaged Docker context locally.
+Pre-releases keep their downloadable assets but never advance this stable channel.
+Both GitHub's prerelease flag and semantic prerelease tags exclude publication.
+
+The publisher checks the archive hash and matched app identity before writing.
+It copies `repository.json`, the complete packaged `open-energy-planner` directory
+and the original release manifest without rebuilding or restamping them. The
+branch starts from the first published source revision. Its original source
+scaffold and workflow files remain unchanged. The source `ha_app/config.yaml`
+is removed so Supervisor sees only the generated app, whose Docker build context
+contains exactly the tested package files. Later publications replace that
+directory and remove obsolete app files.
+
+GitHub's `createCommitOnBranch` signs generated publication commits using the
+existing workflow identity. This branch is a generated distribution channel,
+not an implementation PR or a replacement for `main`. Publication checks GitHub's
+Verified result and the full intended remote file identities after writing.
+The expected branch head guards concurrent publishers. Retrying the identical
+bundle makes no new commit and rechecks its signature and files. A different
+bundle for the same version or an older stable version fails. Existing release
+assets remain unchanged and the release stays a draft if app publication fails.
+Rerun the failed publication job to resume from the original retained bundle.
+A lost final publication response is recoverable from the now-public release only
+when all original assets remain present and verify against the same run.
+Never force-push this channel
+or replace tested assets to make a retry succeed.
+
+Merging this distribution support does not create a release or install OEP on
+any Home Assistant instance. The first stable release must finish full release
+CI and publication before either user installation channel is advertised as
+available. Integration and app updates remain separate HA actions. Users must
+keep both components on the same release and preserve their data when changing
+from a local administrator-managed app to the public repository identity.
+
+## Bundle contents and recovery
 
 The app repository includes `icon.png` and `logo.png` beside `config.yaml` so
 Home Assistant can display its artwork in Apps. Both files reuse the integration's
