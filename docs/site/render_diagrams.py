@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from hooks import MERMAID, ROOT, diagram_path
+from hooks import ROOT, diagram_path, mermaid_blocks
 
 
 def main():
@@ -18,10 +18,10 @@ def main():
     with TemporaryDirectory() as temporary:
         source_file = Path(temporary) / "diagram.mmd"
         for guide in sorted(sources):
-            for match in MERMAID.finditer(guide.read_text(encoding="utf-8")):
-                target = diagram_path(match.group(1))
+            for block in mermaid_blocks(guide.read_text(encoding="utf-8")):
+                target = diagram_path(block.source)
                 target.parent.mkdir(parents=True, exist_ok=True)
-                source_file.write_text(match.group(1), encoding="utf-8")
+                source_file.write_text(block.source, encoding="utf-8")
                 command = [
                     "node",
                     str(args.cli.resolve()),

@@ -74,8 +74,8 @@ class DocumentationSiteTests(unittest.TestCase):
         for guide in self.files:
             if not guide.src_uri.endswith(".md"):
                 continue
-            for match in hooks.MERMAID.finditer(guide.content_string):
-                image = hooks.diagram_path(match.group(1))
+            for block in hooks.mermaid_blocks(guide.content_string):
+                image = hooks.diagram_path(block.source)
                 expected.add(image)
                 self.assertTrue(image.is_file(), guide.src_uri)
                 document = ElementTree.parse(image).getroot()
@@ -95,6 +95,22 @@ class DocumentationSiteTests(unittest.TestCase):
         page = SimpleNamespace(file=SimpleNamespace(src_uri="docs/users/first-plan.md"))
         with self.assertRaisesRegex(ValueError, "Render the Mermaid diagram"):
             hooks.render_diagrams("```mermaid\ngraph TD\nMissing --> New\n```", page)
+
+    def test_nested_mermaid_examples_remain_literal(self):
+        """Preserve examples inside longer backtick or tilde fences, including their links."""
+        page = SimpleNamespace(file=SimpleNamespace(src_uri="docs/development/README.md"))
+        for fence in ("````", "~~~~"):
+            source = f"{fence}markdown\n```mermaid\ngraph TD\nA --> B\n```\n[code](../../src/open_energy_planner/app.py)\n{fence}\n"
+            self.assertEqual(list(hooks.mermaid_blocks(source)), [])
+            self.assertEqual(hooks.on_page_markdown(source, page, self.config, self.files), source)
+
+    def test_fences_require_matching_character_and_sufficient_length(self):
+        """Wrong or shorter fences stay inside the diagram until a valid closure."""
+        source = "````mermaid\ngraph TD\nA --> B\n```\n~~~~\n`````\n"
+        blocks = list(hooks.mermaid_blocks(source))
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].source, "graph TD\nA --> B\n```\n~~~~\n")
+        self.assertEqual(list(hooks.mermaid_blocks("```mermaid\nA --> B\n")), [])
 
     def test_source_links_use_github_and_guide_links_stay_local(self):
         """Keep rendered documentation internal while resolving unpublished code and directories externally."""
