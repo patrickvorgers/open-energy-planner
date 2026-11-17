@@ -786,7 +786,11 @@ def create_app(
                             now = datetime.now(UTC)
                             await prices.refresh(now)
                             timezone = price_timezone()
-                            if timezone and prices.series:
+                            if (
+                                timezone
+                                and prices.market_area
+                                and not getattr(prices, "configuration_issue", None)
+                            ):
                                 async with savings_mutation_lock:
                                     cancellation = await complete_write(
                                         daily_prices.update,

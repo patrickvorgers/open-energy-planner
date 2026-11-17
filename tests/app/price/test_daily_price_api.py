@@ -2,13 +2,15 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiohttp import ClientSession, web
 
 from open_energy_planner.app import create_app
 from open_energy_planner.prices.daily import DailyPrices
+from open_energy_planner.prices.model import PriceKind
 from open_energy_planner.prices.runtime import ConfiguredPrices
 from open_energy_planner.prices.service import PriceService
 from open_energy_planner.prices.storage.adapters.store import PriceStore
@@ -19,14 +21,24 @@ from tests.ha_contract.support.metadata import setup_metadata
 TOKEN = "local-daily-price-test-0123456789abcdef"
 
 
-def test_daily_price_api_requires_authentication_and_bounded_aware_periods(tmp_path):
-    """Real HTTP returns retained selections without a plan or contract, rejecting invalid periods safely."""
+def test_daily_price_api_requires_authentication_and_bounded_aware_periods(tmp_path, monkeypatch):
+    """Real HTTP rejects invalid inputs/configuration and withdraws uncovered future rankings while retaining final days."""
+    monkeypatch.setattr("open_energy_planner.app.PRICE_SCHEDULE_POLL_SECONDS", 0.01)
 
     async def scenario():
         """Exercise production routing and persistence with one independently generated final day."""
         now = datetime.now(UTC)
         day = now.astimezone(ZoneInfo("Europe/Amsterdam")).date()
         evidence = published(day, now)
+        future_published = published(day + timedelta(days=1), now)
+        forecast = replace(
+            future_published,
+            source_id="forecast_test",
+            expires_at=now + timedelta(hours=6),
+            points=tuple(
+                replace(point, kind=PriceKind.FORECAST) for point in future_published.points
+            ),
+        )
         configuration_issue = None
         configured_prices = None
 
@@ -44,7 +56,7 @@ def test_daily_price_api_requires_authentication_and_bounded_aware_periods(tmp_p
                 """Provide a real price service and retained final-day evidence without HTTP sources."""
                 documents = SqlDocuments(engine, "prices")
                 service = PriceService("NL", None, None, PriceStore(documents))
-                service.series = (evidence,)
+                service.series = (evidence, forecast)
                 DailyPrices(documents).update(
                     service.daily_timeline(now), "NL", "Europe/Amsterdam", now
                 )
@@ -98,7 +110,25 @@ def test_daily_price_api_requires_authentication_and_bounded_aware_periods(tmp_p
                     ) as response:
                         assert response.status == 400
                         assert "private-query-sentinel" not in await response.text()
+                future_params = {
+                    "start": forecast.points[0].start.isoformat(),
+                    "end": forecast.points[-1].end.isoformat(),
+                }
+                async with session.get(
+                    url + "/v1/prices/daily", params=future_params, headers=headers
+                ) as response:
+                    assert (await response.json())["days"][0]["status"] == "provisional"
                 configured_prices.service.series = ()
+                async with asyncio.timeout(5):
+                    while True:
+                        async with session.get(
+                            url + "/v1/prices/daily", params=future_params, headers=headers
+                        ) as response:
+                            future = (await response.json())["days"][0]
+                        if future["status"] == "incomplete":
+                            break
+                        await asyncio.sleep(0.01)
+                assert future["quarters"] == future["cheapest"] == future["most_expensive"] == []
                 async with session.get(
                     url + "/v1/prices/daily", params=params, headers=headers
                 ) as response:
