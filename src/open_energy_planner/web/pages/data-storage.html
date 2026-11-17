@@ -14,6 +14,7 @@
 <div class="storage-history-heading"><h2 id="storage-history-title">Database growth</h2><label>Period<select id="storage-period"><option value="week">1 week</option><option value="month" selected>1 month</option><option value="quarter">3 months</option><option value="year">1 year</option><option value="all">All history</option></select></label></div>
 <p id="storage-history-summary" role="status" aria-live="polite"></p>
 <div class="storage-history-plot" id="storage-history-plot" hidden><canvas id="storage-history-chart" tabindex="0" role="img" aria-label="Daily database size. Use Left and Right arrow keys to inspect measurements." aria-describedby="storage-history-selected"></canvas></div>
+<div id="storage-observation-field" hidden><label for="storage-observation">Observation</label><select id="storage-observation"></select></div>
 <p id="storage-history-selected" aria-live="polite"></p>
 <p id="storage-history-note" class="muted">One measurement each day at 04:00 in the Home Assistant installation timezone. Missing days remain gaps.</p>
 </section>

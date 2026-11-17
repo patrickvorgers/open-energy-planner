@@ -16,13 +16,15 @@ export function bindStorageHistory(readToken, bytes) {
     function inspect(index) {
         selected = index;
         const row = samples[index];
-        find("storage-history-selected").textContent = row ? `${when(row.observed_at)}: ${bytes(row.database_bytes)}${row.database_estimated ? " (estimated)" : ""}. ${BACKENDS[row.backend] || "Unknown backend"}.` : "";
+        find("storage-history-selected").textContent = row ? `${when(row.observed_at)}: ${bytes(row.database_bytes)}${row.database_estimated ? " (estimated)" : ""}: ${BACKENDS[row.backend] || "Unknown backend"}` : "";
     }
     /** Replace old evidence immediately so failed or reordered reads cannot show a stale period. */
     async function load() {
         const version = ++requestVersion;
         chart?.destroy(); chart = null; samples = [];
         find("storage-history-plot").hidden = true;
+        find("storage-observation-field").hidden = true;
+        find("storage-observation").replaceChildren();
         find("storage-history-selected").textContent = "";
         find("storage-history-summary").textContent = "Loading database history…";
         try {
@@ -41,16 +43,24 @@ export function bindStorageHistory(readToken, bytes) {
             const known = samples.filter(row => Number.isFinite(row.database_bytes));
             const first = known[0], last = known.at(-1);
             let summary = samples.length ? "Daily observations were recorded, but database size was unavailable. Missing sizes remain gaps." : `No database size measurements in this period. The first daily measurement appears after ${sampleTime} when the app is running.`;
-            if (known.length === 1) summary = `${bytes(last.database_bytes)}${last.database_estimated ? " (estimated)" : ""} recorded. At least two measurements are needed to show growth.`;
+            if (known.length === 1) summary = `Recorded size: ${bytes(last.database_bytes)}${last.database_estimated ? " (estimated)" : ""}: At least two measurements are needed to show growth.`;
             if (known.length > 1) {
                 const change = last.database_bytes - first.database_bytes;
                 const sameBackend = samples.every(row => row.backend === first.backend);
                 const elapsedDays = (Date.parse(last.observed_at) - Date.parse(first.observed_at)) / MILLISECONDS_PER_DAY;
-                summary = `${dateLabel(history.start)} – ${dateLabel(history.end)}: ${known.length} measurements. `;
-                summary += sameBackend && elapsedDays > 0 ? `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}. Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${known.some(row => row.database_estimated) ? " (estimated)" : ""}.` : "Growth is not compared across different database backends.";
+                summary = `${dateLabel(history.start)} – ${dateLabel(history.end)}: Measurements: ${known.length}: `;
+                summary += sameBackend && elapsedDays > 0 ? `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${known.some(row => row.database_estimated) ? " (estimated)" : ""}` : "Growth is not compared across different database backends.";
             }
             find("storage-history-summary").textContent = summary;
-            if (!known.length) return;
+            if (!known.length) {
+                if (samples.length) {
+                    find("storage-observation").replaceChildren(...samples.map((row, index) => new Option(when(row.observed_at), String(index))));
+                    find("storage-observation-field").hidden = false;
+                    find("storage-observation").value = String(samples.length - 1);
+                    inspect(samples.length - 1);
+                }
+                return;
+            }
             const byDay = new Map(samples.map(row => [row.day, row]));
             const points = [];
             for (let day = history.start; day <= history.end; day = nextDate(day)) {
@@ -93,12 +103,14 @@ export function bindStorageHistory(readToken, bytes) {
             if (version === requestVersion) {
                 chart?.destroy(); chart = null; samples = [];
                 find("storage-history-plot").hidden = true;
+                find("storage-observation-field").hidden = true;
                 find("storage-history-selected").textContent = "";
                 find("storage-history-summary").textContent = "Database history unavailable. Check the connection and choose Refresh to try again.";
             }
         }
     }
     find("storage-period").addEventListener("change", load);
+    find("storage-observation").addEventListener("change", event => inspect(Number(event.target.value)));
     find("storage-history-chart").addEventListener("keydown", event => {
         if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !samples.length) return;
         event.preventDefault();

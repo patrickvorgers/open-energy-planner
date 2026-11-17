@@ -104,7 +104,7 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
     with page.expect_request("**/v1/storage/history?period=quarter"):
         page.locator("#storage-period").select_option("quarter")
     page.locator("#storage-period").select_option("week")
-    expect(page.locator("#storage-history-summary")).to_contain_text("7 measurements")
+    expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
     delayed[0].fulfill(json=quarter_rows)
     wait_for_product_reads(page)
     assert (
@@ -154,22 +154,48 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
     )
     body["samples"] = [
         {
-            "day": "2026-11-15",
-            "observed_at": "2026-11-15T03:00:00Z",
+            "day": "2026-11-14",
+            "observed_at": "2026-11-14T03:00:00Z",
             "timezone": "Europe/Amsterdam",
             "backend": "sqlite",
             "database_bytes": None,
             "database_estimated": False,
-        }
+        },
+        {
+            "day": "2026-11-15",
+            "observed_at": "2026-11-15T03:00:00Z",
+            "timezone": "Europe/Amsterdam",
+            "backend": "mysql",
+            "database_bytes": None,
+            "database_estimated": True,
+        },
     ]
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#storage-history-summary")).to_contain_text(
         "database size was unavailable"
     )
     expect(page.locator("#storage-history-chart")).to_be_hidden()
-    body["samples"][0]["database_bytes"] = 512 * 1024**2
+    observation = page.get_by_label("Observation", exact=True)
+    expect(observation).to_be_visible()
+    expect(page.locator("#storage-history-selected")).to_contain_text("Unknown (estimated): MySQL")
+    observation.focus()
+    observation.press("ArrowUp")
+    expect(page.locator("#storage-history-selected")).to_contain_text("Unknown: SQLite")
+    expect(page.locator("#storage-history-selected")).to_contain_text("11/14/2026, 4:00 AM")
+    observation.press("ArrowDown")
+    expect(page.locator("#storage-history-selected")).to_contain_text("Unknown (estimated): MySQL")
+    page.locator("#storage-history-title").click()
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/storage-history-unknown-{page.viewport_size['width']}.png", full_page=True
+    )
+    body["samples"] = [body["samples"][-1]]
+    body["samples"][0].update(
+        database_bytes=512 * 1024**2, backend="sqlite", database_estimated=False
+    )
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#storage-history-summary")).to_contain_text("At least two measurements")
+    expect(observation).to_be_hidden()
     body["samples"].append(
         {
             **body["samples"][0],
@@ -183,6 +209,9 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#storage-history-summary")).to_contain_text("Decrease: 112 MiB")
     expect(page.locator("#storage-history-summary")).to_contain_text("Average: −112 MiB per day")
+    expect(page.locator("#storage-history-summary")).to_have_text(
+        "10/17/2026 – 11/17/2026: Measurements: 2: Decrease: 112 MiB: Average: −112 MiB per day"
+    )
     body["samples"][-1].update(backend="mysql", database_estimated=True)
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#storage-history-summary")).to_contain_text(

@@ -55,7 +55,9 @@ measurement. Two observations are needed to calculate growth.
 Hover a point or focus the chart and use the Left and Right arrow keys to inspect
 its timestamp, size, backend and estimation status. Home and End reach the first
 and last retained observation in the selected period. Unknown size never becomes
-zero. Refresh updates the view without creating another daily point.
+zero. When every size is unavailable, use **Observation** to inspect the recorded
+timestamps, backends and estimation status. Refresh updates the view without
+creating another daily point.
 
 Measurements use the same scope as the capacity cards. SQLite includes WAL and
 shared-memory sidecars, so file activity can change the total even when the
