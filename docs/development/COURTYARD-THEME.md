@@ -67,6 +67,13 @@ The shell uses navy `#1a3060`, sky `#cde9fd`, paper `#f5fbff`, ink `#19263f`,
 muted text `#54657a` and action blue `#006da6`. Selection uses the paper surface.
 Hover outlines do not change menu geometry. Keyboard focus has a distinct outline.
 
+Planning connection status uses a plain text row with a thin bottom divider.
+Information panels and planning notices use uniform one-pixel borders instead of
+thick side accents. Notices retain their severity backgrounds, headings and
+recovery actions. The floating SaveBar changes its full one-pixel border to amber
+for unsaved changes and blue while saving. Its explicit state text and button
+locking remain the primary feedback.
+
 The original OEP icon family uses blue `#4387bf`, green `#21836d` and yellow
 `#f9d544`. Navigation symbols are decorative beside visible labels. All thirteen
 SVG assets are packaged under `src/open_energy_planner/web/public/icons`, including
