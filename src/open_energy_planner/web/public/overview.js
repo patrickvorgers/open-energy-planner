@@ -317,11 +317,11 @@ async function loadDailyPrices(instance) {
                     instance.dailyPriceQuarters.push({start: Date.parse(quarter.start), end: Date.parse(quarter.end), extreme, status: day.status});
                     intervals.push(`${when(quarter.start)} to ${when(quarter.end)}: ${money(quarter.market_price)} ${day.currency}/kWh`);
                 }
-                descriptions.push(`${heading}. ${intervals.join(". ")}`);
+                descriptions.push(`${heading}: ${intervals.join(": ")}`);
             }
         }
         const provisional = days.some(day => day.status === "provisional"), incomplete = !days.length || days.some(day => day.status === "incomplete");
-        status.textContent = `Spot market prices ranked across each complete installation day, including elapsed quarters. ${provisional ? "Provisional selections can change with new prices. " : ""}${days.some(day => day.status === "final") ? "Final selections are retained. " : ""}${incomplete ? "Incomplete days have no ranking. " : ""}${descriptions.join(" ")}`;
+        status.textContent = `Spot market prices ranked across each complete installation day, including elapsed quarters. ${provisional ? "Provisional selections can change with new prices. " : ""}${days.some(day => day.status === "final") ? "Final selections are retained. " : ""}${incomplete ? "Incomplete days have no ranking. " : ""}${descriptions.join(": ")}`;
         instance.dailyPriceDocument = dailyDocument;
         instance.dailyPriceStatus = status.textContent;
         instance.update("none");
@@ -348,7 +348,7 @@ async function loadDailyPrices(instance) {
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
 function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false} = {}) {
-    let balanceTime = null;
+    let balanceTime = null, priceHoverTime = null;
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
     $(`${id}-tooltip`)?.remove();
@@ -425,6 +425,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
             interaction: {mode: "nearest", axis: "x", intersect: false},
             onHover: (event, _elements, instance) => {
+                if (id === "price-chart") priceHoverTime = instance.scales.x.getValueForPixel(event.x);
                 if (balance) {
                     const hits = instance.getElementsAtEventForMode(event, "nearest", {axis: "xy", intersect: true}, false);
                     balanceTime = hits.some(hit => instance.data.datasets[hit.datasetIndex].tooltipGroup === "Battery state")
@@ -447,7 +448,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                     if (!items.length || ["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart"].includes(id)) return "";
                     const step = inspectSteps.find((step) => step.start <= items[0].parsed.x && items[0].parsed.x < step.end);
                     if (id === "price-chart") {
-                        const time = items[0].parsed.x;
+                        const time = Number.isFinite(priceHoverTime) ? priceHoverTime : items[0].parsed.x;
                         const quarter = items[0].chart.dailyPriceQuarters?.find(quarter => quarter.start <= time && time < quarter.end);
                         return [priceInputPlanId ? step?.priceStatus : "", quarter ? `${quarter.extreme === "cheapest" ? "One of this day's 12 cheapest spot-price quarters" : "One of this day's 12 most expensive spot-price quarters"}: ${optionLabel(quarter.status)}` : ""].filter(Boolean);
                     }

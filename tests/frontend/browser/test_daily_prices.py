@@ -140,7 +140,7 @@ def test_original_plan_keeps_frozen_prices_and_uses_only_returned_daily_labels(a
         )
 
     page.route("**/v1/prices/daily?*", daily_response)
-    page.goto(url + "/overview")
+    page.goto(url + "/overview?plan=" + plan_id)
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#price-daily-status")).to_contain_text("12 most expensive quarters")
@@ -148,6 +148,18 @@ def test_original_plan_keeps_frozen_prices_and_uses_only_returned_daily_labels(a
         "Chart.getChart(document.getElementById('price-chart')).dailyPriceQuarters"
     )
     assert marks[0]["start"] == captured["start"] and marks[0]["extreme"] == "most_expensive"
+    canvas = page.locator("#price-chart")
+    canvas.scroll_into_view_if_needed()
+    pointer = page.evaluate("""() => {
+        const chart = Chart.getChart(document.getElementById('price-chart'));
+        const quarter = chart.dailyPriceQuarters[0];
+        return {x: chart.scales.x.getPixelForValue(quarter.start + (quarter.end - quarter.start) * 0.8),
+                y: chart.chartArea.top + chart.chartArea.height / 2};
+    }""")
+    canvas.hover(position=pointer)
+    expect(page.locator("#price-chart-tooltip")).to_contain_text(
+        "One of this day's 12 most expensive spot-price quarters"
+    )
     rates = page.evaluate(
         "Chart.getChart(document.getElementById('price-chart')).data.datasets.map(dataset => dataset.data.map(point => point.y))"
     )
