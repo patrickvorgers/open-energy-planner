@@ -2,6 +2,7 @@
 
 import hashlib
 from datetime import UTC, datetime, time, timedelta
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.core.units import SECONDS_PER_HOUR
@@ -12,6 +13,14 @@ from .model import PriceKind
 EXTREME_QUARTERS = 12
 QUARTER = timedelta(minutes=FINE_INTERVAL_MINUTES)
 MAX_QUERY_DAYS = 4
+
+
+class DailyPriceStatus(StrEnum):
+    """Distinguish missing day coverage, forecast rankings and immutable published rankings."""
+
+    INCOMPLETE = "incomplete"
+    PROVISIONAL = "provisional"
+    FINAL = "final"
 
 
 class DailyPrices:
@@ -45,7 +54,9 @@ class DailyPrices:
             if self.documents.exists(name):
                 days.append(self.documents.read(name))
             else:
-                days.append({"day": day.isoformat(), "status": "incomplete", "quarters": []})
+                days.append(
+                    {"day": day.isoformat(), "status": DailyPriceStatus.INCOMPLETE, "quarters": []}
+                )
             day += timedelta(days=1)
         return days
 
@@ -65,7 +76,7 @@ class DailyPrices:
             name = self._name(area, timezone, day)
             with self.documents.transaction():
                 previous = self.documents.read(name) if self.documents.exists(name) else None
-                if previous and previous["status"] == "final":
+                if previous and previous["status"] == DailyPriceStatus.FINAL:
                     day += timedelta(days=1)
                     continue
                 retained = {row["start"]: row for row in previous["quarters"]} if previous else {}
@@ -85,9 +96,9 @@ class DailyPrices:
                             / QUARTER.total_seconds()
                         )
                         kind = (
-                            "published"
+                            PriceKind.PUBLISHED
                             if all(entry.kind == PriceKind.PUBLISHED for entry in entries)
-                            else "forecast"
+                            else PriceKind.FORECAST
                         )
                         row = {
                             "start": cursor.isoformat(),
@@ -95,8 +106,10 @@ class DailyPrices:
                             "market_price": rate,
                             "price_kind": kind,
                         }
-                        quarters.append(old if old and old["price_kind"] == "published" else row)
-                    elif old and (old["price_kind"] == "published" or following <= now):
+                        quarters.append(
+                            old if old and old["price_kind"] == PriceKind.PUBLISHED else row
+                        )
+                    elif old and (old["price_kind"] == PriceKind.PUBLISHED or following <= now):
                         quarters.append(old)
                     cursor = following
                 complete = len(quarters) * QUARTER == end - start
@@ -107,11 +120,12 @@ class DailyPrices:
                     "timezone": timezone,
                     "market_area": area,
                     "currency": "EUR",
-                    "status": "final"
-                    if complete and all(row["price_kind"] == "published" for row in quarters)
-                    else "provisional"
+                    "status": DailyPriceStatus.FINAL
                     if complete
-                    else "incomplete",
+                    and all(row["price_kind"] == PriceKind.PUBLISHED for row in quarters)
+                    else DailyPriceStatus.PROVISIONAL
+                    if complete
+                    else DailyPriceStatus.INCOMPLETE,
                     "quarters": quarters,
                     "cheapest": [],
                     "most_expensive": [],
