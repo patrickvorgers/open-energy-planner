@@ -13,7 +13,7 @@ from open_energy_planner.core.calendar import day_window
 from open_energy_planner.installation.location import SiteLocation
 
 from ..contracts.bonus import CounterSeed
-from .accounting import evaluate
+from .accounting import evaluate, simulated_counters_ready
 from .advice import active_advice
 from .bonus import HistoricalBonuses
 from .context import physical_context
@@ -35,6 +35,7 @@ SHA256_HEX_LENGTH = 64
 
 # Only fixed owned guidance is public. Other caught exceptions may contain stored or driver values.
 PENDING_SETTLEMENT_MESSAGES = {
+    "Reference continuity requires the missing interval first": "The original common opening measurements are missing. Simulated battery stock and bonus usage remain unknown.",
     "Simulated bonus counters are unknown after missing measurements": "The simulated export allowance cannot be reconstructed from the earlier missing evidence. No actual counter was substituted.",
     "A reset inside the bonus anchor interval prevents exact reconstruction": "An export meter reset prevents reconstruction of the bonus starting total.",
     "Confirmed bonus meter disagrees with its historical boundary": "The confirmed export reading disagrees with the reading in history.",
@@ -287,13 +288,15 @@ class SavingsRuntime:
                     )
                     if start >= end:
                         continue
-                    for retained in self.store.frames(start, end=end):
-                        frame = parse_frame(retained["frame"])
-                        if frame.start > start:
-                            return start, frame.start
-                        start = max(start, frame.end)
-                    if start < end:
-                        return start, end
+                    while start < end:
+                        retained = self.store.frames(start, end=end)
+                        if not retained:
+                            return start, end
+                        for row in retained:
+                            frame = parse_frame(row["frame"])
+                            if frame.start > start:
+                                return start, frame.start
+                            start = max(start, frame.end)
             cursor = datetime.fromisoformat(report["end"])
             self._recovery_search = checkpoint, cursor
         return None
@@ -435,6 +438,14 @@ class SavingsRuntime:
             if start < previous:
                 self.documents.write("recovery.json", {"end": scanned.isoformat()})
 
+    def _require_initial_frame(self, frame, state):
+        """Initialize dependent continuous scenarios only at the original common measured start."""
+        if state is not None:
+            return
+        first = self.store.first_activation()
+        if first is None or frame.start != capture_start(datetime.fromisoformat(first)):
+            raise PendingSettlement("Reference continuity requires the missing interval first")
+
     def advance_reference(self):
         """Persist counter-free physical progress before attempting financial settlement.
 
@@ -465,7 +476,10 @@ class SavingsRuntime:
                     frame, self.store.activations(frame.start, frame.end), self.plans.get_context
                 )
                 bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
-                state = advance(physical_context(plan), frame, bindings, state)["state"]
+                problem = physical_context(plan)
+                if problem.batteries:
+                    self._require_initial_frame(frame, state)
+                state = advance(problem, frame, bindings, state)["state"]
                 self.documents.write(name, state)
             except (ValueError, KeyError, TypeError) as error:
                 self.physical_issue = settlement_issue(error)
@@ -607,6 +621,10 @@ class SavingsRuntime:
             plan = self.plans.get_context(plan_id)
             try:
                 problem = physical_context(plan)
+                if state is None and (
+                    problem.batteries or not simulated_counters_ready(contract, frame.start, None)
+                ):
+                    self._require_initial_frame(frame, state)
                 original_contract = plan["input_snapshot"].get("contract_version")
                 if original_contract and original_contract != contract.version:
                     problem, _ = corrected_problem(plan, contract)

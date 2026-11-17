@@ -13,7 +13,7 @@ from open_energy_planner.savings.runtime import SavingsRuntime
 from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore, stamp
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS
-from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
+from tests.app.savings.support.scenarios import END, START, bindings, contract, frame, problem
 from tests.database.support.history_datasets import settlement_batches
 
 
@@ -730,6 +730,61 @@ def test_missing_physical_interval_does_not_reset_or_skip_reference(settlement):
     runtime.process(contract(bonus=True), END + timedelta(hours=2))
     assert docs.read("physical-reference.json") == before
     assert runtime.physical_issue == "Reference continuity requires the missing interval first"
+
+
+@pytest.mark.parametrize("dependency", ["battery", "bonus", "none"])
+def test_sparse_first_frame_cannot_initialize_continuous_stock_or_bonus_allowance(
+    settlement, monkeypatch, dependency
+):
+    """A first accepted frame after the common start retains evidence without inventing simulated opening state."""
+    from sqlalchemy import delete
+
+    from open_energy_planner.storage.adapters.lifecycle.schema import SETTLEMENT_FRAMES
+
+    runtime, store, documents, engine, plans = settlement
+    original = plans.get_context("original-plan")
+    selected_bindings = bindings()
+    missing, later = frame(), frame(start=END)
+    if dependency != "battery":
+        stateless = replace(problem(), batteries=(), terminal_valuations=())
+        original = {
+            **original,
+            "input_snapshot": {
+                **original["input_snapshot"],
+                "problem": json.loads(
+                    json.dumps(asdict(stateless), default=lambda value: value.isoformat())
+                ),
+            },
+        }
+        monkeypatch.setattr(plans, "get_context", lambda _identity: original)
+        selected_bindings["batteries"] = []
+        missing = replace(missing, battery_start={}, battery_end={})
+        later = replace(later, battery_start={}, battery_end={})
+    with engine.begin() as connection:
+        connection.execute(delete(SETTLEMENT_FRAMES))
+    context = {"bindings": selected_bindings, "seeds": [], "location": None}
+    store.put_frames((later,), context)
+    selected_contract = contract(bonus=dependency == "bonus")
+    runtime.process(selected_contract, END + timedelta(hours=1))
+    if dependency == "none":
+        assert runtime.issue is None
+        assert documents.exists("head.json")
+        assert runtime.overview(START, END + timedelta(minutes=15))["coverage"]["evaluated"] == 1
+        return
+    assert runtime.issue == "Reference continuity requires the missing interval first"
+    assert runtime.attention is False
+    assert not documents.exists("head.json")
+    assert runtime.overview(START, END + timedelta(minutes=15))["intervals"] == []
+    assert store.frames()[0]["frame"] == later.record()
+    if dependency == "battery":
+        assert runtime.physical_issue == "Reference continuity requires the missing interval first"
+        assert not documents.exists("physical-reference.json")
+    store.put_frames((missing,), context)
+    runtime.process(selected_contract, END + timedelta(hours=2))
+    assert runtime.issue != "Reference continuity requires the missing interval first"
+    if dependency == "battery":
+        assert documents.exists("head.json")
+        assert runtime.overview(START, END + timedelta(minutes=15))["coverage"]["evaluated"] == 2
 
 
 def test_physical_reference_advances_without_contract(settlement):

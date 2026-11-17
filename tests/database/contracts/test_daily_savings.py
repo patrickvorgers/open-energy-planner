@@ -1,5 +1,6 @@
 """Portable day closure preserves gaps, independent scenario coverage and immutable checkpoints."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -21,6 +22,40 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
     SETTLEMENT_FRAMES,
 )
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
+
+
+def test_recovery_skips_all_97_retained_frames_when_a_configuration_splits_a_quarter(settlement):
+    """A stale full-day gap must not re-request the 97th already accepted configuration fragment."""
+    runtime, store, documents, _engine, _plans = settlement
+    day = (START + timedelta(days=1)).date().isoformat()
+    first, end = day_window(day, "UTC")
+    now = end + timedelta(hours=1)
+    report = DailySavings(runtime).calculate(day, "UTC", contract(), None, now, START, None)
+    report["finalized_at"] = None
+    store.put_day(report, documents, end.date().isoformat())
+    fragments = [
+        replace(frame(start=first, imported_kwh=1 / 3), end=first + timedelta(minutes=5)),
+        replace(
+            frame(start=first + timedelta(minutes=5), imported_kwh=2 / 3),
+            end=first + timedelta(minutes=15),
+        ),
+        *(frame(start=first + timedelta(minutes=15 * index)) for index in range(1, 96)),
+    ]
+    store.put_frames(tuple(fragments), {"bindings": bindings(), "seeds": [], "location": None})
+    assert len(store.frames(first, end=end, limit=1000)) == 97
+    forward = now - timedelta(minutes=15)
+    documents.write("capture.json", {"end": forward.isoformat()})
+    request = runtime.request(
+        now,
+        SimpleNamespace(batteries=[]),
+        SimpleNamespace(sources=[]),
+        SimpleNamespace(terms=[]),
+        (),
+        SiteLocation(52, 5, "UTC"),
+    )
+    assert request is None
+    assert documents.read("capture.json") == {"end": forward.isoformat()}
+    assert not documents.exists("recovery.json")
 
 
 @pytest.mark.parametrize("day_offset", [0, 20])

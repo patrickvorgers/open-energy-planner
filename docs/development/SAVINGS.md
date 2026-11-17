@@ -128,6 +128,9 @@ and never rewinds. Daily finalization may also advance it past a closed incomple
 day. The cursor never proves complete coverage. Once forward capture catches up,
 unfinalized daily missing-meter ranges schedule bounded retries during the existing recovery window. Already
 retained frames are excluded even if the daily report has not yet been replayed.
+Retained quarters are read in pages through the candidate end, including more
+than 96 frames when configuration changes split quarters. A stale report cannot
+turn a retained fragment into a new missing-data request.
 An independent `recovery.json` cursor rotates acknowledged attempts, including
 empty replies, across gaps and provisional days. It commits with accepted frames
 and the forward cursor in the same transaction. Later gaps and older upgrade days
@@ -139,6 +142,11 @@ minutes in the integration, with at most 96 retained backoffs across rotation.
 Recovered intervals fill absent rows without replacing original evidence.
 Finalized days remain immutable. Missing measurements never become zero, fresh
 reference stock or a new simulated bonus allowance.
+Legacy physical-reference and interval-evaluation initialization also require
+the original common captured start when battery stock or bonus usage carries
+state. A later first retained frame cannot establish that baseline. Missing
+opening evidence leaves dependent comparisons pending while sparse intake and
+independent daily actual accounting continue.
 Sub-quarter tariff/window splits also retain an estimate flag because the
 measured interval total does not reveal its internal power profile.
 

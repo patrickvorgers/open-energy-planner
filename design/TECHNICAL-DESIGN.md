@@ -1388,6 +1388,9 @@ An independent recovery cursor rotates acknowledged attempts across gaps and
 provisional days, including empty replies. It is committed atomically with frames
 and the forward cursor and survives restart and database transfer. Recovery
 selection is bounded and does not advance a request before receipt.
+Legacy reference and interval readers cannot initialize dependent battery or
+bonus state after an uncovered opening interval. Recovery pages through all
+retained configuration fragments before classifying a range as missing.
 
 ### Historical bonus evidence
 
