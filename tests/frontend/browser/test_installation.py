@@ -1486,7 +1486,7 @@ def test_converter_gap_is_explained_without_hiding_complete_installation_balance
     page.get_by_text("Understand this plan", exact=True).click()
     page.get_by_text("Selected interval details", exact=True).click()
     expect(page.locator("#inspect-values")).to_contain_text(
-        "Battery converter 1 (1 interval(s) with unavailable physical evidence)"
+        "1 interval(s) have unavailable physical evidence"
     )
     expect(page.locator("[id^=converter-balance]")).to_have_count(0)
 

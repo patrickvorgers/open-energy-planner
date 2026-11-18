@@ -56,9 +56,7 @@ def test_savings_overview_authentication_empty_coverage_and_mobile_layout(app_pa
     expect(page.get_by_role("heading", name="Planning", exact=True)).to_be_visible()
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#overview-status")).to_have_text(
-        "Connected: Historical views never change active commands."
-    )
+    expect(page.locator("#overview-status")).to_have_text("Connected")
     open_primary_navigation(page)
     page.get_by_role("link", name="Savings", exact=True).click()
     expect(page.locator("#savings-total")).to_contain_text("No evaluated savings yet")
@@ -82,9 +80,7 @@ def test_savings_overview_uses_ingress_without_asking_for_token(app_page):
     page, url = app_page
     page.goto(url + "/overview")
     expect(page.locator("#overview-connect")).to_be_hidden()
-    expect(page.locator("#overview-status")).to_have_text(
-        "Connected: Historical views never change active commands."
-    )
+    expect(page.locator("#overview-status")).to_have_text("Connected")
     open_primary_navigation(page)
     page.get_by_role("link", name="Installation", exact=True).click()
     expect(page).to_have_url(url + "/setup")

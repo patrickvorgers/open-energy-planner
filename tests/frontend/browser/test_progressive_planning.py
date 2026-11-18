@@ -118,7 +118,7 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     assert len(evidence) == 1
     page.get_by_text("Selected interval details", exact=True).click()
     page.locator("#inspect-time").press("ArrowRight")
-    expect(page.locator("#inspect-values")).to_contain_text("Grid:")
+    expect(page.locator("#inspect-values")).to_contain_text("Grid import")
     expect(page.locator("#evidence-issue")).to_contain_text("Loading")
     assert len(evidence) == 1
     page.locator("#plan-evidence-panel").screenshot(
@@ -308,11 +308,36 @@ def test_compact_planning_preserves_commands_costs_and_original_archive(app_page
     page.get_by_text("Selected interval details", exact=True).click()
     expect(page.locator("#interval-evidence")).to_contain_text("Forecast and original prices")
     expect(page.locator("#interval-evidence")).not_to_contain_text("Forecast version")
-    page.get_by_text("Detailed interval values", exact=True).click()
+    expect(page.get_by_role("heading", name="Detailed interval values", exact=True)).to_be_visible()
     page.locator("#inspect-time").press("Home")
     expect(page.locator("#inspect-values")).to_contain_text("Example home battery")
     expect(page.locator("#inspect-values")).to_contain_text("Example AC roof")
-    expect(page.locator("#inspect-values")).to_contain_text("Grid:")
+    expect(page.locator("#inspect-values")).to_contain_text("Planned grid exchange")
+    expect(page.locator("#plan-evidence")).not_to_contain_text("Original contract version")
+    values = page.locator("#inspect-values")
+    expect(
+        values.get_by_role(
+            "heading", name="Forecast and original prices: Selected interval", exact=True
+        )
+    ).to_be_visible()
+    expect(values.get_by_text("Stored energy", exact=True)).to_be_visible()
+    technical = values.locator("details")
+    expect(technical.get_by_text("Installation energy balance", exact=True)).not_to_be_visible()
+    technical.locator("summary").focus()
+    technical.locator("summary").press("Enter")
+    expect(technical.get_by_text("Installation energy balance", exact=True)).to_be_visible()
+    expect(technical.get_by_text("Native resolution", exact=True)).to_be_visible()
+    page.locator("#inspect-time").press("ArrowRight")
+    expect(technical).to_have_attribute("open", "")
+    groups = page.locator("#interval-evidence .evidence-inverter-group")
+    assert groups.count() == len(original["input_snapshot"]["problem"]["inverters"])
+    for inverter_index, inverter in enumerate(original["input_snapshot"]["problem"]["inverters"]):
+        group = page.locator("#interval-evidence").get_by_role(
+            "region", name=f"Inverter {inverter_index + 1}", exact=True
+        )
+        for source in original["input_snapshot"]["problem"]["pv_sources"]:
+            if source["inverter_id"] == inverter["inverter_id"]:
+                expect(group).to_contain_text(original["comparison_names"][source["source_id"]])
     expect(page.locator("#plan-evidence-panel")).to_contain_text("not measurements")
     assert page.request.get(url + "/v1/plans/" + identity, headers=headers).json() == original
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -327,6 +352,29 @@ def test_compact_planning_preserves_commands_costs_and_original_archive(app_page
     panel = page.locator("#plan-evidence-panel")
     panel.evaluate("element => element.scrollIntoView({block:'center'})")
     panel.screenshot(path=str(captures / f"commands-{page.viewport_size['width']}.png"))
+    page.locator("#inspect-time").evaluate(
+        "input => {input.value = Math.min(48, Number(input.max)); input.dispatchEvent(new Event('input', {bubbles:true}));}"
+    )
+    selected = page.locator("#interval-evidence-panel")
+    technical = page.locator("#inspect-values > details")
+    technical.locator("summary").click()
+    if page.viewport_size["width"] < 500:
+        page.set_viewport_size(
+            {"width": 390, "height": int(selected.bounding_box()["height"]) + 200}
+        )
+        selected.evaluate(
+            "element => window.scrollTo(0, window.scrollY + element.getBoundingClientRect().top - 100)"
+        )
+    selected.screenshot(path=str(captures / f"interval-{page.viewport_size['width']}.png"))
+    technical.locator("summary").click()
+    if page.viewport_size["width"] < 500:
+        page.set_viewport_size(
+            {"width": 390, "height": int(selected.bounding_box()["height"]) + 200}
+        )
+        selected.evaluate(
+            "element => window.scrollTo(0, window.scrollY + element.getBoundingClientRect().top - 100)"
+        )
+    selected.screenshot(path=str(captures / f"technical-{page.viewport_size['width']}.png"))
 
 
 @pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
@@ -416,3 +464,46 @@ def test_scenarios_apply_one_shared_scale_batch_after_progressive_first_plan(app
     assert page.evaluate(
         "ids => ids.map(id=>window.balanceDraws.filter(value=>value===id).length)", identities
     ) == [0, 1, 1]
+
+
+@pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
+def test_archived_appliance_cycle_remains_visible_after_interval_evidence_arrives(app_page):
+    """Canonical interval cards retain an independently supplied appliance's original 0.12-kWh schedule."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    identity = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    comparison = page.request.get(
+        url + f"/v1/plans/{identity}/comparison?view=plan", headers=headers
+    ).json()
+    original = page.request.get(url + f"/v1/plans/{identity}", headers=headers).json()
+    plan = comparison["plan"]
+    intervals = plan["input_snapshot"]["problem"]["intervals"]
+    plan["comparison_names"]["example-cycle"] = "Example scheduled appliance"
+    plan["appliance_schedule"] = [
+        {
+            "entity_id": "example-cycle",
+            "start": intervals[0]["start"],
+            "end": intervals[1]["start"],
+            "interval_kwh": [0.12] + [0] * (len(intervals) - 1),
+        }
+    ]
+    page.route("**/comparison?view=plan", lambda route: route.fulfill(json=comparison))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Connected")
+    page.get_by_text("Understand this plan", exact=True).click()
+    page.get_by_text("Selected interval details", exact=True).click()
+    values = page.locator("#interval-evidence")
+    expect(
+        values.get_by_role("heading", name="Household forecast: This interval", exact=True)
+    ).to_be_visible()
+    appliance = values.locator("article").filter(
+        has=page.get_by_role("heading", name="Example scheduled appliance", exact=True)
+    )
+    expect(appliance).to_contain_text("0.12 kWh")
+    expect(appliance).to_contain_text("Cycle starts")
+    expect(appliance).to_contain_text("Cycle ends")
+    assert page.request.get(url + f"/v1/plans/{identity}", headers=headers).json() == original

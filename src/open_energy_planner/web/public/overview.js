@@ -6,7 +6,7 @@ import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePe
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
-const CONNECTED_MESSAGE = "Connected: Historical views never change active commands.";
+const CONNECTED_MESSAGE = "Connected";
 const PLAN_REFRESH_MILLISECONDS = 15000;
 const PLAN_READ_TIMEOUT_MILLISECONDS = 5000;
 const base = document.querySelector('meta[name="oep-api-base"]').content;
@@ -83,8 +83,19 @@ function deviceFill(color, state) {
 /** Render app-owned factual cards as text. Never infer reasons or interpret device names as markup. */
 function evidenceCards(parent, cards) {
     parent.replaceChildren();
+    const groups = new Map();
     for (const card of cards) {
-        const article = document.createElement("article"), heading = document.createElement("h4"), list = document.createElement("dl");
+        let target = parent;
+        if (card.group) {
+            if (!groups.has(card.group.id)) {
+                const section = document.createElement("section"), title = document.createElement("h4"), grid = document.createElement("div");
+                section.className = "evidence-inverter-group"; section.setAttribute("aria-label", card.group.title);
+                title.textContent = card.group.title; grid.className = "evidence-grid";
+                section.append(title, grid); parent.append(section); groups.set(card.group.id, grid);
+            }
+            target = groups.get(card.group.id);
+        }
+        const article = document.createElement("article"), heading = document.createElement(card.group ? "h5" : "h4"), list = document.createElement("dl");
         article.className = "evidence-card"; heading.textContent = card.title; article.append(heading);
         for (const fact of card.facts) {
             const term = document.createElement("dt"), value = document.createElement("dd");
@@ -96,7 +107,7 @@ function evidenceCards(parent, cards) {
         for (const observation of card.observations) {
             const text = document.createElement("p"); text.className = "evidence-observation"; text.textContent = observation; article.append(text);
         }
-        parent.append(article);
+        target.append(article);
     }
 }
 /** Explain actual bar coverage and retain recorded commands only for the active optimizer view. */
@@ -642,14 +653,35 @@ async function showPeriodCosts(start, end) {
         renderPeriodCosts(null, null, plan.currency, `Expected costs for the selected period are unavailable. ${error.message} Use Refresh overview to retry.`, plan);
     }
 }
+/** Use the same labelled facts as the original-plan evidence, without parsing command prose. */
+function intervalCard(title, rows, group) {
+    return {title, facts: rows.map(([label, value, unit = ""]) => ({label, value, unit})), observations: [], ...(group ? {group} : {})};
+}
+/** Present recorded interval quantities separately from optional signed technical balances. */
+function renderIntervalValues(step, evidence) {
+    const parent = $("inspect-values"), technicalOpen = parent.querySelector("details")?.open || false;
+    parent.replaceChildren();
+    if (!step) { parent.textContent = "No planned intervals available."; return; }
+    if (!evidence) {
+        const period = document.createElement("p");
+        period.className = "interval-values-period"; period.textContent = `From ${when(step.start)} to ${when(step.end)}`;
+        parent.append(period);
+    }
+    const values = document.createElement("div");
+    values.id = "interval-evidence"; values.className = "evidence-grid"; values.setAttribute("aria-label", "Selected interval evidence");
+    evidenceCards(values, evidence?.cards?.length ? [...evidence.cards, ...step.applianceValues] : step.values);
+    const technical = document.createElement("details"), summary = document.createElement("summary"), balances = document.createElement("div");
+    summary.textContent = "Energy balance and source details"; technical.open = technicalOpen;
+    balances.className = "evidence-grid"; evidenceCards(balances, [step.priceSource, ...step.balances]);
+    technical.append(summary, balances); parent.append(values, technical);
+}
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
 function inspect() {
     const step = inspectSteps[Number($("inspect-time").value)];
-    $("inspect-values").textContent = step ? step.text : "No planned intervals available.";
     const evidence = planEvidence?.intervals?.find((interval) => Date.parse(interval.start) === step?.start);
+    renderIntervalValues(step, evidence);
     $("evidence-time").textContent = evidence ? `From ${when(evidence.start)} to ${when(evidence.end)}: ${number((Date.parse(evidence.end) - Date.parse(evidence.start)) / MILLISECONDS_PER_MINUTE)} minutes: Energy quantities apply to this interval. Prices are rates per kWh.` : "";
     $("evidence-issue").textContent = evidence?.issue || planEvidence?.issue || (!planEvidence ? $("plan-evidence-status").textContent : !evidence ? "Original interval evidence is unavailable." : "");
-    evidenceCards($("interval-evidence"), evidence?.cards || []);
 }
 /** Switch focused functional pages. Keep forms, selected versions and chart data in memory. */
 function view() {
@@ -773,7 +805,7 @@ function clearPlanComparisons() {
     planEvidence = null;
     $("evidence-period").textContent = "";
     $("plan-evidence-status").textContent = "Open this panel to load original plan evidence.";
-    evidenceCards($("plan-evidence"), []); evidenceCards($("interval-evidence"), []);
+    evidenceCards($("plan-evidence"), []);
 }
 /**
  * Load evidence for an open disclosure, sharing completion through rendering and recovery.
@@ -906,7 +938,7 @@ async function showPlan(signal, background = false) {
         $("inspect-time").disabled = true;
         $("inspect-values").textContent = id ? "Loading original interval values…" : "No plan selected.";
         $("evidence-period").textContent = ""; $("plan-evidence-status").textContent = id ? "Loading original whole-plan evidence…" : "No plan selected.";
-        evidenceCards($("plan-evidence"), []); evidenceCards($("interval-evidence"), []);
+        evidenceCards($("plan-evidence"), []);
         $("evidence-time").textContent = ""; $("evidence-issue").textContent = id ? "Loading original plan evidence…" : "No plan selected.";
         if (!id) {
             $("overview-status").textContent = CONNECTED_MESSAGE;
@@ -945,6 +977,8 @@ async function showPlan(signal, background = false) {
         });
         inspectSteps = [];
         const intervals = plan.input_snapshot?.problem?.intervals || [];
+        const inverterGroups = new Map((plan.input_snapshot?.problem?.inverters || []).map((inverter, index) =>
+            [inverter.inverter_id, {id: inverter.inverter_id, title: plan.comparison_names?.[inverter.inverter_id] || `Inverter ${index + 1}`} ]));
         intervals.forEach((step, i) => {
             // Keep every declared interval in the inspector. Absent evidence must not shift later values.
             const flow = plan.expected_flows?.[i] || {};
@@ -971,28 +1005,51 @@ async function showPlan(signal, background = false) {
             const originalDemand = householdForecastEnergy(plan, prices);
             add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
             add(solarForecast, prices.duration_h > 0 && typeof prices.pv_kwh === "number" ? prices.pv_kwh / prices.duration_h : null);
-            const commands = [];
+            const commands = [], deviceValues = [], applianceValues = [];
             for (const task of plan.appliance_schedule || []) {
                 const energy = task.interval_kwh[i];
-                if (energy > 0) commands.push(`${plan.comparison_names?.[task.entity_id] || "Appliance"}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
+                if (energy > 0) {
+                    const name = plan.comparison_names?.[task.entity_id] || "Appliance";
+                    commands.push(`${name}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
+                    applianceValues.push(intervalCard(name, [["Energy in this interval", energy, "kWh"], ["Cycle starts", when(task.start)], ["Cycle ends", when(task.end)]]));
+                }
             }
             for (const [index, battery] of (flow.batteries || []).entries()) {
                 const name = batteryLabels.get(battery.device_id) || `Battery ${index + 1}`;
                 const target = command?.devices?.[battery.device_id];
                 const text = target?.mode === "follow_grid_target" ? "Zero on the meter (local regulation)" : target?.power_w != null ? `${Math.round(target.power_w)} W fixed power (+ discharge)` : "No command";
                 commands.push(`${name}: ${text}: Stored: ${number(battery.end_kwh)} kWh`);
+                const inverter = identities.find((unit) => unit.device_id === battery.device_id)?.inverter_id;
+                deviceValues.push(intervalCard(name, [["Control", text], ["Stored energy", battery.end_kwh, "kWh"]], inverterGroups.get(inverter)));
 
             }
             for (const [index, [source]] of (step.pv_sources || []).entries()) {
                 const enabled = command?.devices?.[source]?.enabled;
-                commands.push(`${plan.comparison_names?.[source] || `Solar ${index + 1}`}: ${enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production"}`);
+                const name = plan.comparison_names?.[source] || `Solar ${index + 1}`;
+                const production = enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production";
+                commands.push(`${name}: ${production}`);
+                const inverter = plan.input_snapshot?.problem?.pv_sources?.find((unit) => unit.source_id === source)?.inverter_id;
+                deviceValues.push(intervalCard(name, [["Solar production", production]], inverterGroups.get(inverter)));
             }
-            inspectSteps.push({start: time, end, commands, priceStatus: tariff ? `${tariff.price_kind === "published" ? "Published market rate" : tariff.price_kind === "forecast" ? "Forecast market rate" : "Market rate provenance unclassified"}: Native ${tariff.native_resolution_minutes}-minute resolution` : "Market provenance unavailable", text: `From ${when(step.start)} to ${when(end)}\nGrid: ${number(imported)} kWh import / ${number(exported)} kWh export: Household: ${number(step.load_kwh)} kWh: Available PV DC: ${number(step.pv_kwh)} kWh\nImport: ${money(prices.buy_price)} ${currency}/kWh: Export: ${money(prices.sell_price)} ${currency}/kWh${tariff ? `: Market rate: ${optionLabel(tariff.price_kind || "unknown")}: Native resolution: ${tariff.native_resolution_minutes} minutes` : ""}\n${commands.join("\n")}`});
+            inspectSteps.push({start: time, end, commands,
+                priceStatus: tariff ? `${tariff.price_kind === "published" ? "Published market rate" : tariff.price_kind === "forecast" ? "Forecast market rate" : "Market rate provenance unclassified"}: Native ${tariff.native_resolution_minutes}-minute resolution` : "Market provenance unavailable",
+                values: [
+                    intervalCard("Energy in this interval", [["Grid import", imported, "kWh"], ["Grid export", exported, "kWh"], ["Household demand: AC", step.load_kwh, "kWh"], ["Available solar: DC", step.pv_kwh, "kWh"]]),
+                    intervalCard("Electricity rates", [["Import", prices.buy_price, `${currency}/kWh`], ["Export", prices.sell_price, `${currency}/kWh`]]),
+                    ...applianceValues, ...deviceValues
+                ],
+                applianceValues,
+                priceSource: intervalCard("Price source", [["Market rate", tariff ? optionLabel(tariff.price_kind || "unknown") : null], ["Native resolution", tariff?.native_resolution_minutes, "minutes"]]),
+                balances: []});
         });
         const balances = energyBalances(plan, new Map([...Object.entries(plan.comparison_names || {}), ...batteryLabels]));
         inspectSteps.forEach((step, index) => {
-            const rows = balances.map((group) => `${group.name}${group.missing ? ` (${group.missing} interval(s) with unavailable physical evidence)` : ""}: ${group.series.map((series) => series.type === "bar" ? `${series.name} ${number(series.intervals[index]?.value)} kW` : `${series.name} ${percentage(series.points[index * 2 + 1]?.[1])}`).join(": ")}`);
-            step.text += `\n${rows.join("\n")}`;
+            step.balances = balances.map((group) => {
+                const result = intervalCard(group.inverter ? inverterGroups.get(group.id)?.title || "Inverter" : group.name,
+                    group.series.map((series) => [series.name, series.type === "bar" ? series.intervals[index]?.value : series.points[index * 2 + 1]?.[1], series.type === "bar" ? "kW" : "%"]));
+                if (group.missing) result.observations.push(`${group.missing} interval(s) have unavailable physical evidence. Missing values are not zero.`);
+                return result;
+            });
         });
         const balance = balances[0];
         chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true});

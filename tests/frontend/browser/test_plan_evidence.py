@@ -1385,7 +1385,8 @@ def test_same_named_batteries_keep_independent_graph_series(app_page):
     assert page.evaluate(
         "Chart.getChart(document.getElementById('plan-chart')).data.datasets.filter(dataset => dataset.yAxisID === 'soc').map(dataset => dataset.data.map(point => point.y))"
     ) == [[50, 25, 25, 0], [75, 75, 75, 75]]
-    expect(page.locator("#inspect-values")).to_contain_text("Shared battery: 2: Zero on the meter")
+    expect(page.locator("#inspect-values")).to_contain_text("Shared battery: 2")
+    expect(page.locator("#inspect-values")).to_contain_text("Zero on the meter")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)

@@ -24,9 +24,12 @@ def fact(label, value, unit=""):
     return {"label": label, "value": value, "unit": unit}
 
 
-def card(title, facts, observations=()):
-    """Group related recorded inputs/outcomes. Observations describe equality, never causation."""
-    return {"title": title, "facts": facts, "observations": list(observations)}
+def card(title, facts, observations=(), *, group=None):
+    """Group recorded facts, optionally by their archived inverter. Never infer source routes."""
+    result = {"title": title, "facts": facts, "observations": list(observations)}
+    if group is not None:
+        result["group"] = group
+    return result
 
 
 def power_limit(label, energy_kwh, duration_h, limit_w):
@@ -136,7 +139,6 @@ def summary_cards(plan, problem):
                 fact("Strategy", strategy),
                 fact("Solution", status),
                 fact("Currency", plan.get("currency")),
-                fact("Original contract version", plan["input_snapshot"].get("contract_version")),
                 fact("Grid import limit", problem.grid_import_limit_w, "W"),
                 fact("Grid export limit", problem.grid_export_limit_w, "W"),
             ],
@@ -326,6 +328,13 @@ def interval_evidence(plan, problem, interval_index):
         {},
     )
     flow = flows[interval_index] if interval_index < len(flows) else None
+    inverter_groups = {
+        converter.inverter_id: {
+            "id": converter.inverter_id,
+            "title": names.get(converter.inverter_id, f"Inverter {converter_index + 1}"),
+        }
+        for converter_index, converter in enumerate(problem.inverters)
+    }
     cards = [
         card(
             "Forecast and original prices: Selected interval",
@@ -426,7 +435,7 @@ def interval_evidence(plan, problem, interval_index):
                     [
                         fact("Control mode", mode),
                         fact(
-                            "Fixed power target",
+                            "Fixed power target (+ discharge)",
                             "Not applicable"
                             if target.get("mode") == "follow_grid_target"
                             else target.get("power_w"),
@@ -434,6 +443,7 @@ def interval_evidence(plan, problem, interval_index):
                         ),
                         fact("Charge: DC terminal", dispatch.get("charge_kwh"), "kWh"),
                         fact("Discharge: DC terminal", dispatch.get("discharge_kwh"), "kWh"),
+                        fact("Stored energy", stored, "kWh"),
                         fact(
                             "End SoC",
                             stored / battery.capacity_kwh * PERCENT
@@ -445,6 +455,7 @@ def interval_evidence(plan, problem, interval_index):
                         fact("Discharge limit", battery.discharge_limit_w, "W"),
                     ],
                     observations,
+                    group=inverter_groups[unit.inverter_id],
                 )
             )
         for source_index, source in enumerate(problem.pv_sources):
@@ -462,15 +473,26 @@ def interval_evidence(plan, problem, interval_index):
                             "kWh",
                         ),
                         fact("Planned use: DC", solar.get("used_kwh") if solar else None, "kWh"),
+                        fact(
+                            "Solar production",
+                            "Curtailment requested"
+                            if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                            is False
+                            else "Production allowed"
+                            if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                            is True
+                            else "Fixed production",
+                        ),
                         fact("Curtailment permitted", "Yes" if source.can_curtail else "No"),
                         *forecast_facts(plan, "solar", source.source_id),
                     ],
                     ["Production disabled in this plan."]
                     if solar and solar.get("enabled") is False
                     else [],
+                    group=inverter_groups[source.inverter_id],
                 )
             )
-        for converter_index, converter in enumerate(problem.inverters):
+        for converter in problem.inverters:
             dispatch = next(
                 (
                     item
@@ -482,7 +504,7 @@ def interval_evidence(plan, problem, interval_index):
             if dispatch is not None:
                 cards.append(
                     card(
-                        f"Converter {converter_index + 1}: Shared boundary",
+                        "Connection and limits",
                         [
                             fact("AC import", dispatch.get("import_kwh"), "kWh"),
                             fact("AC export", dispatch.get("export_kwh"), "kWh"),
@@ -509,6 +531,7 @@ def interval_evidence(plan, problem, interval_index):
                             interval.duration_h,
                             converter.ac_limit_w,
                         ),
+                        group=inverter_groups[converter.inverter_id],
                     )
                 )
     cards.extend(bonus_cards(plan, interval_index))
@@ -576,7 +599,7 @@ def bonus_cards(plan, interval_index):
             before = counters[interval_index - 1] if interval_index <= len(counters) else None
         cards.append(
             card(
-                "Export bonus: " + rule["rule_id"],
+                "Export bonus",
                 [
                     fact(
                         "Effective bonus rate",

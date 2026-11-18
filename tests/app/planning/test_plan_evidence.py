@@ -10,7 +10,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from open_energy_planner.app import create_app
-from open_energy_planner.savings.evidence import evidence
+from open_energy_planner.savings.evidence import bonus_cards, evidence
 from tests.app.savings.support.scenarios import START, problem
 
 
@@ -66,7 +66,8 @@ def test_evidence_preserves_original_inputs_and_never_claims_causation():
     interval = facts(result["intervals"][0]["cards"])
     assert plan == before
     assert result["plan_id"] == "evidence-original"
-    assert summary["Original contract version"] == "original-contract"
+    assert "Original contract version" not in summary
+    assert plan["input_snapshot"]["contract_version"] == "original-contract"
     assert summary["Solution"] == "Feasible: Financial optimality is not proved."
     assert summary["Price basis"] == "Estimated from a repeated trailing price window."
     assert interval["Import rate before conditional bonuses"] == 0.3
@@ -314,7 +315,7 @@ def test_grid_following_has_no_fictional_fixed_power_target():
     ]
     rows = facts(evidence(plan)["intervals"][0]["cards"])
     assert rows["Control mode"] == "Zero on the meter: Local regulation is active."
-    assert rows["Fixed power target"] == "Not applicable"
+    assert rows["Fixed power target (+ discharge)"] == "Not applicable"
 
 
 def test_bonus_period_reset_uses_its_own_archived_counter():
@@ -400,3 +401,52 @@ def test_invalid_archived_forecast_quality_is_reported_without_breaking_plan_rea
     result = evidence(plan)
     assert result["issue"]
     assert result["summary"] == []
+
+
+def test_interval_devices_group_by_original_inverter_without_changing_evidence():
+    """Roof and battery share inverter one, while a separate garage array stays on inverter two."""
+    plan = original_plan()
+    physics = plan["input_snapshot"]["problem"]
+    physics["inverters"].append({**physics["inverters"][0], "inverter_id": "garage-inverter"})
+    physics["pv_sources"].append(
+        {"source_id": "garage", "inverter_id": "garage-inverter", "can_curtail": False}
+    )
+    physics["intervals"][0]["pv_sources"].append(["garage", 0])
+    plan["expected_flows"][0]["inverters"].append(
+        {"inverter_id": "garage-inverter", "import_kwh": 0, "export_kwh": 0, "clipping": False}
+    )
+    plan["expected_flows"][0]["solar"].append(
+        {"source_id": "garage", "used_kwh": 0, "enabled": True}
+    )
+    before = deepcopy(plan)
+    result = evidence(plan)
+    assert result.get("issue") is None
+    cards = result["intervals"][0]["cards"]
+    groups = {item["title"]: item.get("group") for item in cards}
+    assert groups["House battery: Planned battery"] == {"id": "inv", "title": "Inverter 1"}
+    assert groups["South roof: Solar"] == {"id": "inv", "title": "Inverter 1"}
+    assert groups["Solar 2: Solar"] == {"id": "garage-inverter", "title": "Inverter 2"}
+    connections = [item for item in cards if item["title"] == "Connection and limits"]
+    assert {item["group"]["id"] for item in connections} == {"inv", "garage-inverter"}
+    assert facts([connections[0]])["AC export"] == 0.5
+    assert plan == before
+
+
+def test_bonus_title_omits_technical_identity_and_preserves_original_rule():
+    """A readable bonus title retains its independently specified rate, quota and archived identity."""
+    plan = original_plan()
+    plan["input_snapshot"]["problem"]["export_bonuses"] = [
+        {
+            "rule_id": "example-bonus-rule",
+            "initial_kwh": 2,
+            "rates": [0.07],
+            "caps_kwh": [100],
+            "periods": ["example-period"],
+        }
+    ]
+    before = deepcopy(plan)
+    cards = bonus_cards(plan, 0)
+    assert [item["title"] for item in cards] == ["Export bonus"]
+    assert facts(cards)["Effective bonus rate"] == 0.07
+    assert facts(cards)["Counter before this interval"] == 2
+    assert plan == before
