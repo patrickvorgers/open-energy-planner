@@ -49,7 +49,7 @@ export function bindStorageHistory(readToken, bytes) {
             }
             const known = samples.filter(row => Number.isFinite(row.database_bytes));
             const first = known[0], last = known.at(-1);
-            let summary = samples.length ? "Daily observations were recorded, but database size was unavailable. Missing sizes remain gaps." : `No database size measurements in this period. The first daily measurement appears after ${sampleTime} when the app is running.`;
+            let summary = samples.length ? "Database size is unavailable for the observations in this period. Missing sizes remain gaps." : `No database size measurements in this period. The first daily measurement appears after ${sampleTime} when the app is running.`;
             if (known.length === 1) summary = "";
             if (known.length > 1) {
                 const change = last.database_bytes - first.database_bytes;

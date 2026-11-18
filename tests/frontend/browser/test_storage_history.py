@@ -200,9 +200,7 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
         },
     ]
     page.get_by_role("button", name="Refresh", exact=True).click()
-    expect(page.locator("#storage-history-summary")).to_contain_text(
-        "database size was unavailable"
-    )
+    expect(page.locator("#storage-history-summary")).to_contain_text("Database size is unavailable")
     expect(page.locator("#storage-history-chart")).to_be_hidden()
     observation = page.get_by_label("Observation", exact=True)
     expect(observation).to_be_visible()
@@ -327,3 +325,13 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     assert page.evaluate(
         "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.map(point => point.y)"
     ) == [4, None, None]
+    daily["samples"] = []
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#storage-history-summary")).to_contain_text("Database size is unavailable")
+    expect(page.get_by_label("Observation", exact=True)).to_be_visible()
+    expect(page.locator("#storage-history-chart")).to_be_hidden()
+    usage["database_bytes"] = 7 * 1024**2
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#storage-history-chart")).to_be_visible()
+    expect(page.locator("#storage-history-summary")).to_be_empty()
+    expect(page.locator("#storage-history-selected")).to_contain_text("7 MiB (estimated)")
