@@ -9,7 +9,7 @@ from playwright.sync_api import expect
 from open_energy_planner.storage.adapters.lifecycle.schema import STORAGE_SAMPLES
 from open_energy_planner.storage.adapters.usage import StorageUsage
 from open_energy_planner.storage.adapters.usage_history import StorageHistory
-from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
+from tests.frontend.browser.helpers import TOKEN, choose_period, discover, wait_for_product_reads
 
 
 @pytest.fixture
@@ -76,7 +76,9 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
     page.goto(url + "/data-storage")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#storage-period")).to_have_value("month")
+    expect(
+        page.locator("#storage-period").get_by_role("button", name="Choose period", exact=True)
+    ).to_be_enabled()
     expect(page.locator("#storage-history-summary")).to_contain_text("Average:")
     canvas = page.locator("#storage-history-chart")
     expect(canvas).to_be_visible()
@@ -120,11 +122,19 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
     expect(page.locator("#database-size")).to_have_text("710 MiB")
     expect(page.locator("#storage-history-selected")).to_contain_text("Current:")
     expect(page.locator("#storage-history-selected")).to_contain_text("710 MiB")
+    ranges = {
+        "week": ("2026-11-12", "2026-11-18"),
+        "quarter": ("2026-08-21", "2026-11-18"),
+        "year": ("2025-11-19", "2026-11-18"),
+        "all": ("2025-11-18", "2026-11-18"),
+    }
     for period in ("week", "quarter", "year", "all"):
         with page.expect_response(
-            lambda response, period=period: "/v1/storage/history?period=" + period in response.url
+            lambda response, period=period: (
+                "/v1/storage/history?start=" + ranges[period][0] in response.url
+            )
         ) as loaded:
-            page.locator("#storage-period").select_option(period)
+            choose_period(page, *ranges[period])
         rows = loaded.value.json()
         assert rows["samples"][-1]["database_bytes"] == 680 * 1024**2
         if period == "quarter":
@@ -135,10 +145,10 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
         if period == "all":
             assert len(rows["samples"]) == 364
     delayed = []
-    page.route("**/v1/storage/history?period=quarter", lambda route: delayed.append(route))
-    with page.expect_request("**/v1/storage/history?period=quarter"):
-        page.locator("#storage-period").select_option("quarter")
-    page.locator("#storage-period").select_option("week")
+    page.route("**/v1/storage/history?start=2026-08-21*", lambda route: delayed.append(route))
+    with page.expect_request("**/v1/storage/history?start=2026-08-21*"):
+        choose_period(page, "2026-08-21", "2026-11-18")
+    choose_period(page, "2026-11-12", "2026-11-18")
     expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
     delayed[0].fulfill(json=quarter_rows)
     wait_for_product_reads(page)
@@ -148,11 +158,11 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
         )
         == 7
     )
-    page.unroute("**/v1/storage/history?period=quarter")
+    page.unroute("**/v1/storage/history?start=2026-08-21*")
     page.route(
         "**/v1/storage/history?*", lambda route: route.fulfill(status=503, body="private-password")
     )
-    page.locator("#storage-period").select_option("month")
+    choose_period(page, "2026-10-20", "2026-11-18")
     expect(page.locator("#storage-history-summary")).to_contain_text("Database history unavailable")
     expect(canvas).to_be_hidden()
     expect(page.locator("#storage")).to_be_visible()
@@ -354,7 +364,11 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     page.route(
         "**/v1/storage/history?*",
         lambda route: route.fulfill(
-            json={**daily, "latest": daily["samples"][-1] if daily["samples"] else None}
+            json={
+                **daily,
+                "calendar": {"min_day": "2026-11-12", "max_day": daily["end"]},
+                "latest": daily["samples"][-1] if daily["samples"] else None,
+            }
         ),
     )
     page.goto(url + "/data-storage")
@@ -379,7 +393,7 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
             "database_bytes": 6 * 1024**2,
         }
     )
-    page.locator("#storage-period").select_option("week")
+    choose_period(page, "2026-11-12", "2026-11-18")
     expect(page.locator("#storage-history-selected")).to_contain_text("7 MiB (estimated)")
     wait_for_product_reads(page)
     assert len(capacity_reads) == 2
@@ -425,7 +439,7 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#database-size")).to_have_text("7 MiB (estimated)")
     daily.update(period="all", start="2026-11-20", end="2026-11-20")
-    page.locator("#storage-period").select_option("all")
+    choose_period(page, "2026-11-18", "2026-11-18")
     expect(page.locator("#storage-history-selected")).to_contain_text(
         "Current: 11/19/2026, 12:15 PM: 7 MiB"
     )
@@ -447,7 +461,7 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
         ],
     )
     reads_before_period_change = len(capacity_reads)
-    page.locator("#storage-period").select_option("week")
+    choose_period(page, "2026-11-12", "2026-11-18")
     expect(page.locator("#storage-history-summary")).to_contain_text(
         "No database size measurements"
     )

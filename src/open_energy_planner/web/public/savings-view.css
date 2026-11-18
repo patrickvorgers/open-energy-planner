@@ -1,0 +1,32 @@
+/* Approved Savings A layout, using Courtyard fonts, surfaces and controls. */
+.savings-toolbar { display:flex; justify-content:flex-end; margin-bottom:24px; }
+.savings-summary { display:grid; grid-template-columns:1.1fr 1fr; gap:48px; align-items:center; margin-bottom:24px; padding:28px; }
+.workspace .savings-summary h2 { font:400 16px/1.5 Outfit,sans-serif; letter-spacing:0; margin:0; }
+.savings-amount { font:500 clamp(32px,5vw,70px)/1.15 "Space Grotesk",sans-serif; letter-spacing:-.05em; color:#18735e; margin:12px 0; overflow-wrap:anywhere; }
+.savings-amount.savings-loss { color:#a34e30; }
+.savings-meaning { max-width:360px; color:var(--oep-muted); font-size:16px; }
+.savings-period-label { font-size:14px; color:var(--oep-muted); margin-top:20px; }
+.savings-cost-row { margin:12px 0 20px; }
+.savings-cost-label { display:flex; justify-content:space-between; gap:16px; margin-bottom:8px; font-size:16px; }
+.savings-cost-label strong { font-weight:500; white-space:nowrap; }
+.savings-cost-track { height:12px; border-radius:3px; background:#f0f4f7; }
+.savings-cost-track > span { display:block; height:100%; border-radius:3px; background:#a5b7c9; }
+.savings-cost-track > #savings-actual-bar { background:var(--oep-blue); }
+.savings-cost-note { color:var(--oep-muted); font-size:14px; }
+.savings-chart-heading { display:flex; justify-content:space-between; gap:16px; align-items:baseline; }
+.workspace .savings-chart-heading h2 { font-size:21px; margin:0; }
+.savings-chart-heading p { color:var(--oep-muted); font-size:14px; }
+.savings-chart-wrap { height:260px; margin:20px 0; }
+.savings-explanation { padding-top:12px; border-top:1px solid var(--oep-line); }
+.savings-explanation > summary { min-height:44px; align-content:center; color:var(--oep-blue); cursor:pointer; }
+.savings-explanation p { max-width:820px; color:var(--oep-muted); font-size:16px; }
+.savings-explanation code { white-space:normal; }
+.savings-status { color:var(--oep-muted); font-size:14px; margin-top:20px; }
+#savings-selected:empty { display:none; }
+@media(max-width:700px) {
+    .savings-toolbar { display:block; }
+    .savings-summary { grid-template-columns:1fr; padding:22px; gap:20px; }
+    .savings-amount { font-size:clamp(32px,10vw,60px); }
+    .savings-chart-heading { display:block; }
+    .savings-chart-wrap { height:220px; }
+}

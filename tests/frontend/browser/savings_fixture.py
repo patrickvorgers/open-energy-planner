@@ -8,11 +8,13 @@ from open_energy_planner.build_info import RELEASE
 from open_energy_planner.contracts.calculation.formula import Formula
 from open_energy_planner.contracts.model import ContractPeriod, ContractSchedule, TariffEvidence
 from open_energy_planner.contracts.storage import ContractStore
+from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.installation.model import BatteryState, InstallationProblem, PVUnit
 from open_energy_planner.installation.valuation import TerminalValuation
 from open_energy_planner.optimization.domain import Battery, Interval
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.storage.adapters.store import PriceStore
+from open_energy_planner.savings.daily import DailySavings
 from open_energy_planner.savings.model import Frame
 from open_energy_planner.savings.runtime import SavingsRuntime
 from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore, stamp
@@ -207,7 +209,9 @@ def seed(directory, *, corrected=False, now=None):
             ),
             context,
         )
-        SavingsRuntime(store, SqlDocuments(plans.engine, "savings"), plans).process(schedule, now)
+        DailySavings(SavingsRuntime(store, SqlDocuments(plans.engine, "savings"), plans)).process(
+            schedule, None, now, SiteLocation(52, 5, "UTC")
+        )
         if corrected:
             from open_energy_planner.savings.repricing import PlanValuations
 

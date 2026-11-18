@@ -7,60 +7,24 @@ from datetime import timedelta
 
 import pytest
 
-from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
-from open_energy_planner.prices.storage.adapters.published import retain
-from open_energy_planner.savings.runtime import SavingsRuntime
-from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore, stamp
+from open_energy_planner.savings.daily import DailySavings
+from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore
 from open_energy_planner.storage.adapters.documents import SqlDocuments
-from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS
-from tests.app.savings.support.scenarios import END, START, bindings, contract, frame, problem
-from tests.database.support.history_datasets import settlement_batches
-
-
-def test_settlement_restart_idempotency_and_period_filtering(settlement):
-    """Two quarters cost actual .60 versus reference .40 inventory. Selecting the second retains -.10 benefit."""
-    runtime, _store, _docs, engine, plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    first = runtime.overview(START, END + timedelta(minutes=15))
-    assert first["savings"] == pytest.approx(-0.2)
-    json.dumps(first, allow_nan=False)  # MySQL integer SUM must not leak Decimal into the API.
-    assert first["coverage"] == {"evaluated": 2, "expected": 2, "estimated": 0}
-    restarted = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), plans)
-    restarted.process(contract(), END + timedelta(hours=2))
-    second = restarted.overview(END, END + timedelta(minutes=15))
-    assert second["savings"] == pytest.approx(-0.1)
-    assert second["intervals"][0]["reference"]["stored"] == {"battery": 0}
-    assert restarted.overview(START, END + timedelta(minutes=15)) == first
+from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
+from tests.database.support.history_datasets import retained_evaluation, settlement_batches
 
 
 def test_reconstructed_soc_quality_survives_restart(settlement, tmp_path):
     """Estimated SoC evidence remains immutable and labelled after restart on all four backends."""
 
-    runtime, store, docs, engine, _plans = settlement
+    _runtime, store, _docs, engine, _plans = settlement
     original = store.frames()
     reconstructed = replace(frame(start=END + timedelta(minutes=15)), quality="estimated_soc")
     context = {"bindings": bindings(), "seeds": [], "location": None}
     store.put_frames((reconstructed,), context)
-    runtime.advance_reference()
-    assert runtime.physical_issue is None
-    assert docs.read("physical-reference.json")["reference_stored"] == {"battery": 0}
     restarted = SettlementStore(engine)
     assert restarted.frames()[:2] == original
     assert restarted.frames()[-1]["frame"]["quality"] == "estimated_soc"
-
-
-def test_corrected_contract_creates_new_evaluation_preserving_original_plan(settlement):
-    """Changing actual import .30 to .40 changes total benefit -.20 to -.40. Old evaluated evidence remains readable."""
-    runtime, store, _docs, _engine, plans = settlement
-    original = plans.get_plan("original-plan")
-    runtime.process(contract(), END + timedelta(hours=1))
-    before = runtime.overview(START, END + timedelta(minutes=15))
-    runtime.process(contract(buy="0.4"), END + timedelta(hours=2))
-    after = runtime.overview(START, END + timedelta(minutes=15))
-    assert after["savings"] == pytest.approx(-0.4)
-    assert before["revision"] != after["revision"]
-    assert len(store.results(before["revision"], START, END + timedelta(minutes=15))) == 2
-    assert plans.get_plan("original-plan") == original
 
 
 def test_ingestion_retries_do_not_duplicate_or_replace_meter_evidence(settlement):
@@ -190,34 +154,6 @@ def test_sparse_capture_rejects_invalid_scan_or_frame_boundaries_atomically(sett
     assert not documents.exists("capture.json")
 
 
-def test_new_published_correction_reprices_without_reoptimizing(settlement):
-    """A changed published source starts a new assessment generation even when fixed retail formulas keep costs equal."""
-    runtime, _store, _docs, engine, _plans = settlement
-    now = END + timedelta(hours=1)
-    runtime.process(contract(), now)
-    first = runtime.overview(START, END + timedelta(minutes=15))
-    with engine.begin() as connection:
-        retain(
-            connection,
-            (
-                PriceSeries(
-                    "published",
-                    "NL",
-                    "EUR",
-                    now + timedelta(minutes=1),
-                    None,
-                    None,
-                    (PricePoint(START, END, 0.9, PriceKind.PUBLISHED, 15),),
-                ),
-            ),
-        )
-    runtime.process(contract(), now + timedelta(minutes=2))
-    corrected = runtime.overview(START, END + timedelta(minutes=15))
-    assert first["revision"] != corrected["revision"]
-    assert corrected["savings"] == first["savings"]
-    assert corrected["intervals"][0]["actual"]["tariffs"][0]["market_price"] == 0.9
-
-
 def test_background_plan_repricing_publishes_only_successful_versions(settlement):
     """Corrected .40 costs are separate. A later uncovered contract leaves that successful valuation and original plan intact."""
     from open_energy_planner.savings.repricing import PlanValuations
@@ -307,10 +243,8 @@ def test_sparse_multi_year_query_preserves_year_bounds_and_bounded_details(settl
         SETTLEMENT_FRAMES,
     )
 
-    runtime, store, docs, engine, _plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    head = docs.read("head.json")
-    sample = store.results(head["revision"], START, END)[0]
+    runtime, _store, docs, engine, _plans = settlement
+    head, sample = retained_evaluation(docs)
     windows = [
         (datetime(2022, 12, 31, 23, 45, tzinfo=UTC), 1),
         (datetime(2023, 1, 1, tzinfo=UTC), 97),
@@ -332,143 +266,6 @@ def test_sparse_multi_year_query_preserves_year_bounds_and_bounded_details(settl
     full = runtime.overview(datetime(2022, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC))
     assert full["coverage"]["evaluated"] == 99
     assert [row["start"] for row in full["chart"]] == ["2022-12-01", "2023-01-01", "2024-01-01"]
-
-
-def test_correction_uses_ingestion_order_not_provider_receipt_time(settlement):
-    """An HTTP refresh received before the last poll but committed after it still triggers retrospective correction."""
-    runtime, _store, _docs, engine, _plans = settlement
-    now = END + timedelta(hours=1)
-    runtime.process(contract(), now)
-    first = runtime.overview(START, END)
-    with engine.begin() as connection:
-        retain(
-            connection,
-            (
-                PriceSeries(
-                    "late-refresh",
-                    "NL",
-                    "EUR",
-                    START,
-                    None,
-                    None,
-                    (PricePoint(START, END, 0.8, PriceKind.PUBLISHED, 15),),
-                ),
-            ),
-        )
-    runtime.process(contract(), now + timedelta(minutes=1))
-    after = runtime.overview(START, END)
-    assert first["revision"] != after["revision"]
-    assert after["intervals"][0]["actual"]["tariffs"][0]["market_price"] == 0.8
-
-
-def test_changed_price_cannot_commit_a_stale_interval(settlement):
-    """A price corrected after evaluation was read rejects the stale commit without storing evaluation or continuation."""
-    from sqlalchemy import func, select
-
-    from open_energy_planner.savings.model import PendingSettlement
-    from open_energy_planner.storage.adapters.lifecycle.schema import SETTLEMENT_EVALUATIONS
-
-    runtime, store, _docs, engine, _plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    first = runtime.overview(START, END)["intervals"][0]
-    with engine.begin() as connection:
-        retain(
-            connection,
-            (
-                PriceSeries(
-                    "race",
-                    "NL",
-                    "EUR",
-                    START,
-                    None,
-                    None,
-                    (PricePoint(START, END, 0.8, PriceKind.PUBLISHED, 15),),
-                ),
-            ),
-        )
-    with pytest.raises(PendingSettlement, match="changed"):
-        store.commit("stale-evaluation", first, {})
-    assert store.state("stale-evaluation") is None
-    with engine.connect() as connection:
-        assert (
-            connection.scalar(
-                select(func.count())
-                .select_from(SETTLEMENT_EVALUATIONS)
-                .where(SETTLEMENT_EVALUATIONS.c.revision == "stale-evaluation")
-            )
-            == 0
-        )
-
-
-def test_failed_settlement_correction_preserves_latest_successful_view(settlement):
-    """An uncovered corrected contract cannot replace the two settled quarters with an empty default evaluation."""
-    runtime, _store, _docs, _engine, _plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    before = runtime.overview(START, END + timedelta(minutes=15))
-    broken = replace(contract(), periods=(replace(contract().periods[0], effective_from=END),))
-    runtime.process(broken, END + timedelta(hours=2))
-    after = runtime.overview(START, END + timedelta(minutes=15))
-    assert after["revision"] == before["revision"]
-    assert after["totals"] == before["totals"]
-    assert after["coverage"] == before["coverage"]
-    assert after["issue"] == "Contract coverage is missing"
-
-
-def test_partial_correction_publishes_after_existing_coverage_is_replayed(settlement, monkeypatch):
-    """One-quarter batches retain the old two-quarter view until correction has caught up, then publish both corrected quarters."""
-    runtime, store, docs, _engine, _plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    before = runtime.overview(START, END + timedelta(minutes=15))
-    frames = store.frames
-    monkeypatch.setattr(store, "frames", lambda after=None: frames(after, limit=1))
-    runtime.process(contract(buy="0.4"), END + timedelta(hours=2))
-    assert runtime.overview(START, END)["revision"] == before["revision"]
-    assert docs.read("working.json") is not None
-    runtime.process(contract(buy="0.4"), END + timedelta(hours=3))
-    after = runtime.overview(START, END + timedelta(minutes=15))
-    assert after["revision"] != before["revision"]
-    assert after["coverage"]["evaluated"] == 2
-    assert after["savings"] == pytest.approx(-0.4)
-    assert docs.read("working.json") is None
-
-
-def test_contract_correction_revalues_settlement_inventory_with_frozen_wholesale(settlement):
-    """Corrected .40 usable-volume-capped value leaves the reference's first kWh above its one-kWh value cap. Benefit is -.40."""
-    from open_energy_planner.contracts.model import TariffEvidence
-
-    runtime, _store, _docs, engine, plans = settlement
-    document = plans.get_plan("original-plan")
-    document["plan_id"] = "valued-plan"
-    document["input_snapshot"]["contract_version"] = contract().version
-    rate = TariffEvidence(
-        START,
-        END,
-        0.1,
-        0.3,
-        -0.1,
-        "published",
-        15,
-        "test-market",
-        "original-price",
-        contract().version,
-        0,
-    )
-    document["input_snapshot"]["tariff_evidence"] = json.loads(
-        json.dumps([asdict(rate)], default=lambda value: value.isoformat())
-    )
-    plans.state["plan"] = document
-    plans.save()
-    with engine.begin() as connection:
-        connection.execute(
-            ACTIVATIONS.update()
-            .where(ACTIVATIONS.c.activated_at == stamp(START))
-            .values(plan_id="valued-plan")
-        )
-    runtime.process(contract(buy="0.4"), END + timedelta(hours=1))
-    first = runtime.overview(START, END)
-    assert first["coverage"]["evaluated"] == 1
-    assert first["savings"] == pytest.approx(-0.4)
-    assert first["totals"]["reference"]["inventory_change"] == 0
 
 
 @pytest.mark.parametrize("role, entities", [("imports", ["sensor.pv"]), ("exports", [])])
@@ -607,42 +404,6 @@ def test_capture_preserves_requested_configuration_edges(
     assert docs.read("capture.json")["end"] == moments[-1].isoformat()
 
 
-@pytest.mark.parametrize("seed_kind", ["missing", "aggregate"])
-def test_bonus_failure_does_not_stop_physical_reference(settlement, seed_kind):
-    """Two measured 1 kWh quarters deplete the independent 2 kWh stock despite an unknown bonus budget."""
-    runtime, _store, docs, engine, plans = settlement
-    original = plans.get_plan("original-plan")
-    from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
-
-    selected = contract(bonus=True)
-    book = None
-    if seed_kind != "missing":
-        book = CounterBook(
-            END,
-            (
-                CounterSeed(
-                    "bonus",
-                    selected.bonuses[0].period_start(START),
-                    1,
-                    10,
-                    "sensor.export" if seed_kind == "late" else "sensor.aggregate",
-                    END if seed_kind == "late" else START,
-                    () if seed_kind == "late" else (("sensor.export", 10),),
-                ),
-            ),
-        )
-    runtime.process(selected, END + timedelta(hours=1), book)
-    assert runtime.issue == ("Historical bonus baseline is being read from Home Assistant")
-    state = docs.read("physical-reference.json")
-    assert state["reference_stored"] == {"battery": 0}
-    assert state["actual_stored"] == {"battery": 2}
-    assert state["end"] == (END + timedelta(minutes=15)).isoformat()
-    restarted = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), plans)
-    restarted.process(contract(buy="0.4", bonus=True), END + timedelta(hours=2), book)
-    assert docs.read("physical-reference.json") == state
-    assert plans.get_plan("original-plan") == original
-
-
 def test_later_budget_confirmation_initializes_historical_billing_on_every_backend(
     settlement, tmp_path
 ):
@@ -656,10 +417,11 @@ def test_later_budget_confirmation_initializes_historical_billing_on_every_backe
         "bonus", selected.bonuses[0].period_start(START), 1, 10, "sensor.export", END
     )
     confirmed = CounterBook(END, (seed,))
-    runtime.process(selected, END + timedelta(hours=1), confirmed)
+    result = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", selected, confirmed, END + timedelta(days=1), START, None
+    )
     assert runtime.issue is None
-    result = runtime.overview(START, END + timedelta(minutes=15))
-    assert result["coverage"]["evaluated"] == 2
+    assert result["cash"]["coverage_seconds"] == 1800
     assert store.frames() == original
     assert confirmed.seeds == (seed,)
     # An automatic historical seed lives separately from the manual planning confirmation.
@@ -676,7 +438,7 @@ def test_historical_source_confirmation_survives_a_current_meter_change(settleme
     """A new physical meter's 99-kWh confirmation cannot replace the retained old source's 1-kWh opening volume."""
     from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
 
-    runtime, store, docs, _engine, _plans = settlement
+    runtime, store, _docs, _engine, _plans = settlement
     selected = contract(bonus=True)
     original = store.frames
     seed = CounterSeed(
@@ -693,11 +455,12 @@ def test_historical_source_confirmation_survives_a_current_meter_change(settleme
 
     monkeypatch.setattr(store, "frames", historical_context)
     new_source = CounterBook(END, (replace(seed, entity_id="sensor.replacement", used_kwh=99),))
-    runtime.process(selected, END + timedelta(hours=1), new_source)
+    result = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", selected, new_source, END + timedelta(days=1), START, None
+    )
     assert runtime.issue is None
-    state = store.state(docs.read("head.json")["revision"])
-    assert list(state["counters"]["actual"].values()) == [1]
-    assert list(state["counters"]["reference"].values()) == [1]
+    assert result["cash"]["coverage_seconds"] == 1800
+    assert result["scenarios"]["actual"]["totals"]["bonus"] == 0
 
 
 def test_multiple_export_anchors_backdate_on_every_database_backend(settlement):
@@ -716,210 +479,6 @@ def test_multiple_export_anchors_backdate_on_every_database_backend(settlement):
     assert seed.used_kwh == pytest.approx(8.85)
     assert seed.component_meters == ((EXPORTS[0], 100), (EXPORTS[1], 200))
     assert store.frames()[:2] == original
-
-
-def test_missing_physical_interval_does_not_reset_or_skip_reference(settlement):
-    """After two measured quarters a missing third blocks a fourth. Budget failure never permits an SoC reset."""
-    runtime, store, docs, _engine, _plans = settlement
-    runtime.process(contract(bonus=True), END + timedelta(hours=1))
-    before = docs.read("physical-reference.json")
-    store.put_frames(
-        (frame(start=END + timedelta(minutes=30)),),
-        {"bindings": bindings(), "seeds": [], "location": None},
-    )
-    runtime.process(contract(bonus=True), END + timedelta(hours=2))
-    assert docs.read("physical-reference.json") == before
-    assert runtime.physical_issue == "Reference continuity requires the missing interval first"
-
-
-@pytest.mark.parametrize("dependency", ["battery", "bonus", "none"])
-def test_sparse_first_frame_cannot_initialize_continuous_stock_or_bonus_allowance(
-    settlement, monkeypatch, dependency
-):
-    """A first accepted frame after the common start retains evidence without inventing simulated opening state."""
-    from sqlalchemy import delete
-
-    from open_energy_planner.storage.adapters.lifecycle.schema import SETTLEMENT_FRAMES
-
-    runtime, store, documents, engine, plans = settlement
-    original = plans.get_context("original-plan")
-    selected_bindings = bindings()
-    missing, later = frame(), frame(start=END)
-    if dependency != "battery":
-        stateless = replace(problem(), batteries=(), terminal_valuations=())
-        original = {
-            **original,
-            "input_snapshot": {
-                **original["input_snapshot"],
-                "problem": json.loads(
-                    json.dumps(asdict(stateless), default=lambda value: value.isoformat())
-                ),
-            },
-        }
-        monkeypatch.setattr(plans, "get_context", lambda _identity: original)
-        selected_bindings["batteries"] = []
-        missing = replace(missing, battery_start={}, battery_end={})
-        later = replace(later, battery_start={}, battery_end={})
-    with engine.begin() as connection:
-        connection.execute(delete(SETTLEMENT_FRAMES))
-    context = {"bindings": selected_bindings, "seeds": [], "location": None}
-    store.put_frames((later,), context)
-    selected_contract = contract(bonus=dependency == "bonus")
-    runtime.process(selected_contract, END + timedelta(hours=1))
-    if dependency == "none":
-        assert runtime.issue is None
-        assert documents.exists("head.json")
-        assert runtime.overview(START, END + timedelta(minutes=15))["coverage"]["evaluated"] == 1
-        return
-    assert runtime.issue == "Reference continuity requires the missing interval first"
-    assert runtime.attention is False
-    assert not documents.exists("head.json")
-    assert runtime.overview(START, END + timedelta(minutes=15))["intervals"] == []
-    assert store.frames()[0]["frame"] == later.record()
-    if dependency == "battery":
-        assert runtime.physical_issue == "Reference continuity requires the missing interval first"
-        assert not documents.exists("physical-reference.json")
-    store.put_frames((missing,), context)
-    runtime.process(selected_contract, END + timedelta(hours=2))
-    assert runtime.issue != "Reference continuity requires the missing interval first"
-    if dependency == "battery":
-        assert documents.exists("head.json")
-        assert runtime.overview(START, END + timedelta(minutes=15))["coverage"]["evaluated"] == 2
-
-
-def test_physical_reference_advances_without_contract(settlement):
-    """Measured physics requires no tariff configuration or inventory valuation to continue its stock."""
-    runtime, _store, docs, _engine, _plans = settlement
-    runtime.process(None, END + timedelta(hours=1))
-    assert docs.read("physical-reference.json")["reference_stored"] == {"battery": 0}
-    assert runtime.issue == "Contract configuration is required for settlement"
-    assert runtime.physical_issue is None
-
-
-@pytest.mark.parametrize(
-    "condition",
-    ["partial", "pending", "pending_second", "private_pending", "invalid", "missing_plan"],
-)
-def test_settlement_activity_distinguishes_waiting_from_failure(settlement, monkeypatch, condition):
-    """Partial replay and pending input retain prior results without inventing failure or recovery."""
-    from open_energy_planner.activities.events import Events, Outcome
-    from open_energy_planner.savings.model import PendingSettlement
-    from open_energy_planner.storage.adapters.activities import ActivityStore
-
-    runtime, store, docs, engine, plans = settlement
-    now = END + timedelta(hours=1)
-    runtime.process(contract(), now)
-    original_plan = plans.get_plan("original-plan")
-    published = docs.read("head.json")
-    prior_intervals = runtime.overview(START, END + timedelta(minutes=15))["intervals"]
-
-    async def scenario():
-        """Run the real financial worker and activity writer with explicitly bounded source evidence."""
-        events = Events(ActivityStore(engine), lambda: now)
-        events.loop = asyncio.get_running_loop()
-        runtime.events = events
-        if condition in ("partial", "pending", "pending_second", "private_pending"):
-            failed = await events.start("settlement", "settlement", "Earlier savings evaluation")
-            await events.finish(failed, Outcome.FAILED, "Earlier rejected evidence.")
-        cursor = events.cursor
-        try:
-            with monkeypatch.context() as patch:
-                if condition == "partial":
-                    frames = store.frames
-
-                    def one_interval(after=None, *, end=None, limit=96):
-                        """Use the actual reader with a one-row cap to exercise multi-batch replay."""
-                        return frames(after, end=end, limit=1)
-
-                    patch.setattr(store, "frames", one_interval)
-                elif condition in ("pending", "pending_second", "private_pending", "invalid"):
-                    prepare = runtime.bonus.prepare
-
-                    def reject(*args, **kwargs):
-                        """Keep expected evidence waiting distinct from invalid retained inputs."""
-                        if condition == "pending_second" and args[1].start == START:
-                            return prepare(*args, **kwargs)
-                        if condition in ("pending", "pending_second"):
-                            raise PendingSettlement("Published price coverage is missing")
-                        if condition == "private_pending":
-                            raise PendingSettlement("PRIVATE_WAITING_EVIDENCE")
-                        raise ValueError("Contract coverage is missing")
-
-                    patch.setattr(runtime.bonus, "prepare", reject)
-                else:
-                    patch.setattr(store, "context_plan", lambda _start: None)
-                await asyncio.to_thread(runtime.process, contract(buy="0.4"), now)
-            await events.flush()
-            terminal = [
-                row["value"]
-                for row in events.changes(cursor)["events"]
-                if row["topic"] == "activity" and row["value"]["state"] != "running"
-            ]
-            assert len(terminal) == 1
-            row = terminal[0]
-            assert {
-                field: value for field, value in row["context"].items() if field in ("start", "end")
-            } == {
-                "start": START.isoformat(),
-                "end": (END if condition == "partial" else END + timedelta(minutes=15)).isoformat(),
-            }
-            waiting = condition in ("partial", "pending", "pending_second", "private_pending")
-            assert "PRIVATE_WAITING_EVIDENCE" not in json.dumps(row)
-            if condition == "partial":
-                assert "processed 1 of 1 measured intervals" in row["detail"]
-                assert "next background check continues with the next batch" in row["detail"]
-                assert "waiting_start" not in row["context"]
-            else:
-                assert (
-                    row["context"]["waiting_start"]
-                    == (END if condition == "pending_second" else START).isoformat()
-                )
-                assert (
-                    row["context"]["waiting_end"]
-                    == (
-                        END + timedelta(minutes=15) if condition == "pending_second" else END
-                    ).isoformat()
-                )
-                assert (
-                    f"processed {1 if condition == 'pending_second' else 0} of 2 measured intervals"
-                    in row["detail"]
-                )
-            if condition in ("pending", "pending_second"):
-                assert "Published electricity prices are missing" in row["detail"]
-                assert "next background check tries again" in row["detail"]
-                assert "price sources under Installation" in row["detail"]
-            elif condition == "invalid":
-                assert "No contract price rule covers" in row["detail"]
-                assert "dated rule under Contract" in row["detail"]
-            elif condition == "missing_plan":
-                assert "No original energy plan covers" in row["detail"]
-            assert row["state"] == ("skipped" if waiting else "failed")
-            assert not row["usable"] and not row["recovered"]
-            assert events.health["settlement"]["state"] == ("unknown" if waiting else "degraded")
-            assert ("settlement", "settlement") in events.failed
-            assert docs.read("head.json") == published
-            assert (
-                runtime.overview(START, END + timedelta(minutes=15))["intervals"] == prior_intervals
-            )
-            assert plans.get_plan("original-plan") == original_plan
-            cursor = events.cursor
-            await asyncio.to_thread(runtime.process, contract(buy="0.4"), now)
-            await events.flush()
-            recovered = [
-                row["value"]
-                for row in events.changes(cursor)["events"]
-                if row["topic"] == "activity" and row["value"]["state"] != "running"
-            ]
-            assert len(recovered) == 1
-            assert recovered[0]["state"] == "completed"
-            assert recovered[0]["usable"] and recovered[0]["recovered"]
-            assert events.health["settlement"]["state"] == "available"
-            assert ("settlement", "settlement") not in events.failed
-            assert len(runtime.overview(START, END + timedelta(minutes=15))["intervals"]) == 2
-        finally:
-            await events.close()
-
-    asyncio.run(scenario())
 
 
 def test_repricing_failure_hides_private_exception_values(settlement, monkeypatch, caplog):
@@ -954,7 +513,6 @@ def test_repricing_activity_identifies_plan_period_and_preserves_safe_failure(
     settlement, monkeypatch
 ):
     """Real stored activities identify the original horizon and explain financial failure without changing advice."""
-    import asyncio
 
     from open_energy_planner.activities.events import Events
     from open_energy_planner.savings import repricing

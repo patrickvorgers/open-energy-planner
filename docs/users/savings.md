@@ -1,6 +1,6 @@
 # Understand savings and costs
 
-Planning predicts an outcome. **Energy > Savings** evaluates retained metering and a separate simulated reference. Read the comparison basis and coverage before interpreting a monetary total.
+Planning predicts an outcome. **Energy > Savings** compares recorded electricity cash cost with the same measured home and solar without battery exchange. Read the comparison basis and coverage before interpreting a monetary total.
 
 ## Expected benefit on Planning
 
@@ -33,101 +33,97 @@ Open **Cost breakdown** to separate cash, wear and stored-energy value. Check ef
 
 ## Read evaluated Savings
 
-Choose a period and inspect **Daily results**. The actual side uses recorded meters and published settlement prices. **Battery self-consumption** simulates storage without price optimization. **Without battery** simulates the same measured household demand and available solar without storage. Each scenario has its own coverage and bonus counters.
+**Energy > Savings** shows one comparison: the electricity cost with your battery
+versus the same measured home and solar without a battery.
 
-| Planning comparison | Evaluated Savings comparison |
-|---|---|
-| Predicts a future horizon | Evaluates completed local days from chronological quarter-hour measurements |
-| Uses the selected original plan's forecasts and prices | Uses retained metering and published settlement prices |
-| Shows both battery scenarios versus without battery | Preserves actual operation, continuous self-consumption and without-battery costs |
-| Starts each future comparison from the recorded common state | Carries independent reference stock and bonus counters through time |
+```text
+battery saving = cost without battery - cost with battery
+electricity cost = import cost - export income - applicable bonus income
+```
 
-The reference is simulated, not an independently measured parallel household. A favourable difference does not prove that OEP alone caused it. Real equipment behavior, forecasts and the reference assumptions all matter.
+For example, EUR 34.80 without the battery minus EUR 22.40 with the battery gives
+EUR 12.40 saved. Negative savings mean that the battery increased electricity
+costs in the selected period. This is a cash-cost comparison. It excludes battery
+wear, investment costs and changes in the value of stored energy. Charging is
+paid for when electricity is bought. Using previously stored energy can therefore
+shift the apparent saving between days or months.
 
-For each measured quarter, the app applies the dated import and export prices and
-eligible contract bonus. Economic cost is import cost minus export and bonus
-income, plus battery wear, minus the change in stored-energy value. The reference
-uses its own simulated battery stock and export allowance throughout the period.
+The without-battery amount is reconstructed from recorded AC energy flows.
+Battery charging is removed from measured demand and battery discharge is added
+back. The calculation keeps the measured solar production and the actual timing
+of appliances, heating and EV charging. It does not run another battery schedule
+or depend on a simulated state of charge.
 
-| Benefit | Calculation over matching accepted quarters |
-|---|---|
-| Smart planning | Battery self-consumption cost minus actual cost |
-| Versus without battery | Without-battery cost minus actual cost |
-| Self-consumption versus without battery | Without-battery cost minus battery self-consumption cost |
+Quarter-hour totals cannot reveal the exact sequence of flows within a quarter.
+When no battery energy is removed, recorded gross import and export remain
+unchanged. Otherwise, the reconstruction first offsets the opposite grid flow
+and then increases import or export. Solar curtailment, hybrid clipping and the
+timing of flexible loads are not independently reversed. The result measures the
+battery's cash contribution, including how it was operated. It does not prove
+that every saving was caused by the planner.
 
-For example, actual cost of EUR 10, self-consumption cost of EUR 12 and
-without-battery cost of EUR 14 imply benefits of EUR 2, EUR 4 and EUR 2 respectively.
-These overlapping comparisons must not be added together. Negative benefits mean
-the actual operation or simulated scenario was more expensive than its reference.
+Choose the period through the calendar control. The arrows move to the previous
+or next available period. The calendar includes standard periods and **Custom
+period**, where you can choose both dates. The amount, both costs and the daily
+chart always use the same selection. Open **How is this calculated?** for the
+basis and limitations. The chart retains negative values and gaps. Keyboard
+users can focus it and inspect amounts with Left, Right, Home and End.
+
+The shared date control uses the Home Assistant installation timezone and the
+signed-in user's date format. Forecast quality, Activity and Planning performance
+use its single-day mode. Their charts and filters retain their existing meaning.
+Planning performance permits only dates within its backend-reported retention
+window. Disabled dates cannot be selected through arrows, shortcuts or the
+calendar. Planning's relative future-horizon controls remain separate.
 
 ## Inspect coverage before totals
 
-Missing readings, a missing settlement price or an unestablished opening bonus counter can delay evaluation. Estimated hourly or boundary reconstruction remains labelled estimated. A gap is not a zero-cost interval and does not reset the reference to a fresh battery.
+Both displayed costs include only intervals for which the same comparison can
+be calculated. Missing intervals are never counted as zero and partial totals
+are never extrapolated. A missing quarter does not stop later valid quarters.
+There is no continuous simulated battery stock that a gap could invalidate.
 
-A missing or invalid measurement interval does not stop the import of later valid
-intervals or days. The affected time remains uncovered. Once the import catches
-up, missing measurements in provisional days are requested again during the
-recovery window. Hourly reconstruction uses both bounding hourly readings,
-including when an import resumes partway through an hour. A permanent gap can
-still leave a continuous battery or bonus comparison unavailable. Independently
-recoverable actual costs and measured energy continue where their evidence allows.
-Recovery attempts rotate across gaps and provisional days, so one permanent gap
-cannot keep later recoverable measurements waiting until finalization.
+Recorded AC meters, published prices and applicable contract rules are still
+necessary. A DC solar meter behind a hybrid inverter cannot establish the
+measured AC alternative. Such intervals remain unavailable for the comparison
+instead of using a simulated conversion. Capped export bonuses retain independent actual and without-battery
+usage. A later actual meter reading cannot establish an unknown reconstructed
+allowance. Where export or the bonus rate is zero, the exact zero payment remains
+usable without inventing the missing usage. A positive payment may still need
+earlier export evidence or a genuine contractual reset.
 
-A contract may start after the earliest available Home Assistant history. For example, a June contract can use recorded statistics even when those statistics begin in January. Historical bonus evaluation keeps the contract start and annual reset separate. If a newer bonus checkpoint cannot be traced back through stored measurements, the app automatically requests a historical statistics endpoint using the same confirmed reference and any manual missing-period export. It then needs only the local measurements between that completed hour and the requested interval. Do not change a valid contract date or enter an estimated bonus total to bypass a wait.
+Savings states whether the selected period is complete or partial. It also
+identifies reconstructed measurements. Measured zero savings remain zero. No
+comparable evidence produces **Not available**, never a fictional EUR 0.00.
+Connection failures clear the old amounts until the selected period is loaded
+successfully. Configuration problems retain their specific recovery guidance.
 
-Measured history normally becomes available after the completed interval and Recorder delay. Repeatedly refreshing does not create missing evidence. Open the relevant warning or use [troubleshooting](troubleshooting.md#savings-or-quality-is-incomplete).
+## Provisional and finalized days
 
-### Provisional and finalized days
+Only completed Home Assistant local days are evaluated. After midnight, yesterday
+becomes provisional. Three complete local days remain available for missing
+measurements, published prices and corrections. Monday closes at Friday 00:00.
+Summer and winter clock changes do not shorten that recovery window.
 
-Savings initially selects yesterday in Home Assistant's timezone. Device labels
-follow current Home Assistant Energy names while finalized calculations remain
-unchanged. Changing the installation timezone after daily history exists pauses
-automatic processing and retains the existing calendar evidence.
-The warning asks you to restore the original Home Assistant timezone. Savings
-resumes automatically after you restore it. Existing daily results remain readable
-while processing and archive maintenance are paused.
-Missing Contract or Installation location settings also pause processing with a
-specific warning. Complete those settings to resume. Previously stored results
-remain available during the pause.
+Finalized daily results are immutable. Older finalized results retain their
+original calculation policy and are not relabelled or mixed into the measured
+cash comparison. Their archived evidence remains retained. Provisional days with
+the required measurements can be evaluated using the new policy. Expired detail
+cannot be reconstructed from an old total or a current battery reading.
 
-The current day is not evaluated yet. After local midnight, the previous day becomes provisional. Three complete local days remain available for missing measurements, published prices and corrections. For Monday, those are Tuesday, Wednesday and Thursday. Monday closes at Friday 00:00 in Home Assistant's timezone. Summer and winter clock changes do not shorten this calendar window.
+Changing the installation timezone after daily history exists pauses processing
+until the original Home Assistant timezone is restored. Missing Contract or
+Installation location settings also pause processing with recovery guidance.
+Existing results remain readable during a pause. Refreshing does not manufacture
+missing measurements.
 
-Each scenario closes as **Complete**, **Partial** or **Unavailable**. Partial totals cover only the displayed measured time. They are never stretched to represent a full day. Actual costs can remain usable while a simulated scenario is unavailable. The benefit includes only intervals accepted for both scenarios being compared. A complete actual-cost total and a partial reference-cost total cannot simply be subtracted.
+Planning continues to show expected economic costs, including its separate wear
+and stored-energy valuation. Those future estimates have a different basis from
+the retrospective electricity cash comparison. Do not add overlapping plans or
+combine their predictions with measured Savings.
 
-Smart planning benefit and benefit versus without battery have independent
-coverage. One can remain available when the other is unavailable. Charts use
-day or month totals according to the selected period. Missing measured meter
-associations remain unavailable rather than appearing as zero consumption.
-Valid measured energy remains available when the original plan or accounting
-context is missing. Costs and benefits still require their own complete evidence.
+For the accounting and archive contracts, see [settlement and measured
+savings](../development/SAVINGS.md).
 
-A reference without batteries or bonus rules can resume after a gap on later
-fully measured intervals. The missing interval remains uncovered. Unknown battery
-stock or simulated bonus usage cannot be reset to make a comparison available.
-
-An unknown historical bonus allowance does not hide an otherwise exact quarter
-with no export or a zero applicable bonus rate. Its bonus payment is known to be
-zero. Costs can also use an intact physical reference even while its bonus usage
-is unknown. The allowance stays unknown, so a later export whose bonus depends on
-that allowance remains uncovered. Pairwise benefits exclude only the affected
-quarters. Provisional days are recalculated in the background. Previously finalized
-days retain their original results and coverage.
-
-After finalization, the daily costs, energy totals, coverage, missing ranges, battery endpoints and calculation versions remain available. Later changes to terms or prices do not silently rewrite a finalized day. Detailed temporary quarters can then expire. **View retained day plan** opens the original daily plan when one was published that day. Its forecast is separate from the measured daily result.
-
-On upgrade, existing history receives a recovery window before old days can close. Backfill proceeds in the background. An old day appearing first does not mean the entire historical import has finished.
-
-A gap in physical measurements never resets a simulated battery to the actual battery. Unknown simulated bonus usage never becomes a fresh allowance. Later actual measurements and independently recoverable scenarios may still produce partial results. Missing prices alone do not erase known physical battery progress.
-
-## Avoid misleading comparisons
-
-- Do not sum benefits from overlapping future plans.
-- Do not compare different time coverage as though it were the same period.
-- Do not call stored-energy value cash profit.
-- Do not substitute expected flows for measured execution.
-- Do not treat lower grid import and lower cost as interchangeable objectives.
-
-For implementation and exact measurement-quality rules, use [settlement and continuous reference](../development/SAVINGS.md) and [battery inventory valuation](../development/TERMINAL-VALUATION.md).
-
-**Next:** [Inspect forecast quality](forecasts.md#read-forecast-quality), or [preserve your data](data-storage.md).
+**Next:** [Inspect forecast quality](forecasts.md#read-forecast-quality), or
+[preserve your data](data-storage.md).

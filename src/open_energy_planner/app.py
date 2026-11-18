@@ -866,7 +866,6 @@ def create_app(
                     "settlement_bonus_request": settlement_bonus_request(),
                     "savings_status": {
                         "issue": savings_runtime.issue,
-                        "physical_issue": savings_runtime.physical_issue,
                         "action_required": savings_runtime.attention,
                     },
                     **repository.state,

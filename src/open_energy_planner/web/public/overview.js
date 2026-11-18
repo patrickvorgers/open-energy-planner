@@ -1,3 +1,4 @@
+import {createSavingsView} from "./savings-view.js";
 // Read-only views never activate an archived plan or reset the reference scenario.
 import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
@@ -6,22 +7,20 @@ import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePe
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
+const savingsPage = createSavingsView($("savings-view"), api);
 const CONNECTED_MESSAGE = "Connected";
 const PLAN_REFRESH_MILLISECONDS = 15000;
 const PLAN_READ_TIMEOUT_MILLISECONDS = 5000;
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let requestedPlan = new URL(location.href).searchParams.get("plan");
 let selectedLinkedPlan = false;
-let token = "", cursor = null, evaluationCursor = null, selectionRequest = 0, periodRequest = 0;
+let token = "", cursor = null, selectionRequest = 0, periodRequest = 0;
 let planRefreshEnabled = false, planRefreshBusy = false, overviewLoads = 0, renderedPlanId = null;
 let planReadPending = false;
 let simulationReadPending = false;
 let evidenceRequest = null;
 let priceRefreshPending = false;
 let periodCostPlan = null, periodCostKey = "", periodCostRequest = 0;
-const evaluationVersions = new Map();
-const DAILY_RESULTS_PAGE_SIZE = 25;
-let dailySavingsData = null, dailySavingsPage = 0;
 let overviewSessionReady = false, overviewIngress = false;
 let sourceNamesGeneration = 0, planSourceNamesGeneration = 0;
 const isMoneyUnit = (unit) => /^[A-Z]{3}(\/kWh)?$/.test(unit || "");
@@ -456,7 +455,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                         if (!bar) return [];
                         return balanceNotes(bar, id, axisTime);
                     }
-                    if (!items.length || ["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart"].includes(id)) return "";
+                    if (!items.length || ["forecast-chart", "reference-chart", "self-consumption-chart"].includes(id)) return "";
                     const step = inspectSteps.find((step) => step.start <= items[0].parsed.x && items[0].parsed.x < step.end);
                     if (id === "price-chart") {
                         const time = Number.isFinite(priceHoverTime) ? priceHoverTime : items[0].parsed.x;
@@ -485,7 +484,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
                 ...(series.some((entry) => entry.axis === "soc") ? {soc: {position: "right", min: 0, max: 100, stacked: false, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
             onClick: (_event, elements) => {
-                if (["savings-chart", "realization-chart", "forecast-chart", "reference-chart", "self-consumption-chart"].includes(id) || id === "price-chart" && !priceInputPlanId || !elements.length) return;
+                if (["forecast-chart", "reference-chart", "self-consumption-chart"].includes(id) || id === "price-chart" && !priceInputPlanId || !elements.length) return;
                 const time = datasets[elements[0].datasetIndex].data[elements[0].index].x;
                 const index = inspectSteps.findIndex((step) => step.start <= time && time < step.end);
                 if (index >= 0) { $("inspect-time").value = index; inspect(); $("plan-evidence-panel").open = true; $("interval-evidence-panel").open = true; $("evidence-time").scrollIntoView({block: "nearest"}); }
@@ -567,7 +566,6 @@ function applyRange() {
     const currentPlan = !selectedLinkedPlan && $("plan-version").selectedIndex === 0 && first <= now;
     const start = first == null ? undefined : currentPlan ? currentQuarter : Math.floor(first / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS;
     for (const [id, instance] of charts) {
-        if (["savings-chart", "realization-chart"].includes(id)) continue;
         if (id === "price-chart" && !priceInputPlanId) {
             const priceStart = currentPriceWindow ? Math.max(currentPriceWindow.start, currentQuarter) : undefined;
             const priceEnd = currentPriceWindow ? Math.max(currentPriceWindow.end, priceStart + QUARTER_MILLISECONDS) : undefined;
@@ -1188,171 +1186,8 @@ async function refreshLatestPlan() {
         planRefreshBusy = false;
     }
 }
-/** Use local calendar boundaries as aware API instants. Absent coverage never becomes zero savings. */
-async function savings(signal) {
-    const request = ++periodRequest;
-    try {
-        const start = $("period-start").value, last = $("period-end").value;
-        if (!start || !last || last < start) throw new Error("Choose a valid date range.");
-        const query = {start: localInstant(start), end: localInstant(nextDate(last))};
-        const selectedRevision = $("evaluation-version").value;
-        if (selectedRevision) query.revision = selectedRevision;
-        const data = await api(`v1/savings?${new URLSearchParams(query)}`, signal);
-        if (request !== periodRequest) return false;
-        if (data.daily) { renderDailySavings(data); return true; }
-        const coverage = data.coverage;
-        for (const revision of data.versions || []) evaluationVersions.set(revision.revision, revision);
-        renderVersions(selectedRevision);
-        evaluationCursor = data.next_evaluation;
-        $("older-evaluations").hidden = !evaluationCursor;
-        $("evaluation-version-info").textContent = data.revision ? `${data.corrected ? "Corrected evaluation" : "Original evaluation"}: ${data.revision.slice(0, 8)}: Original plans remain unchanged.` : "An evaluation version appears when settlement can begin.";
-        $("coverage").textContent = `Quarters evaluated: ${number(coverage.evaluated)} of ${coverage.expected}: Reconstructed intervals: ${coverage.estimated}: Missing coverage is not zero savings.${data.details_truncated ? " Detail table shows the first day. Select a day to inspect later intervals. Period totals and chart cover the full selection." : ""}${data.issue ? ` ${data.issue}.` : ""}`;
-        const currency = data.intervals[0]?.currency || "";
-        $("savings-chart").setAttribute("aria-label", "Evaluated savings over the selected period");
-        $("realization-chart").setAttribute("aria-label", "Recorded import compared with advice and simulated reference");
-        $("realization-chart").closest("figure").querySelector("figcaption h3").textContent = "Import: advice and realization";
-        $("savings-total").textContent = coverage.evaluated ? `Evaluated benefit: ${money(data.savings)} ${currency}: Avoided gross import: ${number(data.avoided_import_kwh)} kWh: Negative results are retained.` : "No evaluated savings yet. Comparison starts when a published plan, completed metering and published prices are available.";
-        $("cost-rows").replaceChildren();
-        for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["grid_cash", "Net electricity cost"], ["wear", "Battery wear"], ["inventory_change", "Battery value change (estimated, not cash)"], ["economic_cost", "Economic cost"], ["import_kwh", "Gross import (kWh)"]]) row($("cost-rows"), [label, coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.actual[key]) : "-", coverage.evaluated ? (key.endsWith("_kwh") ? number : money)(data.totals.reference[key]) : "-"]);
-        $("evaluation-rows").replaceChildren();
-        $("realized-battery-rows").replaceChildren();
-        $("inventory-rows").replaceChildren();
-        for (const r of data.intervals) {
-            row($("evaluation-rows"), [when(r.start), r.advice?.complete ? "Advice available" : "No complete active advice", number(r.load_kwh), number(r.measured_pv_kwh), r.advice?.complete ? number(r.advice.import_kwh) : "-", number(r.actual.import_kwh), number(r.reference.import_kwh), money(r.savings), r.quality === "recorded" && !r.available_pv_estimated && !r.subinterval_estimated ? "Measurements were recorded. The reference was simulated." : "Contains estimated reconstruction", when(r.evaluated_at)]);
-            const button = document.createElement("button"); button.type = "button"; button.textContent = "View original plan";
-            button.addEventListener("click", () => selectOriginal(r.plan_id));
-            $("evaluation-rows").lastElementChild.children[1].append(button);
-            Object.entries(r.actual.stored).forEach(([id, value], index) => row($("realized-battery-rows"), [when(r.start), r.device_names?.[id] || `Battery ${index + 1}`, number(value), number(r.reference.stored[id])]));
-            for (const movement of r.inventory_movements) row($("inventory-rows"), [when(r.start), r.device_names?.[movement.device_id] || "Changed battery", movement.scenario === "reference" ? "Simulated reference" : "Actual", number(movement.kwh), money(movement.value), "Installation change"]);
-        }
-        const bins = data.details_truncated ? data.chart : data.intervals;
-        const segments = [];
-        let previousEnd = null;
-        for (const bin of bins) {
-            const start = new Date(data.details_truncated ? `${bin.start}T00:00:00Z` : bin.start).getTime();
-            const end = new Date(data.details_truncated ? `${bin.end}T00:00:00Z` : bin.end).getTime();
-            if (start !== previousEnd) segments.push([]);
-            segments.at(-1).push([start, bin.savings], [end, bin.savings]);
-            previousEnd = end;
-        }
-        chart("savings-chart", [{name: `Benefit (${currency})`, points: segments.flat(), segments}], {unit: currency, utcDays: data.details_truncated});
-        // Detailed measured/advised energy uses interval duration. Never plot truncated totals as complete period power.
-        const realized = [], advised = [], simulated = [];
-        let previous = null;
-        for (const interval of data.intervals) {
-            const start = new Date(interval.start).getTime(), end = new Date(interval.end).getTime();
-            const hours = (end - start) / 3600000;
-            if (previous !== null && start !== previous) {
-                for (const points of [realized, advised, simulated]) points.push([start, null]);
-            }
-            realized.push([start, interval.actual.import_kwh / hours * 1000], [end, interval.actual.import_kwh / hours * 1000]);
-            simulated.push([start, interval.reference.import_kwh / hours * 1000], [end, interval.reference.import_kwh / hours * 1000]);
-            const value = interval.advice?.complete ? interval.advice.import_kwh / hours * 1000 : null;
-            advised.push([start, value], [end, value]); previous = end;
-        }
-        chart("realization-chart", [{name: "Recorded EMS", points: realized}, {name: "Simulated reference", points: simulated, reference: true}, {name: "Original advice", points: advised}], {unit: "W", minimum: 0});
-        $("realization-chart").closest("figure").querySelector("figcaption p").textContent = data.details_truncated ? "First day of detailed intervals only. Select a day to compare later advice and recorded import. Period benefit above covers the entire selection." : "Recorded EMS import versus simulated reference and original advice. Missing advice stays absent.";
-
-        return true;
-    } catch (error) { if (request === periodRequest) $("coverage").textContent = error.message; return false; }
-}
-/** Present compact daily evidence with independent coverage, including unavailable scenarios. */
-function renderDailySavings(data) {
-    const samePeriod = dailySavingsData?.start === data.start && dailySavingsData?.end === data.end;
-    if (!samePeriod) dailySavingsPage = 0;
-    dailySavingsData = data;
-    $("daily-savings-details").hidden = false;
-    for (const id of ["savings-chart", "realization-chart"]) $(id).closest("figure").classList.add("daily-savings-chart");
-    $("savings-chart").setAttribute("aria-label", "Daily smart planning benefit on matching measured coverage");
-    $("realization-chart").setAttribute("aria-label", "Daily gross import: Actual, battery self-consumption and without battery");
-    $("evaluation-version").closest("label").hidden = true;
-    $("older-evaluations").hidden = true;
-    $("evaluation-version-info").textContent = "Finalized days retain their original calculation method, contract, installation and quality. Changes apply only to provisional days.";
-    for (const id of ["evaluation-rows", "realized-battery-rows", "inventory-rows"]) $(id).closest("details").hidden = true;
-    const currency = data.currency || "";
-    $("coverage").textContent = `${data.day_count} evaluated days: Actual coverage: ${percentage(data.coverage.actual.seconds / data.coverage.actual.expected_seconds * 100)}: Self-consumption coverage: ${percentage(data.coverage.reference.seconds / data.coverage.reference.expected_seconds * 100)}: Without battery coverage: ${percentage(data.coverage.without_battery.seconds / data.coverage.without_battery.expected_seconds * 100)}.${data.details_truncated ? " Select a shorter period to inspect later daily details. Totals and charts cover the full selection." : ""}${data.issue ? ` ${data.issue}.` : ""}`;
-    $("savings-total").textContent = [
-        data.savings === null ? "No matching measured coverage for a smart planning comparison. Missing evidence is not zero savings." : `Smart planning benefit: ${money(data.savings)} ${currency}.`,
-        data.battery_savings === null ? "No matching measured coverage for a comparison versus without battery. Missing evidence is not zero savings." : `Benefit versus without battery: ${money(data.battery_savings)} ${currency}.`,
-        "Negative results are retained."
-    ].join(" ");
-    const table = $("cost-rows").closest("table");
-    table.querySelector("caption").textContent = "Costs on each scenario's own measured coverage. Compare benefits only on matching coverage.";
-    table.querySelector("thead tr").replaceChildren(...["Component", "Actual", "Battery self-consumption", "Without battery"].map(label => { const cell = document.createElement("th"); cell.textContent = label; return cell; }));
-    $("cost-rows").replaceChildren();
-    for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], ["grid_cash", "Net electricity cost"], ["wear", "Battery wear"], ["inventory_change", "Battery value change (estimated, not cash)"], ["economic_cost", "Economic cost"], ["import_kwh", "Gross import (kWh)"], ["export_kwh", "Gross export (kWh)"]]) {
-        row($("cost-rows"), [label, ...["actual", "reference", "without_battery"].map(kind => data.totals[kind][key] === null ? "Unavailable" : (key.endsWith("_kwh") ? number : money)(data.totals[kind][key]))]);
-    }
-    const segments = [];
-    let previousEnd = null;
-    for (const bin of data.chart) {
-        const start = Date.parse(bin.start), end = Date.parse(bin.end);
-        if (bin.savings === null) { previousEnd = null; continue; }
-        if (start !== previousEnd) segments.push([]);
-        segments.at(-1).push([start, bin.savings], [end, bin.savings]); previousEnd = end;
-    }
-    chart("savings-chart", [{name: `Smart planning benefit (${currency})`, points: segments.flat(), segments}], {unit: currency, calendarDates: true});
-    $("savings-chart").setAttribute("aria-label", "Smart planning benefit on matching measured coverage");
-    $("savings-chart").closest("figure").querySelector("figcaption p").textContent = "Benefit totals for each plotted interval on matching measured coverage. Partial coverage remains partial. Gaps indicate unavailable comparisons.";
-    const series = [["actual", "Actual"], ["reference", "Battery self-consumption"], ["without_battery", "Without battery"]].map(([kind, name]) => ({name, points: data.chart.flatMap(bin => [[Date.parse(bin.start), bin[`${kind}_import_kwh`] ?? null], [Date.parse(bin.end), bin[`${kind}_import_kwh`] ?? null]])}));
-    chart("realization-chart", series, {unit: "kWh", minimum: 0, calendarDates: true});
-    const caption = $("realization-chart").closest("figure").querySelector("figcaption");
-    $("realization-chart").setAttribute("aria-label", "Gross import: Actual, battery self-consumption and without battery");
-    caption.querySelector("h3").textContent = "Gross import";
-    caption.querySelector("p").textContent = "Measured actual import and both simulated scenarios on their own available coverage. Inspect daily details before comparing partial days.";
-    renderDailySavingsRows(!samePeriod);
-}
-/** Keep a compact, accessible 25-row list and disclose missing ranges only on request. */
-function renderDailySavingsRows(resetScroll = false) {
-    const data = dailySavingsData;
-    if (!data) return;
-    const pages = Math.max(1, Math.ceil(data.days.length / DAILY_RESULTS_PAGE_SIZE));
-    dailySavingsPage = Math.max(0, Math.min(dailySavingsPage, pages - 1));
-    const expanded = new Set([...$("daily-savings-rows").querySelectorAll("tr:has(details[open])")].map(row => row.dataset.day));
-    const focusedDay = document.activeElement?.closest("#daily-savings-rows tr")?.dataset.day;
-    const focusedTag = document.activeElement?.tagName?.toLowerCase();
-    let restoreFocus = null;
-    $("daily-savings-rows").replaceChildren();
-    for (const day of data.days.slice(dailySavingsPage * DAILY_RESULTS_PAGE_SIZE, (dailySavingsPage + 1) * DAILY_RESULTS_PAGE_SIZE)) {
-        const amount = kind => { const value = day.scenarios[kind]; return value.totals ? `${money(value.totals.economic_cost)}: ${percentage(value.coverage_seconds / day.expected_seconds * 100)}` : "Unavailable"; };
-        const quality = Object.values(day.scenarios).every(scenario => scenario.status === "complete") ? "Complete" : Object.values(day.scenarios).some(scenario => scenario.status !== "unavailable") ? "Partial" : "Unavailable";
-        row($("daily-savings-rows"), [dateLabel(day.day), `${day.finalized_at ? "Finalized" : "Provisional"}: ${quality}`, amount("actual"), amount("reference"), amount("without_battery"), day.savings === null ? "Unavailable" : money(day.savings), ""]);
-        const current = $("daily-savings-rows").lastElementChild;
-        current.dataset.day = day.day;
-        const details = document.createElement("details"), summary = document.createElement("summary");
-        summary.textContent = "Coverage and calculation"; details.append(summary);
-        const metadata = document.createElement("p"); metadata.textContent = `Evaluated: ${when(day.evaluated_at)}: ${day.finalized_at ? `Finalized: ${when(day.finalized_at)}` : `Recovery until: ${when(day.finalizes_after)}`}: Method: ${day.policy}`; details.append(metadata);
-        if (day.day_plan_id) { const original = document.createElement("button"); original.type = "button"; original.textContent = "View retained day plan"; original.addEventListener("click", () => selectOriginal(day.day_plan_id)); details.append(original); }
-        for (const [kind, label] of [["actual", "Actual"], ["reference", "Battery self-consumption"], ["without_battery", "Without battery"]]) {
-            const scenario = day.scenarios[kind], text = document.createElement("p");
-            text.textContent = `${label}: ${optionLabel(scenario.status)}: Reconstructed coverage: ${percentage(scenario.estimated_seconds / day.expected_seconds * 100)}${scenario.opening ? `: Opening battery value: ${money(scenario.opening.value)}: Closing battery value: ${money(scenario.closing.value)}` : ""}`; details.append(text);
-            for (const gap of scenario.missing) { const missing = document.createElement("p"); missing.textContent = `${when(gap.start)} to ${when(gap.end)}: ${gap.reason}`; details.append(missing); }
-        }
-        for (const movement of day.inventory_movements || []) {
-            const changed = document.createElement("p");
-            changed.textContent = `Installation change: ${when(movement.at)}: ${day.device_names?.[movement.device_id] || "Battery"}: ${movement.scenario === "actual" ? "Actual" : "Battery self-consumption"}: ${number(movement.kwh)} kWh: Value: ${money(movement.value)}: Excluded from operating benefit.`;
-            details.append(changed);
-        }
-        $("daily-savings-rows").lastElementChild.lastElementChild.append(details);
-        details.open = !resetScroll && expanded.has(day.day);
-        if (!resetScroll && focusedDay === day.day && ["summary", "button"].includes(focusedTag)) restoreFocus = current.querySelector(focusedTag);
-    }
-    $("daily-savings-page").textContent = `Page ${dailySavingsPage + 1} of ${pages}`;
-    $("daily-savings-previous").disabled = dailySavingsPage === 0;
-    $("daily-savings-next").disabled = dailySavingsPage >= pages - 1;
-    const scroll = $("daily-savings-rows").closest(".table-scroll");
-    if (resetScroll) { scroll.scrollTop = 0; scroll.scrollLeft = 0; }
-    restoreFocus?.focus({preventScroll: true});
-}
-/** Keep the selected immutable evaluation available while paging descriptors. */
-function renderVersions(selected) {
-    $("evaluation-version").replaceChildren();
-    const latest = document.createElement("option"); latest.value = ""; latest.textContent = "Latest evaluated costs"; $("evaluation-version").append(latest);
-    for (const revision of [...evaluationVersions.values()].sort((a, b) => b.created_at.localeCompare(a.created_at))) {
-        const option = document.createElement("option"); option.value = revision.revision; option.textContent = `${when(revision.created_at)}: Version: ${revision.revision.slice(0, 8)}`; $("evaluation-version").append(option);
-    }
-    $("evaluation-version").value = selected;
-}
+/** Read the selected cash comparison without changing Planning state. */
+async function savings(signal) { ++periodRequest; return savingsPage.read(signal); }
 /** Open original advice only. Do not issue a control or planning request. */
 function selectOriginal(id, signal) {
     if (![...$("plan-version").options].some((o) => o.value === id)) {
@@ -1443,19 +1278,7 @@ window.addEventListener("pageshow", event => {
 $("overview-connect").addEventListener("submit", (event) => { event.preventDefault(); token = $("overview-token").value; $("overview-token").value = ""; load(); });
 $("plan-version").addEventListener("change", () => { requestedPlan = null; selectedLinkedPlan = false; showPlan(); });
 $("older-plans").addEventListener("click", () => plans(true).catch((error) => { $("overview-status").textContent = error.message; }));
-$("period").addEventListener("submit", (event) => { event.preventDefault(); savings(); });
-$("evaluation-version").addEventListener("change", () => savings());
-$("daily-savings-previous").addEventListener("click", () => { dailySavingsPage--; renderDailySavingsRows(true); });
-$("daily-savings-next").addEventListener("click", () => { dailySavingsPage++; renderDailySavingsRows(true); });
 $("overview-refresh").addEventListener("click", load);
-$("older-evaluations").addEventListener("click", async () => {
-    try {
-        const data = await api(`v1/evaluations?before=${encodeURIComponent(evaluationCursor)}`);
-        for (const revision of data.versions) evaluationVersions.set(revision.revision, revision);
-        renderVersions($("evaluation-version").value);
-        evaluationCursor = data.next_evaluation; $("older-evaluations").hidden = !evaluationCursor;
-    } catch (error) { $("overview-status").textContent = error.message; }
-});
 /** Initialize once after a confirmed read/render. Explicit Connect/Refresh can retry a failed attempt. */
 async function initializeOverview() {
     const signal = AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS);
@@ -1463,10 +1286,7 @@ async function initializeOverview() {
         const session = await api("setup/session", signal);
         if (overviewSessionReady) return session;
         useHomeAssistantTimezone(session.timezone);
-        const completed = new Date(`${localDate()}T00:00:00Z`);
-        completed.setUTCDate(completed.getUTCDate() - 1);
-        if (!$("period-start").value) $("period-start").value = completed.toISOString().slice(0, 10);
-        if (!$("period-end").value) $("period-end").value = $("period-start").value;
+        savingsPage.initialize();
         watchSourceNames(() => api("setup/session", AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS)), () => {
             sourceNamesGeneration++;
             return location.hash === "#savings" ? savings() : showPlan();

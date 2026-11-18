@@ -1,3 +1,4 @@
+import {createPeriodSelector} from "./period-selector.js";
 import "./chart_theme.js";
 import {qualityChart} from "./quality-chart.js";
 import {when, dateLabel, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
@@ -7,6 +8,8 @@ bindSettingsActions();
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = (id) => document.getElementById(id);
+let qualityDays = [];
+const qualityDay = createPeriodSelector(find("quality-period"), {dayOnly: true, label: "Forecast day", onChange: show});
 let token = "", cursor = null, requestVersion = 0, historyVersion = 0, charts = [], displayedDay = null;
 const quantity = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 3}) : "Unavailable";
 let currentRows = new Map(), indexData = null;
@@ -121,7 +124,7 @@ function graph(source, index, inProgress) {
 }
 
 async function show() {
-    const version = ++requestVersion, day = find("quality-day").value; clear();
+    const version = ++requestVersion, day = qualityDay.value.start; clear();
     find("quality-status").textContent = "Loading daily forecast evidence…";
     try {
         const [data, selection] = await Promise.all([day ? api(`v1/forecast-quality/days/${encodeURIComponent(day)}`) : Promise.resolve(indexData), api("v1/models")]);
@@ -142,18 +145,16 @@ async function load(older = false) {
     try {
         const page = await api("v1/forecast-quality/days" + (older && cursor ? `?before=${encodeURIComponent(cursor)}` : ""));
         if (version !== historyVersion) return;
-        const previous = find("quality-day").value;
-        const days = new Set([...page.days, ...(older ? [...find("quality-day").options].map((option) => option.value) : []), ...(previous ? [previous] : [])]);
-        find("quality-day").replaceChildren();
-        for (const day of [...days].sort().reverse()) { const option = document.createElement("option"); option.value = day; option.textContent = dateLabel(day); find("quality-day").append(option); }
+        const previous = qualityDay.value.start;
+        qualityDays = [...new Set([...page.days, ...(older ? qualityDays : []), ...(previous ? [previous] : [])])].sort().reverse();
+        qualityDay.set({start: qualityDays.includes(previous) ? previous : qualityDays[0] || null, availableDays: qualityDays, min: qualityDays.at(-1), max: qualityDays[0], enabled: qualityDays.length > 0});
         indexData = page;
-        cursor = page.next_before; find("quality-older").disabled = !cursor; find("quality-older").hidden = !cursor; find("quality-day").disabled = !find("quality-day").options.length;
-        if ([...find("quality-day").options].some((option) => option.value === previous)) find("quality-day").value = previous;
+        cursor = page.next_before; find("quality-older").disabled = !cursor; find("quality-older").hidden = !cursor;
         await show();
     } catch (error) { if (version === historyVersion) { clear(); find("quality-status").textContent = error.message; } }
 }
 find("connect").onsubmit = (event) => { event.preventDefault(); token = find("token").value; load(); };
 find("quality-source").onchange = () => {selections[subject] = find("quality-source").value; remember(); renderSources();};
 for (const button of document.querySelectorAll("#quality-subjects button")) button.onclick = () => {subject = button.dataset.subject; devices(displayedDay || {}); remember(); renderSources();};
-find("quality-day").onchange = show; find("quality-refresh").onclick = () => load(); find("quality-older").onclick = () => load(true);
+find("quality-refresh").onclick = () => load(); find("quality-older").onclick = () => load(true);
 sessionResponse(base).then((response) => response.json()).then((session) => { useHomeAssistantTimezone(session.timezone); watchSourceNames(() => sessionResponse(base).then(response => response.json()), show, session.source_names_revision); find("connect").hidden = Boolean(session.ingress); if (session.ingress) load(); }).catch((error) => { find("quality-status").textContent = error.message; });

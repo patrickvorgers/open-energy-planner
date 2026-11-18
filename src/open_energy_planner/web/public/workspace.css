@@ -1,3 +1,5 @@
+@import url("./savings-view.css");
+@import url("./period-selector.css");
 /* Shared workspace shell. Setup retains its existing progressive form behaviour. */
 .price-daily-description { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .price-daily-key { display:flex; flex-wrap:wrap; gap:.5rem 1.5rem; font-size:.875rem; }
@@ -39,7 +41,7 @@
 .toolbar label { flex:1; max-width:540px; }
 .workspace label { font-size:12px; font-weight:600; color:#475569; }
 .workspace select,.workspace input:not([type="checkbox"]):not([type="range"]) { border:1px solid #d6dfe7; border-radius:8px; padding:11px; font-size:13px; margin-top:6px; background:white; color:#1e3444; }
-.muted,#plan-description,#evaluation-version-info,#coverage { color:#64748b; font-size:12px; }
+.muted,#plan-description { color:#64748b; font-size:12px; }
 .insight { background:#fff; border:1px solid #dde6ec; border-radius:10px; padding:20px; line-height:1.8; font-size:14px; }
 .chart-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin:22px 0 10px; }
 .chart-toolbar p { font-size:13px; font-weight:650; }
@@ -69,10 +71,6 @@
 .chart-legend > button,.chart-legend > p { grid-column:1/-1; }
 .chart-legend > button { justify-self:start; }
 .workspace details { border:1px solid #dee6ec; border-radius:10px; background:#fff; padding:16px; margin:16px 0; font-size:13px; }
-.workspace #daily-savings-details .table-scroll { max-height:none; }
-.workspace #daily-savings-details details { margin:0; padding:6px 10px; }
-.workspace #daily-savings-details td { vertical-align:top; font-variant-numeric:tabular-nums; }
-.workspace #daily-savings-details td:nth-child(n+3):nth-child(-n+6) { text-align:right; white-space:nowrap; }
 .workspace summary { cursor:pointer; font-weight:650; color:#354c61; }
 .workspace .table-scroll { margin-top:12px; max-height:360px; }
 .workspace th { color:#60768c; background:#f6f8fa; font-size:11px; position:sticky; top:0; }
@@ -248,7 +246,7 @@
 .workspace button[aria-pressed="true"] { background:var(--oep-navy); color:white; border-color:var(--oep-navy); }
 .workspace select,.workspace input:not([type="checkbox"]):not([type="range"]) { color:var(--oep-ink); border-color:var(--oep-line); font-family:inherit; }
 .workspace input[type="checkbox"],.workspace input[type="range"] { accent-color:var(--oep-blue); }
-.workspace .page-header p,.workspace label,.workspace .muted,.workspace #plan-description,.workspace #evaluation-version-info,.workspace #coverage { color:var(--oep-muted); }
+.workspace .page-header p,.workspace label,.workspace .muted,.workspace #plan-description { color:var(--oep-muted); }
 .workspace .eyebrow,.workspace header p:first-child { color:var(--oep-blue); }
 .workspace #overview-status { color:var(--oep-navy); }
 .workspace .chart-card,.workspace details,.workspace fieldset,.workspace .contract-rule,.workspace .contract-actions,.workspace .evidence-card,.workspace #overview-connect { border-color:var(--oep-line); box-shadow:none; }

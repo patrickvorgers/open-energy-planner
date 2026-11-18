@@ -1,507 +1,165 @@
-# Settlement, continuous reference and visual overview
+# Settlement and measured battery savings
 
-The savings service implements UI-01–18 and the associated storage/benefit boundary.
-It does not change the selected planning strategy, enable another optimizer, or
-claim that a counterfactual is measured or that every saving was caused by OEP.
+The app owns measured settlement. Home Assistant transfers bounded Recorder
+energy evidence through the existing integration. No solver, physical device
+control, separate database or executable contract language is introduced.
 
-## Planning period costs
+## Calculation boundaries
 
-`savings/windows.py` owns read-only costs for arbitrary timezone-aware subperiods
-of an original plan. `GET /v1/plans/{plan_id}/comparison?start=...&end=...` returns
-only the covered period, scenario amounts and issues. The authenticated route
-performs no writes or optimization and runs financial replay off the event loop.
-The original comparison without query parameters retains its whole-plan contract.
+Planning and Savings answer different questions:
 
-Import, export and wear follow original interval mean flows. Interior battery
-endpoints are linearly interpolated in stored kWh. Both endpoints use the same
-original terminal valuation curves, including their reserves and useful-volume
-caps. No new tariffs or valuation curves are derived for a different view.
-Chronological bonus settlement includes all earlier original export. A cap
-reached within a partially selected interval credits its earliest exported energy.
-Independent missing scenarios remain unavailable and cannot fabricate a benefit.
-A window outside the plan has no coverage, rather than a zero economic cost.
+| View | Basis |
+| --- | --- |
+| Planning | Original future forecasts and tariffs, with economic cost including battery wear and terminal inventory valuation. |
+| Savings | Recorded AC grid and battery flows, with net electricity cash cost compared against the same measured home and solar without storage. |
 
-The frontend chooses a time range and formats server-owned amounts. Its latest
-plan starts at the current UTC quarter, while linked or historical plans retain
-their original start. Captions state actual covered boundaries. The full-period
-button states available hours instead of assuming that every retained or expired
-plan has 48 remaining hours. Versioned range reads clear stale totals and cannot
-replace a newer selection. Whole-plan evidence keeps its explicitly separate original-plan scope.
-Planning exposes scenario cost breakdowns and a contract-update notice. The API
-retains separate original and corrected-contract valuation evidence without a
-duplicate user-facing comparison table.
+Planning's independent self-consumption and without-battery forecasts remain in
+`forecast.py`, `reference.py` and `scenarios.py`. `windows.py` provides read-only
+costs for timezone-aware subperiods of an original plan. A different chart window
+does not optimize again or change original valuation curves, prices or bonus
+chronology. Whole-plan evidence remains separate from selected-period amounts.
 
-## Ownership and flow
+Measured Savings uses `measured-battery-cash-v1`. It runs no continuous battery
+simulation and needs no historical SoC, original physical forecast, wear rate or
+terminal valuation. It does require frozen, disjoint AC measurement bindings,
+published prices and dated contract rules.
 
-```mermaid
-flowchart LR
-  subgraph HA[Home Assistant]
-    Energy[Energy dashboard inventory]
-    Recorder[Native Recorder statistics and SoC history]
-    subgraph Integration[OEP integration]
-      Bridge[Bounded read-only settlement bridge]
-    end
-    Energy --> Bridge
-    Recorder --> Bridge
-  end
-  subgraph App[OEP app]
-    Capture[Validated immutable metering intervals]
-    Reference[Continuous self-consumption simulation]
-    Billing[Dated formulas, bonuses and separate counters]
-    Archive[Shared SQLAlchemy database]
-    UI[Plan, history and savings overview]
-    Capture --> Reference --> Archive --> UI
-    Reference --> Billing --> Archive
-    Capture --> Billing
-    Plans[Original plans and activation chronology] --> Reference
-    Plans --> UI
-    Prices[Archived published wholesale prices] --> Billing
-  end
-  Bridge -->|Authenticated local API| Capture
-  style HA fill:#e5f3ff,stroke:#1976a3
-  style Integration fill:#d2ebf7,stroke:#1976a3
-  style App fill:#e8f5e9,stroke:#388e3c
+## Measured reconstruction
+
+`accounting.measured_cash_flows` computes household demand from the frozen signed
+energy terms. Subtracting measured AC solar yields the no-battery net exchange.
+Its difference from recorded net grid exchange removes the measured battery
+contribution. A positive difference first reduces recorded gross export and then
+adds import. A negative difference first reduces import and then adds export.
+Zero difference preserves both recorded gross directions, including quarters
+that imported and exported at different times.
+
+No extra inverter, DC or cell efficiency is applied to these already normalized
+AC meters. There is no reconstructed battery stock. Missing or contradictory
+meter evidence invalidates its interval, not later valid intervals. Raw meter
+evidence is never replaced with forecasts or current readings.
+
+This is a quarter-energy reconstruction, not independently measured alternate
+reality. Within-quarter sequencing is unknown. Actual solar curtailment, hybrid
+conversion/clipping and flexible-load timing are retained rather than simulated
+away. The result measures the battery's electricity cash contribution and does
+not isolate every effect of energy management.
+
+## Cash and bonus accounting
+
+`bill` splits quarters at published-price, dated-contract, bonus-window and reset
+boundaries. Partial splits use uniform energy rates and retain estimated quality.
+For each side:
+
+```text
+electricity cost = purchase - export income - bonus
+saving = without-battery electricity cost - actual electricity cost
 ```
 
-The planner remains responsible only for future plans. `savings/reference.py`
-owns deterministic physical self-consumption. `accounting.py` owns independent
-settlement. `daily.py` owns completed-day replay, recovery and immutable daily closure.
-`runtime.py` retains capture validation and the legacy interval-evaluation reader/replay.
-Native HA
-and SQLAlchemy objects stay in their adapters. No second database or executable
-contract language is introduced. Settlement mutations use a dedicated lock. The
-app lock is held only while taking immutable configuration snapshots. Slow
-financial replay cannot hold plan publication or HA snapshot reads. HA capture
-validation/transport failures remain isolated from plan acceptance, with retry
-backoff retained until the request changes. After historical transfer, synchronization
-rechecks newer pause/resume/closed intent before accepting an older snapshot.
-Pending capture reuses one immutable binding projection per plan rather than
-reconstructing its full archive on every HA poll.
+Only quarters accepted for both sides enter the headline and both displayed
+costs. Their separately accepted scenario totals are audit evidence and must not
+be subtracted when coverage differs. Zero remains distinct from unavailable.
+Negative savings remain negative. Investment costs, wear and inventory-value
+changes are excluded. Initial or externally introduced battery energy can affect
+cash costs when discharged. Its economic value is not credited or debited here.
 
-Accepting raw measurements does not establish financial recovery and must not
-clear a pending financial or prerequisite issue. A recovered capture-request
-read clears only its own failure and its action-required flag together, including
-when no new measurements or completed calendar day are available. The daily
-worker clears a recovered configuration prerequisite after checking the current
-contract and location. Home Assistant retains an action-required notification
-with owned fallback guidance when its explanation is missing or empty.
+The two sides retain independent chronological gross-export bonus usage. A
+confirmed actual export anchor may establish actual usage, or their original
+common opening before divergence. It cannot repair a later unknown no-battery
+allowance. Meter gaps invalidate dependent usage until valid evidence or a real
+contractual reset establishes it. Zero export or a zero bonus rate may still
+produce an exact payment without establishing unknown usage. Missing prices do
+not erase independently established gross export progress.
 
-## Measured evidence and coverage
+`HistoricalBonuses` retains bounded native hourly-statistics recovery, confirmed
+reference provenance and compatible aggregate-meter identities. It never grants
+a fresh allowance merely because a view or provisional day starts.
 
-Comparison starts after the first newly recorded plan publication, at the next
-complete quarter. Earlier original plans remain readable. Activation times for
-older development installations are not invented. The bridge waits ten minutes
-for completed Recorder intervals, requesting at most one day/96 intervals at a
-time. Physical configuration changes split capture at their recorded activation
-time and retain the corresponding original measurement bindings.
+DC solar meters cannot establish measured AC production behind a hybrid converter.
+These intervals retain actual energy and costs but do not contribute a matched
+without-battery comparison. They are never relabelled as measured AC solar or
+silently converted using forecast efficiency. The public issue explains this boundary.
 
-The bridge reads Energy's grid import/export channels, the disjoint AC household
-balance channels and recorded per-battery SoC endpoints. It uses native Recorder
-APIs with kWh conversion, never Recorder SQL or current SoC as a historical value.
-Five-minute sum endpoints supply quarter deltas and handle cumulative-meter
-resets. Missing data stays missing. Where only long-term hourly sums survive,
-linear interpolation is explicitly `estimated_hourly`. Interpolation of a
-configuration boundary is `estimated_boundary`. Neither is labelled exact data.
-An unavailable or unknown historical SoC spanning at most one hour can be
-reconstructed only when valid percentage readings before and after agree and
-both configured battery charge/discharge cumulative sums prove no energy moved
-throughout the enclosing five-minute boundaries. Missing counters, active
-battery flows, changed SoC, invalid readings and an absent return sample still
-leave affected intervals uncovered. Current SoC never substitutes for historical evidence. Such
-frames are `estimated_soc`, including when their energy also uses hourly
-reconstruction. Every non-recorded quality remains estimated downstream.
-A negative counter delta no greater than `1e-9` kWh (one micro-Wh) is treated
-as unit-conversion roundoff and normalized to zero. Larger decreases and
-nonfinite values remain invalid. Measurements outside the app's settlement wire
-bounds are rejected per interval before upload, so one outlier cannot reject an
-otherwise usable batch. Recorder reads align their lookback to the
-statistics period before subtracting one hour, preserving both hourly endpoints
-when a capture resumes inside an hour. Capture logs the first unavailable boundary
-and source in a batch and continues examining later intervals. It returns only
-complete valid frames plus aware `scanned_until`. An empty frame list may still
-acknowledge an examined range. Intake validates ordered, nonoverlapping quarter
-boundaries within the frozen request and scanned range. Legacy reports without
-`scanned_until` must retain their contiguous-prefix contract.
+## Intake and daily processing
 
-The atomically committed capture cursor records examined time, including gaps,
-and never rewinds. Daily finalization may also advance it past a closed incomplete
-day. The cursor never proves complete coverage. Once forward capture catches up,
-unfinalized daily missing-meter ranges schedule bounded retries during the existing recovery window. Already
-retained frames are excluded even if the daily report has not yet been replayed.
-Retained quarters are read in pages through the candidate end, including more
-than 96 frames when configuration changes split quarters. A stale report cannot
-turn a retained fragment into a new missing-data request.
-An independent `recovery.json` cursor rotates acknowledged attempts, including
-empty replies, across gaps and provisional days. It commits with accepted frames
-and the forward cursor in the same transaction. Later gaps and older upgrade days
-cannot be starved by an unavailable first gap. Selection wraps after the latest
-eligible day. Each read examines at most four provisional day reports, with a
-read-only continuation cache for intervening gap-free days. Selecting a request
-does not advance its durable cursor. Request-version backoffs remain fifteen
-minutes in the integration, with at most 96 retained backoffs across rotation.
-Recovered intervals fill absent rows without replacing original evidence.
-Finalized days remain immutable. Missing measurements never become zero, fresh
-reference stock or a new simulated bonus allowance.
-Legacy physical-reference and interval-evaluation initialization also require
-the original common captured start when battery stock or bonus usage carries
-state. A later first retained frame cannot establish that baseline. Missing
-opening evidence leaves dependent comparisons pending while sparse intake and
-independent daily actual accounting continue.
-Sub-quarter tariff/window splits also retain an estimate flag because the
-measured interval total does not reveal its internal power profile.
+`runtime.py` owns capture requests, immutable receipt and recovery cursors.
+`daily.py` owns one completed local day per background round. Blocking reads and
+writes run off the HTTP event loop under the existing settlement mutation lock.
+The app lock is held only while borrowing immutable configuration snapshots.
+Slow billing does not hold plan publication or HA snapshot reads.
 
-Only the measurements needed for billing, independent household reconstruction,
-battery value/wear and the reference are retained. Raw HA history is not copied.
-Each frame includes original sums/deltas, battery endpoints, quality, source
-bindings, initial counter evidence and location. Capture retries are idempotent.
-Conflicting replacement evidence is rejected instead of silently rewriting it.
-Gaps remain missing during the recovery window. At finalization, their explicit
-missing ranges survive in the daily report. Unknown simulated stock and counters
-remain unknown for later days. Actual billing and independently recoverable
-without-battery intervals do not require inventing reference stock.
+Capture begins after the first recorded publication at the next complete UTC
+quarter. Requests wait for the existing Recorder delay and contain at most one
+day/96 intervals. Actual source/configuration changes split capture at their
+recorded activation boundaries. The bridge reads native five-minute or hourly
+statistics with kWh normalization and counter-reset handling. It does not query
+Recorder SQL. It no longer reads or reconstructs historical SoC for Savings.
+Capture also freezes available original currency and market-area metadata. A known
+identity mismatch with the contract excludes monetary coverage without discarding
+measured energy. Older frames use retained compact metadata for this guard.
+New frames retain empty battery endpoint maps for the existing wire/archive
+contract. Older frames, including `estimated_soc` evidence, remain readable.
 
-## Reference policy
+Each valid interval is accepted independently. Sparse replies include aware
+`scanned_until`, so an unavailable interval cannot stop later capture. Frame,
+forward cursor and recovery cursor writes share one transaction. Conflicting
+replacement evidence is rejected. Recovery rotates through provisional gaps and
+never rewinds forward progress or resets financial state.
 
-`self-consumption-v1` uses the same installation, initial measured stored energy,
-reserves, conversion efficiencies and physical power limits as the EMS scenario.
-It stores surplus solar energy and discharges only against household demand.
-It never performs price-driven grid charging, battery export or PV curtailment.
-PV overflow is exported even at negative export prices. Without a battery it
-reduces to direct self-consumption and surplus export.
+Daily windows follow the HA timezone and actual DST elapsed time. The current day
+is not evaluated. Three complete local recovery days follow each day. Finalization
+occurs at D+4 local midnight, after finalized predecessors. Upgrade recovery and
+configuration/timezone pause safeguards remain. Only provisional reports may be
+updated. Missing raw evidence remains explicitly missing at closure.
 
-Local hybrid DC charging accounts for conversion advantages and clipping. Shared
-converter capacity is consumed once. Stable battery-ID order makes simultaneous
-choices reproducible without introducing a second financial optimizer. A
-reference exceeding an unavoidable hard grid bound is reported as unavailable,
-not silently curtailed to make the comparison look valid.
+## Durable evidence and historical policies
 
-During planned PV curtailment, measured curtailed production is not the available
-PV baseline. Use retained available-production model evidence and label it
-estimated. This is a modelled counterfactual, not proof of uncurtailed production.
-Meter definitions must respect the existing AC household-balance contract. Raw
-DC energy cannot be inserted into that balance as AC energy.
+`oep_savings_days` retains the compact report, original policy, recovery/finalization
+metadata, meter totals and original evidence. New reports contain actual and
+without-battery cash breakdowns, a `cash` comparison on matching quarters and a
+checkpoint with independent `cash_counters`. There is no reference stock,
+inventory trajectory or self-consumption continuation in new reports.
 
-Both scenarios inherit the same reliably established remaining bonus budget.
-Thereafter their stored energy and all-export bonus counters evolve independently.
-Date selection never resets or synchronizes either state. Missing initial counter evidence or evidence that is ambiguous after a reset
-blocks the affected evaluation. It does not grant a new
-annual allowance. Counter resets and price/time/daylight conditions use the same
-tested contract primitives, including the HA location for daylight windows.
+`oep_savings_cash_days` is a portable indexed projection of matching cash totals.
+It references the original day, commits with that report, shares its immutable
+closure and participates in every database transfer. Period totals and daily or
+monthly chart bins are read from one repeatable snapshot. They never aggregate
+legacy economic/reference columns into the new cash basis.
 
-## Costs and corrections
+Finalized legacy reports and their tables are retained without reinterpretation
+or destructive migration. `GET /v1/evaluations` and explicit revision reads retain
+access to already stored interval evaluations. These readers cannot create new
+legacy evaluations. Expired quarters, missing bonus usage and missing original
+facts are not invented to backfill the new policy. The current UI explains when
+a selected historical period has no new-policy comparison.
 
-For each nonoverlapping evaluated interval:
+See the [data dictionary](DATABASE-SCHEMA.md) for columns, signs and payloads.
+All tables use the app-owned active engine and shared SQLAlchemy schema.
 
-* Net electricity cost = import cost − export income − bonuses.
-* Economic cost = net electricity cost + wear − change in battery inventory value.
-* Financial benefit = reference economic cost − actual EMS economic cost.
-* Avoided gross import = reference import kWh − actual EMS import kWh.
+## Read-only interface and calendar control
 
-Negative benefits and extra imports remain visible. Realized EMS costs use
-measurements, not the predicted EMS flows. Remaining battery energy uses the
-existing bounded valuation curves for both scenarios and is explicitly not cash.
-Recorded end value becomes the next interval's start value, so period selection
-cannot create repeated intermediate valuation credits. Added/removed energy and
-capacity corrections are separate zero-acquisition-cost inventory movements.
-They do not enter grid flows, bonus counters, cycles or EMS savings.
+Savings shows one cash amount, its two matching costs, a signed daily chart and
+collapsed calculation help. Missing data, loading and failed reads never show a
+zero or a stale previous period's amount. Chart values remain keyboard accessible.
+Large historical tables and the continuous-simulation controls are removed.
 
-Published wholesale prices are retained in an indexed projection when normalized
-price versions are saved/loaded. Forecast prices never settle actual costs.
-Every evaluation retains its selected published source version, effective retail
-formulas, bonus seed evidence, policy version, plan identity and evaluation time.
-Provisional completed days are recalculated chronologically from the preceding
-daily checkpoint. Corrected published prices, contracts and confirmed bonus seeds
-can update those provisional reports. Finalized days are immutable. The daily
-worker does not replay years of finalized quarters after a contract correction.
-Legacy interval evaluation versions remain separately readable while their
-temporary evidence remains. They are not the default daily archive.
-A missing published price delays evaluation without an actionable
-fault notification. Persistent configuration/data errors are reported separately.
-Daily publication and price acceptance use the same dedicated mutation lock.
-A newly accepted correction is visible to a later provisional-day pass. It cannot
-race an in-progress final publication. The original legacy interval evaluator
-also retains its price recheck before committing an interval.
+`period-selector.js` owns the shared Energy-style trigger, previous/next buttons,
+presets and custom-calendar dialog. `display.js` formats calendar labels using HA
+locale preferences. Its owners provide authoritative bounds and retain their
+own fetching, ordering and validation. Forecast quality, Activity and Planning
+performance use single-day mode. Their evidence and chart semantics do not
+change. Planning performance uses backend `retention.min_day/max_day`, never a
+second browser-clock retention calculation. An unavailable preset, arrow target
+or calendar day is disabled. Custom selections undergo the same bounds check.
 
-New expected comparisons start self-consumption and OEP at the same measured
-battery stock and the same initial bonus budgets frozen in the plan. They use
-the same start, horizon, physical installation, tariffs and external forecasts.
-Their economic cost difference is the expected extra saving from choosing OEP
-now, including remaining battery value. Negative savings remain visible.
-Historical metering gaps cannot block this future comparison. Original archived
-continuous-start forecasts retain their original outcomes and interpretation.
-This common forecast start never changes historical settlement or its counters.
+Data storage accepts inclusive ISO `start` and `end` dates, while existing named
+period queries retain their contract. Its backend supplies the first retained
+date and current installation-local date. Invalid, reversed or future ranges
+receive owned validation guidance. Planning's existing relative future-horizon
+controls remain separate from historical calendar filtering.
 
-Contract corrections also reprice frozen expected EMS and reference flows in
-bounded batches of twenty plans. Original wholesale knowledge, times and physical
-quantities stay unchanged. The original terminal-price evidence is reused with
-corrected effective tariffs. These are new expected valuations, not actuals or
-new optimal plans. Publish a separate success-only valuation pointer and retain
-the previous result on failure. The UI shows the original, the latest successful
-correction and any pending/failed correction independently.
-The existing scenario cards show the successful full-original-horizon valuation's
-optimizer and self-consumption costs by default, with its own period and
-calculation time. Shorter or remaining periods display their original-basis amounts
-alongside this whole-plan valuation. A selected-period read failure or pending
-request cannot hide the independent successful valuation. Original amounts and
-separate component groups remain in the cards' disclosures. No corrected
-without-battery valuation is supplied, so corrected costs are not compared with
-that original baseline. Period slices retain original contract and inventory
-values and link to the full original plan. No repriced slice is inferred in the UI.
-
-Publication, explicit pause/resume and plan revocation are recorded separately
-from solver generation time, atomically with app state. Advice history integrates
-the succession of active, enabled, unexpired plans. Missing advice is not zero
-power and never implies that the user executed an automation.
-
-## Storage and indexed queries
-
-All data uses the active SQLAlchemy engine: SQLite by default, PostgreSQL,
-MariaDB or MySQL optionally. New tables join the shared schema and complete
-backend transfer automatically. Connection settings, tokens, certificates and
-technical logs remain outside it. The new tables are created additively. Existing
-plan contexts and activation identities are backfilled before plan thinning is
-eligible. Existing daily backfill receives three complete recovery dates after
-upgrade before old detail can expire. No database reset is performed.
-
-* Activation chronology: primary key on normalized UTC activation time.
-* Meter frames: primary key on normalized UTC interval start.
-* Evaluations: primary key `(revision, start)`, with retained JSON evidence and
-  numeric cost/energy columns for portable SQL aggregation.
-* Published prices: `(area, currency, start)`. A separate
-  committed ingestion-event index `(area, currency, sequence)` serves correction detection.
-  The sequence belongs to the single app writer. Receipt timestamps are not
-  correction cursors. Backend transfer retains this ordering without a server sequence reset.
-
-Daily period totals and chart bins are aggregated in SQL. Periods up to 366 days
-use local daily bins. Longer selections use local monthly bins, retaining UTC
-start/end instants. At most 366 daily detail reports enter one response. The UI
-uses 25-row Previous/Next pagination and asks for a shorter selection to inspect
-later details. Unavailable comparisons remain null. Zero is a measured/evaluated
-zero, never a substitute for missing coverage. Mixed-currency periods are rejected.
-
-`oep_savings_days` permanently retains per-scenario totals, coverage seconds,
-estimated seconds, missing ranges/reasons, opening/closing battery stock/value,
-installation snapshots, original/current contract identities, price source
-versions, method versions and independent continuation. Smart-planning, actual
-versus without-battery, and self-consumption versus without-battery benefits each
-sum only pairwise matching accepted quarters. Different scenario coverages must
-not be compared by subtracting their unmatched total costs.
-
-Missing bonus usage blocks only payments that depend on it. Billing can establish
-an exact zero bonus when export is zero or the selected rate is zero, without
-creating a counter or borrowing an actual seed for a diverged scenario. A rejected
-opening, such as a reset meter or forward-dated seed, also stays unknown when the
-payment is provably zero. Failed initialization cannot leave a partial counter. Known
-counter keys still advance gross exports even when payment is zero. Missing keys
-remain unknown. Independent reference billing may use the existing continuous
-physical result, its own opening stock and retained inventory value, without
-reinitializing the reference or its financial continuation. A later positive
-payment with unknown usage remains pending and excluded from paired benefit.
-This also works after restart and raw-detail expiry using a finalized physical
-checkpoint. Finalized financial reports remain immutable.
-
-Reports also retain opening bonus seed evidence and external battery inventory
-movements. Display responses overlay current Home Assistant Energy names through
-retained source identities without rewriting finalized evidence. Changing the
-Home Assistant timezone after daily history exists pauses automatic processing.
-Existing calendar identities remain intact instead of being silently reassigned.
-The worker exposes this as an expected pause needing attention, with an instruction
-to restore the original Home Assistant timezone. Processing and maintenance resume
-automatically after restoration. While paused, thinning and other worker maintenance
-remain blocked and existing results stay readable. No generic failure traceback is
-generated for this owned condition.
-
-Each daily calculation shares one short-lived context lookup across frame accounting
-and active advice. Every distinct plan is decoded at most once during that replay.
-The next replay reads fresh hash-verified context. Missing or corrupt evidence remains
-unavailable rather than falling back to a previous replay's cached values.
-
-Each replay also reads its bounded local-day activation chronology and published
-price rows from one repeatable database snapshot. Frame starts resolve the most
-recent non-null physical context, including across disabled advice. Active advice
-still integrates only its actual enabled overlap. Price rows retain their receipt
-identities and are filtered by overlap before billing. The filter uses the original
-SQL predicate on canonical UTC timestamp strings before billing parses selected
-dates. Malformed evidence rejects its selected frame without poisoning unrelated
-frames. A following replay reads new corrections. There is no process cache or
-change to finalized results.
-
-The overview's shared JSON read function supplies a fresh five-second cancellation
-deadline when no caller signal is provided. Explicit caller signals remain
-authoritative for coordinated request groups. Automatic source-name refresh,
-manual plan selection and Savings period changes therefore cannot leave reads
-unbounded. A failed refresh retains its revision for the next independent retry.
-
-Measured energy metrics require a nonempty meter association and all its readings.
-An absent association has no measured total or coverage. An associated recorded
-zero remains a measured zero. An installation with no solar can still have an
-explicit physical/modelled zero without claiming a measured solar channel.
-Validate all consumed associations before adding any metric from a frame.
-Record valid measured energy before checking the original plan, installation
-physics, market identity or financial prices. Missing accounting context leaves
-the financial scenarios unavailable without discarding valid meter totals.
-
-An activated installation with no contract or location exposes an owned prerequisite
-issue requiring attention. Daily work and maintenance remain paused while stored
-results are readable. Restoring the prerequisite clears only that owned prerequisite
-issue. Before the first plan activation, no historical-work warning is generated.
-
-The current local day is excluded. For day D, recovery covers the three complete
-dates D+1, D+2 and D+3. Closure is at local midnight D+4, calculated with
-`core/calendar.day_window`, rather than 72 elapsed hours across DST. Earlier
-unfinalized days must close first. Partial and unavailable scenarios close with
-their missing coverage. Publication, checkpoint and capture-cursor advancement
-share one transaction. This allows ingestion to move past an expired gap without
-filling that gap or resetting simulated state.
-
-Maintenance expires bounded raw frames, legacy interval evaluations and detailed
-historical plan payloads only behind a hash-verified finalized checkpoint.
-The boundary installation/advice context and active plan remain protected.
-Permanent daily totals and control ownership do not depend on full original
-plans. Complete plan retention and lossless compression follow the
-[archive policy](PLAN-ARCHIVE.md#retention-and-payload-representation).
-
-## User interface and API
-
-Open **Plan and savings** from installation setup. HA OS uses the existing
-authenticated ingress session. Standalone users use the administration token.
-The same responsive workspace offers original plan versions and expectations,
-then completed-day Savings with three scenario costs, coverage, provisional/final
-state and disclosed recovery details. Retained day-plan links open original
-expectations without replaying financial history. Original plans are read-only.
-The current plan's charts advance at each quarter boundary while retaining the
-original archived data. The page checks for a newly published plan every 15
-seconds and refreshes its charts when one becomes available. A deliberately
-selected historical plan stays selected. Hidden pages pause these reads and
-check again when visible. The refresh button remains available for a manual
-reload without activating an old plan.
-
-* `POST /v1/settlement`: integration-only bounded, version-matched capture.
-* `GET /v1/savings?start=…&end=…[&revision=…]`: authenticated stored period results.
-* `GET /v1/plans/{plan_id}/comparison`: original expectations, reference and separate contract valuation.
-* `GET /v1/plans/{plan_id}/comparison?view=plan`: original display plan without evidence, replay or repricing.
-* `GET /v1/plans/{plan_id}/comparison?view=simulations`: comparison scenarios and valuations without repeating the plan or evidence.
-* `GET /v1/plans/{plan_id}/comparison?view=evidence`: original evidence and plan identity without replay or repricing. Planning requests this only when its evidence disclosure is open.
-* `GET /v1/evaluations[?before=…]`: bounded evaluation-version pagination.
-* `/overview`: public static shell. All private data retains API/ingress authentication.
-
-Existing plan-history pagination is reused. Charts use the locally bundled
-Chart.js asset. No second dashboard, extra user-created helpers, physical
-automation or new source selection is needed.
-Independent numeric oracles belong in the maintained savings tests. Simulated app and HA checks do not establish physical execution or measured household savings.
-
-## Interactive workspace
-
-See [EMS visualization](EMS-VISUALIZATION.md) for the Planning/Savings/Installation navigation, interactive locally bundled charts, keyboard inspection and the quarter-hour scheduling policy. Original plan evidence remains available through the whole-plan and selected-interval disclosures.
-
-## Price/publication coordination
-
-The app composition root supplies one mutation lock to settlement capture,
-financial processing/repricing and price-cache acceptance. PriceService holds
-that lock only for the drained durable cache write and in-memory publication.
-Provider fetching and candidate validation stay outside it. The financial worker
-can therefore finish its price-cursor publication before a correction is retained.
-The barrier is separate from the live state lock: plan publication and HA reads
-remain independent. The offline test-price service follows the same write rule.
-A controlled integration test suspends provider fetching, then financial
-publication, and proves that fetches/HA reads remain free while retention waits.
-
-The expected reference comparison is optional enrichment of a validated plan.
-Missing documents, I/O failures and database read failures mark that comparison
-unavailable without blocking plan publication. Unexpected failures retain a
-traceback in the shared runtime log. Normal pending-reference states remain
-readiness information. This does not suppress failures saving the actual plan.
-
-The HA coordinator applies and projects a received pause, revocation or validated
-plan before awaiting optional settlement capture/upload. Slow Recorder reads
-therefore cannot postpone a stop decision that has already arrived. Financial
-completion never reapplies an older response over newer local user intent.
-
-## Physical progress during financial outages
-
-`physical.py` owns measured-frame reconstruction and stock transitions shared by
-settlement and the independent reference. A daily checkpoint retains physical
-continuation separately from financial reference/counter readiness. Valid physical
-frames still advance when prices or bonus evidence prevent billing. Financial
-replay reuses the same resolved physical frame rather than running a second
-dispatch. Physical and monetary readiness remain distinct after restart and
-cross-backend transfer. The older `physical-reference.json` and interval replay
-remain readable for legacy evidence. They are not the new daily worker's cursor.
-
-Known exports advance each scenario's bonus usage even when its settlement price
-is missing. Missing prices cannot create fresh allowance. Simulated counters may
-share actual opening evidence only at the original common start. A genuine reset
-can establish a new period, but a later backdated rule cannot borrow actual usage.
-Actual hardware inventory changes are accounted independently of reference stock.
-Valuation preserves the physical movement evidence retained in the daily report.
-
-After a measurement gap, a reference with neither batteries nor bonus rules can
-resume on later fully measured frames because it has no stock or allowance to
-carry forward. The gap remains explicit and contributes no coverage or benefit.
-Battery stock and simulated bonus usage remain fail-closed when unknown.
-
-A pending historical bonus opening does not erase already established scenario
-usage. The daily evaluator handles only this expected evidence wait locally and
-passes no unvalidated opening seeds to billing. Actual and without-battery accounts
-can continue from their own known counters while another comparison remains unknown.
-Unknown openings stay unknown. A later actual confirmation cannot establish earlier
-simulated usage. Complete measurement continuity, the original shared start or a
-genuine reset is still required. No offset or new checkpoint format is introduced.
-
-Archive maintenance failures have separate sanitized, deduplicated diagnostics
-and recovery messages. They do not mark successful financial processing as failed.
-Unexpected financial processing failures defer maintenance for that worker round.
-
-The first complete measured quarter after initial publication supplies the common
-initial stock. An exactly aligned publication preserves that same quarter.
-Thereafter no date selection, contract change, financial outage or finalized gap
-synchronizes the reference to actual SoC. Missing physical coverage remains unknown.
-
-A missing, late or aggregate bonus seed can prevent financial settlement without
-preventing physical advancement. Historical settlement still requires measured
-channels, battery endpoints and original installation context. An interval gap
-stops historical progression at the last valid checkpoint. The future plan's
-common measured start is independent of this checkpoint.
-`/v1/snapshot.savings_status.physical_issue` distinguishes physical failures from
-financial `issue`. The recovery below separately handles later seeds and repairs
-a financial baseline only with sufficient historical evidence.
-
-## Historical bonus opening balances
-
-Historical billing sums the exact physical export members retained with each
-measurement interval. The synthetic aggregate source ID is an identity, never
-a sensor to look up in individual meter readings. Each member is checked so a
-reset cannot be hidden by another meter increasing.
-
-A confirmed seed recorded after the first unsettled interval is backdated by
-subtracting contiguous recorded export deltas. Whole intervals use reset-aware
-Recorder deltas. An anchor inside an interval uses its component meter readings
-only when the following boundary proves that no member reset in that interval.
-No uniform split is used to invent the anchor. A gap, changed membership,
-inconsistent endpoint or negative reconstructed usage keeps the budget unknown.
-The confirmation and immutable measurements remain unchanged.
-
-When that historical period has no matching seed, the app automatically requests
-native HA hourly statistics from its reset boundary to the completed hour around
-the old interval. The existing bounded history bridge transfers all export
-members and their final readings. The app validates complete coverage and derives
-the opening volume. A separate bridge prevents optional historical work from
-blocking control or current-budget initialization. Requests are bound to the
-contract, current confirmation revision and frozen historical export bindings.
-Old, invalid or incomplete replies cannot overwrite current confirmations.
-
-`GET /v1/snapshot` exposes `settlement_bonus_request`. Authenticated
-`POST /v1/settlement/bonus-history` accepts the existing compact kWh hourly format
-with a 1 MiB body limit. Derived historical books use the shared SQLAlchemy engine
-and the `savings-bonus-counters` document namespace. Current planning books remain
-in `bonus-counters`. Both transfer with the complete database on every backend.
-Backdating reads at most 96 frames per page, scans at most the existing 9000-hour
-history bound and caches at most 64 derived seeds. This work runs off the HTTP
-loop under the settlement mutation lock. Missing history remains explicit and
-physical reference progression remains independent.
-Historical cache updates retain prior periods within the shared 64-seed limit.
-The newly requested periods always take precedence over optional cached periods,
-so an old replay cannot be stuck repeatedly requesting an immediately evicted
-seed. A reset not aligned to a whole UTC hour cannot be reconstructed exactly
-from hourly statistics. It exposes a manual-baseline requirement and does not
-issue an unusable automatic hourly request.
+The native modal preserves focus, Escape dismissal and background inertness.
+Closing an unconfirmed selection leaves the page filter unchanged. Refreshes
+bound stale selections to newly confirmed availability and reread that range.
+Authentication, ingress prefixes, immutable plans and device commands are
+unchanged. No third-party UI package or runtime font request is required.

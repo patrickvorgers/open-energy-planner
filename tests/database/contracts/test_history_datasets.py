@@ -11,38 +11,8 @@ from tests.database.support.history_datasets import (
     retained_decisions,
     retained_pairs,
     settlement_batches,
+    settlement_sample,
 )
-
-
-def settlement_sample():
-    """Specify raw evidence independently, including a nested value that serialization must preserve."""
-    return {
-        "actual": {
-            "purchase": 1.0,
-            "sale": 0.2,
-            "bonus": 0,
-            "grid_cash": 0.8,
-            "wear": 0,
-            "inventory_change": 0,
-            "economic_cost": 0.8,
-            "import_kwh": 2,
-            "export_kwh": 1,
-        },
-        "reference": {
-            "purchase": 0.9,
-            "sale": 0.2,
-            "bonus": 0,
-            "grid_cash": 0.7,
-            "wear": 0,
-            "inventory_change": 0,
-            "economic_cost": 0.7,
-            "import_kwh": 1,
-            "export_kwh": 1,
-        },
-        "context": {"quality": "observed", "unknown": None},
-        "start": "overridden-start",
-        "end": "overridden-end",
-    }
 
 
 def test_settlement_generator_keeps_rows_json_and_input_across_leap_day():

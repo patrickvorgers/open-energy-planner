@@ -419,3 +419,18 @@ versioned. A partial failure retains the remaining draft and the revisions alrea
 confirmed by successful writes. This change introduces no database schema or
 atomic cross-endpoint transaction. Physical execution remains owned by user HA
 automations and equipment.
+
+## Shared date selection
+
+`period-selector.js` owns the Energy-style previous/date/next control and calendar
+modal. `period-selector.css` uses the existing Courtyard tokens. Date labels use
+HA locale and calendar arithmetic does not reinterpret dates in the browser timezone.
+Cancel closes the draft without changing the page filter. Native date fields retain
+platform input and validation behavior. Calendar buttons expose disabled boundaries.
+
+Savings and Data storage offer standard periods and a custom inclusive range.
+Activity and Forecast quality select exactly one whole day. Forecast quality
+supplies its archived day set. Planning performance supplies backend retention
+bounds and keeps its existing day calculations. Page owners convert confirmed
+dates into HA-local query boundaries. Planning's relative future horizon controls
+remain unchanged. The shared control never aggregates or changes a page's data.

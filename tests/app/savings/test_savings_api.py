@@ -153,8 +153,10 @@ def test_period_requires_auth_and_bounds_without_replanning(tmp_path):
                 ) as response:
                     assert response.status == 200
                     value = await response.json()
-                    assert value["intervals"] == []
-                    assert value["coverage"] == {"evaluated": 0, "expected": 1, "estimated": 0}
+                    assert value["days"] == []
+                    assert value["cash"]["savings"] is None
+                    assert value["cash"]["coverage_seconds"] == 0
+                    assert value["cash"]["expected_seconds"] == 900
                 async with client.get(
                     url + "/v1/savings",
                     params={

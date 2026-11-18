@@ -9,7 +9,16 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.activity_fixture import ACTIVITY_SCENARIO_TIME
-from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_reads
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    choose_day,
+    choose_today,
+    day_trigger,
+    discover,
+    expect_day,
+    selected_day,
+    wait_for_product_reads,
+)
 
 
 @pytest.fixture
@@ -456,7 +465,7 @@ def test_module_details_keep_keyboard_focus_and_open_state_during_live_updates(a
         "NL forecast unavailable. Published prices remain usable.", exact=True
     )
     expect(detail).not_to_be_visible()
-    day = page.get_by_label("Day", exact=True)
+    day = day_trigger(page)
     day.focus()
     assert page.request.post(
         url + "/_test/activity-health",
@@ -647,9 +656,10 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     if page.viewport_size["width"] < 500:
-        day = page.get_by_label("Day", exact=True).bounding_box()
+        day = page.locator("#activity-period").bounding_box()
         kind = page.get_by_label("Activity type").bounding_box()
-        assert abs(day["y"] - kind["y"]) < 4
+        assert day["y"] + day["height"] <= kind["y"]
+        assert abs(day["x"] - kind["x"]) < 4
     expect(page.locator("#activity-list")).to_contain_text("Recovered")
     expect(page.locator("#activity-list")).to_contain_text("Running")
     history = page.locator("#activity-list .activity-row")
@@ -705,9 +715,9 @@ def test_activity_filter_pagination_live_updates_and_keyboard_details(app_page):
     )
     page.get_by_label("Activity type").select_option("training")
     expect(page.locator("#activity-list .activity-row")).to_have_count(1)
-    page.get_by_label("Day", exact=True).fill("2020-01-01")
+    choose_day(page, "2020-01-01")
     expect(page.locator("#activity-list")).to_contain_text("No activities recorded")
-    page.get_by_role("button", name="Today", exact=True).click()
+    choose_today(page)
     expect(page.locator("#activity-list .activity-row")).to_have_count(1)
 
 
@@ -725,9 +735,8 @@ def test_day_changes_keep_type_filter_and_open_newest_page(app_page):
     expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     page.get_by_role("button", name="Next", exact=True).click()
     expect(page.locator("#activity-page")).to_have_text("Page 2")
-    day = page.get_by_label("Day", exact=True)
-    today = day.input_value()
-    day.fill((date.fromisoformat(today) - timedelta(days=1)).isoformat())
+    today = selected_day(page)
+    choose_day(page, (date.fromisoformat(today) - timedelta(days=1)).isoformat())
     expect(page.locator("#activity-page")).to_have_text("Page 1")
     expect(page.get_by_label("Activity type")).to_have_value("prices")
     expect(page.locator("#activity-list strong").first).to_have_text(
@@ -737,8 +746,8 @@ def test_day_changes_keep_type_filter_and_open_newest_page(app_page):
     page.get_by_role("button", name="Next", exact=True).click()
     expect(page.locator("#activity-page")).to_have_text("Page 2")
     expect(page.locator("#activity-list .activity-row")).to_have_count(7)
-    page.get_by_role("button", name="Today", exact=True).click()
-    expect(day).to_have_value(today)
+    choose_today(page)
+    expect_day(page, today)
     expect(page.get_by_label("Activity type")).to_have_value("prices")
     expect(page.locator("#activity-page")).to_have_text("Page 1")
     expect(page.locator("#activity-list strong").first).to_have_text(
@@ -758,7 +767,7 @@ def test_older_page_receives_its_live_outcome_without_changing_position(app_page
     expect(page.locator("#activity-list .activity-row")).to_have_count(25)
     document = page.request.get(
         url + "/v1/activities",
-        params={"day": page.get_by_label("Day", exact=True).input_value(), "kind": "prices"},
+        params={"day": selected_day(page), "kind": "prices"},
         headers={"Authorization": f"Bearer {TOKEN}"},
     ).json()
     identity = next(row["id"] for row in document["activities"] if row["state"] == "running")
@@ -817,8 +826,7 @@ def test_failed_navigation_and_late_old_day_response_preserve_selection(app_page
     response = page.request.get(
         held[0].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
     ).json()
-    day = page.get_by_label("Day", exact=True)
-    day.fill((date.fromisoformat(day.input_value()) - timedelta(days=1)).isoformat())
+    choose_day(page, (date.fromisoformat(selected_day(page)) - timedelta(days=1)).isoformat())
     expect(page.locator("#activity-list strong").first).to_have_text(
         "Earlier-day prices 31: Nord Pool"
     )
@@ -884,7 +892,7 @@ def test_pagination_restores_keyboard_focus_after_held_and_failed_reads(app_page
     page.get_by_role("button", name="Next", exact=True).focus()
     page.get_by_role("button", name="Next", exact=True).press("Enter")
     page.wait_for_function("() => window.paginationFocusRequestCount === 10")
-    day = page.get_by_label("Day", exact=True)
+    day = day_trigger(page)
     day.focus()
     response = page.request.get(
         held[-1].request.url, headers={"Authorization": f"Bearer {TOKEN}"}
@@ -944,7 +952,7 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
     next_page.dispatch_event("click")
     assert len(held) == 1
     if move_focus:
-        page.get_by_label("Day", exact=True).focus()
+        day_trigger(page).focus()
     if first_failure:
         held[0].fulfill(status=503)
     else:
@@ -980,7 +988,7 @@ def test_live_resets_queue_one_read_without_releasing_pagination_focus(
     expect(page.locator("#activity-status")).to_have_text("")
     expect(page.locator("#activity-list")).to_have_attribute("aria-busy", "false")
     expect(next_page).to_be_enabled()
-    expect(page.get_by_label("Day", exact=True) if move_focus else next_page).to_be_focused()
+    expect(day_trigger(page) if move_focus else next_page).to_be_focused()
     assert len(held) == 2 and len(requests) == 2
     assert_serial_requests(requests, request_intervals)
 

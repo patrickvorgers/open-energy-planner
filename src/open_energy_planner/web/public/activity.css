@@ -43,13 +43,12 @@
     .activity-next { border-left:0; border-top:1px solid var(--oep-line); padding:1rem 0 0; }
 }
 @media(max-width:640px) {
-    .workspace .activity-toolbar { display:grid; grid-template-columns:1fr 1fr; grid-template-areas:"day type" "today refresh"; gap:8px 12px; }
-    .activity-toolbar label:first-child { grid-area:day; }
-    .activity-toolbar label:nth-of-type(2) { grid-area:type; }
-    #activity-today { grid-area:today; }
+    .workspace .activity-toolbar { display:grid; grid-template-columns:1fr 1fr; grid-template-areas:"day day" "type refresh"; gap:8px 12px; }
+    #activity-period { grid-area:day; }
+    .activity-toolbar > label { grid-area:type; }
     #activity-refresh { grid-area:refresh; }
     .activity-toolbar label { min-width:0; }
-    .activity-toolbar input,.activity-toolbar select,.activity-toolbar button { width:100%; min-width:0; box-sizing:border-box; }
+    .activity-toolbar select,.activity-toolbar > button { width:100%; min-width:0; box-sizing:border-box; }
     .activity-list-heading { display:none; }
     #activity-list .activity-row > summary { grid-template-columns:5.3rem minmax(0,1fr) .6rem; grid-template-areas:"time title arrow" "type state arrow"; gap:3px 10px; padding:8px 4px; min-height:52px; }
     #activity-list time { grid-area:time; font-size:11px; }

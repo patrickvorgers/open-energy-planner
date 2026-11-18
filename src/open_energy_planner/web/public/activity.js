@@ -1,3 +1,4 @@
+import {createPeriodSelector} from "./period-selector.js";
 /** Read-only activity history with installation-local dates and cursor-based live updates. */
 import {when, localDate, useHomeAssistantTimezone, planName, planStrategy} from "./display.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
@@ -5,6 +6,7 @@ import {connectEvents, observeEvents} from "./events.js";
 import {priceSourceName} from "./price-sources.js";
 bindSettingsActions();
 const find = id => document.getElementById(id);
+const activityDay = createPeriodSelector(find("activity-period"), {dayOnly: true, label: "Activity day", onChange: resetHistory});
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 let token = "", rows = new Map(), running = [], scheduled = [], health = [], next, generation = 0, loading = false;
 const pageSize = 25;
@@ -14,7 +16,7 @@ const historyWarning = (available, lost) => lost ? "Some activity updates could 
 const label = value => value.charAt(0).toUpperCase() + value.slice(1).replaceAll(/[_-]/g, " ");
 const moduleName = value => value.split(":").map(label).join(": ");
 const clock = value => when(value, {hour:"2-digit", minute:"2-digit"});
-const matches = row => localDate(new Date(row.started_at)) === find("activity-day").value && (!find("activity-type").value || row.kind === find("activity-type").value);
+const matches = row => localDate(new Date(row.started_at)) === activityDay.value.start && (!find("activity-type").value || row.kind === find("activity-type").value);
 const newestFirst = (left, right) => right.started_at.localeCompare(left.started_at) || right.id.localeCompare(left.id);
 
 /** Never expose raw response bodies or save credentials. */
@@ -203,7 +205,7 @@ async function load(page = 0) {
             resetPending = false;
             pendingUpdates = new Map();
             try {
-                const day = find("activity-day").value, before = pageCursors[page] ? `&before=${encodeURIComponent(pageCursors[page])}` : "";
+                const day = activityDay.value.start, before = pageCursors[page] ? `&before=${encodeURIComponent(pageCursors[page])}` : "";
                 const kind = find("activity-type").value;
                 const result = await api(`v1/activities?day=${encodeURIComponent(day)}&limit=${pageSize}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}${before}`);
                 if (version !== generation) return;
@@ -262,11 +264,9 @@ observeEvents(message => {
     render();
 });
 find("activity-type").addEventListener("change", resetHistory);
-find("activity-day").addEventListener("change", resetHistory);
-find("activity-today").addEventListener("click", () => {find("activity-day").value = localDate(); resetHistory();});
 find("activity-refresh").addEventListener("click", () => {if (!loading) resetHistory();});
 find("activity-previous").addEventListener("click", () => {if (!loading && pageIndex > 0) load(pageIndex - 1);});
 find("activity-next").addEventListener("click", () => {if (!loading && next) load(pageIndex + 1);});
 find("connect").addEventListener("submit", event => {event.preventDefault(); token = find("token").value; find("token").value = ""; find("connect").hidden = true; connectEvents(base, token); load();});
-api("setup/session").then(session => {useHomeAssistantTimezone(session.timezone); find("activity-day").value = localDate(); find("connect").hidden = Boolean(session.ingress); if (session.ingress) {connectEvents(base); load();} else {loadProblem = "Connect to read activity history."; render();}}).catch(() => {loadProblem = historyFailure; render();});
+api("setup/session").then(session => {useHomeAssistantTimezone(session.timezone); activityDay.set({start: localDate(), max: localDate(), selection: "today"}); find("connect").hidden = Boolean(session.ingress); if (session.ingress) {connectEvents(base); load();} else {loadProblem = "Connect to read activity history."; render();}}).catch(() => {loadProblem = historyFailure; render();});
 setInterval(render, 60000);

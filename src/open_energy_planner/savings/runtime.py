@@ -1,32 +1,24 @@
 """App-owned settlement orchestration. Original plans and measured evidence are never rewritten."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
 from zoneinfo import ZoneInfo
 
-from open_energy_planner.contracts.wire import parse_counters
 from open_energy_planner.core.calendar import day_window
 from open_energy_planner.installation.location import SiteLocation
 
 from ..contracts.bonus import CounterSeed
-from .accounting import evaluate, simulated_counters_ready
-from .advice import active_advice
 from .bonus import HistoricalBonuses
-from .context import physical_context
 from .model import (
     MAX_BATCH_INTERVALS,
     MISSING_MEASUREMENTS,
-    POLICY_VERSION,
     SETTLEMENT_INTERVAL,
     PendingSettlement,
     parse_frame,
 )
-from .physical import advance
-from .repricing import corrected_problem
 
 SETTLEMENT_RECORDER_DELAY = timedelta(minutes=10)
 MAX_RECOVERY_DAYS_PER_READ = 4
@@ -35,12 +27,11 @@ SHA256_HEX_LENGTH = 64
 
 # Only fixed owned guidance is public. Other caught exceptions may contain stored or driver values.
 PENDING_SETTLEMENT_MESSAGES = {
-    "Reference continuity requires the missing interval first": "The original common opening measurements are missing. Simulated battery stock and bonus usage remain unknown.",
-    "Simulated bonus counters are unknown after missing measurements": "The simulated export allowance cannot be reconstructed from the earlier missing evidence. No actual counter was substituted.",
+    "Without-battery comparison requires measured AC solar energy": "The solar source measures DC energy. A without-battery cash comparison requires measured AC solar energy at the household boundary.",
+    "Without-battery bonus usage is unknown after missing measurements": "The export allowance without a battery cannot be reconstructed from earlier missing evidence. No actual counter was substituted.",
     "A reset inside the bonus anchor interval prevents exact reconstruction": "An export meter reset prevents reconstruction of the bonus starting total.",
     "Confirmed bonus meter disagrees with its historical boundary": "The confirmed export reading disagrees with the reading in history.",
     "Confirmed bonus meter is outside its historical interval": "The confirmed export reading falls outside the historical interval's readings.",
-    "Continuous reference awaits recent metering. No SoC reset was performed": "Recent meter readings are missing from the continuous comparison scenario.",
     "Historical bonus anchor does not match the export meters or period": "The bonus starting reading belongs to different export meters or a different period.",
     "Historical bonus baseline awaits captured export evidence": "The stored export measurements cannot yet connect the historical interval to the bonus checkpoint.",
     "Historical bonus interval predates the confirmed statistics reference": "The requested interval starts before the confirmed bonus statistics reference.",
@@ -55,91 +46,10 @@ PENDING_SETTLEMENT_MESSAGES = {
     "Historical bonus history unavailable: unsupported_statistics": "Home Assistant cannot supply supported statistics for these export meters.",
     "Historical bonus period does not start on a whole UTC hour. Confirm a manual baseline": "The bonus period starts between hourly readings and needs a confirmed manual starting total.",
     "Historical exports exceed the confirmed used bonus volume": "Historical exports exceed the confirmed export total used for the bonus.",
-    "No original installation plan covers this interval": "The original energy plan for this measurement interval is missing.",
     "Published price coverage is missing": "Published electricity prices are missing for this measurement interval.",
-    "Published prices changed during settlement. Retrying": "Published prices changed while this measurement interval was being evaluated.",
-    "Reference awaits metering across the installation change": "Meter readings are missing across an installation change.",
-    "Reference forecast context is missing": "The captured inputs for the original comparison forecast are missing.",
-    "Retained forecast cannot bridge the reference metering delay": "The retained forecast cannot cover the gap in comparison meter readings.",
     "Validated physical bonus endpoint is unavailable": "The confirmed export measurement needed to continue the bonus calculation is unavailable.",
 }
-SETTLEMENT_VALIDATION_MESSAGES = (
-    "Contract coverage is missing",
-    "Reference continuity requires the missing interval first",
-)
-
-
-class EvaluationState(StrEnum):
-    """Distinguish accepted publication, expected waiting and rejected evidence."""
-
-    COMPLETE = "complete"
-    PENDING = "pending"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class EvaluationResult:
-    """Describe one measured batch without confusing committed intervals with published results."""
-
-    state: EvaluationState
-    processed: int
-    total: int
-    waiting_start: str | None = None
-    waiting_end: str | None = None
-
-
-def settlement_activity_detail(result, issue):
-    """Explain the actual bounded attempt using only admitted causes and owned recovery advice."""
-    progress = f"This attempt processed {result.processed} of {result.total} measured intervals. "
-    if result.state == EvaluationState.COMPLETE:
-        return progress + "Measured savings were evaluated and the result was published."
-    if result.waiting_start is None:
-        reason = "The correction has not yet caught up with the previously published period. The next background check continues with the next batch."
-    elif issue == "Published price coverage is missing":
-        reason = "The next background check tries again. No action is needed while waiting for price publication. If this persists, check price sources under Installation."
-    elif issue == "Published prices changed during settlement. Retrying":
-        reason = "The next background check uses the updated prices. No action is needed."
-    elif issue in (
-        "Historical bonus baseline is being read from Home Assistant",
-        "Historical bonus baseline awaits completed hourly statistics",
-    ):
-        reason = "The historical export total needed for the bonus is not yet available. Home Assistant history is being collected or is not complete yet. The next background check tries again. Check the bonus budget under Contract if this persists."
-    elif issue == "Historical bonus baseline awaits captured export evidence":
-        reason = "The historical bonus calculation needs stored export measurements around its checkpoint. The next background check rechecks the measurement coverage. Do not change a valid contract start date or enter an estimated bonus total to bypass this wait. If it persists, report this activity for investigation."
-    elif issue == "Historical bonus interval predates the confirmed statistics reference":
-        reason = "A confirmed missing-period total does not identify how much was exported before this historical interval. Keep the confirmed bonus settings. Report this activity if the interval needs historical evaluation."
-    elif issue in (
-        "Historical bonus history unavailable: history_missing",
-        "Historical bonus history unavailable: history_unavailable",
-        "Historical bonus history unavailable: recorder_unavailable",
-        "Historical bonus history unavailable: unsupported_statistics",
-    ):
-        reason = "Home Assistant cannot currently supply the historical export statistics needed for the bonus. Check Recorder and export statistics in Home Assistant, then check the bonus budget under Contract. The next background check tries again."
-    elif issue and issue in PENDING_SETTLEMENT_MESSAGES and "bonus" in issue.lower():
-        reason = "The retained export history or bonus baseline cannot yet establish an exact historical total. Review the export meters and bonus baseline under Contract. The next background check rechecks the evidence. If it remains unresolved, report this activity for investigation."
-    elif issue in (
-        "Continuous reference awaits recent metering. No SoC reset was performed",
-        "Reference awaits metering across the installation change",
-        "Retained forecast cannot bridge the reference metering delay",
-    ):
-        reason = "The comparison scenario needs continuous meter history for the indicated interval. Check that Home Assistant records the required meters without gaps. The next background check rechecks the evidence. The comparison's battery state is not reset."
-    elif issue == "Reference forecast context is missing":
-        reason = "The original comparison forecast evidence is missing for the indicated interval. Inspect the original plan under Planning and report this activity if the evidence remains unavailable. The next background check rechecks the evidence."
-    elif issue == "No original installation plan covers this interval":
-        reason = "No original energy plan covers the indicated measurement interval. Check the retained plans under Planning. If that historical plan is unavailable, report this activity. A new plan does not reconstruct missing original advice."
-    elif issue == "Contract coverage is missing":
-        reason = "No contract price rule covers the indicated interval. Add or correct the dated rule under Contract. The next background check uses the saved contract."
-    elif issue == "Reference continuity requires the missing interval first":
-        reason = "An earlier measurement interval is missing, so the comparison cannot continue chronologically. Check meter history in Home Assistant and the coverage under Savings. The next background check rechecks the evidence."
-    else:
-        reason = "The required historical evidence is incomplete or invalid. The exact missing or invalid item could not be identified. Open Savings to check the available coverage. If the cause remains unclear, report this activity for investigation. The next background check rechecks the evidence."
-    cause = PENDING_SETTLEMENT_MESSAGES.get(issue)
-    return (
-        progress
-        + (cause + " " if cause else "")
-        + reason
-        + " Previous published financial results remain available. Refreshing Activity reloads history and does not start a calculation."
-    )
+SETTLEMENT_VALIDATION_MESSAGES = ("Contract coverage is missing",)
 
 
 def settlement_issue(error):
@@ -184,7 +94,7 @@ def capture_start(instant):
 
 
 class SavingsRuntime:
-    """Keep ingestion, continuous scenario state and correction generations outside planning."""
+    """Keep measured-energy ingestion and immutable historical readers outside planning."""
 
     def __init__(self, store, documents, plans):
         """Borrow app-owned stores. A dedicated settlement lock serializes mutations."""
@@ -193,8 +103,7 @@ class SavingsRuntime:
         self.issue = None
         self.attention = False
         self.events = None
-        self.physical_issue = None
-        self._request_bindings = None, None
+        self._request_bindings = None, None, None
         self._recovery_search = None, None
 
     def request(self, now, settings, solar, demand, seeds, location):
@@ -222,17 +131,25 @@ class SavingsRuntime:
             "batteries": [asdict(battery) for battery in settings.batteries],
         }
         plan_id = self.store.context_plan(start)
+        market_identity = None
         if plan_id:
-            cached_plan, historical_bindings = self._request_bindings
+            cached_plan, historical_bindings, market_identity = self._request_bindings
             if cached_plan != plan_id:
                 original = self.plans.get_context(plan_id)
                 historical_bindings = original.get("comparison_bindings") if original else None
-                self._request_bindings = plan_id, historical_bindings
+                market_identity = (
+                    {key: original[key] for key in ("currency", "market_area") if key in original}
+                    if original
+                    else None
+                )
+                self._request_bindings = plan_id, historical_bindings, market_identity
             bindings = historical_bindings or bindings
         changed = self.store.next_configuration(start, end, bindings)
         if changed:
             end = datetime.fromisoformat(changed)
         request = {"start": start.isoformat(), "end": end.isoformat(), "bindings": bindings}
+        if market_identity:
+            request["market_identity"] = market_identity
         request["version"] = version(request)
         return request
 
@@ -408,8 +325,8 @@ class SavingsRuntime:
             if (
                 set(frame.channels) != allowed
                 or set(frame.meter_start) - allowed
-                or set(frame.battery_start) != batteries
-                or set(frame.battery_end) != batteries
+                or not set(frame.battery_start) <= batteries
+                or not set(frame.battery_end) <= batteries
             ):
                 raise ValueError("Settlement channels do not match requested Energy bindings")
         context = json.loads(
@@ -420,6 +337,11 @@ class SavingsRuntime:
                         "imports": body["imports"],
                         "exports": body["exports"],
                     },
+                    **(
+                        {"market_identity": pending["market_identity"]}
+                        if pending.get("market_identity")
+                        else {}
+                    ),
                     "seeds": [asdict(seed_item) for seed_item in seeds],
                     "location": asdict(location) if location else None,
                 },
@@ -437,277 +359,6 @@ class SavingsRuntime:
             self.documents.write("capture.json", {"end": max(previous, scanned).isoformat()})
             if start < previous:
                 self.documents.write("recovery.json", {"end": scanned.isoformat()})
-
-    def _require_initial_frame(self, frame, state):
-        """Initialize dependent continuous scenarios only at the original common measured start."""
-        if state is not None:
-            return
-        first = self.store.first_activation()
-        if first is None or frame.start != capture_start(datetime.fromisoformat(first)):
-            raise PendingSettlement("Reference continuity requires the missing interval first")
-
-    def advance_reference(self):
-        """Persist counter-free physical progress before attempting financial settlement.
-
-        Bootstrap from an existing successful continuation once, preserving its
-        independent stock. Subsequent contract/counter corrections never rewind it.
-        The settlement lock owned by the caller serializes this checkpoint with intake.
-        """
-        name = "physical-reference.json"
-        state = self.documents.read(name) if self.documents.exists(name) else None
-        if state is None and self.documents.exists("head.json"):
-            head = self.documents.read("head.json")
-            previous = self.store.state(head["revision"]) if head else None
-            if previous:
-                state = {
-                    key: previous[key]
-                    for key in ("end", "reference_stored", "actual_stored", "capacities")
-                }
-                self.documents.write(name, state)
-        for row in self.store.frames(datetime.fromisoformat(state["end"]) if state else None):
-            try:
-                frame = parse_frame(row["frame"])
-                plan_id = self.store.context_plan(frame.start)
-                plan = self.plans.get_context(plan_id) if plan_id else None
-                if plan is None:
-                    raise PendingSettlement("No original installation plan covers this interval")
-                bindings = dict(row["context"]["bindings"])
-                advice = active_advice(
-                    frame, self.store.activations(frame.start, frame.end), self.plans.get_context
-                )
-                bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
-                problem = physical_context(plan)
-                if problem.batteries:
-                    self._require_initial_frame(frame, state)
-                state = advance(problem, frame, bindings, state)["state"]
-                self.documents.write(name, state)
-            except (ValueError, KeyError, TypeError) as error:
-                self.physical_issue = settlement_issue(error)
-                return
-        self.physical_issue = None
-
-    def process(self, contract, now, book=None):
-        """Evaluate bounded chronological batches. Replay on contract or already-settled price corrections."""
-        self.advance_reference()
-        if contract is None:
-            self.issue = "Contract configuration is required for settlement"
-            return
-        published = self.documents.read("head.json") if self.documents.exists("head.json") else None
-        working = (
-            self.documents.read("working.json") if self.documents.exists("working.json") else None
-        )
-        head = working or published
-        published_state = self.store.state(published["revision"]) if published else None
-        old_state = self.store.state(head["revision"]) if head else None
-        price_cursor = self.store.price_cursor(contract.market_area, contract.currency)
-        corrections = (
-            self.store.corrected_prices(
-                datetime.fromisoformat(old_state["end"]),
-                head.get("price_cursor", 0),
-                contract.market_area,
-                contract.currency,
-                price_cursor,
-            )
-            if old_state and head
-            else ()
-        )
-        counter_version = book.version if book else None
-        if (
-            head is None
-            or head["contract_version"] != contract.version
-            or head.get("counter_version") != counter_version
-            or corrections
-        ):
-            head = {
-                "revision": version(
-                    [
-                        contract.version,
-                        head,
-                        [tuple(row_item) for row_item in corrections],
-                        POLICY_VERSION,
-                    ]
-                ),
-                "contract_version": contract.version,
-                "counter_version": counter_version,
-                "created_at": now.isoformat(),
-                "previous_revision": published["revision"] if published else None,
-                "price_cursor": price_cursor,
-            }
-            self.documents.write("working.json", head)
-        state = self.store.state(head["revision"])
-        rows = self.store.frames(datetime.fromisoformat(state["end"]) if state else None)
-        if self.events and rows:
-            from ..activities.events import Health, Outcome
-
-            first_frame, last_frame = rows[0].get("frame"), rows[-1].get("frame")
-            activity_context = (
-                {"start": first_frame.get("start"), "end": last_frame.get("end")}
-                if isinstance(first_frame, dict) and isinstance(last_frame, dict)
-                else None
-            )
-            with self.events.thread_attempt(
-                "settlement",
-                "settlement",
-                "Evaluate measured savings",
-                context=activity_context,
-                failure="Settlement processing failed. Last successful financial results remain available.",
-            ) as identity:
-                evaluation = self._evaluate_rows(
-                    contract, now, book, head, published_state, price_cursor, state, rows
-                )
-                usable = evaluation.state == EvaluationState.COMPLETE
-                pending = evaluation.state == EvaluationState.PENDING
-                self.events.finish_thread(
-                    identity,
-                    Outcome.COMPLETED if usable else Outcome.SKIPPED if pending else Outcome.FAILED,
-                    settlement_activity_detail(evaluation, self.issue),
-                    usable=usable,
-                    context={
-                        "waiting_start": evaluation.waiting_start,
-                        "waiting_end": evaluation.waiting_end,
-                    },
-                )
-                self.events.availability_thread(
-                    "settlement",
-                    Health.AVAILABLE if usable else Health.UNKNOWN if pending else Health.DEGRADED,
-                    "Measured savings are current."
-                    if usable
-                    else "Waiting for complete savings evidence. Previous financial results remain available."
-                    if pending
-                    else "Previous financial results are retained. Check Savings for missing evidence.",
-                )
-        else:
-            self._evaluate_rows(
-                contract, now, book, head, published_state, price_cursor, state, rows
-            )
-
-    def _evaluate_rows(self, contract, now, book, head, published_state, price_cursor, state, rows):
-        """Evaluate captured intervals before publishing a successful head.
-
-        Args:
-            contract: Current terms whose currency and market are recorded per result.
-            now: Aware evaluation time used for financial evidence and metadata.
-            book: Optional counter book used to prepare bonus evidence.
-            head: Working evaluation metadata, including its revision.
-            published_state: Previously published continuation state, if available.
-            price_cursor: Price cursor retained after the complete batch.
-            state: Continuation state for the next captured interval.
-            rows: Captured measurements and contexts in chronological order.
-
-        Returns:
-            A result describing COMPLETE after accepted publication, PENDING while evidence or further
-            correction batches are needed, or FAILED for rejected evidence or a
-            missing original plan. These states do not depend on display text.
-
-        Each successful interval is committed immediately. An early return records
-        self.issue and, for handled evaluation errors, self.attention. Earlier
-        interval commits remain stored. Only a complete batch writes the new head
-        or working state, preserving the previous successful publication.
-        """
-        counter_version = book.version if book else None
-        for processed, row in enumerate(rows):
-            frame = parse_frame(row["frame"])
-            context = row["context"]
-            plan_id = self.store.context_plan(frame.start)
-            if plan_id is None:
-                self.issue = "No original installation plan covers this interval"
-                return EvaluationResult(
-                    EvaluationState.FAILED,
-                    processed,
-                    len(rows),
-                    frame.start.isoformat(),
-                    frame.end.isoformat(),
-                )
-            plan = self.plans.get_context(plan_id)
-            try:
-                problem = physical_context(plan)
-                if state is None and (
-                    problem.batteries or not simulated_counters_ready(contract, frame.start, None)
-                ):
-                    self._require_initial_frame(frame, state)
-                original_contract = plan["input_snapshot"].get("contract_version")
-                if original_contract and original_contract != contract.version:
-                    problem, _ = corrected_problem(plan, contract)
-                bindings = dict(context["bindings"])
-                advice = active_advice(
-                    frame, self.store.activations(frame.start, frame.end), self.plans.get_context
-                )
-                bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
-                seeds = (
-                    parse_counters({"seeds": context["seeds"]}, now).seeds
-                    if context["seeds"]
-                    else ()
-                )
-                seeds = self.bonus.prepare(
-                    contract, frame, bindings, seeds, book, now, version(bindings), state
-                )
-                prices = self.store.published(
-                    frame.start, frame.end, contract.market_area, contract.currency
-                )
-                result, continuation = evaluate(
-                    problem,
-                    frame,
-                    bindings,
-                    state,
-                    contract,
-                    seeds,
-                    prices,
-                    SiteLocation(**context["location"]) if context["location"] else None,
-                )
-                result.update(
-                    plan_id=plan_id,
-                    strategy=plan["strategy"],
-                    evaluated_at=now.isoformat(),
-                    revision=head["revision"],
-                    contract_version=contract.version,
-                    currency=contract.currency,
-                    market_area=contract.market_area,
-                    measurements=frame.record(),
-                    advice=advice,
-                    counter_version=counter_version,
-                    device_names=plan.get("comparison_names", {}),
-                    counter_seeds=json.loads(
-                        json.dumps(
-                            [asdict(seed) for seed in seeds],
-                            default=lambda value: value.isoformat(),
-                        )
-                    ),
-                )
-                self.store.commit(head["revision"], result, continuation)
-                state = continuation
-                self.issue = None
-            except (ValueError, KeyError, TypeError) as error:
-                self.issue = settlement_issue(error)
-                self.attention = not isinstance(error, PendingSettlement)
-                return EvaluationResult(
-                    EvaluationState.PENDING
-                    if isinstance(error, PendingSettlement)
-                    else EvaluationState.FAILED,
-                    processed,
-                    len(rows),
-                    frame.start.isoformat(),
-                    frame.end.isoformat(),
-                )
-        head["price_cursor"] = price_cursor
-        with self.documents.transaction():
-            if state and (published_state is None or state["end"] >= published_state["end"]):
-                self.documents.write(f"evaluation-{head['revision']}.json", head)
-                self.documents.write("head.json", head)
-                self.documents.write("working.json", None)
-            else:
-                self.documents.write("working.json", head)
-        pending = published_state is not None and (
-            state is None or state["end"] < published_state["end"]
-        )
-        self.issue = (
-            "Correction is still being evaluated. The previous successful version remains visible"
-            if pending
-            else None
-        )
-        self.attention = False
-        return EvaluationResult(
-            EvaluationState.PENDING if pending else EvaluationState.COMPLETE, len(rows), len(rows)
-        )
 
     def overview(self, start, end, revision=None):
         """Filter stored nonoverlapping results. Never reset either scenario or run a historical optimizer."""
