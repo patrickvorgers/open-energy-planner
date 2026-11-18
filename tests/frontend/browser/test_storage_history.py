@@ -99,6 +99,17 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
     assert page.locator("#storage-history-selected").inner_text() != first
     canvas.press("End")
     expect(page.locator("#storage-history-selected")).to_contain_text("SQLite")
+    expect(canvas).to_have_accessible_description(
+        page.locator("#storage-history-selected").text_content()
+    )
+    tooltip = page.evaluate(
+        "() => {const tooltip=Chart.getChart(document.getElementById('storage-history-chart')).tooltip;return {opacity:tooltip.opacity,title:tooltip.title,label:tooltip.body[0].lines[0]};}"
+    )
+    assert tooltip["opacity"] == 1 and "680 MiB" in tooltip["label"]
+    assert tooltip["title"] == ["11/18/2026, 4:00 AM"]
+    selected_bounds = page.locator("#storage-history-selected").bounding_box()
+    assert selected_bounds["width"] == 1 and selected_bounds["height"] == 1
+    assert "Measured daily after" not in page.locator("main").inner_text()
     page.locator("#storage-history-title").click()
     page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(
@@ -277,6 +288,17 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
     expect(page.locator("#storage-history-selected")).to_contain_text("SQLite")
     assert page.evaluate(
         "Chart.getChart(document.getElementById('storage-history-chart')).getDatasetMeta(0).dataset.segments.some(segment => segment.style?.borderColor === 'transparent')"
+    )
+    body["samples"][0]["database_bytes"] = None
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#storage-history-summary")).to_be_empty()
+    page.locator("#storage-history-chart").focus()
+    page.locator("#storage-history-chart").press("Home")
+    expect(page.locator("#storage-history-chart")).to_have_accessible_description(
+        page.locator("#storage-history-selected").text_content()
+    )
+    assert "Unknown" in page.evaluate(
+        "Chart.getChart(document.getElementById('storage-history-chart')).tooltip.body[0].lines[0]"
     )
 
 

@@ -6,5 +6,7 @@
 .storage-history-heading select,#storage-observation {min-height:44px}
 .storage-history-plot {height:280px;position:relative;min-width:0}
 #storage-history-chart:focus-visible {outline:2px solid var(--oep-teal,#21836d);outline-offset:4px}
-#storage-history-selected {min-height:1.5em;font-variant-numeric:tabular-nums}
+#storage-history-selected {font-variant-numeric:tabular-nums}
+#storage-history-selected:empty {display:none}
+.storage-history-plot:not([hidden]) ~ #storage-history-selected {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%)}
 @media(max-width:640px) {.storage-history-heading label {width:100%}.storage-history-plot {height:240px}}
