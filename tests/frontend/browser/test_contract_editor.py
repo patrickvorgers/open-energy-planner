@@ -149,7 +149,7 @@ def test_contract_valuation_failure_and_late_period_response_keep_correct_basis(
     page.clock.set_fixed_time(first + timedelta(minutes=15))
     page.locator("#plan-version").dispatch_event("change")
     expect(page.locator(".scenario-period").first).to_contain_text("Loading expected costs")
-    page.wait_for_function("window.periodReadHeld === true")
+    page.wait_for_function("() => window.periodReadHeld === true")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     assert held
     if retained_success:
@@ -226,7 +226,7 @@ def test_latest_plan_shows_full_contract_valuation_by_default_after_first_quarte
         expect(page.locator("#reference-costs > dl dd").first).to_have_text("0.30 EUR")
     elif slice_state == "loading":
         expect(caption).to_contain_text("Loading expected costs")
-        page.wait_for_function("window.defaultPeriodHeld === true")
+        page.wait_for_function("() => window.defaultPeriodHeld === true")
         for route in held:
             route.fulfill(response=route.fetch())
         wait_for_product_reads(page)
