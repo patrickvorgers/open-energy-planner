@@ -184,6 +184,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         refresh_box = refresh_button.bounding_box()
         assert day_control["y"] < page.locator("#quality-subjects").bounding_box()["y"]
         assert refresh_box["height"] >= 44
+    page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(
         path=f"results/ci/quality-refresh-alignment-{original_size['width']}-{'ingress' in url}.png",
         full_page=True,

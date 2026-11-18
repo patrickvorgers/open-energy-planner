@@ -38,6 +38,15 @@
         ],
         "createdAt": "2026-11-18T20:20:48.323Z",
         "reason": "Agent: static detector cannot resolve route-mounted /setup/style.css and /setup/workspace.css for Activity and reports all headings as16px. The actual workspace h1 is30px and h2 is23px above inherited body16px; activity.css does not override those sizes."
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "src/open_energy_planner/web/pages/planning-performance.html"
+        ],
+        "createdAt": "2026-11-18T22:35:49.380Z",
+        "reason": "Agent: static detector cannot resolve route-mounted /setup/stylesheets and reports all headings16px. Actual planning-performance.css sets h1=1.5rem and h2=1.125rem (24px/18px at default root), a1.33x heading step above inherited16px body. No typography change is needed."
       }
     ]
   }
