@@ -1231,6 +1231,106 @@ def test_calculation_index_and_progress_rollback_as_one_write(archive, monkeypat
     assert not any(name.startswith("calculation-") for name in reads)
 
 
+def test_calculation_retention_preserves_boundary_dst_and_other_archives(settlement):
+    """Only starts before Amsterdam's retained midnight expire, including both repeated 02:30 runs."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.optimization.performance import CalculationHistory
+    from open_energy_planner.storage.adapters.lifecycle.schema import SETTLEMENT_FRAMES
+    from open_energy_planner.synthetic import capture
+
+    _runtime, _store, savings, engine, plans = settlement
+    documents = SqlDocuments(engine, "planning")
+    history = CalculationHistory(documents)
+    instants = [
+        datetime(2026, 10, 24, 21, 59, 59, tzinfo=UTC),
+        datetime(2026, 10, 24, 22, tzinfo=UTC),
+        datetime(2026, 10, 25, 0, 30, tzinfo=UTC),
+        datetime(2026, 10, 25, 1, 30, tzinfo=UTC),
+    ]
+    for started in instants:
+        history.record(capture(started), None, started, started, "planning_error")
+    old = history.day("2026-10-24", "Europe/Amsterdam")[0]
+    retained = history.day("2026-10-25", "Europe/Amsterdam")
+    original_details = [history.detail(row["id"]) for row in retained]
+    documents.write("current.json", "minimize cost")
+    documents.write("model-selection.json", {"preserved": True})
+    savings.write("calculation-" + old["id"] + ".json", {"counter": 7})
+    savings.write("calculations-2026-10-24.json", {"cost": 12.34})
+    original_plan = plans.get_plan("original-plan")
+    with engine.connect() as connection:
+        original_frames = connection.execute(select(SETTLEMENT_FRAMES)).all()
+    before = datetime(2026, 10, 24, 22, tzinfo=UTC)
+    while history.prune(before):
+        pass
+    assert not documents.exists("calculation-" + old["id"] + ".json")
+    assert history.day("2026-10-24", "Europe/Amsterdam") == []
+    assert [history.detail(row["id"]) for row in retained] == original_details
+    assert len(history.day("2026-10-25", "Europe/Amsterdam")) == 3
+    assert documents.read("current.json") == "minimize cost"
+    assert documents.read("model-selection.json") == {"preserved": True}
+    assert savings.read("calculation-" + old["id"] + ".json") == {"counter": 7}
+    assert savings.read("calculations-2026-10-24.json") == {"cost": 12.34}
+    assert plans.get_plan("original-plan") == original_plan
+    with engine.connect() as connection:
+        assert connection.execute(select(SETTLEMENT_FRAMES)).all() == original_frames
+
+
+def test_calculation_retention_is_bounded_and_resumes_after_restart(archive):
+    """A batch removes 128 of 130 observations, then a reopened owner finishes the remaining pair."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.optimization.performance import CalculationHistory
+    from open_energy_planner.synthetic import capture
+
+    engine, _root = archive
+    documents = SqlDocuments(engine, "planning")
+    history = CalculationHistory(documents)
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    observation = history.capture(capture(started), None, started, started, "planning_error")
+    with documents.transaction():
+        for index in range(130):
+            history.write({**observation, "id": f"{index + 1:032x}"})
+    before = datetime(2026, 1, 2, tzinfo=UTC)
+    assert history.prune(before)
+    assert len(history.day("2026-01-01", "UTC")) == 2
+    assert len(list(documents.iter_prefix("calculation-"))) == 2
+    restored = CalculationHistory(SqlDocuments(engine, "planning"))
+    assert restored.prune(before)
+    assert not restored.prune(before)
+    assert not documents.exists("calculations-2026-01-01.json")
+    assert list(documents.iter_prefix("calculation-")) == []
+
+
+def test_calculation_retention_rolls_back_details_and_index_together(archive, monkeypatch):
+    """A failed partial-day index update restores the expired curve as well as both original summaries."""
+    from datetime import UTC, datetime
+
+    from open_energy_planner.optimization.performance import CalculationHistory
+    from open_energy_planner.synthetic import capture
+
+    engine, _root = archive
+    documents = SqlDocuments(engine, "planning")
+    history = CalculationHistory(documents)
+    for hour in (22, 23):
+        started = datetime(2026, 11, 4, hour, 30, tzinfo=UTC)
+        history.record(capture(started), None, started, started, "planning_error")
+    original = documents.read("calculations-2026-11-04.json")
+    write = documents.write
+
+    def fail_index(name, value):
+        """Fail after a curve was deleted, before the retained summary index can commit."""
+        if name.startswith("calculations-"):
+            raise OSError("Simulated index update failure")
+        write(name, value)
+
+    monkeypatch.setattr(documents, "write", fail_index)
+    with pytest.raises(OSError):
+        history.prune(datetime(2026, 11, 4, 23, tzinfo=UTC))
+    assert documents.read("calculations-2026-11-04.json") == original
+    assert all(documents.exists("calculation-" + row["id"] + ".json") for row in original)
+
+
 def test_solar_nonlinear_weights_and_training_reports_survive_backend_restart(archive):
     """Every real backend retains source-bound native weights, immutable cleaning evidence and baseline selection."""
     from open_energy_planner.solar.boosting import SolarBoostedModel

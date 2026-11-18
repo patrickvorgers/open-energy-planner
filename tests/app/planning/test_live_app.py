@@ -363,23 +363,28 @@ def test_synthetic_submission_waits_for_inflight_publication(tmp_path, monkeypat
                 submit(coordinator, snapshot)
 
             monkeypatch.setattr(SqlPlanRepository, "save", slow_save)
-            async with session.post(url + "/v1/replan", json={"initial_kwh": 0.25}) as response:
-                assert response.status == 200
-            assert await asyncio.to_thread(started.wait, 5)
-            monkeypatch.setattr(PlanningCoordinator, "submit", observe_submit)
-            pending = asyncio.create_task(
-                session.post(url + "/v1/replan", json={"initial_kwh": 0.5})
+            # The first response can also wait for publication while assembling its snapshot.
+            initial_request = asyncio.create_task(
+                session.post(url + "/v1/replan", json={"initial_kwh": 0.25})
             )
+            pending = None
             try:
+                assert await asyncio.to_thread(started.wait, 5)
+                monkeypatch.setattr(PlanningCoordinator, "submit", observe_submit)
+                pending = asyncio.create_task(
+                    session.post(url + "/v1/replan", json={"initial_kwh": 0.5})
+                )
                 await asyncio.wait_for(captured.wait(), 5)
                 assert not submissions
                 assert not pending.done()
             finally:
                 release.set()
-                response = await pending
-                await response.read()
-                response.release()
-            assert response.status == 200
+                for request in (initial_request, pending):
+                    if request is not None:
+                        response = await request
+                        await response.read()
+                        response.release()
+                        assert response.status == 200
             assert submissions == [True]
             await wait_ready(session, url)
 

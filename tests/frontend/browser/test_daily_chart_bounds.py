@@ -44,6 +44,11 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
     ).json()
     evidence["day"] = day
     evidence["timezone"] = timezone
+    evidence["retention"] = {
+        "days": 14,
+        "min_day": (datetime.fromisoformat(day) - timedelta(days=13)).date().isoformat(),
+        "max_day": day,
+    }
     for row, minutes in zip(evidence["calculations"], (480, 485, 495), strict=True):
         row["started_at"] = (start + timedelta(minutes=minutes)).isoformat()
     page.route("**/v1/planning-performance**", lambda route: route.fulfill(json=evidence))
@@ -340,7 +345,12 @@ def test_skipped_calendar_date_remains_responsive(app_page):
     page.route(
         "**/v1/planning-performance**",
         lambda route: route.fulfill(
-            json={"day": "2011-12-30", "timezone": "Pacific/Apia", "calculations": []}
+            json={
+                "day": "2011-12-30",
+                "timezone": "Pacific/Apia",
+                "calculations": [],
+                "retention": {"days": 14, "min_day": "2011-12-18", "max_day": "2011-12-31"},
+            }
         ),
     )
     page.goto(url + "/planning-performance?day=2011-12-30")
@@ -369,6 +379,7 @@ def test_repeated_local_calculation_times_are_distinct(app_page):
         url + "/v1/planning-performance", headers={"Authorization": f"Bearer {TOKEN}"}
     ).json()
     evidence["day"] = "2026-10-25"
+    evidence["retention"] = {"days": 14, "min_day": "2026-10-12", "max_day": "2026-10-25"}
     starts = ["2026-10-25T00:00:00Z", "2026-10-25T01:00:00Z", "2026-10-25T08:00:00Z"]
     for row, started in zip(evidence["calculations"], starts, strict=True):
         row["started_at"] = started

@@ -3,16 +3,26 @@
 import asyncio
 import logging
 import re
-from contextlib import suppress
 from dataclasses import asdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
+from open_energy_planner.runtime.diagnostics.logging import failure_trace
+
 MAX_PENDING_HISTORY_RECORDS = 32
+HISTORY_RETENTION_DAYS = 14
+HISTORY_PRUNE_BATCH_ROWS = 128
+HISTORY_CLOCK_POLL_SECONDS = 60
 _LOGGER = logging.getLogger(__name__)
+
+
+def retained_days(now, timezone):
+    """Return the fourteen installation-local calendar dates including today, independently of UTC day length."""
+    last = now.astimezone(ZoneInfo(timezone)).date()
+    return last - timedelta(days=HISTORY_RETENTION_DAYS - 1), last
 
 
 class CalculationHistory:
@@ -87,6 +97,36 @@ class CalculationHistory:
             raise ValueError("Invalid calculation identity")
         return self.documents.read("calculation-" + identity + ".json")
 
+    def prune(self, before):
+        """Atomically remove at most 128 expired summaries and their curves before an aware UTC cutoff.
+
+        Indexes are UTC partitions. The boundary partition can also contain
+        retained local-day rows. Plans and other document identities are untouched.
+        Return whether a bounded batch changed data so the writer can resume.
+        """
+        boundary = "calculations-" + (before.date() + timedelta(days=1)).isoformat() + ".json"
+        with self.documents.transaction():
+            entry = self.documents.first_before("calculations-", boundary)
+            if entry is None:
+                return False
+            name, rows = entry
+            expired = [row for row in rows if datetime.fromisoformat(row["started_at"]) < before][
+                :HISTORY_PRUNE_BATCH_ROWS
+            ]
+            if rows and not expired:
+                return False
+            identities = {row["id"] for row in expired}
+            if any(not re.fullmatch(r"[0-9a-f]{32}", identity) for identity in identities):
+                raise ValueError("Invalid calculation identity")
+            for identity in identities:
+                self.documents.delete("calculation-" + identity + ".json")
+            remaining = [row for row in rows if row["id"] not in identities]
+            if remaining:
+                self.documents.write(name, remaining)
+            else:
+                self.documents.delete(name)
+            return True
+
     def day(self, selected, timezone):
         """Read UTC partitions surrounding a real local date, including 23-hour and 25-hour days."""
         selected = date.fromisoformat(selected)
@@ -114,13 +154,63 @@ def register(app, documents, timezone):
     pending = asyncio.Queue(maxsize=MAX_PENDING_HISTORY_RECORDS)
 
     async def write_pending():
-        """Serialize optional writes off-loop, surviving individual storage failures."""
+        """Serialize bounded cleanup and writes off-loop, including startup and idle clock changes."""
+        cleaned_before, cleanup_failed, retry_at = None, False, 0.0
         while True:
-            observation = await pending.get()
+            zone = timezone()
+            first = retained_days(datetime.now(UTC), zone)[0] if zone else None
+            before = (
+                datetime.combine(first, time(), ZoneInfo(zone)).astimezone(UTC) if first else None
+            )
+            more = False
+            if (
+                before is not None
+                and before != cleaned_before
+                and asyncio.get_running_loop().time() >= retry_at
+            ):
+                try:
+                    more = await asyncio.to_thread(history.prune, before)
+                    if cleanup_failed:
+                        _LOGGER.info(
+                            "Calculation history cleanup recovered. Automatic retention resumed"
+                        )
+                    cleanup_failed = False
+                    if not more:
+                        cleaned_before = before
+                except Exception as error:  # noqa: BLE001 - Isolate diagnostic maintenance and log only sanitized traces.
+                    if not cleanup_failed:
+                        _LOGGER.error(
+                            "Calculation history cleanup failed (%s). Planning is unaffected. Retrying after the next clock check.\n%s",
+                            type(error).__name__,
+                            failure_trace(error),
+                        )
+                    cleanup_failed = True
+                    retry_at = asyncio.get_running_loop().time() + HISTORY_CLOCK_POLL_SECONDS
+            if more and pending.empty():
+                continue
             try:
-                await asyncio.to_thread(history.write, observation)
-            except Exception:
-                _LOGGER.exception("Calculation history write failed. Planning is unaffected")
+                observation = await asyncio.wait_for(pending.get(), HISTORY_CLOCK_POLL_SECONDS)
+            except TimeoutError:
+                continue
+            try:
+                if observation is None:
+                    return
+                # The calendar boundary can change while the queue is idle.
+                zone = timezone()
+                first = retained_days(datetime.now(UTC), zone)[0] if zone else None
+                before = (
+                    datetime.combine(first, time(), ZoneInfo(zone)).astimezone(UTC)
+                    if first
+                    else None
+                )
+                if before is None or datetime.fromisoformat(observation["started_at"]) >= before:
+                    await asyncio.to_thread(history.write, observation)
+            except Exception as error:  # noqa: BLE001 - Preserve optional recording isolation with sanitized traces.
+                _LOGGER.error(
+                    "Calculation history write failed (%s). Planning is unaffected.\n%s",
+                    type(error).__name__,
+                    failure_trace(error),
+                )
             finally:
                 pending.task_done()
 
@@ -130,10 +220,9 @@ def register(app, documents, timezone):
         try:
             yield
         finally:
+            await pending.put(None)
             await pending.join()
-            worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker
+            await worker
 
     app.cleanup_ctx.append(lifecycle)
 
@@ -142,24 +231,48 @@ def register(app, documents, timezone):
         zone = timezone()
         if not zone:
             raise web.HTTPConflict(text="Home Assistant timezone is not available yet")
-        selected = request.query.get("day", datetime.now(ZoneInfo(zone)).date().isoformat())
+        now = datetime.now(UTC)
+        selected = request.query.get("day", now.astimezone(ZoneInfo(zone)).date().isoformat())
         try:
             selected = date.fromisoformat(selected).isoformat()
         except ValueError:
             raise web.HTTPBadRequest(text="Choose a valid calendar day") from None
         try:
-            rows = await asyncio.to_thread(history.day, selected, zone)
+            first, last = retained_days(now, zone)
+            rows = (
+                await asyncio.to_thread(history.day, selected, zone)
+                if first.isoformat() <= selected <= last.isoformat()
+                else []
+            )
         except (OSError, TypeError, KeyError, ValueError):
             raise web.HTTPServiceUnavailable(text="Calculation history unavailable") from None
-        return web.json_response({"day": selected, "timezone": zone, "calculations": rows})
+        return web.json_response(
+            {
+                "day": selected,
+                "timezone": zone,
+                "calculations": rows,
+                "retention": {
+                    "days": HISTORY_RETENTION_DAYS,
+                    "min_day": first.isoformat(),
+                    "max_day": last.isoformat(),
+                },
+            }
+        )
 
     async def detail(request):
         """Return one authenticated calculation, with distinct missing and unavailable states."""
         identity = request.match_info["identity"]
         if not re.fullmatch(r"[0-9a-f]{32}", identity):
             raise web.HTTPBadRequest(text="Invalid calculation identity")
+        zone = timezone()
+        if not zone:
+            raise web.HTTPConflict(text="Home Assistant timezone is not available yet")
         try:
             value = await asyncio.to_thread(history.detail, identity)
+            first, last = retained_days(datetime.now(UTC), zone)
+            started = datetime.fromisoformat(value["started_at"]).astimezone(ZoneInfo(zone)).date()
+            if not first <= started <= last:
+                raise web.HTTPGone(text="Calculation is outside the retained period")
         except FileNotFoundError:
             raise web.HTTPNotFound(text="Calculation not found") from None
         except (OSError, TypeError, KeyError, ValueError):

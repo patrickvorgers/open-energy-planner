@@ -149,6 +149,37 @@ class SqlDocuments:
                     DOCUMENTS.insert().values(namespace=self.namespace, name=name, payload=payload)
                 )
 
+    def first_before(self, prefix, boundary):
+        """Read the first namespace-owned document below a lexical boundary without scanning payloads."""
+        self._key(prefix)
+        self._key(boundary)
+        try:
+            with (
+                nullcontext(self.pending.connection)
+                if getattr(self.pending, "connection", None) is not None
+                else self.engine.connect() as connection
+            ):
+                row = connection.execute(
+                    select(DOCUMENTS.c.name, DOCUMENTS.c.payload)
+                    .where(
+                        DOCUMENTS.c.namespace == self.namespace,
+                        DOCUMENTS.c.name >= prefix,
+                        DOCUMENTS.c.name.startswith(prefix, autoescape=True),
+                        DOCUMENTS.c.name < boundary,
+                    )
+                    .order_by(DOCUMENTS.c.name)
+                    .limit(1)
+                ).first()
+        except SQLAlchemyError:
+            raise OSError("Document archive read failed") from None
+        return (row.name, json.loads(decode_payload(row.payload))) if row else None
+
+    def delete(self, name):
+        """Idempotently delete one exact namespace-owned identity in the shared transaction."""
+        key = self._key(name)
+        with self.transaction():
+            self.pending.connection.execute(DOCUMENTS.delete().where(key))
+
     def iter_prefix(self, prefix):
         """Stream namespace-bound JSON, reusing an active transaction and bounding reconstruction memory."""
         self._key(prefix)
