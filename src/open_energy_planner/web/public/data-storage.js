@@ -8,7 +8,7 @@ const find = id => document.getElementById(id);
 const READ_TIMEOUT_MILLISECONDS = 35000;
 let token = "", busy = false;
 const refreshMigration = bindStorageMigration(() => token, load);
-const refreshHistory = bindStorageHistory(() => token, bytes);
+const refreshHistory = bindStorageHistory(() => token, bytes, showDatabase);
 
 /** Format byte measurements without converting unknown space into zero. */
 function bytes(value) {
@@ -19,8 +19,15 @@ function bytes(value) {
     return `${value.toLocaleString(undefined, {maximumFractionDigits: 2})} ${units[unit]}`;
 }
 
-/** Clear stale evidence on failures and serialize refreshes without storing credentials. */
-async function load() {
+/** Keep size, backend and scope attached to the same displayed observation. */
+function showDatabase(usage) {
+    find("backend").textContent = {sqlite: "SQLite", postgresql: "PostgreSQL", mariadb: "MariaDB", mysql: "MySQL"}[usage.backend] || "Unknown";
+    find("database-size").textContent = bytes(usage.database_bytes) + (usage.database_estimated ? " (estimated)" : "");
+    find("size-scope").textContent = usage.backend === "sqlite" ? "For file-backed SQLite, includes WAL and shared-memory sidecars. Sizes can change during writes." : usage.database_estimated ? "Estimated size of visible tables and indexes in the connected database, including tables belonging to other applications. Server storage overhead is excluded." : "Whole connected database, including tables belonging to other applications. Server storage overhead is excluded.";
+}
+
+/** Show the saved daily database size until an explicit Refresh requests the live view. */
+async function load(current = false) {
     if (busy) return;
     refreshMigration();
     busy = true;
@@ -33,20 +40,17 @@ async function load() {
         const response = await fetch(base + "v1/storage", {headers: {Authorization: `Bearer ${token}`}, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS)});
         if (!response.ok) { if (response.status === 401) find("connect").hidden = false; throw new Error("Storage evidence unavailable. Check the connection and try again."); }
         const usage = await response.json();
-        find("backend").textContent = {sqlite: "SQLite", postgresql: "PostgreSQL", mariadb: "MariaDB", mysql: "MySQL"}[usage.backend] || "Unknown";
-        find("database-size").textContent = bytes(usage.database_bytes) + (usage.database_estimated ? " (estimated)" : "");
         find("free-space").textContent = bytes(usage.disk_free_bytes);
         find("volume-size").textContent = bytes(usage.disk_total_bytes);
         find("capacity-status").textContent = {ok: "Sufficient space", low: "Low space", unknown: "Unknown", unavailable: "Measurement unavailable"}[usage.status] || "Unknown";
-        find("size-scope").textContent = usage.backend === "sqlite" ? "For file-backed SQLite, includes WAL and shared-memory sidecars. Sizes can change during writes." : usage.database_estimated ? "Estimated size of visible tables and indexes in the connected database, including tables belonging to other applications. Server storage overhead is excluded." : "Whole connected database, including tables belonging to other applications. Server storage overhead is excluded.";
-        find("capacity-note").textContent = usage.disk_free_bytes === null ? "Free space cannot be determined for this database. Check the database host or provider for capacity and quotas." : "Free space on the volume containing the active database. This is not a database quota.";
+        find("capacity-note").textContent = usage.disk_free_bytes === null ? "Free space cannot be determined for this database. Check the database host or provider for capacity and quotas." : "Free space on the volume containing the active database. Low space means less than 1 GiB or 5.0% free. Other applications may share this space.";
         const warning = find("storage-warning");
         warning.hidden = usage.status !== "low";
         warning.textContent = "Low storage space. Free space on the database volume or expand its capacity to protect future writes. Back up retained evidence before removing any files.";
         find("status").textContent = usage.measurement_failed ? "Some storage measurements are unavailable. Refresh to try again." : "Storage evidence refreshed.";
         find("connect").hidden = true;
         find("storage").hidden = false;
-        await refreshHistory();
+        await refreshHistory(usage, current);
     } catch {
         find("status").textContent = find("database-connection").dataset.running === "false" ? "The app is paused for database maintenance. Storage measurements return after restart." : "Storage evidence unavailable. Check the connection and try again.";
     } finally {
@@ -56,7 +60,7 @@ async function load() {
     }
 }
 
-find("refresh").onclick = load;
+find("refresh").onclick = () => load(true);
 find("connect").onsubmit = event => { event.preventDefault(); token = find("token").value; load(); };
 fetch(base + "setup/session", {redirect: "error", cache: "no-store", signal: AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS)})
     .then(response => response.json()).then(session => { if (session.ingress) return load(); })

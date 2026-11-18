@@ -71,6 +71,17 @@ retention or current contract valuation. See [archive reads](PLAN-ARCHIVE.md).
 
 Settings > Data storage reads the active engine through authenticated
 `GET /v1/storage`. This live read does not write history or prune retained data.
+Its `observed_at` is the UTC probe completion time with microseconds.
+On opening the page, the Database card uses the latest saved daily observation
+returned by the history endpoint, including its backend and estimation status.
+No saved observation means unknown size. Available space still uses live volume
+evidence. An explicit Refresh switches the card and graph to the same live size
+response, marked **Current**. Period changes retain that live snapshot until the
+next Refresh. Reopening the page returns to the saved daily view.
+If a live view crosses local midnight, later observations wait for Refresh so the
+graph does not advance beyond the displayed snapshot. The projection never changes
+the stored daily row. A current unknown size remains unknown even when today's
+stored measurement was available.
 The separate authenticated `/v1/storage/migration` maintenance API manages
 cross-backend transfer from the same page. It adds no tables or columns. It copies
 and verifies the complete shared registry with writers stopped, then validates
@@ -138,11 +149,15 @@ One writable app process is supported, as for other lifecycle writers.
 
 Authenticated `GET /v1/storage/history?period=month` returns `period`, inclusive
 ISO `start` and `end` dates, the current `timezone`, `sample_hour` and ordered
-`samples` containing the columns above. Supported periods are `week`, `month`,
+`samples` containing the columns above, and nullable `latest`. The latter uses
+the same row contract and preserves the latest observation at or before `end`,
+even when it predates `start`. Empty windows use a descending primary-key query
+limited to one row, without scanning all retained history.
+Supported periods are `week`, `month`,
 `quarter`, `year` and `all`. The default is one calendar month, with month-end
 clamping. Week includes seven local dates. Reads run in a worker and never
 sample. While the HA timezone is unavailable, the endpoint returns empty samples
-and null date bounds rather than guessing a UTC calendar window. The primary-key
+and null date bounds and `latest` rather than guessing a UTC calendar window. The primary-key
 index supports the date window. There are no foreign
 keys or additional indexes. Missing days and nulls break chart lines. Backend
 changes also break lines and suppress cross-backend growth comparisons because

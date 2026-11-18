@@ -36,10 +36,12 @@ def test_history_authentication_background_sampling_and_safe_failures(tmp_path, 
     class Clock(datetime):
         """Keep the daily worker and period endpoint on one independently chosen UTC instant."""
 
+        instant = datetime(2026, 11, 17, 12, tzinfo=UTC)
+
         @classmethod
         def now(cls, tz=None):
             """Return a deterministic after-schedule instant for the real app lifecycle."""
-            return datetime(2026, 11, 17, 12, tzinfo=UTC)
+            return cls.instant
 
     monkeypatch.setattr(storage_api, "datetime", Clock)
 
@@ -60,9 +62,14 @@ def test_history_authentication_background_sampling_and_safe_failures(tmp_path, 
             assert body["end"] == "2026-11-17" and body["sample_hour"] == 4
             assert len(body["samples"]) == 1
             assert body["samples"][0]["database_bytes"] > 0
+            assert body["latest"] == body["samples"][-1]
             assert (
                 await (await client.get("/v1/storage/history?period=all", headers=headers)).json()
             )["samples"] == body["samples"]
+            Clock.instant = datetime(2027, 1, 17, 12, tzinfo=UTC)
+            older = await (await client.get("/v1/storage/history", headers=headers)).json()
+            assert older["samples"] == []
+            assert older["latest"] == body["samples"][-1]
             invalid = await client.get(
                 "/v1/storage/history?period=private-password", headers=headers
             )
@@ -107,6 +114,7 @@ def test_history_waits_for_ha_timezone_and_uses_its_calendar(tmp_path, monkeypat
                 pending["timezone"] is None and pending["start"] is None and pending["end"] is None
             )
             assert pending["samples"] == []
+            assert pending["latest"] is None
             metadata = {**setup_metadata(), "timezone": "Pacific/Auckland"}
             assert (
                 await client.post("/v1/ha/catalogue", headers=headers, json=metadata)

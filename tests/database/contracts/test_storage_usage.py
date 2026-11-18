@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import SingletonThreadPool
 
 from open_energy_planner.app import create_app
+from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import archive_engine
 from open_energy_planner.storage.adapters.usage import StorageUsage, storage_usage
 from tests.database.support.backends import BACKENDS
@@ -193,36 +195,67 @@ def test_external_query_failure_does_not_probe_local_disk(monkeypatch):
     assert usage.status == "unavailable"
 
 
-def test_api_requires_authentication_and_runs_probe_off_event_loop(tmp_path, monkeypatch):
+@pytest.mark.parametrize("backend,url", BACKENDS, ids=[entry[0] for entry in BACKENDS])
+def test_api_requires_authentication_and_runs_probe_off_event_loop(
+    backend, url, tmp_path, monkeypatch
+):
     """Public shells reveal no storage evidence and authorized requests run probes in a worker."""
     main_thread = threading.get_ident()
+    engine = archive_engine(tmp_path, url)
+    SCHEMA.drop_all(engine)
 
-    def probe(_engine):
+    def probe(active_engine):
         """Assert the blocking adapter is not executed on the HTTP event loop thread."""
         assert threading.get_ident() != main_thread
-        return StorageUsage("postgresql", database_bytes=8192)
+        assert active_engine is engine
+        return storage_usage(active_engine)
+
+    class WorkerClock(datetime):
+        """Reject timestamps taken after the handler resumes on the event loop."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Keep a probe completed before midnight on its actual observation date."""
+            assert threading.get_ident() != main_thread
+            return datetime(2026, 11, 17, 23, 59, 59, 999999, tzinfo=UTC)
 
     monkeypatch.setattr("open_energy_planner.storage.adapters.usage.storage_usage", probe)
+    monkeypatch.setattr("open_energy_planner.storage.api.datetime", WorkerClock)
 
     async def scenario():
         """Use real app routing and middleware to verify authentication and the byte contract."""
         token = "storage-test-token-0123456789"
         async with TestClient(
-            TestServer(create_app(tmp_path, token, source="home_assistant"))
+            TestServer(create_app(tmp_path, token, source="home_assistant", database_engine=engine))
         ) as client:
             assert (await client.get("/v1/storage")).status == 401
             assert (await client.get("/data-storage")).status == 200
             response = await client.get("/v1/storage", headers={"Authorization": f"Bearer {token}"})
             assert response.status == 200
             assert response.headers["Cache-Control"] == "no-store"
-            assert await response.json() == {
-                "backend": "postgresql",
-                "database_bytes": 8192,
-                "database_estimated": False,
-                "disk_total_bytes": None,
-                "disk_free_bytes": None,
-                "measurement_failed": False,
-                "status": "unknown",
+            body = await response.json()
+            assert body.pop("observed_at") == "2026-11-17T23:59:59.999999+00:00"
+            assert set(body) == {
+                "backend",
+                "database_bytes",
+                "database_estimated",
+                "disk_total_bytes",
+                "disk_free_bytes",
+                "measurement_failed",
+                "status",
             }
+            assert body["backend"] == backend
+            assert body["database_estimated"] == (backend in ("mysql", "mariadb"))
+            assert body["database_bytes"] > 0 and body["measurement_failed"] is False
+            if backend == "sqlite":
+                assert body["disk_total_bytes"] > 0 and body["disk_free_bytes"] >= 0
+                assert body["status"] in ("ok", "low")
+            else:
+                assert body["disk_total_bytes"] is None and body["disk_free_bytes"] is None
+                assert body["status"] == "unknown"
 
-    asyncio.run(scenario())
+    try:
+        asyncio.run(scenario())
+    finally:
+        SCHEMA.drop_all(engine)
+        engine.dispose()

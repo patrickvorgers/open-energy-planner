@@ -40,6 +40,19 @@ For local SQLite, the page can show database size and available volume space. It
 ## Follow database growth
 
 **Database growth** shows daily database size, with **1 month** selected by default.
+On opening the page, the **Database size** card and graph show the saved daily
+observations. The card uses the latest saved observation, including its backend
+and estimation status. If it is older than the selected period, widen the period
+to inspect that point. Without a saved observation the size is **Unknown**.
+**Available space** still shows current volume capacity.
+
+Choose **Refresh** to show the current database size in both the card and the
+graph. That point is marked **Current**. The live view remains while changing
+periods. Opening the page again returns to the saved daily view. Refresh never
+overwrites or adds a saved daily observation.
+
+[![After Refresh, the database card and Current graph point use the same live measurement.](../assets/data-storage-current.png)](../assets/data-storage-current.png)
+
 Use **Period** to choose one week, three months, one year or all retained history.
 The summary shows the change between the first and last available observation
 and the average change per elapsed day. A decrease can reflect database
@@ -49,8 +62,8 @@ The app records one measurement each day after **04:00 in the Home Assistant
 installation timezone**, checked every minute. No browser page needs to be open.
 Collection and the history window wait until the installation timezone is available. If the app starts
 later, it records the current day at the actual observation time. Days while the
-app was stopped remain gaps. The first point appears after the first eligible
-measurement. Two observations are needed to calculate growth.
+app was stopped remain gaps. After Refresh, today's live point can appear before the first
+scheduled observation. Two available points are needed to calculate growth.
 
 Hover a point or focus the chart and use the Left and Right arrow keys to inspect
 its timestamp, size, backend and estimation status. Home and End reach the first
