@@ -287,6 +287,19 @@ versus without-battery, and self-consumption versus without-battery benefits eac
 sum only pairwise matching accepted quarters. Different scenario coverages must
 not be compared by subtracting their unmatched total costs.
 
+Missing bonus usage blocks only payments that depend on it. Billing can establish
+an exact zero bonus when export is zero or the selected rate is zero, without
+creating a counter or borrowing an actual seed for a diverged scenario. A rejected
+opening, such as a reset meter or forward-dated seed, also stays unknown when the
+payment is provably zero. Failed initialization cannot leave a partial counter. Known
+counter keys still advance gross exports even when payment is zero. Missing keys
+remain unknown. Independent reference billing may use the existing continuous
+physical result, its own opening stock and retained inventory value, without
+reinitializing the reference or its financial continuation. A later positive
+payment with unknown usage remains pending and excluded from paired benefit.
+This also works after restart and raw-detail expiry using a finalized physical
+checkpoint. Finalized financial reports remain immutable.
+
 Reports also retain opening bonus seed evidence and external battery inventory
 movements. Display responses overlay current Home Assistant Energy names through
 retained source identities without rewriting finalized evidence. Changing the

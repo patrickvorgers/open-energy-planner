@@ -316,3 +316,94 @@ def test_unknown_simulated_openings_cannot_borrow_a_later_actual_confirmation(
     assert following["scenarios"]["without_battery"]["totals"] is None
     assert following["savings"] is None
     assert store.day(finalized=True) == sealed
+
+
+@pytest.mark.parametrize("later_export", [False, True])
+def test_unknown_allowance_does_not_hide_exact_costs_from_retained_physics(
+    settlement, later_export
+):
+    """Unknown bonus usage preserves exact no-export costs and the reference's own 1-kWh opening stock."""
+    from open_energy_planner.savings.accounting import inventory_curves
+    from open_energy_planner.savings.context import physical_context
+    from open_energy_planner.savings.runtime import SavingsRuntime
+
+    (
+        runtime,
+        store,
+        docs,
+        engine,
+        plans,
+        selected,
+        counter,
+        previous,
+        context,
+        initial,
+        start,
+        end,
+    ) = export_day(settlement)
+    with engine.begin() as connection:
+        connection.execute(SETTLEMENT_FRAMES.delete())
+    rows = tuple(frame(start=start + timedelta(minutes=index * 15)) for index in range(96))
+    if later_export:
+        rows = (
+            *rows[:-1],
+            frame(start=end - timedelta(minutes=15), imported_kwh=0, exported_kwh=0.5, pv_kwh=0.5),
+        )
+    store.put_frames(rows, context)
+    previous.update(
+        physical_known=True,
+        physical={
+            "end": start.isoformat(),
+            "reference_stored": {"battery": 1},
+            "actual_stored": {"battery": 2},
+            "capacities": {"battery": 4},
+            "inventory": {"actual": 0.4, "reference": 0.2},
+            "curves": inventory_curves(physical_context(plans.get_context("export-continuity"))),
+            "counters": {"actual": {}, "reference": {}},
+        },
+        reference_counters=None,
+        without_battery_counters=None,
+    )
+    now = end + timedelta(days=4)
+    report = DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", selected, None, now, initial, previous
+    )
+    actual, reference, without = (
+        report["scenarios"][kind] for kind in ("actual", "reference", "without_battery")
+    )
+    assert actual["status"] == reference["status"] == "complete"
+    assert reference["opening"]["stored_kwh"] == {"battery": 1}
+    assert actual["totals"]["economic_cost"] == pytest.approx(28.5 if later_export else 28.8)
+    assert reference["totals"]["economic_cost"] == pytest.approx(28.3 if later_export else 28.7)
+    assert without["coverage_seconds"] == (85500 if later_export else 86400)
+    assert without["totals"]["economic_cost"] == pytest.approx(28.5 if later_export else 28.8)
+    assert report["savings"] == pytest.approx(-0.2 if later_export else -0.1)
+    assert report["battery_savings"] == pytest.approx(0)
+    assert report["checkpoint"]["reference_counters"] is None
+    assert report["checkpoint"]["without_battery_counters"] is None
+    assert report["checkpoint"]["actual_counters"][counter] == pytest.approx(
+        2 if later_export else 1.5
+    )
+    if later_export:
+        assert without["status"] == "partial"
+        assert len(without["missing"]) == 1
+        assert without["missing"][0]["start"] == rows[-1].start.isoformat()
+        return
+    report["finalized_at"] = now.isoformat()
+    store.put_day(report, docs, "2026-10-23")
+    sealed = store.day(finalized=True)
+    thin(plans, docs, now, "UTC")
+    assert store.frames() == []
+    store.put_frames(
+        tuple(frame(start=end + timedelta(minutes=index * 15)) for index in range(96)), context
+    )
+    restarted = SavingsRuntime(store, docs, plans)
+    following = DailySavings(restarted).calculate(
+        "2026-10-23", "UTC", selected, None, now, initial, sealed["checkpoint"]
+    )
+    assert all(scenario["status"] == "complete" for scenario in following["scenarios"].values())
+    assert following["savings"] == pytest.approx(0)
+    assert following["scenarios"]["reference"]["opening"]["stored_kwh"] == {"battery": 0}
+    assert following["checkpoint"]["reference_counters"] is None
+    assert following["checkpoint"]["without_battery_counters"] is None
+    assert store.day(finalized=True) == sealed

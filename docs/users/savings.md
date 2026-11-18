@@ -44,6 +44,22 @@ Choose a period and inspect **Daily results**. The actual side uses recorded met
 
 The reference is simulated, not an independently measured parallel household. A favourable difference does not prove that OEP alone caused it. Real equipment behavior, forecasts and the reference assumptions all matter.
 
+For each measured quarter, the app applies the dated import and export prices and
+eligible contract bonus. Economic cost is import cost minus export and bonus
+income, plus battery wear, minus the change in stored-energy value. The reference
+uses its own simulated battery stock and export allowance throughout the period.
+
+| Benefit | Calculation over matching accepted quarters |
+|---|---|
+| Smart planning | Battery self-consumption cost minus actual cost |
+| Versus without battery | Without-battery cost minus actual cost |
+| Self-consumption versus without battery | Without-battery cost minus battery self-consumption cost |
+
+For example, actual cost of EUR 10, self-consumption cost of EUR 12 and
+without-battery cost of EUR 14 imply benefits of EUR 2, EUR 4 and EUR 2 respectively.
+These overlapping comparisons must not be added together. Negative benefits mean
+the actual operation or simulated scenario was more expensive than its reference.
+
 ## Inspect coverage before totals
 
 Missing readings, a missing settlement price or an unestablished opening bonus counter can delay evaluation. Estimated hourly or boundary reconstruction remains labelled estimated. A gap is not a zero-cost interval and does not reset the reference to a fresh battery.
@@ -89,6 +105,14 @@ context is missing. Costs and benefits still require their own complete evidence
 A reference without batteries or bonus rules can resume after a gap on later
 fully measured intervals. The missing interval remains uncovered. Unknown battery
 stock or simulated bonus usage cannot be reset to make a comparison available.
+
+An unknown historical bonus allowance does not hide an otherwise exact quarter
+with no export or a zero applicable bonus rate. Its bonus payment is known to be
+zero. Costs can also use an intact physical reference even while its bonus usage
+is unknown. The allowance stays unknown, so a later export whose bonus depends on
+that allowance remains uncovered. Pairwise benefits exclude only the affected
+quarters. Provisional days are recalculated in the background. Previously finalized
+days retain their original results and coverage.
 
 After finalization, the daily costs, energy totals, coverage, missing ranges, battery endpoints and calculation versions remain available. Later changes to terms or prices do not silently rewrite a finalized day. Detailed temporary quarters can then expire. **View retained day plan** opens the original daily plan when one was published that day. Its forecast is separate from the measured daily result.
 

@@ -65,15 +65,23 @@ def bonus_payment(contract, start, end, market, exported, counters, seeds, meter
             continue
         if policy.contract_start is not None and start < policy.contract_start:
             continue
-        key = opening_counter_key(
-            identity, policy.period_start(start), start, counters, seeds, meter_start
-        )
-        quota = min(exported, max(0, chosen.cap_kwh - counters[key])) if chosen else 0
-        amount += (
-            quota * chosen.extra_rate(market, start + (end - start) / 2, location=location)
+        rate = (
+            chosen.extra_rate(market, start + (end - start) / 2, location=location)
             if chosen
-            else 0
+            else 0.0
         )
+        period = policy.period_start(start)
+        counter_key = identity + "|" + period.isoformat()
+        try:
+            key = opening_counter_key(identity, period, start, counters, seeds, meter_start)
+        except ValueError:
+            if exported != 0 and rate != 0:
+                raise
+            # The payment is exact, but missing gross usage must remain unknown.
+            counters.pop(counter_key, None)
+            continue
+        quota = min(exported, max(0, chosen.cap_kwh - counters[key])) if chosen else 0
+        amount += quota * rate
         counters[key] += exported
     return amount
 
@@ -353,12 +361,15 @@ def independent_account(
     *,
     common_start=False,
     inventory_previous=None,
+    physical=None,
 ):
-    """Bill one independently recoverable scenario after a gap without inventing reference stock.
+    """Bill independently known flows without inventing reference stock or bonus usage.
 
     Actual inventory endpoints come from measurements. Without-battery flows
     use the same measured demand and available-PV policy as self-consumption.
-    Unknown simulated bonus counters cannot use an actual export seed.
+    Unknown simulated bonus counters cannot use an actual export seed. Zero
+    export or a zero bonus rate can still establish the exact interval cost.
+    Reference flows require the independently continued physical calculation.
     An actual ``inventory_previous`` checkpoint contains end, actual_stored,
     capacities, curves and scalar inventory value. Contiguous hardware movements
     are excluded from operating cost even when reference stock is unavailable.
@@ -379,14 +390,34 @@ def independent_account(
         imported, exported, wear = flows["import_kwh"], flows["export_kwh"], 0.0
         opening = closing = 0.0
         stored = {}
+    elif kind == "reference" and physical is not None:
+        flows = physical["reference"]
+        imported, exported, wear = flows["import_kwh"], flows["export_kwh"], flows["wear"]
+        opening = inventory(problem, physical["reference_start"])
+        closing = inventory(problem, flows["stored"])
+        stored = flows["stored"]
+        estimated = physical["estimated_pv"]
+        if inventory_previous:
+            movements, external = value_movements(
+                problem, inventory_previous, physical["movements"]
+            )
+            opening = inventory_previous["inventory"]["reference"] + external["reference"]
     else:
         raise ValueError("Unsupported independent savings scenario")
     counters = dict(previous) if previous is not None else {}
-    if kind != "actual" and not simulated_counters_ready(
+    known = kind == "actual" or simulated_counters_ready(
         contract, frame.start, previous, common_start=common_start
-    ):
-        raise PendingSettlement("Simulated bonus counters are unknown after missing measurements")
-    result = bill(contract, frame, imported, exported, counters, seeds, prices, location)
+    )
+    try:
+        result = bill(
+            contract, frame, imported, exported, counters, seeds if known else (), prices, location
+        )
+    except ValueError as error:
+        if not known and error.args == ("Bonus comparison baseline is missing",):
+            raise PendingSettlement(
+                "Simulated bonus counters are unknown after missing measurements"
+            ) from None
+        raise
     result.update(
         wear=wear,
         inventory_start=opening,
@@ -399,7 +430,9 @@ def independent_account(
         available_pv_estimated=estimated,
         inventory_movements=movements,
     )
-    return result, counters
+    return result, (
+        counters if counters or simulated_counters_ready(contract, frame.start, counters) else None
+    )
 
 
 def simulated_counters_ready(contract, start, counters, *, common_start=False):
