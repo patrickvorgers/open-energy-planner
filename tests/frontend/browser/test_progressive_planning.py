@@ -323,6 +323,16 @@ def test_compact_planning_preserves_commands_costs_and_original_archive(app_page
     expect(values.get_by_text("Stored energy", exact=True)).to_be_visible()
     technical = values.locator("details")
     expect(technical.get_by_text("Installation energy balance", exact=True)).not_to_be_visible()
+    for control in page.locator(".inspector summary, #inspect-time").all():
+        assert control.bounding_box()["height"] >= 44
+    if page.viewport_size["width"] < 500:
+        summary = technical.locator("summary")
+        summary.scroll_into_view_if_needed()
+        bounds = summary.bounding_box()
+        page.touchscreen.tap(bounds["x"] + 10, bounds["y"] + bounds["height"] - 2)
+        expect(technical.get_by_text("Installation energy balance", exact=True)).to_be_visible()
+        summary.press("Enter")
+        expect(technical.get_by_text("Installation energy balance", exact=True)).not_to_be_visible()
     technical.locator("summary").focus()
     technical.locator("summary").press("Enter")
     expect(technical.get_by_text("Installation energy balance", exact=True)).to_be_visible()

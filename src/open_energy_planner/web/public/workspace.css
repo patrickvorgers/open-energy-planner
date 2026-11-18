@@ -79,6 +79,8 @@
 .workspace td { font-size:12px; border-color:#edf1f5; }
 .inspector { padding:20px; margin:20px 0; background:#e7f0f3; border-radius:12px; }
 .inspector input { width:100%; accent-color:#087f76; }
+.workspace .inspector summary { min-height:44px; padding:12px 0; box-sizing:border-box; }
+.workspace #inspect-time { min-height:44px; }
 #inspect-values { font-size:13px; line-height:1.6; }
 .interval-values-period { margin:12px 0; }
 .workspace #interval-evidence-panel { padding:16px 0 0; border:0; border-top:1px solid #d4e0e6; border-radius:0; background:transparent; }
