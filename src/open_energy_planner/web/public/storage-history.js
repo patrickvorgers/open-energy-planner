@@ -44,8 +44,6 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
                 measurement = history.latest;
                 showDatabase(measurement || {...currentUsage, database_bytes: null});
             }
-            const sampleTime = `${String(history.sample_hour).padStart(2, "0")}:00`;
-            find("storage-history-note").textContent = history.timezone ? `Measured daily after ${sampleTime} (${history.timezone}).` : "Daily measurements start when the Home Assistant installation timezone is available.";
             if (!history.timezone) {
                 find("storage-history-summary").textContent = "Waiting for the Home Assistant installation timezone. Refresh after the connection is restored.";
                 return;
@@ -129,10 +127,16 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
     find("storage-period").addEventListener("change", () => load());
     find("storage-observation").addEventListener("change", event => inspect(Number(event.target.value)));
     find("storage-history-chart").addEventListener("keydown", event => {
-        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !samples.length) return;
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !samples.length || !chart) return;
         event.preventDefault();
         keyboardSelection = true;
         inspect(event.key === "Home" ? 0 : event.key === "End" ? samples.length - 1 : Math.max(0, Math.min(samples.length - 1, selected + (event.key === "ArrowRight" ? 1 : -1))));
+        const index = chart.data.datasets[0].data.findIndex(point => point.row === samples[selected]);
+        const point = chart.getDatasetMeta(0).data[index];
+        const active = [{datasetIndex: 0, index}];
+        chart.setActiveElements(active);
+        chart.tooltip.setActiveElements(active, {x: point.x, y: point.y});
+        chart.update();
     });
     find("storage-history-chart").addEventListener("pointerdown", () => { keyboardSelection = false; });
     find("storage-history-chart").addEventListener("pointermove", () => { keyboardSelection = false; });

@@ -47,7 +47,9 @@ to inspect that point. Without a saved observation the size is **Unknown**.
 **Available space** still shows current volume capacity.
 
 Choose **Refresh** to show the current database size in both the card and the
-graph. That point is marked **Current**. The live view remains while changing
+graph. When the chart shows the live observation, its tooltip is marked
+**Current**. When no sizes are available and no chart is shown, use
+**Observation** to inspect the measurement instead. The live view remains while changing
 periods. Opening the page again returns to the saved daily view. Refresh never
 overwrites or adds a saved daily observation.
 
@@ -66,7 +68,9 @@ app was stopped remain gaps. After Refresh, today's live point can appear before
 scheduled observation. Two available points are needed to calculate growth.
 
 Hover a point or focus the chart and use the Left and Right arrow keys to inspect
-its timestamp, size, backend and estimation status. Home and End reach the first
+its timestamp, size, backend and estimation status in the tooltip. Screen readers
+receive the same selected details. The chart has no repeated size or schedule
+caption beneath it. Home and End reach the first
 and last retained observation in the selected period. Unknown size never becomes
 zero. When every size is unavailable, use **Observation** to inspect the recorded
 timestamps, backends and estimation status. Refresh updates the view without
