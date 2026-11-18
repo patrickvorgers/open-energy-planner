@@ -1,3 +1,4 @@
+import {createPeriodSelector} from "./period-selector.js";
 /** Read-only measured calculation history. Missing progress never becomes a fictional first plan. */
 import "./chart_theme.js";
 import {when, dateLabel, money, percentage, localDate, nextDate, useHomeAssistantTimezone} from "./display.js";
@@ -5,6 +6,7 @@ import {calendarDayStart} from "./chart_days.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
 const find = id => document.getElementById(id);
+const performanceDay = createPeriodSelector(find("performance-period"), {dayOnly: true, label: "Calculation day", describedBy: "performance-retention", onChange: load});
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const seconds = value => Number.isFinite(value) ? `${value.toLocaleString(undefined,{maximumFractionDigits:1})} s` : "Not recorded";
 const MINUTE_MILLISECONDS = 60 * 1000;
@@ -126,7 +128,7 @@ function render() {
   instants.push(minute); clocks.set(label,instants);
  }
  for (const instants of clocks.values()) if(instants.length>1) instants.forEach((minute,index)=>clockOccurrences.set(minute,` (${index+1} of ${instants.length})`));
- const day = find("performance-day").value || localDate();
+ const day = performanceDay.value.start || localDate();
  const minimum = calendarDayStart(day), maximum = calendarDayStart(nextDate(day));
  if (maximum <= minimum) {
   chart=null;
@@ -171,12 +173,11 @@ function render() {
 /** Ignore late responses after a day change. Failed reads clear stale data rather than misdate it. */
 async function load() {
  const version = ++requestVersion; loading = true; renderSelection(); find("performance-status").textContent="Loading calculation history.";
- try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`, "history"); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone);
- const picker=find("performance-day"), period=data.retention;
- picker.min=period.min_day; picker.max=period.max_day; picker.disabled=false; find("performance-today").disabled=false;
+ try {const selected=performanceDay.value.start; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`, "history"); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone);
+ const period=data.retention;
+ performanceDay.set({start:data.day, min:period.min_day, max:period.max_day});
  find("performance-retention").textContent=`Calculations are kept for ${period.days} days, including today. Select a date from ${dateLabel(period.min_day)} to ${dateLabel(period.max_day)}. Older calculations are automatically deleted.`;
- picker.value=data.day < picker.min ? picker.min : data.day > picker.max ? picker.max : data.day;
- if(picker.value!==data.day){await load();return;}
+ if(performanceDay.value.start!==data.day){await load();return;}
  rows=data.calculations; loading = false; render(); find("performance-status").textContent="";
  const address=new URL(location.href), selectedId=address.searchParams.get("calculation"); if(selectedId){address.searchParams.delete("calculation");history.replaceState(null,"",address);const selectedRow=rows.find(row=>row.id===selectedId);if(selectedRow&&!find("calculation-detail").open)detail(selectedRow);}
  } catch(error){if(version!==requestVersion)return; rows=[]; loading = false; render(); find("performance-summary").textContent="Calculation history is unavailable for the selected day."; find("performance-status").textContent=readMessage(error);}
@@ -193,8 +194,6 @@ find("performance-chart").addEventListener("keydown", event => {
 find("calculation-detail").addEventListener("close",()=>{if(find("calculation-detail").open)return;detailVersion++;pendingReads.get("detail")?.controller.abort();detailChart?.destroy();detailChart=null;});
 find("calculation-close").addEventListener("click",()=>find("calculation-detail").close());
 find("performance-extra").addEventListener("change",render);
-find("performance-day").addEventListener("change",load);
 find("performance-refresh").addEventListener("click",load);
-find("performance-today").addEventListener("click",()=>{find("performance-day").value=localDate();load();});
 find("connect").addEventListener("submit",event=>{event.preventDefault();token=find("token").value;find("token").value="";find("connect").hidden=true;load();});
-api("setup/session", "session").then(session=>{useHomeAssistantTimezone(session.timezone);find("performance-day").value=new URLSearchParams(location.search).get("day")||localDate();find("connect").hidden=Boolean(session.ingress);if(session.ingress)load();else find("performance-status").textContent="Connect to read calculation history.";}).catch(error=>{find("performance-status").textContent=readMessage(error);});
+api("setup/session", "session").then(session=>{useHomeAssistantTimezone(session.timezone);performanceDay.set({start:new URLSearchParams(location.search).get("day")||localDate(), enabled:false});find("connect").hidden=Boolean(session.ingress);if(session.ingress)load();else find("performance-status").textContent="Connect to read calculation history.";}).catch(error=>{find("performance-status").textContent=readMessage(error);});

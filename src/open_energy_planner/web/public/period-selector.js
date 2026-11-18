@@ -14,7 +14,7 @@ function validDate(value) {
         && new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value;
 }
 /** Own the compact trigger, presets and native modal. Single-day pages never emit a range. */
-export function createPeriodSelector(host, {dayOnly = false, onChange, label = "Period"} = {}) {
+export function createPeriodSelector(host, {dayOnly = false, onChange, label = "Period", describedBy} = {}) {
     let start = null, end = null, minimum = null, maximum = null, available = null, preset = "custom";
     let month = null, anchor = null, disabled = true, openingPreset = "custom", committed = false;
     const make = (tag, className, text) => {const element = document.createElement(tag); element.className = className; if (text) element.textContent = text; return element;};
@@ -24,6 +24,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
     const next = button("›", "Next " + (dayOnly ? "day" : "period"), () => navigate(1));
     const trigger = button("Choose " + (dayOnly ? "day" : "period"), "Choose " + (dayOnly ? "day" : "period"), open);
     trigger.classList.add("period-trigger"); trigger.setAttribute("aria-haspopup", "dialog");
+    if (describedBy) trigger.setAttribute("aria-describedby", describedBy);
     for (const element of [previous, trigger, next]) element.disabled = true;
     control.append(previous, trigger, next); host.replaceChildren(control);
     const dialog = make("dialog", "period-dialog"); dialog.setAttribute("aria-label", "Choose " + (dayOnly ? "day" : "period"));
@@ -42,6 +43,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
         const field = make("label", "", title); field.append(input); form.append(field);
         input.oninput = () => {preset = "custom"; anchor = null; error.textContent = ""; draw();};
     }
+    if (describedBy) from.setAttribute("aria-describedby", describedBy);
     to.closest("label").hidden = dayOnly; to.required = !dayOnly;
     const apply = make("button", "", "Apply " + (dayOnly ? "day" : "period")); apply.type = "submit"; form.append(error, apply);
     calendar.append(monthHeading, weekdays, days, instruction, form); layout.append(shortcuts, calendar); dialog.append(heading, layout); document.body.append(dialog);
@@ -145,7 +147,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
         /** Update server-owned bounds and dates without causing a second network request. */
         set({start: first = start, end: last = end, min = minimum, max = maximum, availableDays, enabled = true, selection = preset} = {}) {
             minimum = min; maximum = max; available = availableDays ? new Set(availableDays) : available; disabled = !enabled; preset = selection;
-            start = first; end = dayOnly ? first : last;
+            start = validDate(first) ? first : null; end = dayOnly ? start : validDate(last) ? last : start;
             if (start && minimum && start < minimum) start = minimum;
             if (start && maximum && start > maximum) start = maximum;
             if (end && minimum && end < minimum) end = minimum;

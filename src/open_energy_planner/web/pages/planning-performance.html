@@ -3,7 +3,7 @@
 <body class="workspace performance-workspace"><!-- OEP_NAVIGATION -->
 <main class="workspace-main"><header class="page-header"><div><h1 class="page-heading"><img class="page-icon" src="/setup/icons/planning.svg" alt="" width="32" height="32"><span>Planning performance</span></h1></div></header>
 <form id="connect"><label>Installation API token<input id="token" type="password" autocomplete="off"></label><button>Connect</button></form>
-<section class="toolbar view-filters" aria-label="Calculation day"><label>Day<input id="performance-day" type="date" required disabled aria-describedby="performance-retention"></label><button type="button" id="performance-today" class="secondary" disabled>Today</button><button type="button" id="performance-refresh" class="secondary">Refresh</button></section>
+<section class="toolbar view-filters" aria-label="Calculation day"><div id="performance-period" class="period-selector-host"></div><button type="button" id="performance-refresh" class="secondary">Refresh</button></section>
 <p id="performance-retention" class="muted" role="status">Available dates load with calculation history.</p>
 <div class="chart-legend"><label><input id="performance-extra" type="checkbox">Show additional calculations between quarter hours</label></div>
 <p id="performance-status" role="status">Connecting to calculation history.</p>

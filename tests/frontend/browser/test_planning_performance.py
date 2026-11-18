@@ -8,7 +8,13 @@ from zoneinfo import ZoneInfo
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    choose_day,
+    choose_today,
+    discover,
+    expect_day,
+)
 
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
@@ -21,7 +27,7 @@ def test_daily_calculation_chart_dialog_and_day_navigation(app_page):
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     today = datetime.now(ZoneInfo("Europe/Amsterdam")).date()
-    expect(page.get_by_label("Day", exact=True)).to_have_value(today.isoformat())
+    expect_day(page, today.isoformat())
     expect(page.locator("#performance-chart")).to_have_attribute("aria-valuemax", "2")
     expect(page.locator("#performance-summary")).to_contain_text("3 completed calculations")
     action = page.locator("#performance-chart")
@@ -53,11 +59,11 @@ def test_daily_calculation_chart_dialog_and_day_navigation(app_page):
     page.locator("#performance-chart").press("Enter")
     expect(dialog.locator("#calculation-summary")).to_contain_text("not recorded")
     page.get_by_role("button", name="Close", exact=True).click()
-    page.get_by_label("Day", exact=True).fill((today - timedelta(days=1)).isoformat())
+    choose_day(page, (today - timedelta(days=1)).isoformat())
     expect(page.locator("#performance-chart")).to_have_attribute("aria-valuemax", "0")
-    page.get_by_label("Day", exact=True).fill("2020-01-01")
+    choose_day(page, (today - timedelta(days=13)).isoformat())
     expect(page.locator("#performance-summary")).to_contain_text("No completed calculations")
-    page.get_by_role("button", name="Today", exact=True).click()
+    choose_today(page)
     expect(page.locator("#performance-chart")).to_have_attribute("aria-valuemax", "2")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
@@ -180,3 +186,15 @@ def test_expired_calculation_details_offer_safe_recovery(app_page, status):
         "These calculation details are no longer available. Refresh history and choose a recent day."
     )
     expect(dialog).not_to_contain_text("private details")
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_invalid_day_link_recovers_to_the_backend_day(app_page):
+    """An invalid URL date behaves like an empty native date field and cannot break calendar initialization."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/planning-performance?day=not-a-calendar-day")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#performance-summary")).to_contain_text("3 completed calculations")
+    expect_day(page, datetime.now(ZoneInfo("Europe/Amsterdam")).date().isoformat())

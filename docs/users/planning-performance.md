@@ -75,3 +75,12 @@ Compare progress within one calculation. Two calculations can have different inp
 On a phone, the calculation dialog fills the screen. Use **Close** to return to the same history. An absent progress sequence remains explicitly unavailable rather than becoming an invented improvement curve.
 
 **Next:** [Read the resulting plan](read-your-plan.md), or [report a problem with useful context](troubleshooting.md#ask-for-help-safely).
+
+## Choose a calculation day
+
+Use the shared calendar control to select one whole day, or its previous/next
+arrows to move by a day. **Today** and **Yesterday** are available in the calendar.
+Dates outside the backend's fourteen-day window are disabled in the calendar,
+shortcuts and manual date form. A refresh moves an expired selection to the first
+retained day and reloads it. Existing chart calculations and detail dialogs keep
+their original behavior. Removed details still offer safe refresh guidance.
