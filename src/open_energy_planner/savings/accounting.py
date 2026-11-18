@@ -72,15 +72,14 @@ def bonus_payment(contract, start, end, market, exported, counters, seeds, meter
         )
         period = policy.period_start(start)
         counter_key = identity + "|" + period.isoformat()
-        if (
-            counter_key not in counters
-            and period != start
-            and not any(seed.rule_id == identity and seed.period_start == period for seed in seeds)
-            and (exported == 0 or rate == 0)
-        ):
+        try:
+            key = opening_counter_key(identity, period, start, counters, seeds, meter_start)
+        except ValueError:
+            if exported != 0 and rate != 0:
+                raise
             # The payment is exact, but missing gross usage must remain unknown.
+            counters.pop(counter_key, None)
             continue
-        key = opening_counter_key(identity, period, start, counters, seeds, meter_start)
         quota = min(exported, max(0, chosen.cap_kwh - counters[key])) if chosen else 0
         amount += quota * rate
         counters[key] += exported
