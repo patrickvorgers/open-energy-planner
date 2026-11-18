@@ -73,3 +73,18 @@ class StorageHistory:
                 ]
         except SQLAlchemyError:
             raise OSError("Database growth history could not be read") from None
+
+    def latest(self, end: str):
+        """Read the latest retained observation even when it predates the chart window."""
+        statement = (
+            select(STORAGE_SAMPLES)
+            .where(STORAGE_SAMPLES.c.day <= end)
+            .order_by(STORAGE_SAMPLES.c.day.desc())
+            .limit(1)
+        )
+        try:
+            with self.engine.connect() as connection:
+                row = connection.execute(statement).mappings().first()
+                return dict(row) if row is not None else None
+        except SQLAlchemyError:
+            raise OSError("Database growth history could not be read") from None

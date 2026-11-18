@@ -16,11 +16,22 @@ from tests.frontend.browser.helpers import TOKEN, discover, wait_for_product_rea
 def daily_storage_history(monkeypatch):
     """Seed an independent varying year with two recent gaps before real app composition."""
     original = StorageHistory.__init__
+    instant = datetime(2026, 11, 18, 12, tzinfo=UTC)
+
+    class Clock(datetime):
+        """Keep the seeded dates and real storage routes aligned across test-run midnight."""
+
+        @classmethod
+        def now(cls, tz=None):
+            """Use an independent fixed instant for both history and live capacity requests."""
+            return instant
+
+    monkeypatch.setattr("open_energy_planner.storage.api.datetime", Clock)
 
     def seeded(self, engine):
         """Populate only the fixture's newly created isolated app engine."""
         original(self, engine)
-        today = datetime.now(ZoneInfo("Europe/Amsterdam")).date()
+        today = instant.astimezone(ZoneInfo("Europe/Amsterdam")).date()
         rows = []
         for offset in range(366):
             day = today - timedelta(days=365 - offset)
@@ -75,10 +86,9 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
     assert 28 <= len(state["points"]) <= 32
     assert len([point for point in state["points"] if point["y"] is None]) == 2
     assert state["spanGaps"] is False
-    assert state["points"][-1]["y"] == 710
-    assert state["points"][-1]["row"]["current"] is True
-    expect(page.locator("#database-size")).to_have_text("710 MiB")
-    expect(page.locator("#storage-history-selected")).to_contain_text("Current:")
+    assert state["points"][-1]["y"] == 680
+    expect(page.locator("#database-size")).to_have_text("680 MiB")
+    expect(page.locator("#storage-history-selected")).not_to_contain_text("Current:")
     expect(page.locator("#capacity-note")).to_contain_text("Low space means less than 1 GiB")
     assert "Historical evidence is retained" not in page.locator("main").inner_text()
     assert "Late starts record" not in page.locator("main").inner_text()
@@ -95,6 +105,10 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
         path=f"results/ci/storage-history-{page.viewport_size['width']}.png", full_page=True
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#database-size")).to_have_text("710 MiB")
+    expect(page.locator("#storage-history-selected")).to_contain_text("Current:")
+    expect(page.locator("#storage-history-selected")).to_contain_text("710 MiB")
     for period in ("week", "quarter", "year", "all"):
         with page.expect_response(
             lambda response, period=period: "/v1/storage/history?period=" + period in response.url
@@ -144,6 +158,12 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
         )
         == 724.5
     )
+    page.reload()
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#database-size")).to_have_text("680 MiB")
+    expect(page.locator("#storage-history-selected")).not_to_contain_text("Current:")
+    expect(page.locator("#storage-history-selected")).to_contain_text("680 MiB")
     assert not errors
 
 
@@ -169,7 +189,12 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
         "samples": [],
     }
     body["timezone"] = None
-    page.route("**/v1/storage/history?*", lambda route: route.fulfill(json=body))
+    page.route(
+        "**/v1/storage/history?*",
+        lambda route: route.fulfill(
+            json={**body, "latest": body["samples"][-1] if body["samples"] else None}
+        ),
+    )
     page.goto(url + "/data-storage")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -294,10 +319,18 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
         "**/v1/storage",
         lambda route: (capacity_reads.append(route.request), route.fulfill(json=usage)),
     )
-    page.route("**/v1/storage/history?*", lambda route: route.fulfill(json=daily))
+    page.route(
+        "**/v1/storage/history?*",
+        lambda route: route.fulfill(
+            json={**daily, "latest": daily["samples"][-1] if daily["samples"] else None}
+        ),
+    )
     page.goto(url + "/data-storage")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#database-size")).to_have_text("5 MiB (estimated)")
+    expect(page.locator("#storage-history-selected")).not_to_contain_text("Current:")
+    page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#database-size")).to_have_text("7 MiB (estimated)")
     expect(page.locator("#storage-history-selected")).to_have_text(
         "Current: 11/18/2026, 12:15 AM: 7 MiB (estimated): MySQL"
@@ -307,24 +340,38 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     ) == [4, 7]
     daily["end"] = "2026-11-19"
     daily["samples"].append(
-        {**daily["samples"][-1], "day": "2026-11-19", "database_bytes": 6 * 1024**2}
+        {
+            **daily["samples"][-1],
+            "day": "2026-11-19",
+            "observed_at": "2026-11-19T03:00:00Z",
+            "database_bytes": 6 * 1024**2,
+        }
     )
     page.locator("#storage-period").select_option("week")
     expect(page.locator("#storage-history-selected")).to_contain_text("7 MiB (estimated)")
     wait_for_product_reads(page)
-    assert len(capacity_reads) == 1
+    assert len(capacity_reads) == 2
     assert page.evaluate(
         "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.map(point => point.y)"
     ) == [4, 7, None]
+    usage.update(database_bytes=8 * 1024**2, observed_at="2026-11-19T11:15:00Z")
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#database-size")).to_have_text("8 MiB (estimated)")
+    expect(page.locator("#storage-history-selected")).to_have_text(
+        "Current: 11/19/2026, 12:15 PM: 8 MiB (estimated): MySQL"
+    )
+    assert page.evaluate(
+        "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.map(point => point.y)"
+    ) == [4, 5, 8]
     usage["database_bytes"] = None
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#database-size")).to_have_text("Unknown (estimated)")
     expect(page.locator("#storage-history-selected")).to_contain_text(
-        "Current: 11/18/2026, 12:15 AM: Unknown (estimated): MySQL"
+        "Current: 11/19/2026, 12:15 PM: Unknown (estimated): MySQL"
     )
     assert page.evaluate(
         "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.map(point => point.y)"
-    ) == [4, None, None]
+    ) == [4, 5, None]
     daily["samples"] = []
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#storage-history-summary")).to_contain_text("Database size is unavailable")
@@ -335,3 +382,21 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     expect(page.locator("#storage-history-chart")).to_be_visible()
     expect(page.locator("#storage-history-summary")).to_be_empty()
     expect(page.locator("#storage-history-selected")).to_contain_text("7 MiB (estimated)")
+    page.reload()
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#database-size")).to_have_text("Unknown (estimated)")
+    expect(page.locator("#storage-history-chart")).to_be_hidden()
+    expect(page.locator("#storage-history-summary")).to_contain_text(
+        "No database size measurements"
+    )
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#database-size")).to_have_text("7 MiB (estimated)")
+    daily.update(period="all", start="2026-11-20", end="2026-11-20")
+    page.locator("#storage-period").select_option("all")
+    expect(page.locator("#storage-history-selected")).to_contain_text(
+        "Current: 11/19/2026, 12:15 PM: 7 MiB"
+    )
+    assert page.evaluate(
+        "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.map(point => point.y)"
+    ) == [7, None]

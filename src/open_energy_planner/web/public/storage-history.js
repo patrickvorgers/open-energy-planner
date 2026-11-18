@@ -1,4 +1,4 @@
-/** Plot daily history with the capacity card's current measurement for today. */
+/** Share the latest daily observation or an explicitly refreshed live snapshot with the card. */
 import "./chart_theme.js";
 import {dateLabel, localDate, nextDate, useHomeAssistantTimezone, when} from "./display.js";
 
@@ -8,10 +8,10 @@ const BYTES_PER_MIB = 1024 ** 2;
 const BACKENDS = {sqlite: "SQLite", postgresql: "PostgreSQL", mysql: "MySQL", mariadb: "MariaDB"};
 
 /** Own request ordering, keyboard inspection and chart teardown for this read-only page. */
-export function bindStorageHistory(readToken, bytes) {
+export function bindStorageHistory(readToken, bytes, showDatabase) {
     const find = id => document.getElementById(id);
     const base = document.querySelector('meta[name="oep-api-base"]').content;
-    let chart = null, requestVersion = 0, samples = [], selected = 0, keyboardSelection = false, currentUsage = null;
+    let chart = null, requestVersion = 0, samples = [], selected = 0, keyboardSelection = false, currentUsage = null, measurement = null, live = false;
     /** Expose the same measurement to pointer, keyboard and assistive readers. */
     function inspect(index) {
         selected = index;
@@ -19,8 +19,13 @@ export function bindStorageHistory(readToken, bytes) {
         find("storage-history-selected").textContent = row ? `${row.current ? "Current: " : ""}${when(row.observed_at)}: ${bytes(row.database_bytes)}${row.database_estimated ? " (estimated)" : ""}: ${BACKENDS[row.backend] || "Unknown backend"}` : "";
     }
     /** Replace old evidence immediately so failed or reordered reads cannot show a stale period. */
-    async function load(usage) {
-        if (usage) currentUsage = usage;
+    async function load(usage, current = false) {
+        if (usage) {
+            currentUsage = usage;
+            live = current;
+            measurement = current ? {...usage, current: true} : null;
+            showDatabase(measurement || {...usage, database_bytes: null});
+        }
         const version = ++requestVersion;
         chart?.destroy(); chart = null; samples = [];
         find("storage-history-plot").hidden = true;
@@ -35,27 +40,32 @@ export function bindStorageHistory(readToken, bytes) {
             if (version !== requestVersion) return;
             useHomeAssistantTimezone(history.timezone);
             samples = history.samples;
+            if (!live) {
+                measurement = history.latest;
+                showDatabase(measurement || {...currentUsage, database_bytes: null});
+            }
             const sampleTime = `${String(history.sample_hour).padStart(2, "0")}:00`;
             find("storage-history-note").textContent = history.timezone ? `Measured daily after ${sampleTime} (${history.timezone}).` : "Daily measurements start when the Home Assistant installation timezone is available.";
             if (!history.timezone) {
                 find("storage-history-summary").textContent = "Waiting for the Home Assistant installation timezone. Refresh after the connection is restored.";
                 return;
             }
-            const currentDay = currentUsage && localDate(currentUsage.observed_at);
-            if (currentDay >= history.start && currentDay <= history.end) {
+            const measurementDay = measurement && (measurement.day || localDate(measurement.observed_at));
+            const start = live && history.period === "all" && measurementDay < history.start ? measurementDay : history.start;
+            if (measurementDay >= start && measurementDay <= history.end) {
                 // Keep the view aligned with the displayed snapshot, including across local midnight.
-                samples = samples.filter(row => row.day < currentDay);
-                samples.push({...currentUsage, day: currentDay, current: true});
+                samples = samples.filter(row => row.day < measurementDay);
+                samples.push({...measurement, day: measurementDay});
             }
             const known = samples.filter(row => Number.isFinite(row.database_bytes));
             const first = known[0], last = known.at(-1);
-            let summary = samples.length ? "Database size is unavailable for the observations in this period. Missing sizes remain gaps." : `No database size measurements in this period. The first daily measurement appears after ${sampleTime} when the app is running.`;
+            let summary = samples.length ? "Database size is unavailable for the observations in this period. Missing sizes remain gaps." : "No database size measurements in this period.";
             if (known.length === 1) summary = "";
             if (known.length > 1) {
                 const change = last.database_bytes - first.database_bytes;
                 const sameBackend = samples.every(row => row.backend === first.backend);
                 const elapsedDays = (Date.parse(last.observed_at) - Date.parse(first.observed_at)) / MILLISECONDS_PER_DAY;
-                summary = `${dateLabel(history.start)} – ${dateLabel(history.end)}: Measurements: ${known.length}: `;
+                summary = `${dateLabel(start)} – ${dateLabel(history.end)}: Measurements: ${known.length}: `;
                 summary += sameBackend && elapsedDays > 0 ? `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${known.some(row => row.database_estimated) ? " (estimated)" : ""}` : "Growth is not compared across different database backends.";
             }
             find("storage-history-summary").textContent = summary;
@@ -70,7 +80,7 @@ export function bindStorageHistory(readToken, bytes) {
             }
             const byDay = new Map(samples.map(row => [row.day, row]));
             const points = [];
-            for (let day = history.start; day <= history.end; day = nextDate(day)) {
+            for (let day = start; day <= history.end; day = nextDate(day)) {
                 const row = byDay.get(day);
                 points.push({x: Date.parse(day + "T00:00:00Z"), y: row?.database_bytes == null ? null : row.database_bytes / BYTES_PER_MIB, row});
             }

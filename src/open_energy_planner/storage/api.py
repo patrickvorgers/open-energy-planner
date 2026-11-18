@@ -40,14 +40,19 @@ def register(app, engine, timezone):
     """Compose read-only HTTP routes and daily collection around the app-owned database."""
     history = StorageHistory(engine)
 
+    def measure():
+        """Pair capacity with its UTC completion time before returning to the HTTP event loop."""
+        usage = storage_capacity.storage_usage(engine)
+        return usage, datetime.now(UTC).isoformat(timespec="microseconds")
+
     async def capacity(request):
         """Measure live capacity off the event loop without retaining an extra history point."""
-        usage = await asyncio.to_thread(storage_capacity.storage_usage, engine)
+        usage, observed_at = await asyncio.to_thread(measure)
         return web.json_response(
             {
                 **asdict(usage),
                 "status": usage.status,
-                "observed_at": datetime.now(UTC).isoformat(timespec="microseconds"),
+                "observed_at": observed_at,
             },
             headers={"Cache-Control": "no-store"},
         )
@@ -68,6 +73,7 @@ def register(app, engine, timezone):
                         "timezone": None,
                         "sample_hour": DAILY_SAMPLE_HOUR,
                         "samples": [],
+                        "latest": None,
                     },
                     headers={"Cache-Control": "no-store"},
                 )
@@ -75,6 +81,9 @@ def register(app, engine, timezone):
             start = period_start(today, period)
             rows = await asyncio.to_thread(
                 history.read, start.isoformat() if start else None, today.isoformat()
+            )
+            latest = (
+                rows[-1] if rows else await asyncio.to_thread(history.latest, today.isoformat())
             )
             return web.json_response(
                 {
@@ -86,6 +95,7 @@ def register(app, engine, timezone):
                     "timezone": zone,
                     "sample_hour": DAILY_SAMPLE_HOUR,
                     "samples": rows,
+                    "latest": latest,
                 },
                 headers={"Cache-Control": "no-store"},
             )

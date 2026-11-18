@@ -59,6 +59,7 @@ def test_daily_measurement_calendar_restart_gaps_and_large_bytes(
             store.sample(lambda: now, "Europe/Amsterdam")
         assert "private-database-password" not in "".join(traceback.format_exception(failure.value))
         assert store.read(None, "2026-10-25") == []
+        assert store.latest("2026-10-25") is None
         monkeypatch.setattr(
             "open_energy_planner.storage.adapters.usage_history.storage_usage", probe
         )
@@ -95,6 +96,7 @@ def test_daily_measurement_calendar_restart_gaps_and_large_bytes(
         assert rows[0]["observed_at"] == "2026-10-25T03:00:00.000000+00:00"
         assert rows[0]["timezone"] == "Europe/Amsterdam"
         assert rows[0]["database_estimated"] == (backend in ("mysql", "mariadb"))
+        assert store.latest("2026-10-25") == rows[0]
         monkeypatch.setattr(
             "open_energy_planner.storage.adapters.usage_history.storage_usage",
             lambda _: StorageUsage(backend, measurement_failed=True),
@@ -106,6 +108,9 @@ def test_daily_measurement_calendar_restart_gaps_and_large_bytes(
         rows = StorageHistory(engine).read(None, "2026-10-28")
         assert [row["day"] for row in rows] == ["2026-10-25", "2026-10-28"]
         assert rows[-1]["database_bytes"] is None
+        assert store.latest("2026-10-28") == rows[-1]
+        assert store.latest("2026-10-27") == rows[0]
+        assert store.latest("2026-10-24") is None
         assert store.read("2026-10-26", "2026-10-27") == []
         monkeypatch.setattr(
             "open_energy_planner.storage.adapters.usage_history.storage_usage", probe
