@@ -27,6 +27,10 @@ Large stored JSON is compressed without rounding or changing its meaning. Backgr
 
 Keep a consistent backup before upgrading or downgrading. Older app versions cannot read the new compressed representation. Restoring the complete matching app/database backup is the rollback route. Expired original plan versions and temporary quarters cannot be recovered from compact daily totals.
 
+### Planning performance
+
+[Planning performance](planning-performance.md#available-dates) keeps calculation summaries and detailed progress curves for the last 14 Home Assistant calendar dates, including today. Older calculation diagnostics are cleaned up automatically. This is independent of complete-plan thinning and daily Savings retention.
+
 ## Inspect capacity
 
 For local SQLite, the page can show database size and available volume space. It warns below 1 GiB or 5.0% free. External database server free space remains unknown. OEP's local free-space figure must not be read as that server's capacity.

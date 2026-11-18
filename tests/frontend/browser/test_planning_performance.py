@@ -155,3 +155,28 @@ def test_rejected_candidates_do_not_report_timeout_as_the_publication_cause(app_
         if index == 0:
             page.evaluate("window.scrollTo({top: 0, left: 0, behavior: 'instant'})")
             page.screenshot(path=str(captures / f"rejected-overview-{width}.png"), full_page=True)
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+@pytest.mark.parametrize("status", [404, 410])
+def test_expired_calculation_details_offer_safe_recovery(app_page, status):
+    """A calculation removed after daily loading explains how to recover without exposing server text."""
+    page, url = app_page
+    discover(page, url)
+    page.route(
+        "**/v1/planning-performance/*",
+        lambda route: route.fulfill(status=status, body="private details"),
+    )
+    page.goto(url + "/planning-performance")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    selection = page.locator("#performance-chart")
+    expect(selection).to_have_attribute("aria-valuemax", "2")
+    selection.focus()
+    selection.press("Enter")
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog.locator("#calculation-summary")).to_contain_text(
+        "These calculation details are no longer available. Refresh history and choose a recent day."
+    )
+    expect(dialog).not_to_contain_text("private details")

@@ -1,6 +1,6 @@
 /** Read-only measured calculation history. Missing progress never becomes a fictional first plan. */
 import "./chart_theme.js";
-import {when, money, percentage, localDate, nextDate, useHomeAssistantTimezone} from "./display.js";
+import {when, dateLabel, money, percentage, localDate, nextDate, useHomeAssistantTimezone} from "./display.js";
 import {calendarDayStart} from "./chart_days.js";
 import {bindSettingsActions} from "./settings-actions.js";
 bindSettingsActions();
@@ -19,8 +19,10 @@ const CALCULATION_READ_TIMEOUT_MILLISECONDS = 5000;
 const pendingReads = new Map();
 /** Identify only the app-owned authentication failure, never arbitrary exception messages. */
 class ConnectionRequiredError extends Error {}
+/** Identify an expired or removed observation without displaying any server payload. */
+class CalculationUnavailableError extends Error {}
 /** Keep projection, transport and parsing exceptions outside the visible explanation. */
-const readMessage = (error, fallback = "Calculation history could not be loaded. Try Refresh.") => error instanceof ConnectionRequiredError ? "Connect to read calculation history." : fallback;
+const readMessage = (error, fallback = "Calculation history could not be loaded. Try Refresh.") => error instanceof ConnectionRequiredError ? "Connect to read calculation history." : error instanceof CalculationUnavailableError ? "These calculation details are no longer available. Refresh history and choose a recent day." : fallback;
 let token = "", chart = null, detailChart = null, rows = [], requestVersion = 0, detailVersion = 0, plottedRows = [], loading = false, selectedId = null, selectedIndex = 0;
 /** Share identical reads and settle cancelled predecessors before replacing their evidence context. */
 async function api(path, context) {
@@ -38,6 +40,7 @@ async function api(path, context) {
    if (!response.ok) {
     await response.body?.cancel();
     if (response.status === 401) throw new ConnectionRequiredError();
+    if (context === "detail" && [404,410].includes(response.status)) throw new CalculationUnavailableError();
     throw new Error();
    }
    return await response.json();
@@ -168,7 +171,13 @@ function render() {
 /** Ignore late responses after a day change. Failed reads clear stale data rather than misdate it. */
 async function load() {
  const version = ++requestVersion; loading = true; renderSelection(); find("performance-status").textContent="Loading calculation history.";
- try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`, "history"); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone); find("performance-day").value=data.day; rows=data.calculations; loading = false; render(); find("performance-status").textContent="";
+ try {const selected=find("performance-day").value; const data=await api(`v1/planning-performance${selected ? `?day=${encodeURIComponent(selected)}` : ""}`, "history"); if(version!==requestVersion)return; useHomeAssistantTimezone(data.timezone);
+ const picker=find("performance-day"), period=data.retention;
+ picker.min=period.min_day; picker.max=period.max_day; picker.disabled=false; find("performance-today").disabled=false;
+ find("performance-retention").textContent=`Calculations are kept for ${period.days} days, including today. Select a date from ${dateLabel(period.min_day)} to ${dateLabel(period.max_day)}. Older calculations are automatically deleted.`;
+ picker.value=data.day < picker.min ? picker.min : data.day > picker.max ? picker.max : data.day;
+ if(picker.value!==data.day){await load();return;}
+ rows=data.calculations; loading = false; render(); find("performance-status").textContent="";
  const address=new URL(location.href), selectedId=address.searchParams.get("calculation"); if(selectedId){address.searchParams.delete("calculation");history.replaceState(null,"",address);const selectedRow=rows.find(row=>row.id===selectedId);if(selectedRow&&!find("calculation-detail").open)detail(selectedRow);}
  } catch(error){if(version!==requestVersion)return; rows=[]; loading = false; render(); find("performance-summary").textContent="Calculation history is unavailable for the selected day."; find("performance-status").textContent=readMessage(error);}
 }
