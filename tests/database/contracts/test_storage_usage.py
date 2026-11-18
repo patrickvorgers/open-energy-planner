@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -212,10 +213,13 @@ def test_api_requires_authentication_and_runs_probe_off_event_loop(tmp_path, mon
         ) as client:
             assert (await client.get("/v1/storage")).status == 401
             assert (await client.get("/data-storage")).status == 200
+            started = datetime.now(UTC)
             response = await client.get("/v1/storage", headers={"Authorization": f"Bearer {token}"})
             assert response.status == 200
             assert response.headers["Cache-Control"] == "no-store"
-            assert await response.json() == {
+            body = await response.json()
+            assert started <= datetime.fromisoformat(body.pop("observed_at")) <= datetime.now(UTC)
+            assert body == {
                 "backend": "postgresql",
                 "database_bytes": 8192,
                 "database_estimated": False,

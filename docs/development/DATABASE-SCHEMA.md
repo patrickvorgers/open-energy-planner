@@ -71,6 +71,13 @@ retention or current contract valuation. See [archive reads](PLAN-ARCHIVE.md).
 
 Settings > Data storage reads the active engine through authenticated
 `GET /v1/storage`. This live read does not write history or prune retained data.
+Its `observed_at` is the UTC probe completion time with microseconds. The page
+uses this same response for the capacity card and today's graph point, marked
+**Current**. Period changes reuse that displayed measurement until Refresh.
+If the page crosses local midnight, later observations wait for Refresh so the
+graph does not advance beyond the displayed live snapshot.
+The projection never changes the stored daily row. A current unknown size remains
+unknown even when today's stored measurement was available.
 The separate authenticated `/v1/storage/migration` maintenance API manages
 cross-backend transfer from the same page. It adds no tables or columns. It copies
 and verifies the complete shared registry with writers stopped, then validates

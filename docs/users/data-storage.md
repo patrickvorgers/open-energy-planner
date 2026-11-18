@@ -40,6 +40,10 @@ For local SQLite, the page can show database size and available volume space. It
 ## Follow database growth
 
 **Database growth** shows daily database size, with **1 month** selected by default.
+Today's point is marked **Current** and uses the same measurement as the
+**Database size** card above. Refresh updates both together. Earlier points show
+the saved daily observations. The saved observation for today is preserved
+without being overwritten by a refresh.
 Use **Period** to choose one week, three months, one year or all retained history.
 The summary shows the change between the first and last available observation
 and the average change per elapsed day. A decrease can reflect database
@@ -49,8 +53,8 @@ The app records one measurement each day after **04:00 in the Home Assistant
 installation timezone**, checked every minute. No browser page needs to be open.
 Collection and the history window wait until the installation timezone is available. If the app starts
 later, it records the current day at the actual observation time. Days while the
-app was stopped remain gaps. The first point appears after the first eligible
-measurement. Two observations are needed to calculate growth.
+app was stopped remain gaps. Today's live point can appear before the first
+scheduled observation. Two available points are needed to calculate growth.
 
 Hover a point or focus the chart and use the Left and Right arrow keys to inspect
 its timestamp, size, backend and estimation status. Home and End reach the first

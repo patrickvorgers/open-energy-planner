@@ -39,14 +39,14 @@ async function load() {
         find("volume-size").textContent = bytes(usage.disk_total_bytes);
         find("capacity-status").textContent = {ok: "Sufficient space", low: "Low space", unknown: "Unknown", unavailable: "Measurement unavailable"}[usage.status] || "Unknown";
         find("size-scope").textContent = usage.backend === "sqlite" ? "For file-backed SQLite, includes WAL and shared-memory sidecars. Sizes can change during writes." : usage.database_estimated ? "Estimated size of visible tables and indexes in the connected database, including tables belonging to other applications. Server storage overhead is excluded." : "Whole connected database, including tables belonging to other applications. Server storage overhead is excluded.";
-        find("capacity-note").textContent = usage.disk_free_bytes === null ? "Free space cannot be determined for this database. Check the database host or provider for capacity and quotas." : "Free space on the volume containing the active database. This is not a database quota.";
+        find("capacity-note").textContent = usage.disk_free_bytes === null ? "Free space cannot be determined for this database. Check the database host or provider for capacity and quotas." : "Free space on the volume containing the active database. Low space means less than 1 GiB or 5.0% free. Other applications may share this space. This is not a database quota. Storage quotas may impose additional limits.";
         const warning = find("storage-warning");
         warning.hidden = usage.status !== "low";
         warning.textContent = "Low storage space. Free space on the database volume or expand its capacity to protect future writes. Back up retained evidence before removing any files.";
         find("status").textContent = usage.measurement_failed ? "Some storage measurements are unavailable. Refresh to try again." : "Storage evidence refreshed.";
         find("connect").hidden = true;
         find("storage").hidden = false;
-        await refreshHistory();
+        await refreshHistory(usage);
     } catch {
         find("status").textContent = find("database-connection").dataset.running === "false" ? "The app is paused for database maintenance. Storage measurements return after restart." : "Storage evidence unavailable. Check the connection and try again.";
     } finally {

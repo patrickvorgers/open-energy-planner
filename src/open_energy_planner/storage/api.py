@@ -44,7 +44,12 @@ def register(app, engine, timezone):
         """Measure live capacity off the event loop without retaining an extra history point."""
         usage = await asyncio.to_thread(storage_capacity.storage_usage, engine)
         return web.json_response(
-            {**asdict(usage), "status": usage.status}, headers={"Cache-Control": "no-store"}
+            {
+                **asdict(usage),
+                "status": usage.status,
+                "observed_at": datetime.now(UTC).isoformat(timespec="microseconds"),
+            },
+            headers={"Cache-Control": "no-store"},
         )
 
     async def observations(request):

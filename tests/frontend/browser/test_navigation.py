@@ -49,6 +49,9 @@ def test_storage_navigation_authentication_refresh_and_warning(app_page, monkeyp
     expect(page.locator("#storage-warning")).to_be_visible()
     expect(page.locator("#free-space")).to_have_text("0 B")
     expect(page.locator("#capacity-status")).to_have_text("Low space")
+    capacity_card = page.get_by_role("heading", name="Available space", exact=True).locator("..")
+    expect(capacity_card).to_contain_text("Low space means less than 1 GiB or 5.0% free.")
+    expect(capacity_card).to_contain_text("Storage quotas may impose additional limits.")
     page.screenshot(
         path=f"results/ci/storage-low-{page.viewport_size['width']}-{'ingress' in url}.png",
         full_page=True,
@@ -64,6 +67,7 @@ def test_storage_navigation_authentication_refresh_and_warning(app_page, monkeyp
     expect(page.locator("#free-space")).to_have_text("Unknown")
     expect(page.locator("#database-size")).to_have_text("2 KiB (estimated)")
     expect(page.locator("#capacity-status")).to_have_text("Unknown")
+    expect(capacity_card).to_contain_text("Free space cannot be determined for this database.")
     page.route("**/v1/storage", lambda route: route.fulfill(status=503, body="private/path secret"))
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#status")).to_contain_text("Storage evidence unavailable")
