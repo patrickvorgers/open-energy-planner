@@ -24,9 +24,12 @@ def fact(label, value, unit=""):
     return {"label": label, "value": value, "unit": unit}
 
 
-def card(title, facts, observations=()):
-    """Group related recorded inputs/outcomes. Observations describe equality, never causation."""
-    return {"title": title, "facts": facts, "observations": list(observations)}
+def card(title, facts, observations=(), *, group=None):
+    """Group recorded facts, optionally by their archived inverter. Never infer source routes."""
+    result = {"title": title, "facts": facts, "observations": list(observations)}
+    if group is not None:
+        result["group"] = group
+    return result
 
 
 def power_limit(label, energy_kwh, duration_h, limit_w):
@@ -77,6 +80,32 @@ def recorded_total(values):
     return sum(values) if values and all(recorded_number(value) for value in values) else None
 
 
+def grid_quantities(flow):
+    """Prefer recorded aggregates, including zero, or sum complete original legacy components."""
+    imported, exported = flow.get("grid_import"), flow.get("grid_export")
+    return (
+        imported
+        if imported is not None
+        else recorded_total((flow.get("grid_to_load"), flow.get("grid_to_battery"))),
+        exported
+        if exported is not None
+        else recorded_total((flow.get("pv_to_grid"), flow.get("battery_to_grid"))),
+    )
+
+
+def evidence_names(plan, problem):
+    """Keep original names and the frontend's archived-order ordinal for duplicate battery names."""
+    names = dict(plan.get("comparison_names", {}))
+    labels = [
+        names.get(unit.device_id) or f"Battery {index + 1}"
+        for index, unit in enumerate(problem.batteries)
+    ]
+    for index, unit in enumerate(problem.batteries):
+        label = labels[index]
+        names[unit.device_id] = f"{label}: {index + 1}" if labels.count(label) > 1 else label
+    return names
+
+
 def evidence(plan):
     """Project immutable installation inputs and planned quantities into a read-only evidence document.
 
@@ -120,7 +149,7 @@ def summary_cards(plan, problem):
     """Expose original strategy, initial storage, reserves, losses and inventory assumptions."""
     cards = []
     currency = plan.get("currency") or ""
-    names = plan.get("comparison_names", {})
+    names = evidence_names(plan, problem)
     status = {
         "optimal": "Optimal within solver tolerance",
         "feasible": "Feasible: Financial optimality is not proved.",
@@ -136,7 +165,6 @@ def summary_cards(plan, problem):
                 fact("Strategy", strategy),
                 fact("Solution", status),
                 fact("Currency", plan.get("currency")),
-                fact("Original contract version", plan["input_snapshot"].get("contract_version")),
                 fact("Grid import limit", problem.grid_import_limit_w, "W"),
                 fact("Grid export limit", problem.grid_export_limit_w, "W"),
             ],
@@ -187,12 +215,12 @@ def summary_cards(plan, problem):
             [
                 fact(
                     "Total import",
-                    recorded_total(flow.get("grid_import") for flow in interval_flows),
+                    recorded_total(grid_quantities(flow)[0] for flow in interval_flows),
                     "kWh",
                 ),
                 fact(
                     "Total export",
-                    recorded_total(flow.get("grid_export") for flow in interval_flows),
+                    recorded_total(grid_quantities(flow)[1] for flow in interval_flows),
                     "kWh",
                 ),
             ],
@@ -312,7 +340,7 @@ def summary_cards(plan, problem):
 def interval_evidence(plan, problem, interval_index):
     """Project one archived interval without allocating shared-bus energy to an invented source route."""
     currency = plan.get("currency") or ""
-    names = plan.get("comparison_names", {})
+    names = evidence_names(plan, problem)
     flows = plan.get("expected_flows", [])
     interval = problem.intervals[interval_index]
     command = next(
@@ -326,11 +354,22 @@ def interval_evidence(plan, problem, interval_index):
         {},
     )
     flow = flows[interval_index] if interval_index < len(flows) else None
+    inverter_groups = {
+        converter.inverter_id: {
+            "id": converter.inverter_id,
+            "title": names.get(converter.inverter_id, f"Inverter {converter_index + 1}"),
+        }
+        for converter_index, converter in enumerate(problem.inverters)
+    }
     cards = [
         card(
             "Forecast and original prices: Selected interval",
             [
-                fact("Household demand: AC: This interval", interval.load_kwh, "kWh"),
+                fact(
+                    "Household demand: AC: This interval",
+                    plan["input_snapshot"]["problem"]["intervals"][interval_index]["load_kwh"],
+                    "kWh",
+                ),
                 fact("Available solar: DC: This interval", interval.pv_kwh, "kWh"),
                 fact(
                     "Import rate before conditional bonuses",
@@ -365,27 +404,26 @@ def interval_evidence(plan, problem, interval_index):
     )
     cards.append(card("Household forecast: This interval", forecast_facts(plan, "demand")))
     if flow is not None:
+        imported, exported = grid_quantities(flow)
         cards.append(
             card(
                 "Planned grid exchange: AC",
                 [
-                    fact("Import", flow.get("grid_import"), "kWh"),
-                    fact("Export", flow.get("grid_export"), "kWh"),
+                    fact("Import", imported, "kWh"),
+                    fact("Export", exported, "kWh"),
                 ],
                 power_limit(
                     "Grid import limit",
-                    flow["grid_import"],
+                    imported,
                     interval.duration_h,
                     problem.grid_import_limit_w,
                 )
                 + power_limit(
                     "Grid export limit",
-                    flow["grid_export"],
+                    exported,
                     interval.duration_h,
                     problem.grid_export_limit_w,
-                )
-                if "grid_import" in flow and "grid_export" in flow
-                else [],
+                ),
             )
         )
         for unit_index, unit in enumerate(problem.batteries):
@@ -426,7 +464,7 @@ def interval_evidence(plan, problem, interval_index):
                     [
                         fact("Control mode", mode),
                         fact(
-                            "Fixed power target",
+                            "Fixed power target (+ discharge)",
                             "Not applicable"
                             if target.get("mode") == "follow_grid_target"
                             else target.get("power_w"),
@@ -434,6 +472,7 @@ def interval_evidence(plan, problem, interval_index):
                         ),
                         fact("Charge: DC terminal", dispatch.get("charge_kwh"), "kWh"),
                         fact("Discharge: DC terminal", dispatch.get("discharge_kwh"), "kWh"),
+                        fact("Stored energy", stored, "kWh"),
                         fact(
                             "End SoC",
                             stored / battery.capacity_kwh * PERCENT
@@ -445,32 +484,49 @@ def interval_evidence(plan, problem, interval_index):
                         fact("Discharge limit", battery.discharge_limit_w, "W"),
                     ],
                     observations,
+                    group=inverter_groups[unit.inverter_id],
                 )
             )
-        for source_index, source in enumerate(problem.pv_sources):
-            solar = next(
-                (item for item in flow.get("solar", []) if item["source_id"] == source.source_id),
-                None,
+    for source_index, source in enumerate(problem.pv_sources):
+        solar = next(
+            (
+                item
+                for item in (flow or {}).get("solar", [])
+                if item["source_id"] == source.source_id
+            ),
+            None,
+        )
+        cards.append(
+            card(
+                names.get(source.source_id, f"Solar {source_index + 1}") + ": Solar",
+                [
+                    fact(
+                        "Available forecast: DC",
+                        dict(interval.pv_sources)[source.source_id],
+                        "kWh",
+                    ),
+                    fact("Planned use: DC", solar.get("used_kwh") if solar else None, "kWh"),
+                    fact(
+                        "Solar production",
+                        "Curtailment requested"
+                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                        is False
+                        else "Production allowed"
+                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                        is True
+                        else "Fixed production",
+                    ),
+                    fact("Curtailment permitted", "Yes" if source.can_curtail else "No"),
+                    *forecast_facts(plan, "solar", source.source_id),
+                ],
+                ["Production disabled in this plan."]
+                if solar and solar.get("enabled") is False
+                else [],
+                group=inverter_groups[source.inverter_id],
             )
-            cards.append(
-                card(
-                    names.get(source.source_id, f"Solar {source_index + 1}") + ": Solar",
-                    [
-                        fact(
-                            "Available forecast: DC",
-                            dict(interval.pv_sources)[source.source_id],
-                            "kWh",
-                        ),
-                        fact("Planned use: DC", solar.get("used_kwh") if solar else None, "kWh"),
-                        fact("Curtailment permitted", "Yes" if source.can_curtail else "No"),
-                        *forecast_facts(plan, "solar", source.source_id),
-                    ],
-                    ["Production disabled in this plan."]
-                    if solar and solar.get("enabled") is False
-                    else [],
-                )
-            )
-        for converter_index, converter in enumerate(problem.inverters):
+        )
+    if flow is not None:
+        for converter in problem.inverters:
             dispatch = next(
                 (
                     item
@@ -482,7 +538,7 @@ def interval_evidence(plan, problem, interval_index):
             if dispatch is not None:
                 cards.append(
                     card(
-                        f"Converter {converter_index + 1}: Shared boundary",
+                        "Connection and limits",
                         [
                             fact("AC import", dispatch.get("import_kwh"), "kWh"),
                             fact("AC export", dispatch.get("export_kwh"), "kWh"),
@@ -509,12 +565,11 @@ def interval_evidence(plan, problem, interval_index):
                             interval.duration_h,
                             converter.ac_limit_w,
                         ),
+                        group=inverter_groups[converter.inverter_id],
                     )
                 )
     cards.extend(bonus_cards(plan, interval_index))
-    complete = flow is not None and all(
-        recorded_number(flow.get(key)) for key in ("grid_import", "grid_export")
-    )
+    complete = flow is not None and all(recorded_number(value) for value in grid_quantities(flow))
     if complete:
         complete = all(
             {item.get(key) for item in flow.get(collection, [])} == expected
@@ -557,7 +612,8 @@ def interval_evidence(plan, problem, interval_index):
 def bonus_cards(plan, interval_index):
     """Show frozen compiled bonus rates, caps and original counters without settling or guessing absent credits."""
     cards = []
-    for rule in plan["input_snapshot"]["problem"].get("export_bonuses", []):
+    rules = plan["input_snapshot"]["problem"].get("export_bonuses", [])
+    for rule_index, rule in enumerate(rules):
         outcome = next(
             (
                 entry
@@ -576,7 +632,7 @@ def bonus_cards(plan, interval_index):
             before = counters[interval_index - 1] if interval_index <= len(counters) else None
         cards.append(
             card(
-                "Export bonus: " + rule["rule_id"],
+                "Export bonus" if len(rules) == 1 else f"Export bonus {rule_index + 1}",
                 [
                     fact(
                         "Effective bonus rate",

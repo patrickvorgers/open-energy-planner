@@ -55,7 +55,7 @@ Open [the local Planning page](http://127.0.0.1:18765/overview#planning). Use th
 
 If `OEP_API_TOKEN` is set, paste that environment token into **Installation API token**. The generated token file may not exist in this case. Otherwise, open `.local/first-plan/administration-token` in a local text editor and use its contents. To use a generated token instead, unset `OEP_API_TOKEN` in this terminal and restart the app. In PowerShell use `Remove-Item Env:OEP_API_TOKEN -ErrorAction SilentlyContinue`. In a POSIX shell use `unset OEP_API_TOKEN`. Then choose **Connect**. This token grants access to this local app. Keep it out of screenshots, chat messages, Git and URLs. The standalone page holds it only until the page closes.
 
-**Check:** the page shows **Connected: Historical views never change active commands.** If it does not, verify that you used the token from the directory belonging to this running app. If a token was already supplied through `OEP_API_TOKEN`, that environment value takes precedence over the generated file.
+**Check:** the page shows **Connected**. If it does not, verify that you used the token from the directory belonging to this running app. If a token was already supplied through `OEP_API_TOKEN`, that environment value takes precedence over the generated file.
 
 ## Recognize the first result
 
