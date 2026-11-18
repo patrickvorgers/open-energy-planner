@@ -514,11 +514,6 @@ class DailySavings:
                         common_start=common_start,
                     ):
                         reference_known = False
-                        self._problem(
-                            PendingSettlement(
-                                "Simulated bonus counters are unknown after missing measurements"
-                            )
-                        )
                     if reference_known:
                         try:
                             opening_reference = (
@@ -575,8 +570,33 @@ class DailySavings:
                             except (ValueError, KeyError, TypeError):
                                 actual_counters = None
                     if "reference" not in accepted:
-                        if physical_advanced and simulated_counters_ready(
-                            contract, frame.start, reference_counters, common_start=common_start
+                        if physical_advanced:
+                            try:
+                                accepted["reference"], reference_counters = independent_account(
+                                    problem,
+                                    frame,
+                                    bindings,
+                                    "reference",
+                                    reference_counters,
+                                    contract,
+                                    seeds,
+                                    prices,
+                                    site,
+                                    common_start=common_start,
+                                    inventory_previous=previous_physical,
+                                    physical=physical,
+                                )
+                                accepted["reference"]["opening_stored"] = dict(
+                                    physical["reference_start"]
+                                )
+                            except (ValueError, KeyError, TypeError) as error:
+                                self._problem(error)
+                        if (
+                            "reference" not in accepted
+                            and physical_advanced
+                            and simulated_counters_ready(
+                                contract, frame.start, reference_counters, common_start=common_start
+                            )
                         ):
                             try:
                                 reference_counters = advance_counters(
@@ -589,7 +609,7 @@ class DailySavings:
                                 )
                             except (ValueError, KeyError, TypeError):
                                 reference_counters = None
-                        else:
+                        elif "reference" not in accepted:
                             reference_counters = None
                     try:
                         accepted["without_battery"], without_counters = independent_account(
