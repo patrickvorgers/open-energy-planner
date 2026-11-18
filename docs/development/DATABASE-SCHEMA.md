@@ -411,7 +411,7 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `solar` | `SolarStore`: per-source configuration, forecasts/models, weather/history blocks and receipt times. | Content-addressed kind/version documents. Unchanged daily `block-<hash>.json` reused by manifests. `current.json` selects configuration. |
 | `prices` | `PriceStore`: normalized source series with original receipt/issue/expiry times, published/forecast flags and resolution. `DailyPrices`: calendar quarter prices and extreme selections. | Immutable `<version>.json`. `current.json` is the list of current series references. `daily-<identity>.json` retains daily spot-price evidence. No raw provider payloads or API secrets. |
 | `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
-| `savings` | `SavingsRuntime` and `PlanValuations`: capture cursor, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
+| `savings` | `SavingsRuntime` and `PlanValuations`: capture and recovery cursors, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `recovery.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
 
 The `installation` settings record includes per-battery `calibration_enabled` (boolean, default false), `calibration_interval_days` (integer elapsed days, default 14, configurable range 1–180) and `calibration_hold_hours` (finite hours, default 3, range 0.25–24). Only an enabled policy adds calibration requirements to planning. Disabled defaults are omitted to retain existing configuration hashes. These settings grant planning permission only. They are not BMS voltage or balancing settings.
 
@@ -971,6 +971,25 @@ Only selected settlement evidence is copied from HA, not every sensor state.
 See [savings](SAVINGS.md) for the reference scenario, valuation and quality policy.
 
 ### `oep_settlement_frames`
+
+Only valid measured intervals have rows. Missing or rejected intervals remain
+absent, including when later intervals have been captured. The `savings`
+namespace's `capture.json` contains `{end: aware UTC ISO instant}`. This monotone
+cursor records examined time, not complete measurement coverage. A sparse capture
+commits its valid rows and scanned cursor in one transaction. Recovery inserts
+only missing intervals from unfinalized days and never replaces existing rows or
+rewinds the cursor. Daily reports retain missing ranges and own the recovery and
+finalization window. Finalization may also advance the cursor past a closed
+incomplete day. Neither operation establishes complete measurement coverage.
+No table or column changes are required.
+
+The `savings/recovery.json` document contains `{end: aware UTC ISO instant}` for
+the latest acknowledged recovery scan, including an empty response. This cursor
+rotates independently across gaps and provisional days and may wrap backwards.
+It never rewinds `capture.json`. Frames and both cursors commit atomically in the
+app-owned transaction. Restart and cross-backend transfer retain its position.
+A read-only in-memory continuation bounds selection across gap-free day reports
+without acknowledging an unprocessed request or creating another durable store.
 
 Immutable measured/estimated evidence at up-to-quarter-hour intervals, including
 fragments at configuration boundaries. Conflicting replacement fails explicitly.

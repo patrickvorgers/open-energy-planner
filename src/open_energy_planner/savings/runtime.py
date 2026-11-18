@@ -6,17 +6,20 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
+from zoneinfo import ZoneInfo
 
 from open_energy_planner.contracts.wire import parse_counters
+from open_energy_planner.core.calendar import day_window
 from open_energy_planner.installation.location import SiteLocation
 
 from ..contracts.bonus import CounterSeed
-from .accounting import evaluate
+from .accounting import evaluate, simulated_counters_ready
 from .advice import active_advice
 from .bonus import HistoricalBonuses
 from .context import physical_context
 from .model import (
     MAX_BATCH_INTERVALS,
+    MISSING_MEASUREMENTS,
     POLICY_VERSION,
     SETTLEMENT_INTERVAL,
     PendingSettlement,
@@ -26,11 +29,13 @@ from .physical import advance
 from .repricing import corrected_problem
 
 SETTLEMENT_RECORDER_DELAY = timedelta(minutes=10)
+MAX_RECOVERY_DAYS_PER_READ = 4
 MAX_EVALUATION_VERSIONS = 20
 SHA256_HEX_LENGTH = 64
 
 # Only fixed owned guidance is public. Other caught exceptions may contain stored or driver values.
 PENDING_SETTLEMENT_MESSAGES = {
+    "Reference continuity requires the missing interval first": "The original common opening measurements are missing. Simulated battery stock and bonus usage remain unknown.",
     "Simulated bonus counters are unknown after missing measurements": "The simulated export allowance cannot be reconstructed from the earlier missing evidence. No actual counter was substituted.",
     "A reset inside the bonus anchor interval prevents exact reconstruction": "An export meter reset prevents reconstruction of the bonus starting total.",
     "Confirmed bonus meter disagrees with its historical boundary": "The confirmed export reading disagrees with the reading in history.",
@@ -190,6 +195,7 @@ class SavingsRuntime:
         self.events = None
         self.physical_issue = None
         self._request_bindings = None, None
+        self._recovery_search = None, None
 
     def request(self, now, settings, solar, demand, seeds, location):
         """Request at most one day after first publication. Wait for completed Recorder statistics."""
@@ -206,7 +212,10 @@ class SavingsRuntime:
             start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS,
         )
         if start >= end:
-            return None
+            recovery = self._missing_capture(now, location)
+            if recovery is None:
+                return None
+            start, end = recovery
         bindings = {
             "terms": [asdict(energy_term) for energy_term in demand.terms],
             "solar": [asdict(source) for source in solar.sources],
@@ -227,6 +236,71 @@ class SavingsRuntime:
         request["version"] = version(request)
         return request
 
+    def _missing_capture(self, now, location):
+        """Rotate bounded recovery reads after acknowledged attempts, including empty replies.
+
+        Daily reports own the recovery window and distinguish absent metering from
+        accounting failures. Retained frames remain immutable. A retry fills only
+        missing intervals and never moves the forward capture cursor backwards.
+        The independent durable recovery cursor prevents a permanent first gap
+        from starving later gaps. A read-only cache pages past days without gaps.
+        It does not advance a selected attempt before its receipt commits.
+        """
+        if location is None:
+            return None
+        today = now.astimezone(ZoneInfo(location.timezone)).date()
+        last, _ = day_window(today.isoformat(), location.timezone)
+        initial = capture_start(datetime.fromisoformat(self.store.first_activation()))
+        checkpoint = (
+            self.documents.read("recovery.json")["end"]
+            if self.documents.exists("recovery.json")
+            else initial.isoformat()
+        )
+        cached_checkpoint, cached_cursor = self._recovery_search
+        cursor = (
+            cached_cursor if cached_checkpoint == checkpoint else datetime.fromisoformat(checkpoint)
+        )
+        wrapped = False
+        for _ in range(MAX_RECOVERY_DAYS_PER_READ):
+            first, _ = day_window(
+                cursor.astimezone(ZoneInfo(location.timezone)).date().isoformat(), location.timezone
+            )
+            report = self.store.day(after=first, before=last, finalized=False)
+            if report is None:
+                if wrapped:
+                    return None
+                cursor, wrapped = initial, True
+                first, _ = day_window(
+                    initial.astimezone(ZoneInfo(location.timezone)).date().isoformat(),
+                    location.timezone,
+                )
+                report = self.store.day(after=first, before=last, finalized=False)
+                if report is None:
+                    return None
+            for gap in report["scenarios"]["actual"]["missing"]:
+                if gap["reason"] == MISSING_MEASUREMENTS:
+                    start, end = (datetime.fromisoformat(gap[key]) for key in ("start", "end"))
+                    start = max(start, cursor)
+                    end = min(
+                        end,
+                        quarter(now - SETTLEMENT_RECORDER_DELAY),
+                        start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS,
+                    )
+                    if start >= end:
+                        continue
+                    while start < end:
+                        retained = self.store.frames(start, end=end)
+                        if not retained:
+                            return start, end
+                        for row in retained:
+                            frame = parse_frame(row["frame"])
+                            if frame.start > start:
+                                return start, frame.start
+                            start = max(start, frame.end)
+            cursor = datetime.fromisoformat(report["end"])
+            self._recovery_search = checkpoint, cursor
+        return None
+
     def receive(
         self,
         pending: dict,
@@ -235,15 +309,16 @@ class SavingsRuntime:
         seeds: tuple[CounterSeed, ...],
         location: SiteLocation | None,
     ) -> None:
-        """Validate a requested contiguous prefix before atomically archiving it.
+        """Validate scanned coverage and measured intervals before atomically archiving them.
 
         Each frame spans at most SETTLEMENT_INTERVAL (a timedelta representing
-        fifteen minutes). The first start must match the requested start, which
-        may be off-grid after a configuration change. Interior frame ends must
-        align to the UTC quarters returned by quarter(). A prefix may stop at a
-        complete quarter before the requested end. Only the final frame may end
-        off-grid, and only at that requested end (a possible configuration-change
-        instant). Frame documents kWh units, sign rules and reconstruction quality.
+        fifteen minutes). With scanned_until, absent intervals remain unmeasured
+        while later frames advance capture. Legacy reports require a contiguous
+        prefix. Only request edges may be off-grid after a configuration change.
+        Interior boundaries align to UTC quarters. A scan may stop at a complete
+        quarter before the requested end. Recovery fills absent evidence without
+        rewinding the cursor or replacing retained frames. Frame documents kWh
+        units, sign rules and reconstruction quality.
 
         Args:
             pending: App-owned versioned request with aware bounds and frozen
@@ -271,25 +346,41 @@ class SavingsRuntime:
         """
         if not isinstance(body, dict) or body.get("request_version") != pending["version"]:
             raise ValueError("Settlement request changed")
-        if set(body) != {"request_version", "frames", "imports", "exports"}:
+        sparse = "scanned_until" in body
+        if set(body) != {"request_version", "frames", "imports", "exports"} | (
+            {"scanned_until"} if sparse else set()
+        ):
             raise ValueError("Invalid settlement response")
         frames = body["frames"]
-        if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_BATCH_INTERVALS:
+        if (
+            not isinstance(frames, list)
+            or not (0 if sparse else 1) <= len(frames) <= MAX_BATCH_INTERVALS
+        ):
             raise ValueError("Invalid settlement batch")
         frames = tuple(parse_frame(row) for row in frames)
         start, end = (
             datetime.fromisoformat(pending["start"]),
             datetime.fromisoformat(pending["end"]),
         )
-        if frames[0].start != start or frames[-1].end > end or frames[-1].end > now:
+        scanned = datetime.fromisoformat(body["scanned_until"]) if sparse else frames[-1].end
+        if (
+            scanned.utcoffset() is None
+            or not start < scanned <= min(end, now)
+            or any(frame.start < start or frame.end > scanned for frame in frames)
+            or (not sparse and frames[0].start != start)
+        ):
             raise ValueError("Settlement response outside requested coverage")
         if any(
-            previous_item.end != next_item.start for previous_item, next_item in pairwise(frames)
+            previous_item.end > next_item.start
+            or (not sparse and previous_item.end != next_item.start)
+            for previous_item, next_item in pairwise(frames)
         ):
             raise ValueError("Settlement batch has gaps or overlaps")
         # Only request edges may split a quarter when physical configuration changes.
-        if any(row.end != quarter(row.end) for row in frames[:-1]) or (
-            frames[-1].end != end and frames[-1].end != quarter(frames[-1].end)
+        if (scanned != end and scanned != quarter(scanned)) or any(
+            (frame.start != start and frame.start != quarter(frame.start))
+            or (frame.end != end and frame.end != quarter(frame.end))
+            for frame in frames
         ):
             raise ValueError("Settlement frame does not end on a requested quarter boundary")
         terms = {
@@ -338,7 +429,22 @@ class SavingsRuntime:
         # Raw capture and pointer share the same database transaction.
         with self.documents.transaction():
             self.store.put_frames(frames, context, self.documents.pending.connection)
-            self.documents.write("capture.json", {"end": frames[-1].end.isoformat()})
+            previous = (
+                datetime.fromisoformat(self.documents.read("capture.json")["end"])
+                if self.documents.exists("capture.json")
+                else start
+            )
+            self.documents.write("capture.json", {"end": max(previous, scanned).isoformat()})
+            if start < previous:
+                self.documents.write("recovery.json", {"end": scanned.isoformat()})
+
+    def _require_initial_frame(self, frame, state):
+        """Initialize dependent continuous scenarios only at the original common measured start."""
+        if state is not None:
+            return
+        first = self.store.first_activation()
+        if first is None or frame.start != capture_start(datetime.fromisoformat(first)):
+            raise PendingSettlement("Reference continuity requires the missing interval first")
 
     def advance_reference(self):
         """Persist counter-free physical progress before attempting financial settlement.
@@ -370,7 +476,10 @@ class SavingsRuntime:
                     frame, self.store.activations(frame.start, frame.end), self.plans.get_context
                 )
                 bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
-                state = advance(physical_context(plan), frame, bindings, state)["state"]
+                problem = physical_context(plan)
+                if problem.batteries:
+                    self._require_initial_frame(frame, state)
+                state = advance(problem, frame, bindings, state)["state"]
                 self.documents.write(name, state)
             except (ValueError, KeyError, TypeError) as error:
                 self.physical_issue = settlement_issue(error)
@@ -512,6 +621,10 @@ class SavingsRuntime:
             plan = self.plans.get_context(plan_id)
             try:
                 problem = physical_context(plan)
+                if state is None and (
+                    problem.batteries or not simulated_counters_ready(contract, frame.start, None)
+                ):
+                    self._require_initial_frame(frame, state)
                 original_contract = plan["input_snapshot"].get("contract_version")
                 if original_contract and original_contract != contract.version:
                     problem, _ = corrected_problem(plan, contract)

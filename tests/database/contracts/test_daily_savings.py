@@ -1,6 +1,8 @@
 """Portable day closure preserves gaps, independent scenario coverage and immutable checkpoints."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -10,7 +12,9 @@ from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.storage.adapters.published import retain
 from open_energy_planner.savings.daily import DailySavings, finalization_time
-from open_energy_planner.savings.storage.adapters.sqlalchemy import stamp
+from open_energy_planner.savings.runtime import SavingsRuntime
+from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore, stamp
+from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import (
     ACTIVATIONS,
     PUBLISHED_PRICES,
@@ -18,6 +22,226 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
     SETTLEMENT_FRAMES,
 )
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
+
+
+def test_recovery_skips_all_97_retained_frames_when_a_configuration_splits_a_quarter(settlement):
+    """A stale full-day gap must not re-request the 97th already accepted configuration fragment."""
+    runtime, store, documents, _engine, _plans = settlement
+    day = (START + timedelta(days=1)).date().isoformat()
+    first, end = day_window(day, "UTC")
+    now = end + timedelta(hours=1)
+    report = DailySavings(runtime).calculate(day, "UTC", contract(), None, now, START, None)
+    report["finalized_at"] = None
+    store.put_day(report, documents, end.date().isoformat())
+    fragments = [
+        replace(frame(start=first, imported_kwh=1 / 3), end=first + timedelta(minutes=5)),
+        replace(
+            frame(start=first + timedelta(minutes=5), imported_kwh=2 / 3),
+            end=first + timedelta(minutes=15),
+        ),
+        *(frame(start=first + timedelta(minutes=15 * index)) for index in range(1, 96)),
+    ]
+    store.put_frames(tuple(fragments), {"bindings": bindings(), "seeds": [], "location": None})
+    assert len(store.frames(first, end=end, limit=1000)) == 97
+    forward = now - timedelta(minutes=15)
+    documents.write("capture.json", {"end": forward.isoformat()})
+    request = runtime.request(
+        now,
+        SimpleNamespace(batteries=[]),
+        SimpleNamespace(sources=[]),
+        SimpleNamespace(terms=[]),
+        (),
+        SiteLocation(52, 5, "UTC"),
+    )
+    assert request is None
+    assert documents.read("capture.json") == {"end": forward.isoformat()}
+    assert not documents.exists("recovery.json")
+
+
+@pytest.mark.parametrize("day_offset", [0, 20])
+def test_permanent_first_gap_does_not_starve_later_recovery_after_restart(
+    settlement, monkeypatch, day_offset
+):
+    """An empty first retry rotates to a recoverable later gap, within a day or across upgrade days."""
+    runtime, store, documents, engine, plans = settlement
+    later = START + timedelta(days=day_offset, minutes=30 if day_offset == 0 else 0)
+    gaps = {START, later}
+    context = {"bindings": bindings(), "seeds": [], "location": None}
+    day_names = sorted({instant.date().isoformat() for instant in gaps})
+    with engine.begin() as connection:
+        connection.execute(SETTLEMENT_FRAMES.delete())
+    for day in day_names:
+        first, last = day_window(day, "UTC")
+        first = max(first, START)
+        count = int((last - first).total_seconds() / 900)
+        measured = [first + timedelta(minutes=15 * index) for index in range(count)]
+        store.put_frames(
+            tuple(frame(start=instant) for instant in measured if instant not in gaps), context
+        )
+        report = DailySavings(runtime).calculate(day, "UTC", contract(), None, last, START, None)
+        report["finalized_at"] = None
+        store.put_day(report, documents, (last.date()).isoformat())
+    original_context = plans.get_context
+
+    def historical_context(identity):
+        """Supply the fixture's frozen source binding without modifying the archived original plan."""
+        original = original_context(identity)
+        return {**original, "comparison_bindings": bindings()} if original else None
+
+    monkeypatch.setattr(plans, "get_context", historical_context)
+    now = later + timedelta(days=1)
+    forward = now - timedelta(minutes=15)
+    documents.write("capture.json", {"end": forward.isoformat()})
+    arguments = (
+        now,
+        SimpleNamespace(batteries=[]),
+        SimpleNamespace(sources=[]),
+        SimpleNamespace(terms=[]),
+        (),
+        SiteLocation(52, 5, "UTC"),
+    )
+    first_request = runtime.request(*arguments)
+    assert first_request["start"] == START.isoformat()
+    assert first_request["end"] == END.isoformat()
+    runtime.receive(
+        first_request,
+        {
+            "request_version": first_request["version"],
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [],
+            "scanned_until": END.isoformat(),
+        },
+        now,
+        (),
+        None,
+    )
+    runtime = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), plans)
+    later_request = runtime.request(*arguments)
+    assert later_request["start"] == later.isoformat()
+    assert later_request["end"] == (later + timedelta(minutes=15)).isoformat()
+    # Repeated snapshot/receipt selection must stay stable until the attempt is accepted.
+    assert runtime.request(*arguments) == later_request
+    runtime.receive(
+        later_request,
+        {
+            "request_version": later_request["version"],
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [frame(start=later).record()],
+            "scanned_until": later_request["end"],
+        },
+        now,
+        (),
+        None,
+    )
+    assert documents.read("capture.json")["end"] == forward.isoformat()
+    assert store.frames(START, end=END) == []
+    assert (
+        store.frames(later, end=later + timedelta(minutes=15))[0]["frame"]
+        == frame(start=later).record()
+    )
+    assert runtime.request(*arguments)["start"] == START.isoformat()
+
+
+@pytest.mark.parametrize("age_days", [1, 20])
+def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarter(
+    settlement, age_days
+):
+    """A missing middle quarter leaves 1800 seconds and .60 actual cost, then fills without cursor rewind."""
+    runtime, store, documents, engine, plans = settlement
+    third = END + timedelta(minutes=15)
+    scanned = third + timedelta(minutes=15)
+    with engine.begin() as connection:
+        connection.execute(
+            SETTLEMENT_FRAMES.delete().where(SETTLEMENT_FRAMES.c.start == stamp(END))
+        )
+        retain(
+            connection,
+            (
+                PriceSeries(
+                    "later",
+                    "NL",
+                    "EUR",
+                    START,
+                    None,
+                    None,
+                    (PricePoint(third, scanned, 0.1, PriceKind.PUBLISHED, 15),),
+                ),
+            ),
+        )
+    pending = {
+        "start": END.isoformat(),
+        "end": scanned.isoformat(),
+        "version": "sparse",
+        "bindings": bindings(),
+    }
+    runtime.receive(
+        pending,
+        {
+            "request_version": "sparse",
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [frame(start=third).record()],
+            "scanned_until": scanned.isoformat(),
+        },
+        scanned,
+        (),
+        None,
+    )
+    daily = DailySavings(runtime)
+    report = daily.calculate(
+        "2026-10-22", "UTC", contract(), None, scanned + timedelta(days=1), START, None
+    )
+    assert report["scenarios"]["actual"]["coverage_seconds"] == 1800
+    assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
+    assert {
+        "start": END.isoformat(),
+        "end": third.isoformat(),
+        "reason": "Required measurements are missing. Missing energy is not treated as zero.",
+    } in report["scenarios"]["actual"]["missing"]
+    report["finalized_at"] = None
+    store.put_day(report, documents, "2026-10-23")
+    now = START + timedelta(days=age_days)
+    forward = now - timedelta(minutes=15)
+    arguments = (
+        now,
+        SimpleNamespace(batteries=[]),
+        SimpleNamespace(sources=[]),
+        SimpleNamespace(terms=[]),
+        (),
+        SiteLocation(52, 5, "UTC"),
+    )
+    assert runtime.request(*arguments)["start"] == scanned.isoformat()
+    documents.write("capture.json", {"end": forward.isoformat()})
+    runtime = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), plans)
+    request = runtime.request(*arguments)
+    assert request["start"] == END.isoformat()
+    assert request["end"] == third.isoformat()
+    # Intake is checked against the frozen original binding, independently of request selection.
+    pending = {**pending, "end": third.isoformat(), "version": "repair"}
+    runtime.receive(
+        pending,
+        {
+            "request_version": "repair",
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [frame(start=END).record()],
+            "scanned_until": third.isoformat(),
+        },
+        now,
+        (),
+        None,
+    )
+    assert documents.read("capture.json")["end"] == forward.isoformat()
+    assert len(store.frames()) == 3
+    assert runtime.request(*arguments)["start"] == scanned.isoformat()
+    repaired = daily.calculate("2026-10-22", "UTC", contract(), None, now, START, None)
+    assert repaired["scenarios"]["actual"]["coverage_seconds"] == 2700
+    assert repaired["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.9)
+    report["finalized_at"] = now.isoformat()
+    store.put_day(report, documents, "2026-10-23")
+    assert runtime.request(*arguments) is None
 
 
 @pytest.mark.parametrize("damage", ["missing", "physics", "market"])

@@ -13,7 +13,7 @@ from open_energy_planner.savings.runtime import SavingsRuntime
 from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore, stamp
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS
-from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
+from tests.app.savings.support.scenarios import END, START, bindings, contract, frame, problem
 from tests.database.support.history_datasets import settlement_batches
 
 
@@ -72,6 +72,122 @@ def test_ingestion_retries_do_not_duplicate_or_replace_meter_evidence(settlement
     with pytest.raises(ValueError, match="immutable"):
         store.put_frames((replace(frame(), channels={"sensor.import": 2}),), context)
     assert store.frames()[0]["frame"]["channels"]["sensor.import"] == 1
+
+
+def test_empty_scanned_batch_advances_without_inventing_measurements(settlement):
+    """A whole unavailable day can be passed without zero frames or costs being fabricated."""
+    runtime, store, documents, _engine, _plans = settlement
+    start = END + timedelta(minutes=15)
+    end = start + timedelta(days=1)
+    pending = {
+        "version": "empty",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "bindings": bindings(),
+    }
+    runtime.receive(
+        pending,
+        {
+            "request_version": "empty",
+            "imports": ["sensor.import"],
+            "exports": ["sensor.export"],
+            "frames": [],
+            "scanned_until": end.isoformat(),
+        },
+        end,
+        (),
+        None,
+    )
+    assert documents.read("capture.json") == {"end": end.isoformat()}
+    assert len(store.frames()) == 2
+
+
+def test_recovery_receipt_commits_frames_and_both_cursors_atomically(settlement, monkeypatch):
+    """Failure writing recovery progress rolls back new frames and the forward cursor on every backend."""
+    runtime, store, documents, _engine, _plans = settlement
+    start, end = END + timedelta(minutes=15), END + timedelta(minutes=30)
+    documents.write("capture.json", {"end": end.isoformat()})
+    pending = {
+        "version": "atomic-recovery",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "bindings": bindings(),
+    }
+    response = {
+        "request_version": pending["version"],
+        "imports": ["sensor.import"],
+        "exports": ["sensor.export"],
+        "frames": [frame(start=start).record()],
+        "scanned_until": end.isoformat(),
+    }
+    original_write = documents.write
+
+    def fail_recovery(name, value):
+        """Fail only the final recovery-cursor write after the earlier transaction writes have executed."""
+        if name == "recovery.json":
+            raise OSError("Synthetic recovery storage failure")
+        return original_write(name, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(documents, "write", fail_recovery)
+        with pytest.raises(OSError, match="Synthetic recovery storage failure"):
+            runtime.receive(pending, response, end, (), None)
+    assert len(store.frames()) == 2
+    assert documents.read("capture.json") == {"end": end.isoformat()}
+    assert not documents.exists("recovery.json")
+    runtime.receive(pending, response, end, (), None)
+    assert len(store.frames()) == 3
+    assert documents.read("capture.json") == {"end": end.isoformat()}
+    assert documents.read("recovery.json") == {"end": end.isoformat()}
+
+
+@pytest.mark.parametrize(
+    "damage", ["future", "outside", "naive", "off_grid", "overlap", "before", "after"]
+)
+def test_sparse_capture_rejects_invalid_scan_or_frame_boundaries_atomically(settlement, damage):
+    """Sparse transport never permits future, overlapping, off-grid or out-of-request evidence."""
+    runtime, store, documents, _engine, _plans = settlement
+    start = END + timedelta(minutes=15)
+    end = start + timedelta(hours=1)
+    scanned = end
+    now = end
+    captured = [frame(start=start).record()]
+    if damage == "future":
+        now = end - timedelta(minutes=15)
+    elif damage == "outside":
+        scanned += timedelta(minutes=15)
+    elif damage == "naive":
+        scanned = scanned.replace(tzinfo=None)
+    elif damage == "off_grid":
+        captured = [frame(start=start + timedelta(minutes=1)).record()]
+    elif damage == "overlap":
+        captured *= 2
+    elif damage == "before":
+        captured = [frame(start=start - timedelta(minutes=15)).record()]
+    else:
+        captured = [frame(start=end).record()]
+    pending = {
+        "version": "invalid",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "bindings": bindings(),
+    }
+    with pytest.raises(ValueError):
+        runtime.receive(
+            pending,
+            {
+                "request_version": "invalid",
+                "imports": ["sensor.import"],
+                "exports": ["sensor.export"],
+                "frames": captured,
+                "scanned_until": scanned.isoformat(),
+            },
+            now,
+            (),
+            None,
+        )
+    assert len(store.frames()) == 2
+    assert not documents.exists("capture.json")
 
 
 def test_new_published_correction_reprices_without_reoptimizing(settlement):
@@ -614,6 +730,61 @@ def test_missing_physical_interval_does_not_reset_or_skip_reference(settlement):
     runtime.process(contract(bonus=True), END + timedelta(hours=2))
     assert docs.read("physical-reference.json") == before
     assert runtime.physical_issue == "Reference continuity requires the missing interval first"
+
+
+@pytest.mark.parametrize("dependency", ["battery", "bonus", "none"])
+def test_sparse_first_frame_cannot_initialize_continuous_stock_or_bonus_allowance(
+    settlement, monkeypatch, dependency
+):
+    """A first accepted frame after the common start retains evidence without inventing simulated opening state."""
+    from sqlalchemy import delete
+
+    from open_energy_planner.storage.adapters.lifecycle.schema import SETTLEMENT_FRAMES
+
+    runtime, store, documents, engine, plans = settlement
+    original = plans.get_context("original-plan")
+    selected_bindings = bindings()
+    missing, later = frame(), frame(start=END)
+    if dependency != "battery":
+        stateless = replace(problem(), batteries=(), terminal_valuations=())
+        original = {
+            **original,
+            "input_snapshot": {
+                **original["input_snapshot"],
+                "problem": json.loads(
+                    json.dumps(asdict(stateless), default=lambda value: value.isoformat())
+                ),
+            },
+        }
+        monkeypatch.setattr(plans, "get_context", lambda _identity: original)
+        selected_bindings["batteries"] = []
+        missing = replace(missing, battery_start={}, battery_end={})
+        later = replace(later, battery_start={}, battery_end={})
+    with engine.begin() as connection:
+        connection.execute(delete(SETTLEMENT_FRAMES))
+    context = {"bindings": selected_bindings, "seeds": [], "location": None}
+    store.put_frames((later,), context)
+    selected_contract = contract(bonus=dependency == "bonus")
+    runtime.process(selected_contract, END + timedelta(hours=1))
+    if dependency == "none":
+        assert runtime.issue is None
+        assert documents.exists("head.json")
+        assert runtime.overview(START, END + timedelta(minutes=15))["coverage"]["evaluated"] == 1
+        return
+    assert runtime.issue == "Reference continuity requires the missing interval first"
+    assert runtime.attention is False
+    assert not documents.exists("head.json")
+    assert runtime.overview(START, END + timedelta(minutes=15))["intervals"] == []
+    assert store.frames()[0]["frame"] == later.record()
+    if dependency == "battery":
+        assert runtime.physical_issue == "Reference continuity requires the missing interval first"
+        assert not documents.exists("physical-reference.json")
+    store.put_frames((missing,), context)
+    runtime.process(selected_contract, END + timedelta(hours=2))
+    assert runtime.issue != "Reference continuity requires the missing interval first"
+    if dependency == "battery":
+        assert documents.exists("head.json")
+        assert runtime.overview(START, END + timedelta(minutes=15))["coverage"]["evaluated"] == 2
 
 
 def test_physical_reference_advances_without_contract(settlement):

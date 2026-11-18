@@ -19,12 +19,16 @@ STATISTIC_SECONDS = 300
 HOUR_SECONDS = 3600
 MAX_CAPTURE_DAYS = 1
 MAX_CAPTURE_INTERVALS = 96
+MAX_CAPTURE_REQUEST_BACKOFFS = MAX_CAPTURE_INTERVALS
 MAX_SETTLEMENT_REPORT_BYTES = 192 * 1024
 CAPTURE_TIMEOUT_SECONDS = 30
 RETRY_MINUTES = 15
 FULL_SOC_PERCENT = 100
 # One micro-Wh absorbs unit-conversion roundoff without admitting real counter resets.
 COUNTER_ROUNDING_KWH = 1e-9
+# Match the app's settlement wire bounds before accepting a frame into the batch.
+MAX_SETTLEMENT_ENERGY_KWH = 1_000_000
+MAX_SETTLEMENT_METER_KWH = 1_000_000_000
 MAX_IDLE_SOC_GAP = timedelta(hours=1)
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,14 +38,19 @@ class SettlementBridge:
 
     def __init__(self, hass):
         """Keep retry bookkeeping local. Financial arithmetic and persistence belong to the app."""
-        self.hass, self.version, self.retry_after = hass, None, None
+        self.hass, self.retry_after = hass, {}
 
     async def capture(self, request):
         """Read at most a day. Prefer five-minute sums and label hourly interpolation explicitly."""
         now = dt_util.utcnow()
-        if self.version == request["version"] and self.retry_after and now < self.retry_after:
+        self.retry_after = {
+            version: deadline for version, deadline in self.retry_after.items() if now < deadline
+        }
+        if request["version"] in self.retry_after:
             return None
-        self.version, self.retry_after = request["version"], now + timedelta(minutes=RETRY_MINUTES)
+        if len(self.retry_after) >= MAX_CAPTURE_REQUEST_BACKOFFS:
+            self.retry_after.pop(next(iter(self.retry_after)))
+        self.retry_after[request["version"]] = now + timedelta(minutes=RETRY_MINUTES)
         start, end = (datetime.fromisoformat(request[key]) for key in ("start", "end"))
         if (
             start.utcoffset() is None
@@ -93,26 +102,24 @@ class SettlementBridge:
             metadata = {}
             for batch in channel_batches(entities):
                 metadata.update(get_metadata(self.hass, statistic_ids=set(batch)))
-            for entity_item in sorted(entities):
-                if (
-                    entity_item not in metadata
-                    or not metadata[entity_item][1]["has_sum"]
-                    or metadata[entity_item][1]["unit_of_measurement"] not in ("Wh", "kWh", "MWh")
-                ):
-                    _LOGGER.warning(
-                        "Settlement capture stopped at %s: Energy statistics metadata is unusable: %s",
-                        start.isoformat(),
-                        entity_item,
-                    )
-                    return None
+            usable = {
+                entity_item
+                for entity_item in entities
+                if entity_item in metadata
+                and metadata[entity_item][1]["has_sum"]
+                and metadata[entity_item][1]["unit_of_measurement"] in ("Wh", "kWh", "MWh")
+            }
             datasets = []
             for period, seconds in (("5minute", STATISTIC_SECONDS), ("hour", HOUR_SECONDS)):
                 rows = {}
-                for batch in channel_batches(entities):
+                for batch in channel_batches(usable):
                     rows.update(
                         statistics_during_period(
                             self.hass,
-                            start - timedelta(hours=1),
+                            datetime.fromtimestamp(
+                                int(start.timestamp()) // seconds * seconds - HOUR_SECONDS,
+                                start.tzinfo,
+                            ),
                             end,
                             set(batch),
                             period,
@@ -148,6 +155,8 @@ class SettlementBridge:
 
             def endpoint(entity, instant, interpolate=False):
                 """Use true sum endpoints first. Hourly fallback retains its estimated classification."""
+                if entity not in usable:
+                    raise ValueError(f"Energy statistics metadata is unusable: {entity}")
                 target = instant.timestamp()
                 for data, seconds in datasets:
                     rows = data[entity]
@@ -313,15 +322,18 @@ class SettlementBridge:
                     )
                 return result, reconstructed
 
-            frames, cursor = [], start
+            frames, cursor, unavailable = [], start, False
             base_report = {
                 "request_version": request["version"],
                 "imports": imports,
                 "exports": exports,
                 "frames": [],
+                "scanned_until": end.isoformat(),
             }
             report_bytes = len(json.dumps(base_report).encode())
-            while cursor < end and len(frames) < MAX_CAPTURE_INTERVALS:
+            for _ in range(MAX_CAPTURE_INTERVALS):
+                if cursor >= end:
+                    break
                 boundary = datetime.fromtimestamp(
                     (int(cursor.timestamp()) // QUARTER_SECONDS + 1) * QUARTER_SECONDS,
                     cursor.tzinfo,
@@ -333,7 +345,18 @@ class SettlementBridge:
                         start_counter, meter, qa = endpoint(entity, cursor, True)
                         end_counter, _, qb = endpoint(entity, right, True)
                         delta = end_counter - start_counter
-                        if delta < -COUNTER_ROUNDING_KWH or not isfinite(delta):
+                        if (
+                            delta < -COUNTER_ROUNDING_KWH
+                            or delta > MAX_SETTLEMENT_ENERGY_KWH
+                            or not isfinite(delta)
+                            or (
+                                meter is not None
+                                and (
+                                    not isfinite(meter)
+                                    or not 0 <= meter <= MAX_SETTLEMENT_METER_KWH
+                                )
+                            )
+                        ):
                             raise ValueError(f"Invalid settlement sum: {entity}")
                         channels[entity] = max(0, delta)
                         if meter is not None:
@@ -364,10 +387,14 @@ class SettlementBridge:
                     frames.append(frame)
                     report_bytes += added_bytes
                 except (ValueError, TypeError) as error:
-                    _LOGGER.warning(
-                        "Settlement capture stopped at %s: %s", cursor.isoformat(), error
-                    )
-                    break
+                    if not unavailable:
+                        _LOGGER.warning(
+                            "Settlement interval unavailable at %s: %s. Later intervals continue. "
+                            "Missing measurements remain uncovered and are retried during daily recovery.",
+                            cursor.isoformat(),
+                            error,
+                        )
+                    unavailable = True
                 cursor = right
             return (
                 {
@@ -375,8 +402,9 @@ class SettlementBridge:
                     "imports": imports,
                     "exports": exports,
                     "frames": frames,
+                    "scanned_until": cursor.isoformat(),
                 }
-                if frames
+                if cursor > start
                 else None
             )
 

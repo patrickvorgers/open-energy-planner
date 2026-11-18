@@ -17,6 +17,7 @@ MAX_ENERGY_KWH = 1_000_000
 MAX_SETTLEMENT_ID_LENGTH = 128
 ENERGY_TOLERANCE_KWH = 1e-7
 POLICY_VERSION = "self-consumption-v1"
+MISSING_MEASUREMENTS = "Required measurements are missing. Missing energy is not treated as zero."
 
 
 class PendingSettlement(ValueError):

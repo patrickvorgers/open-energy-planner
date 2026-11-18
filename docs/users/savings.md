@@ -48,6 +48,16 @@ The reference is simulated, not an independently measured parallel household. A 
 
 Missing readings, a missing settlement price or an unestablished opening bonus counter can delay evaluation. Estimated hourly or boundary reconstruction remains labelled estimated. A gap is not a zero-cost interval and does not reset the reference to a fresh battery.
 
+A missing or invalid measurement interval does not stop the import of later valid
+intervals or days. The affected time remains uncovered. Once the import catches
+up, missing measurements in provisional days are requested again during the
+recovery window. Hourly reconstruction uses both bounding hourly readings,
+including when an import resumes partway through an hour. A permanent gap can
+still leave a continuous battery or bonus comparison unavailable. Independently
+recoverable actual costs and measured energy continue where their evidence allows.
+Recovery attempts rotate across gaps and provisional days, so one permanent gap
+cannot keep later recoverable measurements waiting until finalization.
+
 A contract may start after the earliest available Home Assistant history. For example, a June contract can use recorded statistics even when those statistics begin in January. Historical bonus evaluation keeps the contract start and annual reset separate. If a newer bonus checkpoint cannot be traced back through stored measurements, the app automatically requests a historical statistics endpoint using the same confirmed reference and any manual missing-period export. It then needs only the local measurements between that completed hour and the requested interval. Do not change a valid contract date or enter an estimated bonus total to bypass a wait.
 
 Measured history normally becomes available after the completed interval and Recorder delay. Repeatedly refreshing does not create missing evidence. Open the relevant warning or use [troubleshooting](troubleshooting.md#savings-or-quality-is-incomplete).
