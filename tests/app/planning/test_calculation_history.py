@@ -1,7 +1,7 @@
 """Calculation telemetry stays optional while normal publication and failure handling remain authoritative."""
 
 import asyncio
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from open_energy_planner.planning import PlanningCoordinator
 from open_energy_planner.synthetic import capture
@@ -134,6 +134,7 @@ def test_history_worker_survives_write_failure_and_bounds_pending_memory(monkeyp
         written.append(observation)
 
     monkeypatch.setattr(CalculationHistory, "write", flaky_write)
+    monkeypatch.setattr(CalculationHistory, "prune", lambda _history, _before: False)
 
     async def scenario():
         """Fill the queue without yielding to its worker, then drain through normal cleanup."""
@@ -142,9 +143,10 @@ def test_history_worker_survives_write_failure_and_bounds_pending_memory(monkeyp
         runner = web.AppRunner(app)
         await runner.setup()
         try:
-            snapshot = capture(NOW)
+            started = datetime.now(UTC)
+            snapshot = capture(started)
             for _ in range(34):
-                await record(snapshot, None, NOW, NOW, "planning_error")
+                await record(snapshot, None, started, started, "planning_error")
         finally:
             await runner.cleanup()
         assert len(attempts) == 32
