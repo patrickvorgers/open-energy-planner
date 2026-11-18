@@ -2,6 +2,12 @@
 
 Open **Insights > Planning performance** when you want to understand how long calculations took and what result they produced. It is a read-only history. Opening a calculation does not activate its plan or change solver settings.
 
+## Available dates
+
+Calculation summaries and their detailed progress curves are kept for the last **14 calendar days, including today**, in the Home Assistant installation timezone. The date picker shows this period and disables earlier dates. A retained day can still be empty if no calculations were recorded.
+
+Startup and background cleanup remove expired summaries and their curves together. There is no retention setting. Original plans, Savings, forecasts and Home Assistant Recorder keep their own retention policies.
+
 ## Size hardware for your installation
 
 There is no fixed product maximum for the number of configured vehicles,
