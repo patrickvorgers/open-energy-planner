@@ -297,8 +297,18 @@ def test_storage_history_empty_unknown_and_backend_changes(app_page):
     expect(page.locator("#storage-history-chart")).to_have_accessible_description(
         page.locator("#storage-history-selected").text_content()
     )
-    assert "Unknown" in page.evaluate(
-        "Chart.getChart(document.getElementById('storage-history-chart')).tooltip.body[0].lines[0]"
+    tooltip = page.evaluate(
+        "() => {const chart=Chart.getChart(document.getElementById('storage-history-chart')),tooltip=chart.tooltip,index=chart.data.datasets[0].data.findIndex(point=>point.row?.database_bytes===null),point=chart.getDatasetMeta(0).data[index];return {opacity:tooltip.opacity,title:tooltip.title,label:tooltip.body[0].lines[0],finite:Number.isFinite(tooltip.x)&&Number.isFinite(tooltip.y),width:tooltip.width,height:tooltip.height,correctAnchor:tooltip.caretX===point.x&&tooltip.caretY===chart.chartArea.bottom,rawY:chart.data.datasets[0].data[index].y,hasValue:point.hasValue()};}"
+    )
+    assert "Unknown" in tooltip["label"]
+    assert tooltip["title"] == ["11/15/2026, 4:00 AM"]
+    assert tooltip["opacity"] == 1 and tooltip["finite"]
+    assert tooltip["width"] > 0 and tooltip["height"] > 0
+    assert tooltip["correctAnchor"]
+    assert tooltip["rawY"] is None and tooltip["hasValue"]
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/storage-unknown-tooltip-{page.viewport_size['width']}.png", full_page=True
     )
 
 

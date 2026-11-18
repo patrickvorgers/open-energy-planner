@@ -47,7 +47,9 @@ to inspect that point. Without a saved observation the size is **Unknown**.
 **Available space** still shows current volume capacity.
 
 Choose **Refresh** to show the current database size in both the card and the
-graph. Its tooltip is marked **Current**. The live view remains while changing
+graph. When the chart shows the live observation, its tooltip is marked
+**Current**. When no sizes are available and no chart is shown, use
+**Observation** to inspect the measurement instead. The live view remains while changing
 periods. Opening the page again returns to the saved daily view. Refresh never
 overwrites or adds a saved daily observation.
 
