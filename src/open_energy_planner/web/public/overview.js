@@ -659,21 +659,22 @@ function intervalCard(title, rows, group) {
 }
 /** Present recorded interval quantities separately from optional signed technical balances. */
 function renderIntervalValues(step, evidence) {
-    const parent = $("inspect-values"), technicalOpen = parent.querySelector("details")?.open || false;
-    parent.replaceChildren();
+    const parent = $("inspect-values");
     if (!step) { parent.textContent = "No planned intervals available."; return; }
-    if (!evidence) {
-        const period = document.createElement("p");
-        period.className = "interval-values-period"; period.textContent = `From ${when(step.start)} to ${when(step.end)}`;
-        parent.append(period);
+    let values = parent.querySelector("#interval-evidence");
+    if (!values) {
+        parent.replaceChildren();
+        const period = document.createElement("p"), technical = document.createElement("details"), summary = document.createElement("summary"), balances = document.createElement("div");
+        period.className = "interval-values-period";
+        values = document.createElement("div");
+        values.id = "interval-evidence"; values.className = "evidence-grid"; values.setAttribute("aria-label", "Selected interval evidence");
+        summary.textContent = "Energy balance and source details"; balances.className = "evidence-grid";
+        technical.append(summary, balances); parent.append(period, values, technical);
     }
-    const values = document.createElement("div");
-    values.id = "interval-evidence"; values.className = "evidence-grid"; values.setAttribute("aria-label", "Selected interval evidence");
+    const period = parent.querySelector(".interval-values-period");
+    period.hidden = Boolean(evidence); period.textContent = `From ${when(step.start)} to ${when(step.end)}`;
     evidenceCards(values, evidence?.cards?.length ? [...evidence.cards, ...step.applianceValues] : step.values);
-    const technical = document.createElement("details"), summary = document.createElement("summary"), balances = document.createElement("div");
-    summary.textContent = "Energy balance and source details"; technical.open = technicalOpen;
-    balances.className = "evidence-grid"; evidenceCards(balances, [step.priceSource, ...step.balances]);
-    technical.append(summary, balances); parent.append(values, technical);
+    evidenceCards(parent.querySelector("details > .evidence-grid"), [step.priceSource, ...step.balances]);
 }
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
 function inspect() {

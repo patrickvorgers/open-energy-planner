@@ -423,8 +423,14 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
         page.get_by_text("Selected interval details", exact=True).click()
     page.get_by_label("Inspect planning time", exact=True).focus()
     page.keyboard.press("ArrowRight")
-    expect(page.locator("#inspect-values")).to_contain_text("Inverter 1")
-    expect(page.locator("#inspect-values")).to_contain_text("AC supply to converter")
+    technical = page.locator("#inspect-values > details")
+    technical.locator("summary").focus()
+    technical.locator("summary").press("Enter")
+    inverter = technical.locator("article").filter(
+        has=page.get_by_role("heading", name="Inverter 1", exact=True)
+    )
+    expect(inverter.get_by_role("heading", name="Inverter 1", exact=True)).to_be_visible()
+    expect(inverter.get_by_text("AC supply to converter", exact=True)).to_be_visible()
     assert errors == []
 
 

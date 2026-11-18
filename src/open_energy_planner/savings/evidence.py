@@ -339,7 +339,11 @@ def interval_evidence(plan, problem, interval_index):
         card(
             "Forecast and original prices: Selected interval",
             [
-                fact("Household demand: AC: This interval", interval.load_kwh, "kWh"),
+                fact(
+                    "Household demand: AC: This interval",
+                    plan["input_snapshot"]["problem"]["intervals"][interval_index]["load_kwh"],
+                    "kWh",
+                ),
                 fact("Available solar: DC: This interval", interval.pv_kwh, "kWh"),
                 fact(
                     "Import rate before conditional bonuses",
@@ -458,40 +462,45 @@ def interval_evidence(plan, problem, interval_index):
                     group=inverter_groups[unit.inverter_id],
                 )
             )
-        for source_index, source in enumerate(problem.pv_sources):
-            solar = next(
-                (item for item in flow.get("solar", []) if item["source_id"] == source.source_id),
-                None,
+    for source_index, source in enumerate(problem.pv_sources):
+        solar = next(
+            (
+                item
+                for item in (flow or {}).get("solar", [])
+                if item["source_id"] == source.source_id
+            ),
+            None,
+        )
+        cards.append(
+            card(
+                names.get(source.source_id, f"Solar {source_index + 1}") + ": Solar",
+                [
+                    fact(
+                        "Available forecast: DC",
+                        dict(interval.pv_sources)[source.source_id],
+                        "kWh",
+                    ),
+                    fact("Planned use: DC", solar.get("used_kwh") if solar else None, "kWh"),
+                    fact(
+                        "Solar production",
+                        "Curtailment requested"
+                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                        is False
+                        else "Production allowed"
+                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                        is True
+                        else "Fixed production",
+                    ),
+                    fact("Curtailment permitted", "Yes" if source.can_curtail else "No"),
+                    *forecast_facts(plan, "solar", source.source_id),
+                ],
+                ["Production disabled in this plan."]
+                if solar and solar.get("enabled") is False
+                else [],
+                group=inverter_groups[source.inverter_id],
             )
-            cards.append(
-                card(
-                    names.get(source.source_id, f"Solar {source_index + 1}") + ": Solar",
-                    [
-                        fact(
-                            "Available forecast: DC",
-                            dict(interval.pv_sources)[source.source_id],
-                            "kWh",
-                        ),
-                        fact("Planned use: DC", solar.get("used_kwh") if solar else None, "kWh"),
-                        fact(
-                            "Solar production",
-                            "Curtailment requested"
-                            if command.get("devices", {}).get(source.source_id, {}).get("enabled")
-                            is False
-                            else "Production allowed"
-                            if command.get("devices", {}).get(source.source_id, {}).get("enabled")
-                            is True
-                            else "Fixed production",
-                        ),
-                        fact("Curtailment permitted", "Yes" if source.can_curtail else "No"),
-                        *forecast_facts(plan, "solar", source.source_id),
-                    ],
-                    ["Production disabled in this plan."]
-                    if solar and solar.get("enabled") is False
-                    else [],
-                    group=inverter_groups[source.inverter_id],
-                )
-            )
+        )
+    if flow is not None:
         for converter in problem.inverters:
             dispatch = next(
                 (
@@ -580,7 +589,8 @@ def interval_evidence(plan, problem, interval_index):
 def bonus_cards(plan, interval_index):
     """Show frozen compiled bonus rates, caps and original counters without settling or guessing absent credits."""
     cards = []
-    for rule in plan["input_snapshot"]["problem"].get("export_bonuses", []):
+    rules = plan["input_snapshot"]["problem"].get("export_bonuses", [])
+    for rule_index, rule in enumerate(rules):
         outcome = next(
             (
                 entry
@@ -599,7 +609,7 @@ def bonus_cards(plan, interval_index):
             before = counters[interval_index - 1] if interval_index <= len(counters) else None
         cards.append(
             card(
-                "Export bonus",
+                "Export bonus" if len(rules) == 1 else f"Export bonus {rule_index + 1}",
                 [
                     fact(
                         "Effective bonus rate",

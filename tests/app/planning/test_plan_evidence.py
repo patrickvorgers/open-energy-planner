@@ -10,7 +10,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from open_energy_planner.app import create_app
-from open_energy_planner.savings.evidence import bonus_cards, evidence
+from open_energy_planner.savings.evidence import bonus_cards, evidence, interval_evidence
 from tests.app.savings.support.scenarios import START, problem
 
 
@@ -427,8 +427,9 @@ def test_interval_devices_group_by_original_inverter_without_changing_evidence()
     assert groups["South roof: Solar"] == {"id": "inv", "title": "Inverter 1"}
     assert groups["Solar 2: Solar"] == {"id": "garage-inverter", "title": "Inverter 2"}
     connections = [item for item in cards if item["title"] == "Connection and limits"]
-    assert {item["group"]["id"] for item in connections} == {"inv", "garage-inverter"}
-    assert facts([connections[0]])["AC export"] == 0.5
+    by_inverter = {item["group"]["id"]: facts([item]) for item in connections}
+    assert by_inverter["inv"]["AC export"] == 0.5
+    assert by_inverter["garage-inverter"]["AC export"] == 0
     assert plan == before
 
 
@@ -449,4 +450,55 @@ def test_bonus_title_omits_technical_identity_and_preserves_original_rule():
     assert [item["title"] for item in cards] == ["Export bonus"]
     assert facts(cards)["Effective bonus rate"] == 0.07
     assert facts(cards)["Counter before this interval"] == 2
+    assert plan == before
+
+
+def test_multiple_bonus_titles_distinguish_separate_counters_without_rule_ids():
+    """Equal-rate bonus rules retain separate original counters under stable numbered labels."""
+    plan = original_plan()
+    plan["input_snapshot"]["problem"]["export_bonuses"] = [
+        {
+            "rule_id": identity,
+            "initial_kwh": stock,
+            "rates": [0.07],
+            "caps_kwh": [100],
+            "periods": ["example-period"],
+        }
+        for identity, stock in (("first-example", 2), ("second-example", 7))
+    ]
+    before = deepcopy(plan)
+    cards = bonus_cards(plan, 0)
+    assert [item["title"] for item in cards] == ["Export bonus 1", "Export bonus 2"]
+    assert [facts([item])["Counter before this interval"] for item in cards] == [2, 7]
+    assert plan == before
+
+
+def test_solar_command_survives_absent_physical_outcomes():
+    """An archived curtailment command remains readable without inventing missing solar use."""
+    plan = original_plan()
+    plan["expected_flows"] = []
+    plan["steps"] = [
+        {
+            "start": START.isoformat(),
+            "end": (START + timedelta(minutes=15)).isoformat(),
+            "devices": {"roof": {"enabled": False}},
+        }
+    ]
+    before = deepcopy(plan)
+    interval = evidence(plan)["intervals"][0]
+    solar = next(item for item in interval["cards"] if item["title"] == "South roof: Solar")
+    assert facts([solar])["Solar production"] == "Curtailment requested"
+    assert facts([solar])["Planned use: DC"] is None
+    assert solar["group"] == {"id": "inv", "title": "Inverter 1"}
+    assert interval["issue"]
+    assert plan == before
+
+
+def test_household_label_excludes_service_energy_added_to_physical_context():
+    """The archived 0.5-kWh house remains separate from 0.2 kWh of additional service demand."""
+    plan = original_plan()
+    physical = problem(pv_kwh=1.5, load_kwh=0.7)
+    before = deepcopy(plan)
+    rows = facts(interval_evidence(plan, physical, 0)["cards"])
+    assert rows["Household demand: AC: This interval"] == 0.5
     assert plan == before

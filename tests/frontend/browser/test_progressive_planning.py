@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from playwright.sync_api import expect
 
+from open_energy_planner.savings.evidence import evidence as plan_evidence
 from tests.frontend.browser.documentation_fixture import START
 from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
@@ -124,11 +125,19 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     page.locator("#plan-evidence-panel").screenshot(
         path=str(captures / f"evidence-loading-{page.viewport_size['width']}.png")
     )
+    technical = page.locator("#inspect-values > details")
+    summary = technical.locator("summary")
+    summary.focus()
+    summary.press("Enter")
     pending = evidence.pop()
     pending.fulfill(response=pending.fetch())
     expect(page.locator("#plan-evidence")).to_contain_text("Initial stored energy")
     expect(page.locator("#plan-evidence")).not_to_contain_text("Forecast version")
     expect(page.locator("#interval-evidence")).to_contain_text("Forecast and original prices")
+    expect(summary).to_be_focused()
+    expect(technical).to_have_attribute("open", "")
+    summary.press("Enter")
+    expect(technical).not_to_have_attribute("open", "")
     page.get_by_text("Understand this plan", exact=True).click()
     page.get_by_text("Understand this plan", exact=True).click()
     wait_for_product_reads(page)
@@ -337,7 +346,10 @@ def test_compact_planning_preserves_commands_costs_and_original_archive(app_page
     technical.locator("summary").press("Enter")
     expect(technical.get_by_text("Installation energy balance", exact=True)).to_be_visible()
     expect(technical.get_by_text("Native resolution", exact=True)).to_be_visible()
+    expect(page.locator("#inspect-time")).to_have_value("0")
     page.locator("#inspect-time").press("ArrowRight")
+    expect(page.locator("#inspect-time")).to_have_value("1")
+    expect(page.locator("#inspect-time")).to_be_focused()
     expect(technical).to_have_attribute("open", "")
     groups = page.locator("#interval-evidence .evidence-inverter-group")
     assert groups.count() == len(original["input_snapshot"]["problem"]["inverters"])
@@ -517,3 +529,54 @@ def test_archived_appliance_cycle_remains_visible_after_interval_evidence_arrive
     expect(appliance).to_contain_text("Cycle starts")
     expect(appliance).to_contain_text("Cycle ends")
     assert page.request.get(url + f"/v1/plans/{identity}", headers=headers).json() == original
+
+
+@pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)
+def test_missing_physical_evidence_retains_original_solar_command_and_household_value(app_page):
+    """Evidence arrival retains curtailment and the archived house quantity without inventing solar use."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    identity = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    comparison = page.request.get(
+        url + f"/v1/plans/{identity}/comparison?view=plan", headers=headers
+    ).json()
+    plan = comparison["plan"]
+    plan["expected_flows"] = []
+    source = plan["input_snapshot"]["problem"]["pv_sources"][0]["source_id"]
+    plan["steps"][0]["devices"][source] = {"enabled": False}
+    projected = plan_evidence(plan)
+    assert projected["intervals"][0]["issue"]
+    pending = []
+    page.route("**/comparison?view=plan", lambda route: route.fulfill(json=comparison))
+    page.route("**/comparison?view=evidence", lambda route: pending.append(route))
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Connected")
+    page.get_by_text("Understand this plan", exact=True).click()
+    page.get_by_text("Selected interval details", exact=True).click()
+    values = page.locator("#interval-evidence")
+    fallback_solar = values.locator("article").filter(
+        has=page.get_by_role("heading", name=plan["comparison_names"][source], exact=True)
+    )
+    expect(fallback_solar.get_by_text("Curtailment requested", exact=True)).to_be_visible()
+    fallback = values.get_by_text("Household demand: AC", exact=True)
+    assert fallback.evaluate("term => term.nextElementSibling.textContent") == "0.113 kWh"
+    assert len(pending) == 1
+    pending.pop().fulfill(json={"plan_id": identity, "evidence": projected})
+    solar = values.locator("article").filter(
+        has=page.get_by_role(
+            "heading", name=plan["comparison_names"][source] + ": Solar", exact=True
+        )
+    )
+    expect(solar.get_by_text("Curtailment requested", exact=True)).to_be_visible()
+    assert (
+        solar.get_by_text("Planned use: DC", exact=True).evaluate(
+            "term => term.nextElementSibling.textContent"
+        )
+        == "Not recorded"
+    )
+    recorded = values.get_by_text("Household demand: AC: This interval", exact=True)
+    assert recorded.evaluate("term => term.nextElementSibling.textContent") == "0.113 kWh"
