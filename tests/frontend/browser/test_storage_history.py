@@ -400,3 +400,37 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     assert page.evaluate(
         "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.map(point => point.y)"
     ) == [7, None]
+    daily.update(
+        period="week",
+        start="2026-11-21",
+        end="2026-11-27",
+        samples=[
+            {
+                "day": "2026-11-27",
+                "observed_at": "2026-11-27T03:00:00Z",
+                "backend": "mysql",
+                "database_bytes": 6 * 1024**2,
+                "database_estimated": True,
+            }
+        ],
+    )
+    reads_before_period_change = len(capacity_reads)
+    page.locator("#storage-period").select_option("week")
+    expect(page.locator("#storage-history-summary")).to_contain_text(
+        "No database size measurements"
+    )
+    expect(page.locator("#storage-history-chart")).to_be_hidden()
+    expect(page.locator("#database-size")).to_have_text("7 MiB (estimated)")
+    assert len(capacity_reads) == reads_before_period_change
+    usage.update(database_bytes=9 * 1024**2, observed_at="2026-11-27T12:00:00Z")
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect(page.locator("#database-size")).to_have_text("9 MiB (estimated)")
+    expect(page.locator("#storage-history-selected")).to_have_text(
+        "Current: 11/27/2026, 1:00 PM: 9 MiB (estimated): MySQL"
+    )
+    assert (
+        page.evaluate(
+            "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.at(-1).y"
+        )
+        == 9
+    )

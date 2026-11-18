@@ -52,9 +52,9 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
             }
             const measurementDay = measurement && (measurement.day || localDate(measurement.observed_at));
             const start = live && history.period === "all" && measurementDay < history.start ? measurementDay : history.start;
+            if (measurement) samples = samples.filter(row => row.day < measurementDay);
             if (measurementDay >= start && measurementDay <= history.end) {
                 // Keep the view aligned with the displayed snapshot, including across local midnight.
-                samples = samples.filter(row => row.day < measurementDay);
                 samples.push({...measurement, day: measurementDay});
             }
             const known = samples.filter(row => Number.isFinite(row.database_bytes));
