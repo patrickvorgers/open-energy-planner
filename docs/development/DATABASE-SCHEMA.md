@@ -1572,6 +1572,12 @@ Financial corrections cannot rewind it. Missing physical intervals cannot be ski
 The daily worker instead stores separate physical and financial continuation in
 `oep_savings_days.payload.checkpoint`. Known physical progress can outlive a
 financial outage, while a finalized physical gap leaves an explicit unknown state.
+An intact physical checkpoint can support independently billed reference costs
+even when its bonus counter is unknown. Exact zero bonus payments do not create
+counter keys. Partial counter mappings retain known families and leave absent
+families unknown. Monetary coverage can therefore be complete while bonus usage
+continuation remains unknown. Later quota-dependent payments remain uncovered.
+No checkpoint, finalized result or opening stock is reset to establish coverage.
 The normal document archive and backend transfer include it on SQLite, PostgreSQL,
 MariaDB and MySQL. No additional table or database connection is introduced.
 

@@ -16,12 +16,98 @@ def test_new_retroactive_family_cannot_borrow_actual_seed_after_daily_closure():
     seed = CounterSeed("bonus", START - timedelta(days=1), 0.5, 10, "sensor.export", START)
     with pytest.raises(PendingSettlement, match="Simulated bonus counters are unknown"):
         independent_account(
-            problem(), frame(), bindings(), "without_battery", {}, selected, (seed,), prices(), None
+            problem(),
+            frame(imported_kwh=0, exported_kwh=0.5, pv_kwh=0.5),
+            bindings(),
+            "without_battery",
+            {},
+            selected,
+            (seed,),
+            prices(),
+            None,
         )
     result, _counters = independent_account(
         problem(), frame(), bindings(), "actual", {}, selected, (seed,), prices(), None
     )
     assert result["purchase"] == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize("kind", ["actual", "without_battery"])
+def test_zero_export_cost_does_not_require_or_create_a_bonus_opening(kind):
+    """A .30 import costs .30 for every possible remaining allowance, while usage stays unknown."""
+    result, counters = independent_account(
+        problem(), frame(), bindings(), kind, None, contract(bonus=True), (), prices(), None
+    )
+    assert result["economic_cost"] == pytest.approx(0.3)
+    assert result["bonus"] == 0
+    assert counters is None
+
+
+def test_zero_rate_export_remains_billable_without_inventing_gross_usage():
+    """A zero-rate rule pays zero on .5 exported kWh, even when its remaining quota is unknown."""
+    from dataclasses import replace
+
+    from open_energy_planner.contracts.calculation.formula import Formula
+
+    selected = contract(bonus=True)
+    selected = replace(selected, bonuses=(replace(selected.bonuses[0], rate_formula=Formula("0")),))
+    result, counters = independent_account(
+        problem(),
+        frame(imported_kwh=0, exported_kwh=0.5, pv_kwh=0.5),
+        bindings(),
+        "without_battery",
+        None,
+        selected,
+        (),
+        prices(),
+        None,
+    )
+    assert result["economic_cost"] == pytest.approx(0.05)
+    assert result["bonus"] == 0
+    assert counters is None
+
+
+@pytest.mark.parametrize("zero_rate", [False, True])
+@pytest.mark.parametrize("seed_failure", ["reset", "future"])
+def test_unusable_seed_cannot_hide_an_exact_zero_payment_or_create_usage(zero_rate, seed_failure):
+    """A reset/future opening stays unknown. Zero export costs .30, zero-rate .5-kWh export costs .05."""
+    from dataclasses import replace
+
+    from open_energy_planner.contracts.calculation.formula import Formula
+
+    selected = contract(bonus=True)
+    selected_frame = frame()
+    if zero_rate:
+        selected = replace(
+            selected, bonuses=(replace(selected.bonuses[0], rate_formula=Formula("0")),)
+        )
+        selected_frame = frame(imported_kwh=0, exported_kwh=0.5, pv_kwh=0.5)
+    seed = CounterSeed(
+        "bonus",
+        START - timedelta(days=1),
+        0.5,
+        1000 if seed_failure == "reset" else 10,
+        "sensor.export",
+        START + timedelta(minutes=15) if seed_failure == "future" else START,
+    )
+    result, counters = independent_account(
+        problem(), selected_frame, bindings(), "actual", None, selected, (seed,), prices(), None
+    )
+    assert result["economic_cost"] == pytest.approx(0.05 if zero_rate else 0.3)
+    assert result["bonus"] == 0
+    assert counters is None
+    with pytest.raises(ValueError, match="reset|initial comparison budget"):
+        independent_account(
+            problem(),
+            frame(imported_kwh=0, exported_kwh=0.5, pv_kwh=0.5),
+            bindings(),
+            "actual",
+            None,
+            contract(bonus=True),
+            (seed,),
+            prices(),
+            None,
+        )
 
 
 def test_original_common_start_may_share_actual_opening_allowance_once():
