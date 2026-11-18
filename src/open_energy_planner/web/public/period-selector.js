@@ -87,7 +87,8 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
             return {start: values[index], end: values[index]};
         }
         const length = dayOnly ? 1 : ["week", "seven"].includes(preset) ? 7 : Math.round((Date.parse(end) - Date.parse(start)) / DAY_MILLISECONDS) + 1;
-        const first = shiftDay(start, direction * length);
+        const origin = preset === "week" ? shiftDay(start, -((new Date(start + "T00:00:00Z").getUTCDay() + 6) % 7)) : start;
+        const first = shiftDay(origin, direction * length);
         return preset === "week" ? boundPeriod(first, shiftDay(first, 6)) : {start: first, end: shiftDay(first, length - 1)};
     }
     /** Return to a partially elapsed current calendar period after visiting a complete earlier one. */

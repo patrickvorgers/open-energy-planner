@@ -63,3 +63,19 @@ def test_period_calendar_roundtrip_returns_to_clipped_current_month(app_page):
     host.get_by_role("button", name="Next period").click()
     assert page.evaluate("window.dateControl.value") == {"start": "2026-11-01", "end": "2026-11-18"}
     expect(host.get_by_role("button", name="Next period")).to_be_disabled()
+
+
+def test_week_navigation_returns_from_a_clipped_first_week(app_page):
+    """A first partial retained week still returns to the current Monday-based week with Next."""
+    page, url = app_page
+    host = mount(page, url)
+    page.evaluate("window.dateControl.set({min:'2026-11-12'})")
+    host.get_by_role("button", name="Choose period", exact=True).click()
+    page.get_by_role("dialog", name="Choose period").get_by_role(
+        "button", name="This week", exact=True
+    ).click()
+    host.get_by_role("button", name="Previous period").click()
+    assert page.evaluate("window.dateControl.value") == {"start": "2026-11-12", "end": "2026-11-15"}
+    host.get_by_role("button", name="Next period").click()
+    assert page.evaluate("window.dateControl.value") == {"start": "2026-11-16", "end": "2026-11-18"}
+    expect(host.get_by_role("button", name="Next period")).to_be_disabled()
