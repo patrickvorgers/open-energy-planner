@@ -476,6 +476,7 @@ def test_multiple_bonus_titles_distinguish_separate_counters_without_rule_ids():
 def test_solar_command_survives_absent_physical_outcomes():
     """An archived curtailment command remains readable without inventing missing solar use."""
     plan = original_plan()
+    plan["input_snapshot"]["problem"]["pv_sources"][0]["can_curtail"] = True
     plan["expected_flows"] = []
     plan["steps"] = [
         {
@@ -488,6 +489,7 @@ def test_solar_command_survives_absent_physical_outcomes():
     interval = evidence(plan)["intervals"][0]
     solar = next(item for item in interval["cards"] if item["title"] == "South roof: Solar")
     assert facts([solar])["Solar production"] == "Curtailment requested"
+    assert facts([solar])["Curtailment permitted"] == "Yes"
     assert facts([solar])["Planned use: DC"] is None
     assert solar["group"] == {"id": "inv", "title": "Inverter 1"}
     assert interval["issue"]
@@ -501,4 +503,70 @@ def test_household_label_excludes_service_energy_added_to_physical_context():
     before = deepcopy(plan)
     rows = facts(interval_evidence(plan, physical, 0)["cards"])
     assert rows["Household demand: AC: This interval"] == 0.5
+    assert plan == before
+
+
+@pytest.mark.parametrize(
+    ("grid", "expected"),
+    [
+        ({"grid_to_load": 0.25, "grid_to_battery": 0.1}, 0.35),
+        ({"grid_import": 0, "grid_to_load": 0.25, "grid_to_battery": 0.1}, 0),
+        ({"grid_to_load": 0.25}, None),
+        ({}, None),
+    ],
+)
+def test_legacy_grid_components_preserve_known_zero_and_missing_totals(grid, expected):
+    """Complete legacy components yield 0.35 kWh, while an explicit zero wins and missing parts stay unknown."""
+    plan = original_plan()
+    flow = plan["expected_flows"][0]
+    flow.pop("grid_import")
+    flow.pop("grid_export")
+    flow.update(grid, pv_to_grid=0.12, battery_to_grid=0.03)
+    before = deepcopy(plan)
+    result = evidence(plan)
+    interval = facts(result["intervals"][0]["cards"])
+    summary = facts(result["summary"])
+    assert interval["Import"] == expected
+    assert summary["Total import"] == expected
+    assert interval["Export"] == 0.15
+    assert summary["Total export"] == 0.15
+    assert bool(result["intervals"][0]["issue"]) == (expected is None)
+    assert plan == before
+
+
+def test_duplicate_battery_names_retain_archived_order_labels_and_independent_commands():
+    """Same-named batteries keep first fixed-power and second meter-following cards without renaming the archive."""
+    plan = original_plan()
+    physics = plan["input_snapshot"]["problem"]
+    second = deepcopy(physics["batteries"][0])
+    second["device_id"] = "spare"
+    second["can_follow_grid"] = True
+    physics["batteries"].append(second)
+    physics["terminal_valuations"].append(
+        {**physics["terminal_valuations"][0], "device_id": "spare"}
+    )
+    plan["comparison_names"]["spare"] = "House battery"
+    plan["expected_flows"][0]["batteries"].append(
+        {"device_id": "spare", "charge_kwh": 0, "discharge_kwh": 0, "end_kwh": 2}
+    )
+    plan["steps"] = [
+        {
+            "start": START.isoformat(),
+            "end": (START + timedelta(minutes=15)).isoformat(),
+            "devices": {
+                "battery": {"mode": "fixed_power", "power_w": -4000},
+                "spare": {"mode": "follow_grid_target", "power_w": None},
+            },
+        }
+    ]
+    before = deepcopy(plan)
+    cards = evidence(plan)["intervals"][0]["cards"]
+    first_card = next(
+        item for item in cards if item["title"] == "House battery: 1: Planned battery"
+    )
+    second_card = next(
+        item for item in cards if item["title"] == "House battery: 2: Planned battery"
+    )
+    assert facts([first_card])["Control mode"] == "Fixed power"
+    assert facts([second_card])["Control mode"] == "Zero on the meter: Local regulation is active."
     assert plan == before

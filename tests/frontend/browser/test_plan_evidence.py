@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
+from open_energy_planner.savings.evidence import evidence as plan_evidence
 from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 
@@ -1346,7 +1347,7 @@ def test_evidence_loading_failure_and_retry_do_not_show_stale_values(app_page):
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_same_named_batteries_keep_independent_graph_series(app_page):
-    """Duplicate names retain separate 50→25→0 and constant-75 percent SoC curves and fixed/following modes."""
+    """Duplicate batteries retain distinct SoC/modes and the original 0.35-kWh legacy grid import after evidence loads."""
     page, url = app_page
     headers = {"Authorization": "Bearer " + TOKEN}
     identity = page.request.get(url + "/v1/plans?limit=20", headers=headers).json()["plans"][0][
@@ -1360,12 +1361,23 @@ def test_same_named_batteries_keep_independent_graph_series(app_page):
     second["battery"]["initial_kwh"] = 3
     second["can_follow_grid"] = True
     plan["input_snapshot"]["problem"]["batteries"].append(second)
+    curves = plan["input_snapshot"]["problem"].get("terminal_valuations", [])
+    if curves:
+        curves.append({**curves[0], "device_id": "spare"})
     for flow in plan["expected_flows"]:
         flow["batteries"].append(
             {"device_id": "spare", "charge_kwh": 0, "discharge_kwh": 0, "end_kwh": 3}
         )
     for step in plan["steps"]:
         step["devices"]["spare"] = {"mode": "follow_grid_target", "power_w": None}
+    plan["expected_flows"][0].pop("grid_import")
+    plan["expected_flows"][0].update(grid_to_load=0.25, grid_to_battery=0.1)
+    projected = plan_evidence(plan)
+    assert projected["intervals"]
+    page.route(
+        "**/v1/plans/*/comparison?view=evidence",
+        lambda route: route.fulfill(json={"plan_id": identity, "evidence": projected}),
+    )
     page.route("**/v1/plans/*/comparison?view=plan", lambda route: route.fulfill(json=body))
     page.route(
         "**/v1/plans/*/comparison?view=simulations",
@@ -1389,6 +1401,40 @@ def test_same_named_batteries_keep_independent_graph_series(app_page):
         has=page.get_by_role("heading", name="Shared battery: 2", exact=True, include_hidden=True)
     )
     expect(battery).to_contain_text("Zero on the meter")
+    assert (
+        page.locator("#inspect-values")
+        .get_by_text("Grid import", exact=True)
+        .evaluate("term => term.nextElementSibling.textContent")
+        == "0.35 kWh"
+    )
+    page.get_by_text("Understand this plan", exact=True).click()
+    page.get_by_text("Selected interval details", exact=True).click()
+    for ordinal, mode in (
+        (1, "Fixed power"),
+        (2, "Zero on the meter: Local regulation is active."),
+    ):
+        recorded = page.locator("#interval-evidence article").filter(
+            has=page.get_by_role(
+                "heading", name=f"Shared battery: {ordinal}: Planned battery", exact=True
+            )
+        )
+        expect(recorded).to_be_visible()
+        assert (
+            recorded.get_by_text("Control mode", exact=True).evaluate(
+                "term => term.nextElementSibling.textContent"
+            )
+            == mode
+        )
+    grid = page.locator("#interval-evidence article").filter(
+        has=page.get_by_role("heading", name="Planned grid exchange: AC", exact=True)
+    )
+    expect(grid).to_be_visible()
+    assert (
+        grid.get_by_text("Import", exact=True).evaluate(
+            "term => term.nextElementSibling.textContent"
+        )
+        == "0.35 kWh"
+    )
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)

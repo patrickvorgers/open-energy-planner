@@ -526,8 +526,18 @@ def test_archived_appliance_cycle_remains_visible_after_interval_evidence_arrive
         has=page.get_by_role("heading", name="Example scheduled appliance", exact=True)
     )
     expect(appliance).to_contain_text("0.12 kWh")
-    expect(appliance).to_contain_text("Cycle starts")
-    expect(appliance).to_contain_text("Cycle ends")
+    assert (
+        appliance.get_by_text("Cycle starts", exact=True).evaluate(
+            "term => term.nextElementSibling.textContent"
+        )
+        == "11/4/2026, 12:00 AM"
+    )
+    assert (
+        appliance.get_by_text("Cycle ends", exact=True).evaluate(
+            "term => term.nextElementSibling.textContent"
+        )
+        == "11/4/2026, 12:15 AM"
+    )
     assert page.request.get(url + f"/v1/plans/{identity}", headers=headers).json() == original
 
 
@@ -544,7 +554,11 @@ def test_missing_physical_evidence_retains_original_solar_command_and_household_
     ).json()
     plan = comparison["plan"]
     plan["expected_flows"] = []
-    source = plan["input_snapshot"]["problem"]["pv_sources"][0]["source_id"]
+    source = next(
+        unit["source_id"]
+        for unit in plan["input_snapshot"]["problem"]["pv_sources"]
+        if unit["can_curtail"]
+    )
     plan["steps"][0]["devices"][source] = {"enabled": False}
     projected = plan_evidence(plan)
     assert projected["intervals"][0]["issue"]
