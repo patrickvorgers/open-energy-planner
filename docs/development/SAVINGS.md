@@ -24,6 +24,23 @@ simulation and needs no historical SoC, original physical forecast, wear rate or
 terminal valuation. It does require frozen, disjoint AC measurement bindings,
 published prices and dated contract rules.
 
+## Cash calculation flow
+
+```mermaid
+flowchart TD
+    E[Recorded AC energy] --> A[Actual electricity bill]
+    E --> R[Remove measured battery exchange]
+    R --> B[Without-battery electricity bill]
+    T[Published prices and contract rules] --> A
+    T --> B
+    C[Independent bonus counters] --> A
+    C --> B
+    A --> M[Match accepted quarters]
+    B --> M
+    M --> S[Saving = without-battery cost minus actual cost]
+    S --> D[Daily report and cash index]
+```
+
 ## Measured reconstruction
 
 `accounting.measured_cash_flows` computes household demand from the frozen signed
