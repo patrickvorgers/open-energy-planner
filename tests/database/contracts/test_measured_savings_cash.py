@@ -270,7 +270,7 @@ def test_missing_price_advances_known_bonus_family_without_establishing_unknown_
 
     runtime, store, _documents, engine, _plans = settlement
     old = BonusRule("old", START - timedelta(days=2), Formula("0"), 10, timezone="UTC")
-    active = BonusRule("active", START - timedelta(days=1), Formula("0.1"), 2, timezone="UTC")
+    active = BonusRule("active", START - timedelta(days=1), Formula("0.1"), 1, timezone="UTC")
     selected = replace(contract(), bonuses=(old, active))
     key = "active|" + active.period_start(START).isoformat()
     measured = tuple(
@@ -317,7 +317,7 @@ def test_missing_price_advances_known_bonus_family_without_establishing_unknown_
         {"cash_counters": {"actual": {key: 0.0}, "without_battery": {key: 0.0}}},
     )
     assert report["cash"]["coverage_seconds"] == 1800
-    assert report["scenarios"]["without_battery"]["totals"]["bonus"] == pytest.approx(0.1)
+    assert report["scenarios"]["without_battery"]["totals"]["bonus"] == pytest.approx(0.05)
 
 
 @pytest.mark.parametrize("changed", [{"currency": "USD"}, {"market_area": "BE"}, {}])

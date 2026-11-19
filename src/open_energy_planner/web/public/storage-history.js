@@ -46,7 +46,7 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
             useHomeAssistantTimezone(history.timezone);
             if (history.timezone) {
                 period.set({start: history.start, end: history.end, min: history.calendar?.min_day, max: history.calendar?.max_day || localDate()});
-                if (period.value.start !== history.start || period.value.end !== history.end) return load();
+                if (explicitPeriod && (period.value.start !== history.start || period.value.end !== history.end)) return load();
             }
             samples = history.samples;
             if (!live) {
@@ -58,7 +58,7 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
                 return;
             }
             const measurementDay = measurement && (measurement.day || localDate(measurement.observed_at));
-            const start = live && history.period === "all" && measurementDay < history.start ? measurementDay : history.start;
+            const start = live && history.period === "all" && measurementDay < history.start ? measurementDay : period.value.start;
             if (measurement) samples = samples.filter(row => row.day < measurementDay);
             if (measurementDay >= start && measurementDay <= history.end) {
                 // Keep the view aligned with the displayed snapshot, including across local midnight.

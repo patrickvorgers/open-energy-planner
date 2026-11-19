@@ -67,9 +67,10 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
         if (key === "today") return {start: today, end: today};
         if (key === "yesterday") return {start: shiftDay(today, -1), end: shiftDay(today, -1)};
         if (key === "all") return {start: minimum, end: maximum};
-        if (key === "seven") return {start: shiftDay(latest, -6), end: latest};
-        if (key === "week") return {start: shiftDay(today, -((new Date(today + "T00:00:00Z").getUTCDay() + 6) % 7)), end: latest};
-        return {start: key === "year" ? today.slice(0, 4) + "-01-01" : today.slice(0, 7) + "-01", end: latest};
+        const first = key === "seven" ? shiftDay(latest, -6)
+            : key === "week" ? shiftDay(today, -((new Date(today + "T00:00:00Z").getUTCDay() + 6) % 7))
+            : key === "year" ? today.slice(0, 4) + "-01-01" : today.slice(0, 7) + "-01";
+        return boundPeriod(first, latest);
     }
     /** Calendar month/year steps retain complete period units where data allow them. */
     function shifted(direction) {

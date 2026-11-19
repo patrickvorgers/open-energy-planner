@@ -484,3 +484,45 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
         )
         == 9
     )
+
+
+def test_default_month_with_first_sample_midperiod_finishes_once_and_stays_relative(app_page):
+    """A first-day archive clamps the visible range without retrying the identical month request."""
+    page, url = app_page
+    sample = {
+        "day": "2026-11-18",
+        "observed_at": "2026-11-18T03:00:00Z",
+        "backend": "sqlite",
+        "database_bytes": 4 * 1024**2,
+        "database_estimated": False,
+    }
+    history = {
+        "period": "month",
+        "start": "2026-10-19",
+        "end": "2026-11-18",
+        "timezone": "Europe/Amsterdam",
+        "sample_hour": 4,
+        "calendar": {"min_day": "2026-11-18", "max_day": "2026-11-18"},
+        "latest": sample,
+        "samples": [sample],
+    }
+    reads = []
+    page.route(
+        "**/v1/storage/history?*",
+        lambda route: (reads.append(route.request.url), route.fulfill(json=history)),
+    )
+    page.goto(url + "/data-storage")
+    page.get_by_label("Installation API token").fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#storage-history-plot")).to_be_visible()
+    wait_for_product_reads(page)
+    assert len(reads) == 1
+    assert "period=month" in reads[0]
+    expect(page.locator("#storage-period .period-trigger")).to_contain_text("11/18/2026")
+    history["end"] = "2026-11-19"
+    history["calendar"]["max_day"] = "2026-11-19"
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    wait_for_product_reads(page)
+    assert len(reads) == 2
+    assert all("period=month" in address for address in reads)
+    expect(page.locator("#storage-period .period-trigger")).to_contain_text("11/19/2026")
