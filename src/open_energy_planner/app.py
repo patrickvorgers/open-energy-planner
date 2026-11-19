@@ -189,11 +189,7 @@ def create_app(
                     document, datetime.now(UTC), live.current_snapshot
                 )
                 if reason:
-                    if (
-                        live.current_snapshot is not None
-                        and planner.latest is not live.current_snapshot
-                    ):
-                        planner.submit(live.current_snapshot)
+                    live.replan_requested = True
                     raise PublicationSuperseded(reason)
             previous = repository.state["plan"]
             if installation.current and solar.configuration and demand.configuration:

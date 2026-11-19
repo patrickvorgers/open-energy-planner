@@ -540,12 +540,56 @@ def test_forwarding_reports_does_not_replan_on_every_poll():
         assert len(planner.submitted) == (2 if seconds == 900 else 1)
         assert live.current_snapshot.measured_at == clock[0]
     assert len(planner.submitted) == 2
-    # A quarter transition remains legitimate immediately after explicit configuration.
+    # A quarter transition cannot bypass the five-minute gap after configuration.
     live.configure(config)
-    for seconds in (1799, 1800):
+    for seconds in (1799, 1800, 2098, 2099):
         clock[0] = NOW + timedelta(seconds=seconds)
         live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
-        assert len(planner.submitted) == (3 if seconds == 1799 else 4)
+        assert len(planner.submitted) == (4 if seconds == 2099 else 3)
+
+
+def test_pending_sensor_deviation_is_latched_until_latest_inputs_can_be_submitted():
+    """A brief grid deviation queues one round at 300 seconds using the latest capture, not the old spike."""
+    from unittest.mock import Mock
+
+    clock = [NOW]
+    planner = Mock(published=None)
+    live = LiveInputs(planner, Mock(), Mock(), clock=lambda: clock[0])
+    config = configuration()
+    live.configure(config)
+    planner.submit.reset_mock()
+    live.basis_source.current.side_effect = lambda *_arguments, **_keywords: basis(config)
+    live.receive(parse_report(report_body(now=NOW), config, NOW))
+    original = live.current_snapshot
+    planner.published = (
+        original,
+        {
+            "expected_flows": [
+                {
+                    "batteries": [
+                        {
+                            "device_id": "battery",
+                            "end_kwh": original.problem.batteries[0].battery.initial_kwh,
+                        }
+                    ],
+                    "grid_import": 0,
+                    "grid_export": 0,
+                }
+                for _ in original.problem.intervals
+            ]
+        },
+    )
+    for seconds, expected in ((60, 1), (120, 1), (299, 1), (300, 2), (301, 2)):
+        clock[0] = NOW + timedelta(seconds=seconds)
+        body = report_body(now=clock[0])
+        if seconds == 60:
+            body["readings"][0]["value"] = 2000
+        live.receive(parse_report(body, config, clock[0]))
+        assert planner.submit.call_count == expected
+        assert live.replan_requested is (seconds < 300)
+    latest = planner.submit.call_args.args[0]
+    assert latest.measured_at == NOW + timedelta(seconds=300)
+    assert live.report.readings[0].value == 0
 
 
 def test_live_candidate_cannot_skip_first_transfer_when_solving_crosses_boundary():
@@ -587,7 +631,7 @@ def test_live_candidate_cannot_skip_first_transfer_when_solving_crosses_boundary
 
 
 def test_changing_price_versions_cannot_bypass_five_minute_limit(caplog):
-    """Even a new composed price version every poll coalesces until 300 seconds. Quarters remain immediate."""
+    """New composed prices on every poll coalesce until 300 seconds, including quarter transitions."""
 
     class Planner:
         def __init__(self):
