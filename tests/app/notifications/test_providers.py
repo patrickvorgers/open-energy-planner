@@ -40,6 +40,43 @@ def test_known_input_problems_name_the_responsible_resource_and_recovery_page(
     assert "Required planning inputs or saved settings are unusable" not in text.message
 
 
+@pytest.mark.parametrize(
+    "reason,resource,destination",
+    [
+        ("configuration_changed", "settings", "/overview"),
+        ("inputs_unavailable", "current planning inputs", "/overview"),
+        ("battery_dispatch_unavailable", "battery", "/overview"),
+        ("ev_capacity_unavailable", "vehicle", "/ev"),
+        ("ev_session_unavailable", "charging session", "/ev"),
+        ("thermal_dispatch_window_elapsed", "heating", "/overview"),
+        ("publication_inputs_expired", "measurements", "/overview"),
+    ],
+)
+def test_publication_blockers_explain_the_resource_and_conditional_automatic_retry(
+    reason, resource, destination
+):
+    """Publication rejections identify their check and retry without claiming a missing sensor or recovery."""
+    blocked = PlanningStatus("not_ready", reason, datetime(2026, 11, 19, tzinfo=UTC))
+    notice = planning_notifications(blocked, lambda _reason: None)[0]
+    assert resource in notice.text.message
+    assert "automatically" in notice.text.message
+    assert notice.text.title != "Planning is blocked"
+    assert notice.text.action_path == destination
+    assert notice.blocks == ("planning",)
+    assert notice.state == "active"
+    assert "saved settings are unusable" not in notice.text.message
+
+
+@pytest.mark.parametrize("reason", ["future_private_value_sentinel", "candidate_input_mismatch"])
+def test_undiagnosed_and_internal_failures_do_not_invent_missing_data_or_promise_recovery(reason):
+    """Unknown diagnostics stay private and internal failures retain an honest action instead of a retry promise."""
+    text = explain_planning_problem(reason)
+    assert reason not in text.message
+    assert "saved settings are unusable" not in text.message
+    assert "automatically" not in text.message
+    assert text.action_path == "/activity"
+
+
 @pytest.mark.parametrize("status", ["not_ready", "calculating"])
 def test_planning_automatic_retry_preserves_optional_recovery_destination(status):
     """An explanation without a page remains valid while blocked and while publication is recovering."""

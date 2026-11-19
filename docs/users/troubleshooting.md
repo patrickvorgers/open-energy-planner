@@ -64,6 +64,19 @@ own notifications.
 
 ## No plan available
 
+Read the reason in Notifications before changing settings. A plan can be rejected
+even when all sensors are present. For example, battery or vehicle measurements
+may no longer support the remaining commands, or a heating start may pass during
+the calculation. These notices explain the affected check and automatic retry.
+A brief interruption usually clears with current inputs at a later planning round.
+If it keeps recurring, follow the notice's battery, charging or timing checks.
+Retries do not bypass the normal scheduling gap or safety checks.
+
+An unknown blocker or an internal input mismatch does not prove that a sensor or
+setting is missing. Check Activity and the app log if it persists. These cases do
+not promise automatic recovery. A notice changes to **Calculating a new energy
+plan** while recovery is being checked and clears only after successful publication.
+
 **Synthetic demo:** wait for startup and the first calculation, then use **Refresh overview**. Read the first actual calculation error in the terminal. An unsupported native package is not a missing Home Assistant sensor.
 
 **Home Assistant mode:** check the source named by the warning, saved installation, required measurement freshness, forecast availability, contract dates and price coverage. Missing inputs do not receive an unlabelled synthetic replacement. The [configuration sequence](configuration.md) helps identify the missing owner.

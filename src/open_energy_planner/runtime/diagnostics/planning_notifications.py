@@ -80,6 +80,79 @@ def planning_notifications(state: PlanningStatus, explain):
 
 def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeText:
     """Explain assembled planning inputs and calculation outcomes, with an honest unknown fallback."""
+    if reason == "configuration_changed":
+        return NoticeText(
+            "Waiting for inputs for the updated settings",
+            "The calculation or measurement report belongs to earlier installation or device settings.\n\n"
+            "OEP automatically checks new reports and retries with inputs matching the saved settings. "
+            "This is usually temporary. If it persists, check the integration connection and recent settings changes.",
+            "View planning",
+            "/overview",
+            "info",
+        )
+    if reason == "inputs_unavailable":
+        return NoticeText(
+            "Waiting for current planning inputs",
+            "The current planning inputs are not available for the final publication check.\n\n"
+            "OEP automatically rechecks incoming data and can retry once usable inputs are available. "
+            "If this persists, check the integration connection and the source warnings in Planning.",
+            "View planning",
+            "/overview",
+            "info",
+        )
+    if reason == "battery_dispatch_unavailable":
+        return NoticeText(
+            "Waiting to recheck battery limits",
+            "The latest battery measurements no longer allow the remaining charging or discharging "
+            "within its energy limits. Battery charge can change while a calculation runs.\n\n"
+            "OEP retries automatically with current "
+            "measurements at a later planning round. This is usually temporary. "
+            "If it keeps recurring, check the battery state and configured limits.",
+            "View planning",
+            "/overview",
+            "info",
+        )
+    if reason == "ev_capacity_unavailable":
+        return NoticeText(
+            "Waiting to recheck vehicle charging capacity",
+            "The vehicle's latest charge level leaves too little room for the remaining charging "
+            "commands before they expire. The calculated plan was not published.\n\nOEP retries "
+            "automatically with current measurements at a later planning round. "
+            "If this persists, check the vehicle's charge level and charging request in EV charging.",
+            "Check EV charging",
+            "/ev",
+            "info",
+        )
+    if reason == "ev_session_unavailable":
+        return NoticeText(
+            "Vehicle charging session changed",
+            "A charging session used by the calculation is no longer available. "
+            "The vehicle may have disconnected or its charging request may have changed.\n\n"
+            "OEP rechecks sessions automatically and can plan again when the required session "
+            "inputs are usable. If this was unexpected, check the vehicle connection and request in EV charging.",
+            "Check EV charging",
+            "/ev",
+        )
+    if reason == "thermal_dispatch_window_elapsed":
+        return NoticeText(
+            "Heating start passed during calculation",
+            "A scheduled heating start passed while the plan was being calculated. "
+            "The result was not published.\n\nOEP retries automatically with a current schedule "
+            "at a later planning round. This is usually temporary. "
+            "If it keeps recurring, check the heating deadlines and calculation duration.",
+            "View planning",
+            "/overview",
+            "info",
+        )
+    if reason == "candidate_input_mismatch":
+        return NoticeText(
+            "Calculated plan could not be matched to its inputs",
+            "The calculated result could not be matched to the data for this planning round, "
+            "so it was not published. This is an internal consistency check, not evidence "
+            "of a missing sensor. Check Activity and the app log if it recurs.",
+            "View activity",
+            "/activity",
+        )
     if reason == "battery_calibration_changed":
         return NoticeText(
             "Updating the battery calibration plan",
@@ -184,8 +257,9 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Planning inputs expired before publication",
             "The measurements became too old or the first transfer interval elapsed before "
-            "a plan could be published. Planning retries with current inputs and a new usable interval. "
-            "Check Planning for the next calculation and its current status.",
+            "a plan could be published. Planning retries automatically with current inputs and a new usable interval. "
+            "This is usually temporary and needs no settings change. If it keeps recurring, "
+            "check measurement freshness and calculation duration in Planning.",
             "View planning",
             "/overview",
             "info",
@@ -208,8 +282,9 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         )
     return NoticeText(
         "Planning is blocked",
-        "Required planning inputs or saved settings are unusable. Check the installation "
-        "and Home Assistant integration.",
-        "Check installation",
-        "/setup",
+        "OEP cannot publish a new plan, but this status has no specific explanation yet. "
+        "It does not identify a missing sensor or incorrect setting.\n\n"
+        "If the message persists, check Activity and the app log for the cause before changing settings.",
+        "View activity",
+        "/activity",
     )
