@@ -264,6 +264,7 @@ class DailySavings:
         }
         seed_evidence, price_versions = {}, set()
         historical_markets = {}
+        historical_activations = None
         while cursor < end:
             rows = self.store.frames(cursor, end=end)
             if not rows:
@@ -284,7 +285,24 @@ class DailySavings:
                     market_identity = context.get("market_identity")
                     if market_identity is None:
                         # Older frames retain their market in compact plan metadata, never in simulated physics.
-                        identity = self.store.context_plan(frame.start)
+                        if historical_activations is None:
+                            historical_activations = [
+                                (start, self.store.context_plan(start)),
+                                *(
+                                    (datetime.fromisoformat(item["activated_at"]), item["plan_id"])
+                                    for item in self.store.activations(start, end)
+                                    if item["plan_id"]
+                                    and datetime.fromisoformat(item["activated_at"]) > start
+                                ),
+                            ]
+                        identity = next(
+                            (
+                                plan_id
+                                for instant, plan_id in reversed(historical_activations)
+                                if instant <= frame.start
+                            ),
+                            None,
+                        )
                         if identity not in historical_markets:
                             original = (
                                 self.runtime.plans.get_context(identity) if identity else None

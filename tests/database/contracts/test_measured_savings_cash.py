@@ -362,3 +362,65 @@ def test_capture_splits_market_changes_but_batches_unchanged_markets(settlement,
     assert (
         request["end"] == (END if changed else START + timedelta(hours=1, minutes=45)).isoformat()
     )
+
+
+def test_legacy_market_lookup_respects_activation_changes_while_disabled(settlement):
+    """A disabled predecessor still owns the first old quarter, and the next market owns only the following quarter."""
+    from open_energy_planner.savings.storage.adapters.sqlalchemy import stamp
+    from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS
+
+    runtime, _store, _documents, engine, plans = settlement
+    midnight, _ = day_window("2026-10-22", "UTC")
+    plans.state["plan"] = {
+        "plan_id": "changed-market",
+        "generated_at": END.isoformat(),
+        "strategy": "minimize cost",
+        "solution_status": "optimal",
+        "currency": "EUR",
+        "market_area": "BE",
+        "steps": [],
+    }
+    plans.save()
+    with engine.begin() as connection:
+        connection.execute(ACTIVATIONS.delete().where(ACTIVATIONS.c.activated_at == stamp(START)))
+        connection.execute(
+            ACTIVATIONS.insert(),
+            [
+                {"activated_at": stamp(midnight - timedelta(hours=1)), "plan_id": "original-plan"},
+                {"activated_at": stamp(midnight - timedelta(minutes=30)), "plan_id": None},
+                {"activated_at": stamp(END), "plan_id": "changed-market"},
+            ],
+        )
+        retain(
+            connection,
+            (
+                PriceSeries(
+                    "changed-market",
+                    "BE",
+                    "EUR",
+                    START,
+                    None,
+                    None,
+                    tuple(
+                        PricePoint(
+                            moment, moment + timedelta(minutes=15), 0.1, PriceKind.PUBLISHED, 15
+                        )
+                        for moment in (START, END)
+                    ),
+                ),
+            ),
+        )
+    for area in ("NL", "BE"):
+        report = DailySavings(runtime).calculate(
+            "2026-10-22",
+            "UTC",
+            replace(contract(), market_area=area),
+            None,
+            START + timedelta(days=2),
+            START,
+            None,
+        )
+        assert report["energy"]["grid_import"]["kwh"] == 2
+        assert report["cash"]["coverage_seconds"] == 900
+        assert report["cash"]["actual_cost"] == pytest.approx(0.3)
+        assert report["cash"]["without_battery_cost"] == pytest.approx(0.3)
