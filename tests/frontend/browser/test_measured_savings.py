@@ -29,6 +29,14 @@ def measured_response():
                 "without_battery_cost": None if actual is None else actual + saving,
                 "coverage_seconds": 0 if saving is None else 43200 if index == 3 else 86400,
                 "estimated_seconds": 900 if index == 2 else 0,
+                "breakdown": {
+                    "actual": None
+                    if actual is None
+                    else {"purchase": actual, "sale": 0, "bonus": 0},
+                    "without_battery": None
+                    if actual is None
+                    else {"purchase": actual + saving, "sale": 0, "bonus": 0},
+                },
             }
         )
     return {
@@ -45,6 +53,145 @@ def measured_response():
             "chart": chart,
         },
     }
+
+
+@pytest.mark.parametrize("app_site", ["savings", "activity_ingress"], indirect=True)
+@pytest.mark.parametrize("aggregation", ["day", "month"])
+def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app_page, aggregation):
+    """Hover, tap and keyboard show one bar's costs on every viewport, without stale refresh details."""
+    page, url = app_page
+    data = measured_response()
+    if aggregation == "month":
+        data["cash"]["chart"] = data["cash"]["chart"][:6]
+        for index, chart_bin in enumerate(data["cash"]["chart"]):
+            chart_bin.update(
+                start=datetime(2026, index + 1, 1, tzinfo=UTC).isoformat(),
+                end=datetime(2026, index + 2, 1, tzinfo=UTC).isoformat(),
+            )
+    data["cash"]["aggregation"] = aggregation
+    data["cash"]["chart"][2].update(
+        actual_cost=4,
+        without_battery_cost=12,
+        savings=8,
+        breakdown={
+            "actual": {"purchase": 9.75, "sale": 5.5, "bonus": 0.25},
+            "without_battery": {"purchase": 14.25, "sale": 1.75, "bonus": 0.5},
+        },
+    )
+    data["cash"]["chart"][4].update(
+        actual_cost=14.56,
+        without_battery_cost=10,
+        savings=-4.56,
+        breakdown={
+            "actual": {"purchase": 12.56, "sale": -2, "bonus": 0},
+            "without_battery": {"purchase": 10, "sale": 0, "bonus": 0},
+        },
+    )
+    for key in ("actual_cost", "without_battery_cost", "savings"):
+        data["cash"][key] = sum(chart_bin[key] or 0 for chart_bin in data["cash"]["chart"])
+    failed = False
+
+    def respond(route):
+        """Keep the chart fixture current and expose a real failed-refresh response."""
+        route.fulfill(status=503, json={}) if failed else route.fulfill(json=data)
+
+    page.route("**/v1/savings?**", respond)
+    page.goto(url + "/overview#savings")
+    if "hassio_ingress" not in url:
+        page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+        page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#savings-total")).to_contain_text(f"{data['cash']['savings']:.2f}")
+    page.locator("#savings-period").get_by_role("button", name="Choose period").click()
+    dialog = page.get_by_role("dialog", name="Choose period")
+    dialog.get_by_role("button", name="Custom period", exact=True).click()
+    dialog.get_by_label("From", exact=True).fill(data["cash"]["chart"][0]["start"][:10])
+    final_day = datetime.fromisoformat(data["cash"]["chart"][-1]["end"]) - timedelta(days=1)
+    dialog.get_by_label("To", exact=True).fill(final_day.date().isoformat())
+    dialog.get_by_role("button", name="Apply period", exact=True).click()
+    canvas = page.locator("#savings-chart")
+    expect(dialog).not_to_be_visible()
+    page.get_by_role("button", name="Refresh overview", exact=True).focus()
+    canvas.scroll_into_view_if_needed()
+    coordinates = canvas.evaluate("""canvas => {
+        const bar=Chart.getChart(canvas).getDatasetMeta(0).data[2], bounds=canvas.getBoundingClientRect();
+        return {x:bounds.left+bar.x,y:bounds.top+(bar.y+bar.base)/2};
+    }""")
+    if page.viewport_size["width"] < 500:
+        page.touchscreen.tap(coordinates["x"], coordinates["y"])
+    else:
+        page.mouse.move(coordinates["x"], coordinates["y"])
+    tooltip = page.get_by_role("tooltip")
+    expect(tooltip).to_be_visible()
+    table = tooltip.get_by_role("table", name="Savings breakdown for selected bar")
+    expect(table.get_by_role("row", name="Import cost 9.75 EUR 14.25 EUR")).to_be_visible()
+    expect(table.get_by_role("row", name="Export income 5.50 EUR 1.75 EUR")).to_be_visible()
+    expect(table.get_by_role("row", name="Bonus income 0.25 EUR 0.50 EUR")).to_be_visible()
+    expect(table.get_by_role("row", name="Net electricity cost 4.00 EUR 12.00 EUR")).to_be_visible()
+    expect(tooltip).to_contain_text("Saving: 8.00 EUR")
+    if page.viewport_size["width"] >= 500:
+        bounds = tooltip.bounding_box()
+        page.mouse.move(
+            bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2, steps=24
+        )
+        expect(tooltip).to_be_visible()
+        expect(tooltip).to_contain_text("Saving: 8.00 EUR")
+        page.mouse.move(1, 1)
+        expect(tooltip).not_to_be_visible()
+        page.mouse.move(coordinates["x"], coordinates["y"])
+        expect(tooltip).to_contain_text("Saving: 8.00 EUR")
+        page.keyboard.press("Escape")
+        expect(tooltip).not_to_be_visible()
+        expect(page.get_by_role("button", name="Refresh overview", exact=True)).to_be_focused()
+        page.mouse.move(1, 1)
+        page.mouse.move(coordinates["x"], coordinates["y"])
+        expect(tooltip).to_be_visible()
+    assert tooltip.evaluate(
+        "element => {const bounds=element.getBoundingClientRect();return bounds.left>=0 && bounds.right<=innerWidth && bounds.top>=0 && bounds.bottom<=innerHeight && element.scrollWidth<=element.clientWidth;}"
+    )
+    directory = Path("results/ci/savings-daily-breakdown")
+    directory.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(
+            directory
+            / f"{aggregation}-{page.viewport_size['width']}-{'ingress' if 'hassio_ingress' in url else 'standalone'}.png"
+        ),
+        full_page=False,
+    )
+    canvas.focus()
+    page.keyboard.press("Escape")
+    expect(tooltip).not_to_be_visible()
+    page.keyboard.press("Home")
+    expect(tooltip.get_by_role("row", name="Export income 0.00 EUR 0.00 EUR")).to_be_visible()
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    expect(tooltip).to_contain_text("Saving: 8.00 EUR")
+    page.keyboard.press("ArrowRight")
+    expect(tooltip).not_to_contain_text("9.75 EUR")
+    page.keyboard.press("ArrowRight")
+    expect(tooltip).to_contain_text("Saving: -4.56 EUR")
+    expect(tooltip.get_by_role("row", name="Export income -2.00 EUR 0.00 EUR")).to_be_visible()
+    data["cash"]["chart"][3]["breakdown"]["actual"] = None
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(tooltip).not_to_be_visible()
+    expect(canvas).to_have_attribute("tabindex", "0")
+    expect(page.locator("#savings-chart-tooltip")).to_have_text("")
+    expect(canvas).to_have_accessible_description("")
+    canvas.focus()
+    page.keyboard.press("Home")
+    for _ in range(3):
+        page.keyboard.press("ArrowRight")
+    expect(tooltip.get_by_role("row", name="Import cost Unavailable", exact=False)).to_be_visible()
+    expect(tooltip).to_contain_text("same comparable time")
+    expect(tooltip).not_to_contain_text("9.75 EUR")
+    if page.viewport_size["width"] >= 500:
+        page.keyboard.press("PageDown")
+        expect(tooltip).not_to_be_visible()
+        expect(canvas).to_have_accessible_description("")
+    failed = True
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#savings-total")).to_have_text("Not available")
+    expect(tooltip).not_to_be_visible()
+    expect(canvas).to_have_accessible_description("")
 
 
 @pytest.mark.parametrize("app_site", ["savings", "activity_ingress"], indirect=True)

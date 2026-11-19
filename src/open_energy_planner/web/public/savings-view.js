@@ -5,15 +5,34 @@ import {createPeriodSelector, shiftDay} from "./period-selector.js";
 
 const VALUE_LABEL_FONT_PX = 13;
 const CHART_LABEL_GAP_PX = 8;
+const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 
 /** Keep selection, loading and failed reads coherent across all amounts and the daily chart. */
 export function createSavingsView(host, api) {
     const find = id => host.querySelector(`#${id}`);
+    const tooltip = document.createElement("div");
+    tooltip.id = "savings-chart-tooltip"; tooltip.className = "chart-tooltip savings-tooltip";
+    tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); host.append(tooltip);
+    /** Remove both visible and accessible details when their selection is no longer inspected. */
+    function hideTooltip() {
+        tooltip.hidden = true; tooltip.replaceChildren();
+        find("savings-chart").removeAttribute("aria-describedby");
+        document.removeEventListener("keydown", dismissTooltip);
+        window.removeEventListener("scroll", dismissOnScroll, true);
+    }
+    /** Hover does not move focus, so Escape must also work outside the Savings section. */
+    function dismissTooltip(event) { if (event.key === "Escape") hideTooltip(); }
+    /** Page movement invalidates fixed coordinates, while scrolling the table itself preserves its details. */
+    function dismissOnScroll(event) { if (!(event.target instanceof Node && tooltip.contains(event.target))) hideTooltip(); }
+    host.addEventListener("pointerdown", event => { if (event.target !== find("savings-chart") && !tooltip.contains(event.target)) hideTooltip(); });
+    window.addEventListener("hashchange", hideTooltip);
+    tooltip.onpointerleave = () => { if (document.activeElement !== find("savings-chart")) hideTooltip(); };
     let chart = null, request = 0, initialized = false, selectedIndex = 0;
     const period = createPeriodSelector(find("savings-period"), {onChange: () => read()});
     /** Never leave an old period's money visible beneath a new selection. */
     function clear(message) {
         chart?.destroy(); chart = null;
+        hideTooltip();
         find("savings-chart").onkeydown = null;
         find("savings-chart").tabIndex = -1;
         find("savings-total").textContent = message;
@@ -26,8 +45,7 @@ export function createSavingsView(host, api) {
         find("savings-chart").setAttribute("aria-label", "Daily battery savings unavailable");
     }
     /** Show only backend-verified components. Broader scenario coverage never explains a matched net cost. */
-    function renderBreakdown(cash, currency) {
-        const body = find("savings-breakdown-values");
+    function breakdownRows(body, cash, currency) {
         body.replaceChildren();
         for (const [key, label] of [["purchase", "Import cost"], ["sale", "Export income"], ["bonus", "Bonus income"], [null, "Net electricity cost"]]) {
             const row = document.createElement("tr"), heading = document.createElement("th");
@@ -39,6 +57,10 @@ export function createSavingsView(host, api) {
             }
             body.append(row);
         }
+    }
+    /** Keep the period disclosure on the same backend components as each bar tooltip. */
+    function renderBreakdown(cash, currency) {
+        breakdownRows(find("savings-breakdown-values"), cash, currency);
         find("savings-breakdown-total").textContent = cash?.savings == null ? "Savings unavailable" : `Saving: ${money(cash.savings)} ${currency}`.trim();
         find("savings-breakdown-status").textContent = cash?.coverage_seconds > 0 && (!cash.breakdown?.actual || !cash.breakdown?.without_battery) ? "Some component details are unavailable for the same comparable time. The net costs and saving still use only matching measurements." : "";
     }
@@ -109,6 +131,30 @@ export function createSavingsView(host, api) {
         const axisDate = value => when(value, monthly ? {month: "short", year: "numeric"} : {day: "numeric", month: "short", ...(yearsDiffer ? {year: "numeric"} : {})});
         canvas.setAttribute("aria-label", "Battery savings. Use Left and Right to inspect values.");
         const title = bin => `${dateLabel(localDate(bin.start))}${localDate(bin.start) === localDate(Date.parse(bin.end) - 1) ? "" : " – " + dateLabel(localDate(Date.parse(bin.end) - 1))}`;
+        /** Present the selected bar's retained costs without calculating financial values in the browser. */
+        function showBreakdown({chart: instance, tooltip: state}) {
+            if (canvas.closest("[hidden]")) { hideTooltip(); return; }
+            if (!state.opacity && !tooltip.hidden && (canvas.matches(":hover") || tooltip.matches(":hover") || document.activeElement === canvas)) return;
+            if (!state.opacity || !state.dataPoints?.length) { hideTooltip(); return; }
+            tooltip.hidden = false;
+            const bin = state.dataPoints[0].raw.bin, heading = document.createElement("p");
+            heading.className = "chart-tooltip-title"; heading.textContent = `${title(bin)}: ${currency}`;
+            const table = document.createElement("table"), body = document.createElement("tbody");
+            table.setAttribute("aria-label", "Savings breakdown for selected bar");
+            table.append(find("savings-breakdown").querySelector("thead").cloneNode(true), body);
+            breakdownRows(body, bin, currency);
+            const total = document.createElement("p"); total.className = "chart-tooltip-explanation";
+            total.textContent = bin.savings == null ? "No comparable measurements" : `Saving: ${money(bin.savings)} ${currency}`;
+            if (bin.coverage_seconds > 0 && (!bin.breakdown?.actual || !bin.breakdown?.without_battery)) total.textContent += "\nSome component details are unavailable for the same comparable time.";
+            if (bin.estimated_seconds) total.textContent += "\nIncludes reconstructed measurements.";
+            tooltip.replaceChildren(heading, table, total);
+            canvas.setAttribute("aria-describedby", tooltip.id);
+            document.addEventListener("keydown", dismissTooltip);
+            window.addEventListener("scroll", dismissOnScroll, true);
+            const bounds = canvas.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
+            tooltip.style.left = `${Math.max(margin, Math.min(bounds.left + state.caretX + margin, innerWidth - tooltip.offsetWidth - margin))}px`;
+            tooltip.style.top = `${Math.max(margin, Math.min(bounds.top + state.caretY + margin, innerHeight - tooltip.offsetHeight - margin))}px`;
+        }
         chart = new Chart(canvas, {
             type: "bar", data: {datasets: [{label: `Battery saving (${currency})`, data: points, backgroundColor: points.map(point => point.y < 0 ? "#b76b4b" : "#439884"), borderRadius: 4, maxBarThickness: 64}]},
             plugins: [{id: "savingsAmounts", afterDatasetsDraw(instance) {
@@ -130,7 +176,7 @@ export function createSavingsView(host, api) {
                 responsive: true, maintainAspectRatio: false, animation: false,
                 layout: {padding: {top: VALUE_LABEL_FONT_PX + CHART_LABEL_GAP_PX}},
                 scales: {x: {type: "linear", min: calendarDayStart(start), max: calendarDayStart(shiftDay(end, 1)), afterBuildTicks: axis => {axis.ticks = points.map(point => ({value: point.x}));}, grid: {display: false}, ticks: {maxRotation: 0, autoSkip: true, autoSkipPadding: CHART_LABEL_GAP_PX, callback: axisDate}}, y: {beginAtZero: true, ticks: {callback: money}}},
-                plugins: {legend: {display: false}, tooltip: {callbacks: {title: items => title(items[0].raw.bin), label: item => item.raw.y == null ? "No comparable measurements" : `${money(item.raw.y)} ${currency}`, afterLabel: item => item.raw.bin.estimated_seconds ? "Includes reconstructed measurements" : ""}}},
+                plugins: {legend: {display: false}, tooltip: {enabled: false, external: showBreakdown}},
             },
         });
         canvas.onkeydown = event => {
@@ -138,8 +184,12 @@ export function createSavingsView(host, api) {
             event.preventDefault(); selectedIndex = event.key === "Home" ? 0 : event.key === "End" ? points.length - 1 : Math.max(0, Math.min(points.length - 1, selectedIndex + (event.key === "ArrowRight" ? 1 : -1)));
             const point = points[selectedIndex];
             find("savings-selected").textContent = `${title(point.bin)}: ${point.y == null ? "No comparable measurements" : money(point.y) + " " + currency}`;
-            chart.setActiveElements([{datasetIndex: 0, index: selectedIndex}]); chart.update("none");
+            const active = [{datasetIndex: 0, index: selectedIndex}], bar = chart.getDatasetMeta(0).data[selectedIndex];
+            chart.setActiveElements(active); chart.tooltip.setActiveElements(active, {x: bar.x, y: bar.y}); chart.update("none");
+            showBreakdown({chart, tooltip: chart.tooltip});
         };
+        canvas.onblur = hideTooltip;
+        canvas.onpointerleave = event => { if (!tooltip.contains(event.relatedTarget) && document.activeElement !== canvas) hideTooltip(); };
     }
     return {read, initialize};
 }

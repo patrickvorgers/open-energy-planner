@@ -264,6 +264,7 @@ class SettlementStore:
             dict(row)
             for row in connection.execute(
                 select(
+                    calendar_bin.label("period"),
                     func.min(table.c.start).label("start"),
                     func.max(table.c.end).label("end"),
                     *(func.sum(table.c[key]).label(key) for key in columns),
@@ -278,14 +279,21 @@ class SettlementStore:
         summary["estimated_seconds"] = summary["estimated_seconds"] or 0.0
         summary["policy"] = CASH_POLICY_VERSION
         summary["breakdown"] = self.cash_breakdown(start, end, connection)
+        breakdowns = self.cash_breakdown(start, end, connection, calendar_bin=calendar_bin)
+        for chart_bin in summary["chart"]:
+            chart_bin["breakdown"] = breakdowns.get(
+                chart_bin.pop("period"), {"actual": None, "without_battery": None}
+            )
         return summary
 
-    def cash_breakdown(self, start, end, connection):
+    def cash_breakdown(self, start, end, connection, *, calendar_bin=None):
         """Read retained cost components only when every included day's scenario covers exactly its matched cash time.
 
         Matched quarters are a subset of each scenario's accepted quarters. Equal
         daily coverage proves that its retained components describe the same time.
         Never substitute a broader actual total for the matched comparison.
+        An optional SQL calendar expression groups the same evidence for chart
+        tooltips in one query, independently of bounded daily report payloads.
         """
         table = SAVINGS_CASH_DAYS
         kinds, components = ("actual", "without_battery"), ("purchase", "sale", "bonus")
@@ -296,43 +304,47 @@ class SettlementStore:
             )
             for kind in kinds
         }
-        values = (
-            connection.execute(
-                select(
-                    func.count().label("days"),
-                    *(
-                        func.sum(
-                            case(
-                                (available[kind], 1),
-                                else_=0,
-                            )
-                        ).label(f"{kind}_matching_days")
-                        for kind in kinds
-                    ),
-                    *(
-                        func.sum(SAVINGS_DAYS.c[f"{kind}_{component}"]).label(f"{kind}_{component}")
-                        for kind in kinds
-                        for component in components
-                    ),
-                )
-                .select_from(table.join(SAVINGS_DAYS, table.c.start == SAVINGS_DAYS.c.start))
-                .where(
-                    table.c.start >= stamp(start),
-                    table.c.end <= stamp(end),
-                    table.c.coverage_seconds > 0,
-                )
+        query = (
+            select(
+                func.count().label("days"),
+                *(
+                    func.sum(
+                        case(
+                            (available[kind], 1),
+                            else_=0,
+                        )
+                    ).label(f"{kind}_matching_days")
+                    for kind in kinds
+                ),
+                *(
+                    func.sum(SAVINGS_DAYS.c[f"{kind}_{component}"]).label(f"{kind}_{component}")
+                    for kind in kinds
+                    for component in components
+                ),
             )
-            .mappings()
-            .one()
+            .select_from(table.join(SAVINGS_DAYS, table.c.start == SAVINGS_DAYS.c.start))
+            .where(
+                table.c.start >= stamp(start),
+                table.c.end <= stamp(end),
+                table.c.coverage_seconds > 0,
+            )
         )
-        return {
-            kind: {component: values[f"{kind}_{component}"] for component in components}
-            if values["days"]
-            and values[f"{kind}_matching_days"] == values["days"]
-            and all(values[f"{kind}_{component}"] is not None for component in components)
-            else None
-            for kind in kinds
-        }
+        if calendar_bin is not None:
+            query = query.add_columns(calendar_bin.label("period")).group_by(calendar_bin)
+        breakdowns = {}
+        for values in connection.execute(query).mappings():
+            breakdown = {
+                kind: {component: values[f"{kind}_{component}"] for component in components}
+                if values["days"]
+                and values[f"{kind}_matching_days"] == values["days"]
+                and all(values[f"{kind}_{component}"] is not None for component in components)
+                else None
+                for kind in kinds
+            }
+            if calendar_bin is None:
+                return breakdown
+            breakdowns[values["period"]] = breakdown
+        return breakdowns
 
     def days(self, start, end, *, _connection=None):
         """Read bounded daily details without retaining or loading quarter measurement payloads."""

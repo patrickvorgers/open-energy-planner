@@ -153,7 +153,10 @@ Matched quarters are a subset of each scenario's accepted quarters, so equal
 coverage proves the same time. A broader actual scenario cannot explain a
 narrower matched net total. The query covers the entire selected range without
 loading raw quarters or bounded daily payloads. Finalized evidence and the
-existing monetary comparison remain unchanged.
+existing monetary comparison remain unchanged. Each `cash.chart` bin also returns
+its own `breakdown` with the same component contract and exact-coverage checks.
+A second grouped SQL aggregate provides all daily or monthly breakdowns in one
+query, independent of bin count. It never loads raw quarters or day payloads.
 
 Finalized legacy reports and their tables are retained without reinterpretation
 or destructive migration. `GET /v1/evaluations` and explicit revision reads retain
@@ -172,6 +175,10 @@ a collapsed Savings breakdown and calculation help. The breakdown uses only
 backend-verified comparable components. Amount labels above bars and date labels
 at actual bin centers reduce density to fit the available width, while full
 values and dates remain available through tooltips and keyboard inspection.
+Each bar's tooltip compares backend-provided purchase, sale, bonus and matched
+net costs for that bar only. Hover, tap and keyboard inspection use the same
+table. Escape, loss of chart focus, selection changes and failed reads dismiss
+the tooltip. The browser formats monetary values without calculating them.
 Missing data, loading and failed reads never show a
 zero or a stale previous period's amount. Chart values remain keyboard accessible.
 Large historical tables and the continuous-simulation controls are removed.
