@@ -7,6 +7,7 @@ import pytest
 
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
 from open_energy_planner.solar.boosting import TrainingResult, TrainingStatus, TrainingSummary
+from open_energy_planner.solar.calculation.model import version
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.training import DailySolarTraining
@@ -233,8 +234,9 @@ def test_invalid_pointer_keeps_physical_runtime_forecast_available(tmp_path):
     assert runtime.learning["pv0"].summary.status == TrainingStatus.FAILED
 
 
+@pytest.mark.parametrize("failure", ["revision_write", "snapshot_read"])
 def test_withdrawn_source_hours_revoke_persisted_model_and_fallback_after_restart(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, failure
 ):
     """An accepted-history withdrawal atomically changes the binding and survives runtime restoration."""
     from open_energy_planner.solar.storage.history import parse_report
@@ -285,8 +287,15 @@ def test_withdrawn_source_hours_revoke_persisted_model_and_fallback_after_restar
             raise OSError("Synthetic evidence revision write failure")
         return original_write(name, value)
 
+    def interrupt_snapshot(entities):
+        """Fail snapshot restoration after the proposed history and evidence generation have both changed."""
+        raise OSError("Synthetic evidence revision snapshot read failure")
+
     with monkeypatch.context() as patch:
-        patch.setattr(runtime.store.documents, "write", interrupt_revision)
+        if failure == "revision_write":
+            patch.setattr(runtime.store.documents, "write", interrupt_revision)
+        else:
+            patch.setattr(runtime.training, "revisions", interrupt_snapshot)
         with pytest.raises(OSError, match="Synthetic evidence revision"):
             runtime.receive(pending["version"], revised.history, withdrawn_at, report=revised)
     assert runtime.training.revision("sensor.pv0") == before
@@ -334,12 +343,12 @@ def test_original_run_withdrawal_is_durable_and_does_not_restore_last_usable_mod
     runtime, now = runtime_case(tmp_path)
     assert runtime.install(runtime.build(runtime.job(now)), now)
     assert runtime.learning["pv0"].model is not None
-    before = runtime.training.revision("sensor.pv0")
+    before = runtime.run_evidence_revision
     restored = SolarRuntime(SolarStore(runtime.store.documents))
     restored.histories = runtime.histories
     restored.set_weather(SITE, runtime.weather)
     restored.set_forecast_runs(SITE, runtime.forecast_runs[1:])
-    assert restored.training.revision("sensor.pv0") == before + 1
+    assert restored.run_evidence_revision == before + 1
 
     def insufficient(*args, **kwargs):
         """A withdrawn training cohort cannot fall back to its former usable model."""
@@ -378,7 +387,9 @@ def test_worker_captured_before_withdrawal_cannot_publish_under_new_revision(tmp
 
 
 @pytest.mark.parametrize("historical", [False, True])
-def test_feedback_only_revises_training_for_changed_historical_observations(tmp_path, historical):
+def test_feedback_only_revises_training_for_changed_historical_observations(
+    tmp_path, historical, monkeypatch
+):
     """Appending current curtailment transitions preserves daily reuse. Changed prior-day classifications revoke it."""
     from open_energy_planner.solar.curtailment import CurtailmentHistory, save_feedback
 
@@ -393,18 +404,30 @@ def test_feedback_only_revises_training_for_changed_historical_observations(tmp_
     save_feedback(store, None, CurtailmentHistory(entity, start, ()), start - timedelta(hours=1))
     runtime = SolarRuntime(store)
     until = start + timedelta(minutes=5)
-    runtime.receive_feedback(
-        {
-            "configuration_version": definition.version,
-            "start": start.isoformat(),
-            "feedback": {
-                "entity_id": entity,
-                "checked_until": until.isoformat(),
-                "readings": [[start.isoformat(), True]],
-            },
+    body = {
+        "configuration_version": definition.version,
+        "start": start.isoformat(),
+        "feedback": {
+            "entity_id": entity,
+            "checked_until": until.isoformat(),
+            "readings": [[start.isoformat(), True]],
         },
-        NOW + timedelta(minutes=5),
-    )
+    }
+
+    def unreadable_snapshot(entities):
+        """Reject the proposed feedback and epoch atomically when their memory snapshot cannot be restored."""
+        raise OSError("Synthetic feedback snapshot read failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime.training, "revisions", unreadable_snapshot)
+        with pytest.raises(OSError, match="feedback snapshot"):
+            runtime.receive_feedback(body, NOW + timedelta(minutes=5))
+    assert runtime.feedback[entity].checked_until == start
+    assert runtime.evidence_revisions == {"sensor.pv0": 0}
+    reopened = SolarRuntime(SolarStore(store.documents))
+    assert reopened.feedback[entity].checked_until == start
+    assert reopened.training.revision("sensor.pv0") == 0
+    runtime.receive_feedback(body, NOW + timedelta(minutes=5))
     assert runtime.training.revision("sensor.pv0") == int(historical)
     assert SolarRuntime(SolarStore(store.documents)).training.revision("sensor.pv0") == int(
         historical
@@ -487,11 +510,11 @@ def test_partial_run_admissions_preserve_unloaded_keys_but_replacement_and_withd
     """Absence from an admission batch is harmless. Changed supplied keys and authoritative omissions invalidate."""
     runtime, _now = runtime_case(tmp_path)
     original = runtime.forecast_runs
-    before = runtime.training.revision("sensor.pv0")
+    before = runtime.run_evidence_revision
     selected = original[-1:]
     runtime.set_forecast_runs(SITE, selected, authoritative=False)
     assert runtime.forecast_runs == original
-    assert runtime.training.revision("sensor.pv0") == before
+    assert runtime.run_evidence_revision == before
     changed = replace(
         selected[0],
         hours=(
@@ -500,8 +523,80 @@ def test_partial_run_admissions_preserve_unloaded_keys_but_replacement_and_withd
         ),
     )
     runtime.set_forecast_runs(SITE, (changed,), authoritative=False)
-    assert runtime.training.revision("sensor.pv0") == before + 1
+    assert runtime.run_evidence_revision == before + 1
     assert len(runtime.forecast_runs) == len(original)
     runtime.set_forecast_runs(SITE, (), authoritative=True)
     assert runtime.forecast_runs == ()
-    assert runtime.training.revision("sensor.pv0") == before + 2
+    assert runtime.run_evidence_revision == before + 2
+
+
+def test_run_replacement_while_source_is_absent_revokes_its_restored_daily_model(
+    tmp_path, monkeypatch
+):
+    """A site's evidence epoch protects source A even when only source B is configured during replacement."""
+    runtime, now = runtime_case(tmp_path)
+    definition = runtime.configuration
+    histories = dict(runtime.histories)
+    histories["sensor.pv1"] = replace(histories["sensor.pv0"], entity_id="sensor.pv1")
+    runtime.histories = dict(histories)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    original = runtime.learning["pv0"]
+    assert original.model is not None and runtime.learning["pv1"].model is not None
+    initial = runtime.run_evidence_revision
+    runtime.configure(
+        replace(definition, sources=(definition.sources[1],), inverters=(definition.inverters[1],))
+    )
+    runtime.histories = {"sensor.pv1": histories["sensor.pv1"]}
+    run = runtime.forecast_runs[0]
+    changed = replace(run, hours=(replace(run.hours[0], ghi=run.hours[0].ghi + 1), *run.hours[1:]))
+    runtime.set_forecast_runs(SITE, (changed,), authoritative=False)
+    assert runtime.run_evidence_revision == initial + 1
+    assert runtime.training.revision("sensor.pv0") == 0
+    runtime.configure(definition)
+    runtime.histories = histories
+
+    def insufficient(*args, **kwargs):
+        """A newly invalidated source cannot recover the usable fallback from its former site generation."""
+        return TrainingResult(
+            None, TrainingSummary(TrainingStatus.INSUFFICIENT_HISTORY, 1, 0, 0, {}, ())
+        )
+
+    monkeypatch.setattr("open_energy_planner.solar.runtime.fit_boosted_model", insufficient)
+    later = now + timedelta(minutes=15)
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.learning["pv0"].model is None
+    assert runtime.learning["pv0"].archive_reference != original.archive_reference
+
+
+def test_run_admission_snapshot_read_failure_rolls_back_and_unchanged_retry_repairs_memory(
+    tmp_path, monkeypatch
+):
+    """Cohort and epochs commit only after the returned memory snapshot is readable, including unchanged retries."""
+    runtime, _now = runtime_case(tmp_path)
+    original_runs = runtime.forecast_runs
+    initial = runtime.run_evidence_revision
+    run = original_runs[0]
+    changed = replace(run, hours=(replace(run.hours[0], ghi=run.hours[0].ghi + 1), *run.hours[1:]))
+
+    def unreadable_snapshot(entities):
+        """Interrupt after proposed cohort and site-generation writes, before their commit."""
+        raise OSError("Synthetic admission snapshot read failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime.training, "revisions", unreadable_snapshot)
+        with pytest.raises(OSError, match="admission snapshot"):
+            runtime.set_forecast_runs(SITE, (changed,), authoritative=False)
+    assert runtime.forecast_runs == original_runs
+    assert runtime.run_evidence_revision == initial
+    assert runtime.training.site_revision(version(document(SITE))) == initial
+    runtime.set_forecast_runs(SITE, (changed,), authoritative=False)
+    assert runtime.run_evidence_revision == initial + 1
+    assert runtime.training.site_revision(version(document(SITE))) == initial + 1
+    runtime.run_evidence_revision = initial
+    runtime.evidence_revisions = {"sensor.pv0": 999}
+    runtime.learning = {"pv0": object()}
+    runtime.set_forecast_runs(SITE, runtime.forecast_runs, authoritative=False)
+    assert runtime.run_evidence_revision == initial + 1
+    assert runtime.evidence_revisions == {"sensor.pv0": 0, "sensor.pv1": 0}
+    assert runtime.learning == {}
+    assert runtime.training.site_revision(version(document(SITE))) == initial + 1

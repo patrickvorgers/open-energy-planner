@@ -75,6 +75,26 @@ class DailySolarTraining:
             raise ValueError("Invalid solar training evidence revision")
         return value["revision"]
 
+    def site_revision(self, site):
+        """Read the site's run-evidence generation independently of currently configured source entities."""
+        name = "training-site-evidence-" + site + ".json"
+        if not self.store.documents.exists(name):
+            return 0
+        value = self.store.documents.read(name)
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"site", "revision"}
+            or value["site"] != site
+            or type(value["revision"]) is not int
+            or value["revision"] < 0
+        ):
+            raise ValueError("Invalid solar training site revision")
+        return value["revision"]
+
+    def revisions(self, entities):
+        """Snapshot configured entity generations while their caller still owns the write transaction."""
+        return {entity: self.revision(entity) for entity in sorted(set(entities))}
+
     def invalidate(self, entities):
         """Revoke both current weights and usable fallback after destructive evidence changes."""
         with self.store.transaction():
@@ -104,10 +124,15 @@ class DailySolarTraining:
             if not authoritative:
                 incoming = {**previous, **incoming}
             if withdrawn:
-                self.invalidate(entities)
+                self.store.documents.write(
+                    "training-site-evidence-" + site + ".json",
+                    {"site": site, "revision": self.site_revision(site) + 1},
+                )
             if previous != incoming:
                 self.store.documents.write(name, incoming)
-        return withdrawn
+            revisions = self.revisions(entities)
+            site_revision = self.site_revision(site)
+        return withdrawn, revisions, site_revision
 
     def prepare(
         self,
@@ -121,6 +146,7 @@ class DailySolarTraining:
         now,
         *,
         evidence_revision=None,
+        run_evidence_revision=None,
     ):
         """Reuse today's completed result, retry changed incomplete inputs and skip unchanged new days.
 
@@ -136,6 +162,9 @@ class DailySolarTraining:
                 "evidence_revision": self.revision(source.entity_id)
                 if evidence_revision is None
                 else evidence_revision,
+                "run_evidence_revision": self.site_revision(version(document(location)))
+                if run_evidence_revision is None
+                else run_evidence_revision,
                 "inverter": document(inverter),
                 "location": document(location),
                 "model": MODEL_ID,

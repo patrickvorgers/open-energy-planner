@@ -468,11 +468,12 @@ def test_new_background_runs_do_not_discard_usable_jobs_and_remain_coalesced(tmp
     runtime.set_weather(SITE, weather, service=source.service)
     captured = []
 
-    def candidates(*arguments, feedback=None, evidence_revisions=None):
+    def candidates(*arguments, feedback=None, evidence_revisions=None, run_evidence_revision=None):
         """Record exactly the immutable forecast-run snapshot passed to the learning worker."""
         captured.append(arguments[-1])
         assert feedback == {}
         assert evidence_revisions == {"sensor.pv0": 0}
+        assert run_evidence_revision is None
         return {}
 
     monkeypatch.setattr(runtime, "_learned_candidates", candidates)

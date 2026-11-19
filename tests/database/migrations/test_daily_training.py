@@ -42,6 +42,8 @@ def test_solar_daily_model_restores_without_source_or_training(route, monkeypatc
     repository = SqlPlanRepository(root / "source", engine=source)
     store = SolarStore(SqlDocuments(source, "solar"))
     runtime, now = runtime_case(root, store=store)
+    assert runtime.set_forecast_runs(SITE, runtime.forecast_runs[:-1])
+    assert runtime.run_evidence_revision == 1
     assert runtime.install(runtime.build(runtime.job(now)), now)
     original = runtime.learning["pv0"]
     assert original.model is not None

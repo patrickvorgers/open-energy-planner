@@ -55,6 +55,7 @@ class SolarRuntime:
         self.configuration, self.issue = store.current, store.issue
         self.restore_training_revisions()
         self.location, self.weather = None, ()
+        self.run_evidence_revision = None
         self.forecast_runs, self.weather_service = (), {}
         self.forecast_runs_revision, self.last_fit_at = 0, None
         self.forecast_cohort_revision = 0
@@ -156,10 +157,7 @@ class SolarRuntime:
     def restore_training_revisions(self):
         """Restore compact generations during worker-owned state changes, keeping job snapshots memory-only."""
         self.evidence_revisions = (
-            {
-                source.entity_id: self.training.revision(source.entity_id)
-                for source in self.configuration.sources
-            }
+            self.training.revisions(source.entity_id for source in self.configuration.sources)
             if self.configuration
             else {}
         )
@@ -339,7 +337,10 @@ class SolarRuntime:
                     for source in self.configuration.sources
                     if source.curtailment_entity_id == incoming.entity_id
                 )
-        self.restore_training_revisions()
+            revisions = self.training.revisions(
+                source.entity_id for source in self.configuration.sources
+            )
+        self.evidence_revisions = revisions
         self.feedback[incoming.entity_id] = accepted
         if (
             previous is None
@@ -376,6 +377,7 @@ class SolarRuntime:
             self.forecast, self.candidate, self.baseline, self.last_key = None, None, None, None
             self.learning = {}
             self.forecast_runs = ()
+            self.run_evidence_revision = None
             self.forecast_runs_revision += 1
         self.location, self.weather = location, tuple(weather)
         self.weather_service = dict(service) if service is not None else {}
@@ -395,7 +397,7 @@ class SolarRuntime:
         ) or len({run.initialized_at for run in selected}) != len(selected):
             raise ValueError("Invalid original solar forecast run cohort")
         selected = tuple(replace(run, forecast_origin=None) for run in selected)
-        destructive = self.training.accept_runs(
+        destructive, revisions, run_revision = self.training.accept_runs(
             site,
             selected,
             (source.entity_id for source in self.configuration.sources)
@@ -407,8 +409,15 @@ class SolarRuntime:
             admitted = {run.initialized_at: run for run in self.forecast_runs}
             admitted.update((run.initialized_at, run) for run in selected)
             selected = tuple(admitted[initialized] for initialized in sorted(admitted))
-        if destructive:
-            self.restore_training_revisions()
+        destructive = (
+            destructive
+            or revisions != self.evidence_revisions
+            or (
+                self.run_evidence_revision is not None
+                and run_revision != self.run_evidence_revision
+            )
+        )
+        self.evidence_revisions, self.run_evidence_revision = revisions, run_revision
         if selected == self.forecast_runs and not destructive:
             return False
         incoming = {run.initialized_at: run.version for run in selected}
@@ -462,11 +471,14 @@ class SolarRuntime:
                     )
                     if destructive:
                         self.training.invalidate((entity,))
+                    revisions = self.training.revisions(
+                        source.entity_id for source in self.configuration.sources
+                    )
             except HistoryContinuityError:
                 error = "history_continuity_unavailable"
             else:
+                self.evidence_revisions = revisions
                 if destructive:
-                    self.restore_training_revisions()
                     self.last_key = None
                     self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
                     self.source_selection, self.learning = {}, {}
@@ -576,6 +588,7 @@ class SolarRuntime:
             dict(self.weather_service),
             dict(self.feedback),
             dict(self.evidence_revisions),
+            self.run_evidence_revision,
         )
 
     def build(self, job):
@@ -594,6 +607,7 @@ class SolarRuntime:
             weather_service,
             feedback,
             evidence_revisions,
+            run_evidence_revision,
         ) = job
         if not weather:
             energies, issues = ha_energies(configuration, None, ha_predictions, now)
@@ -695,6 +709,7 @@ class SolarRuntime:
             forecast_runs,
             feedback=feedback,
             evidence_revisions=evidence_revisions,
+            run_evidence_revision=run_evidence_revision,
         )
         models_by_source = {
             source_id: result.model
@@ -916,6 +931,7 @@ class SolarRuntime:
         *,
         feedback=None,
         evidence_revisions=None,
+        run_evidence_revision=None,
     ):
         """Persist bounded tree weights once and retain separate source/cleaning provenance per fit."""
         from .backtest import assess_forecasts, validation_baselines
@@ -938,6 +954,7 @@ class SolarRuntime:
                     (feedback or {}).get(source.curtailment_entity_id),
                     now,
                     evidence_revision=(evidence_revisions or {}).get(source.entity_id),
+                    run_evidence_revision=run_evidence_revision,
                 )
                 if cached is not None:
                     learning[source.source_id] = cached

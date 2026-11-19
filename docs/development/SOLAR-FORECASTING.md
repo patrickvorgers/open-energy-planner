@@ -25,6 +25,9 @@ fit to newer evidence. Ordinary appended current feedback retains daily reuse.
 Live weather and historical import batches are partial admissions. Runs not yet
 loaded after restart remain accepted. Explicit authoritative cohort replacement
 can withdraw runs. Partial batches still invalidate genuinely replaced run data.
+Shared weather replacements advance a site generation for all source bindings,
+including temporarily removed sources. Entity and site generations are returned
+with their committed admission snapshot, avoiding post-commit reload gaps.
 
 Open the app's `/setup` wizard, directly or through the integration/device configuration link, and use the **Solar production** step.
 HA Energy defines the solar source catalogue. Missing/incomplete Energy configuration

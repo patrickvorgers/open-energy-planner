@@ -470,13 +470,19 @@ nonnegative integer revision. Missing records mean revision zero. Destructive
 accepted-history or historical-feedback changes advance that source's revision
 in the same transaction as the evidence update. Revision is part of the model
 binding, so an older model and its fallback cannot be reused after withdrawal,
-including after restart. Worker jobs retain their captured revisions.
+including after restart. `training-site-evidence-<location-hash>.json` stores
+`{site, revision}` for the shared original-weather cohort. Its nonnegative site
+revision is captured in every source's binding, including sources temporarily
+absent when a run is replaced. Worker jobs retain both captured revisions.
 `training-runs-<location-hash>.json` maps original run initialization ISO instants
 to run-version hashes. Only identities are stored. Replacement or authoritative
-withdrawal advances affected revisions. Partial live/history-reader batches merge
+withdrawal advances the site revision. Partial live/history-reader batches merge
 admitted identities and do not treat not-yet-loaded runs as withdrawals. They
 preserve saved models during startup without bulk-restoring weather payloads.
 Routine additive inputs retain daily model reuse.
+Run admissions read and return the entity/site revision snapshot inside the same
+transaction as evidence updates. Snapshot failures roll back admission. Even an
+unchanged admission refreshes the runtime snapshot from the committed evidence.
 
 Demand `daily-training-<binding>.json` contains `schema` (1), `binding`, local
 `day`, `input_version`, `reference` and boolean `complete`. It selects immutable

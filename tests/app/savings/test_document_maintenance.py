@@ -71,6 +71,8 @@ def test_shutdown_drains_failed_retention_and_stops_worker(tmp_path, monkeypatch
     """Retention rollback after cancellation cannot restart the worker or hang application cleanup."""
     entered, release, drained = Event(), Event(), Event()
     repository = SqlPlanRepository(tmp_path)
+    workers = []
+    complete_write = savings_api.complete_write
 
     def failed_retention(_documents, _now):
         """Hold the worker's actual off-loop maintenance until shutdown is awaiting its rollback."""
@@ -83,6 +85,14 @@ def test_shutdown_drains_failed_retention_and_stops_worker(tmp_path, monkeypatch
 
     monkeypatch.setattr(savings_api, "maintain_documents", failed_retention)
 
+    async def observe_worker(operation, *arguments):
+        """Capture the real maintenance owner before its off-loop writer starts."""
+        if operation is failed_retention:
+            workers.append(asyncio.current_task())
+        return await complete_write(operation, *arguments)
+
+    monkeypatch.setattr(savings_api, "complete_write", observe_worker)
+
     async def scenario():
         """Start actual lifecycle cleanup before releasing the interrupted maintenance operation."""
         app, _runtime = application(repository)
@@ -92,7 +102,10 @@ def test_shutdown_drains_failed_retention_and_stops_worker(tmp_path, monkeypatch
         try:
             assert await asyncio.to_thread(entered.wait, 1)
             cleanup = asyncio.create_task(server.close())
-            await asyncio.sleep(0)
+            async with asyncio.timeout(2):
+                while not workers[0].cancelling():
+                    await asyncio.sleep(0)
+            assert not drained.is_set()
             assert not cleanup.done()
             release.set()
             await asyncio.wait_for(cleanup, 2)
