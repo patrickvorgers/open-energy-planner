@@ -417,6 +417,37 @@ Owned by [`SqlDocuments`](../../src/open_energy_planner/storage/adapters/documen
 and each typed store. Document names ending in `.json` are database keys, not files.
 The adapter permits updates. Immutability and payload validation belong to the owner.
 
+### `oep_document_metadata`
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `namespace` | String(32), PK | Owning document namespace. |
+| `name` | String(128), PK | Exact flat key in `oep_documents`. |
+| `created_at` | String(40), required | First storage time as fixed-width UTC ISO microseconds. Rewrites preserve this age. Legacy backfill starts a fresh grace period. |
+| `identity` | String(64), nullable | SHA-256 family identity for explicitly expiring solar/demand document kinds. |
+| `kind` | String(32), nullable | Recognized forecast, model-parameter or diagnostic archive kind. Other documents are roots and do not expire here. |
+
+The lifecycle owner writes metadata and payloads in the same transaction. The
+`oep_document_expiry` index covers `created_at`, `namespace`, `name`. The
+`oep_document_family` index covers `namespace`, `identity`. The logical document
+relationship is maintained by transactional write/delete hooks rather than a
+foreign key, allowing bounded initialization of existing archives.
+
+### `oep_document_links`
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `owner_kind` | String(32), PK | `document` or shared plan `value`. |
+| `owner_namespace` | String(32), PK | Document namespace, or empty for a plan value. |
+| `owner_name` | String(128), PK | Flat document name or plan-value digest. |
+| `target_hash` | String(64), PK | Conservatively recognized lowercase SHA-256 reference in an owner's JSON keys or values. |
+
+`oep_document_incoming` indexes `target_hash`. Owners logically reference
+`oep_documents` or `oep_archive_values` without a polymorphic foreign key. Their
+existence is checked before protecting targets. Replacement/deletion of owners
+replaces/removes outgoing links atomically. Hash-shaped nonreferences may retain
+extra evidence. Cross-family cycles are retained conservatively.
+
 ### `oep_documents`
 
 | Field | Type / key | Meaning and use |
@@ -424,6 +455,34 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `namespace` | String(128), PK | Validated module namespace from the list below. |
 | `name` | String(128), PK | Flat document key, such as `current.json`, a version or an evaluation pointer. |
 | `payload` | Text | Finite JSON object, array, scalar or null, decoded and validated by its typed owner. |
+
+Solar `training-current-<binding>.json` selects a durable daily training attempt
+and last usable same-binding report. Its fields are `binding`, HA-local `day`,
+completed historical `inputs` digest, `report` and nullable `usable` report.
+Bindings include source/inverter/location, model/training/weather policies and
+native library version. `ml-training-<hash>.json` additionally records that
+binding and optional challenger metadata. Native weights remain shared.
+
+Demand `daily-training-<binding>.json` contains `schema` (1), `binding`, local
+`day`, `input_version`, `reference` and boolean `complete`. It selects immutable
+`daily-models-<hash>.json` containing schema, binding and validated baseline,
+optional Ridge and optional existing weather-model parameters. Forecast
+`model_parameters` now uses `{reference: <hash>}` to shared
+`model-parameters-<hash>.json`. Existing inline parameter documents remain
+readable. Composite predictions and individual-device evidence remain inline.
+
+Savings `archive-retention.json` stores `stage` (`documents`, `values`,
+`complete`) and nullable lexical `after` cursor. All owner payloads are indexed
+in batches of at most 128 before expiry starts. Existing documents get a fresh
+30-day grace period when indexed. Subsequent batches inspect/delete at most
+128 eligible detail rows. Only unreferenced solar/demand forecasts, companion
+bindings, training reports, historical-fit/assessment diagnostics, shared model
+parameters and daily model bundles older than 30 elapsed days may expire.
+Every family member must be old. Retained original plan values, daily quality
+contexts and current pointers protect their complete reference closure.
+Imported measurements, provider weather runs, immutable configuration and native
+weights do not expire under this policy. Daily quality documents remain reference
+roots, rather than newly compacted scores. No automatic SQLite VACUUM runs.
 
 | Namespace | Owner / payload contents | Version and pointer use |
 | --- | --- | --- |

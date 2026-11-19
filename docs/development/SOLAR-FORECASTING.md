@@ -7,6 +7,17 @@ ownership are described in [installation planning](INSTALLATION-PLANNING.md).
 
 ## Setup and source identity
 
+`DailySolarTraining` persists one successful daily attempt per source/inverter/site
+and model-policy binding. Ordinary forecast/weather updates reuse that fit,
+including after restart. An unchanged completed historical cohort also reuses
+the fit on a later HA local date. Incomplete attempts retry on changed inputs.
+Transient failure or insufficient new evidence preserves the previous usable
+same-binding model. Configuration and native-library/policy changes bind a new
+attempt. Reports preserve original creation time, checked shared weights and
+challenger metadata. Unreferenced forecast/report families can expire after
+30 elapsed days under the [reference-safe archive policy](DATABASE-SCHEMA.md#oep_document_metadata).
+Daily quality and retained original plans protect their evidence dependencies.
+
 Open the app's `/setup` wizard, directly or through the integration/device configuration link, and use the **Solar production** step.
 HA Energy defines the solar source catalogue. Missing/incomplete Energy configuration
 must be corrected in Home Assistant. Sources cannot be independently added or

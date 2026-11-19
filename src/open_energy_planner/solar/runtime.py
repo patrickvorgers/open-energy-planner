@@ -32,6 +32,7 @@ from .ha_forecasts import HA_REFRESH_MAX_AGE
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
 from .source_selection import MIN_ACCURACY_DAYS, SOURCE_POLICY, choose_sources, ha_energies
 from .storage.history import HistoryContinuityError, SolarHistoryImport
+from .training import DailySolarTraining
 from .wire import configuration_document, document, forecast_document
 
 HISTORY_RETRY_MINUTES = 15
@@ -49,6 +50,7 @@ class SolarRuntime:
     def __init__(self, store):
         """Restore settings while requiring new weather/location before publishing live forecasts."""
         self.store = store
+        self.training = DailySolarTraining(store)
         self.configuration_lock = Lock()
         self.configuration, self.issue = store.current, store.issue
         self.location, self.weather = None, ()
@@ -875,7 +877,21 @@ class SolarRuntime:
         for source in configuration.sources:
             if source.entity_id not in histories:
                 continue
+            token = {}
             try:
+                cached, token = self.training.prepare(
+                    source,
+                    inverters[source.inverter_id],
+                    location,
+                    histories[source.entity_id],
+                    weather,
+                    forecast_runs,
+                    (feedback or {}).get(source.curtailment_entity_id),
+                    now,
+                )
+                if cached is not None:
+                    learning[source.source_id] = cached
+                    continue
                 result = fit_boosted_model(
                     source,
                     inverters[source.inverter_id],
@@ -922,9 +938,7 @@ class SolarRuntime:
                     if (feedback or {}).get(source.curtailment_entity_id) is not None
                     else None,
                 }
-                reference = version(record)
-                self.store.archive("ml-training", reference, record)
-                learning[source.source_id] = replace(result, archive_reference=reference)
+                learning[source.source_id] = self.training.save(token, result, record)
             except (ImportError, ValueError, RuntimeError, OSError) as error:
                 failed = True
                 self.learning_log.exception(
@@ -937,7 +951,7 @@ class SolarRuntime:
                     type(error).__name__,
                     failure_trace(error),
                 )
-                learning[source.source_id] = TrainingResult(
+                learning[source.source_id] = self.training.fallback(token) or TrainingResult(
                     None,
                     TrainingSummary(
                         TrainingStatus.FAILED,

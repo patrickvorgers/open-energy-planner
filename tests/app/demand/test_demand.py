@@ -1,6 +1,5 @@
 """Independent household balances, fallback forecasts and chronological model decisions."""
 
-import json
 import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -24,7 +23,7 @@ from open_energy_planner.demand.reconstruction import DemandReconstructor, Recon
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
-from tests.database.support.archive import corrupt_document, make_store, read_document
+from tests.database.support.archive import corrupt_document, make_store
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -586,8 +585,7 @@ def test_ridge_promotion_uses_consistent_realized_solver_decisions(tmp_path):
     assert runtime.model_status == "active"
     assert runtime.forecast.model == "ridge-v2"
     assert runtime.comparison.improved
-    archive = f"forecast-{runtime.forecast.version}.json"
-    parameters = json.loads(read_document(tmp_path, "demand", archive))["model_parameters"]
+    parameters = store.model_parameters(runtime.forecast.version)
     restored = RidgeDemandModel(
         timezone=parameters["timezone"],
         coefficients=tuple(parameters["coefficients"]),

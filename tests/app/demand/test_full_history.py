@@ -62,7 +62,8 @@ def test_annual_import_validates_each_immutable_chunk_once(tmp_path, monkeypatch
         event.remove(store.documents.engine, "before_cursor_execute", query)
     request.node.user_properties.append(("observed_import_counts", json.dumps(counts)))
     assert runtime.histories == {"sensor.house": history}
-    assert counts == {"chunk_reads": 3, "chunk_queries": 9, "normalizations": 6}
+    # Each immutable chunk also checks its indexed first-storage metadata once.
+    assert counts == {"chunk_reads": 3, "chunk_queries": 12, "normalizations": 6}
 
 
 def test_consumer_import_resumes_without_activating_partial_years(tmp_path):

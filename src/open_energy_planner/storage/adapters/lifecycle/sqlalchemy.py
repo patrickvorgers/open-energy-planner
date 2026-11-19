@@ -17,6 +17,7 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_energy_planner.home_assistant.observation_wire import configuration_document
+from open_energy_planner.storage.adapters.lifecycle.document_references import index_value
 from open_energy_planner.storage.adapters.lifecycle.evidence import historical_context
 from open_energy_planner.storage.adapters.lifecycle.files import atomic_json
 from open_energy_planner.storage.adapters.lifecycle.schema import (
@@ -311,6 +312,8 @@ class SqlPlanRepository:
         ]
         if missing_values:
             connection.execute(VALUES.insert(), missing_values)
+            for row in missing_values:
+                index_value(connection, row["digest"], json.loads(values[row["digest"]]))
         known_records = set(
             connection.scalars(select(RECORDS.c.digest).where(RECORDS.c.digest.in_(records)))
         )

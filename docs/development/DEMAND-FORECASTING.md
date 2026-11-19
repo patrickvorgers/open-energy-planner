@@ -15,6 +15,18 @@ fault takes precedence, and recovery dismisses the history notification.
 
 ## Model and tools
 
+`daily_models` separates baseline/Ridge and existing device weather-model fitting
+from prediction refreshes. Completed hourly outcomes and then-known historical
+temperatures define the training cohort. A successful fit is frozen for the HA
+local date and survives restart through validated immutable bundles. Unchanged
+cohorts reuse exact parameters on later dates. Changed configuration/boundaries
+bind a new model. Incomplete cohorts retry when inputs change. Failed or
+insufficient new fits retain usable same-binding models. Household training
+keeps its existing baseline/Ridge candidates without adding a weather XGBoost
+candidate. Forecasts share parameter documents while preserving original component
+predictions. See the [archive contracts](DATABASE-SCHEMA.md#oep_document_metadata)
+for reference-safe 30-day expiry and protected historical dependencies.
+
 | Component | Implementation |
 |---|---|
 | Historical reconstruction | Pure Python typed hourly energy balance using normalized HA Recorder sums |

@@ -870,6 +870,17 @@ SQL document transactions commit versions and current pointers together. The app
 owns one engine, borrowed by all stores and source-selection workers. Authenticated
 history reads never reactivate or reoptimize old plans.
 
+Model fitting is independent of live forecast issuance. Solar and household/device
+demand persist source-bound daily training pointers and immutable model bundles.
+Successful fits are reused within the HA local date and across dates without new
+eligible inputs. Weather refreshes update predictions. Failed/incomplete fits
+retain usable same-binding models. Forecasts reference shared fitted parameters.
+Transactional document metadata and incoming-reference indexes support bounded
+30-day expiry of unused forecast/diagnostic families. Legacy index initialization
+gives old documents a new grace period. Retained plan values, daily quality
+contexts and current pointers protect all dependencies. This does not replace
+historical quality evidence with newly computed summaries or shrink SQLite files.
+
 No OEP version has been released: development JSON files and older development
 schemas have no migration/conversion path. Test installations are reconfigured
 manually. Supported migration transfers all current-schema OEP tables between

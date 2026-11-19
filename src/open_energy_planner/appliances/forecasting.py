@@ -4,13 +4,11 @@ import json
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 from open_energy_planner.appliances.sources import SOURCE_OWNERSHIP_UNAVAILABLE, validate_membership
-from open_energy_planner.demand.calculation.forecasting import (
-    RidgeDemandModel,
-    WeekdayProfile,
-    predict,
-)
+from open_energy_planner.core.units import HOURS_PER_DAY
+from open_energy_planner.demand.calculation.forecasting import MIN_PROFILE_TRAINING_DAYS, predict
 from open_energy_planner.demand.calculation.model import (
     DemandConfiguration,
     DemandForecast,
@@ -20,6 +18,7 @@ from open_energy_planner.demand.calculation.model import (
     digest,
 )
 from open_energy_planner.demand.reconstruction import DemandReconstructor
+from open_energy_planner.demand.training import daily_models
 from open_energy_planner.demand.wire import forecast_document
 from open_energy_planner.history.importer import HistoryImport
 from open_energy_planner.history.storage import HistoryArchive
@@ -294,7 +293,19 @@ def build_components(
                 else controlled_days.get(item["entity_id"], ()),
             )
             baseline_forecast = forecast_document(
-                predict(single, samples, now, WeekdayProfile.fit(single, samples))
+                predict(
+                    single,
+                    samples,
+                    now,
+                    daily_models(
+                        documents,
+                        single,
+                        samples,
+                        now,
+                        temperatures=temperatures,
+                        weather_sensitive=item["weather_sensitive"],
+                    )["baseline"],
+                )
             )
         except ValueError:
             has_unavailable_components = True
@@ -348,7 +359,15 @@ def build_components(
                 residual_configuration,
                 residual,
                 now,
-                WeekdayProfile.fit(residual_configuration, residual),
+                daily_models(
+                    documents,
+                    residual_configuration,
+                    residual,
+                    now,
+                    temperatures=temperatures,
+                    weather_sensitive=True,
+                    boundary=configuration.version,
+                )["baseline"],
             )
         )
     except ValueError:
@@ -460,27 +479,32 @@ def component(
     """
     from open_energy_planner.forecast_selection.accuracy import choose_daily
 
-    baseline = WeekdayProfile.fit(configuration, samples)
+    if len(samples) < MIN_PROFILE_TRAINING_DAYS * HOURS_PER_DAY or {
+        sample.start.astimezone(ZoneInfo(configuration.timezone)).hour for sample in samples
+    } != set(range(HOURS_PER_DAY)):
+        raise ValueError("At least seven complete days covering every hour are required")
+    fitted = daily_models(
+        documents,
+        configuration,
+        samples,
+        now,
+        temperatures=temperatures,
+        weather_sensitive=weather_sensitive,
+        boundary=boundary,
+    )
+    baseline = fitted["baseline"]
     if not baseline.residual_profile:
         raise ValueError("At least seven complete days covering every hour are required")
     models = {"baseline": baseline}
     forecasts = {"baseline": predict(configuration, samples, now, baseline)}
     weather = temperatures if weather_sensitive else ()
-    try:
-        candidate = RidgeDemandModel.fit(configuration, samples, temperatures=weather)
-        prediction = predict(configuration, samples, now, candidate, temperatures=weather)
-        models["ridge"], forecasts["ridge"] = candidate, prediction
-    except ValueError:
-        pass
-    if weather_sensitive:
-        from open_energy_planner.appliances.weather_model import WeatherDemandModel
-
+    for kind in ("ridge", "weather"):
+        if kind not in fitted:
+            continue
         try:
-            candidate = WeatherDemandModel.fit(
-                configuration, samples, temperatures=weather, known_at=now
-            )
+            candidate = fitted[kind]
             prediction = predict(configuration, samples, now, candidate, temperatures=weather)
-            models["weather"], forecasts["weather"] = candidate, prediction
+            models[kind], forecasts[kind] = candidate, prediction
         except (ValueError, ImportError, OSError):
             pass
     selection = choose_daily(

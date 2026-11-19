@@ -22,6 +22,7 @@ from open_energy_planner.runtime.diagnostics.logging import (
 )
 
 from ..storage.adapters.documents import SqlDocuments
+from ..storage.adapters.lifecycle.document_retention import maintain_documents
 from ..storage.adapters.lifecycle.retention import recompress, thin
 from ..storage.writes import complete_write
 from .daily import (
@@ -667,6 +668,11 @@ def register(
                             if cancelled:
                                 raise cancelled
                         cancelled = await complete_write(recompress, runtime.documents)
+                        if cancelled:
+                            raise cancelled
+                        cancelled = await complete_write(
+                            maintain_documents, runtime.documents, datetime.now(UTC)
+                        )
                         if cancelled:
                             raise cancelled
                     if last_maintenance_failure is not None:

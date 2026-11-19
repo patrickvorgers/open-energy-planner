@@ -134,6 +134,78 @@ class TrainingSummary:
     validation_samples: int = 0
     historical_assessment: HistoricalForecastAssessment | None = None
 
+    @classmethod
+    def restore(cls, body):
+        """Restore original typed clocks and validated historical admission after an app restart."""
+        from open_energy_planner.solar.wire import document
+
+        try:
+            arguments = dict(body)
+            arguments["status"] = TrainingStatus(arguments["status"])
+            for name in ("validation_start", "validation_end", "training_start", "training_end"):
+                arguments[name] = (
+                    aware(datetime.fromisoformat(arguments[name])) if arguments[name] else None
+                )
+            for name in ("excluded_periods", "diagnostic_periods"):
+                arguments[name] = tuple(
+                    (
+                        aware(datetime.fromisoformat(start)),
+                        aware(datetime.fromisoformat(end)),
+                        reason,
+                    )
+                    for start, end, reason in arguments[name]
+                )
+            trend = arguments.get("time_trend")
+            if trend is not None:
+                arguments["time_trend"] = TrendAssessment(
+                    **{
+                        **trend,
+                        "status": TrendStatus(trend["status"]),
+                        "reference": aware(datetime.fromisoformat(trend["reference"]))
+                        if trend["reference"]
+                        else None,
+                        "folds": tuple(
+                            TrendFold(
+                                **{
+                                    **fold,
+                                    **{
+                                        name: aware(datetime.fromisoformat(fold[name]))
+                                        for name in (
+                                            "training_end",
+                                            "validation_start",
+                                            "validation_end",
+                                        )
+                                    },
+                                }
+                            )
+                            for fold in trend["folds"]
+                        ),
+                    }
+                )
+            assessment = arguments.get("historical_assessment")
+            arguments["historical_assessment"] = (
+                HistoricalForecastAssessment.restore(assessment) if assessment is not None else None
+            )
+            result = cls(**arguments)
+            if any(
+                type(getattr(result, name)) is not int or getattr(result, name) < 0
+                for name in (
+                    "source_hours",
+                    "training_hours",
+                    "validation_hours",
+                    "training_days",
+                    "validation_days",
+                    "training_samples",
+                    "validation_samples",
+                )
+            ):
+                raise ValueError("Invalid solar training counts")
+            if document(result) != body:
+                raise ValueError("Solar training summary changed")
+            return result
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            raise ValueError("Invalid solar training summary") from None
+
 
 def solar_geometry(instants, location, duration_h=1):
     """Return geometric daylight and sun direction independently of weather or PVWatts.
