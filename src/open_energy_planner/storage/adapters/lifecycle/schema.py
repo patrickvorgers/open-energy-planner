@@ -206,6 +206,32 @@ DOCUMENTS = archive_table(
     Column("payload", Text().with_variant(LONGTEXT(), "mysql", "mariadb"), nullable=False),
 )
 
+DOCUMENT_METADATA = archive_table(
+    "oep_document_metadata",
+    Column("namespace", text_key(IDENTITY_LENGTH), primary_key=True),
+    Column("name", text_key(IDENTITY_LENGTH), primary_key=True),
+    Column("created_at", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("identity", text_key(HASH_LENGTH)),
+    Column("kind", String(AREA_LENGTH)),
+)
+Index(
+    "oep_document_expiry",
+    DOCUMENT_METADATA.c.kind,
+    DOCUMENT_METADATA.c.created_at,
+    DOCUMENT_METADATA.c.namespace,
+    DOCUMENT_METADATA.c.name,
+)
+Index("oep_document_family", DOCUMENT_METADATA.c.namespace, DOCUMENT_METADATA.c.identity)
+
+DOCUMENT_LINKS = archive_table(
+    "oep_document_links",
+    Column("owner_kind", text_key(AREA_LENGTH), primary_key=True),
+    Column("owner_namespace", text_key(IDENTITY_LENGTH), primary_key=True),
+    Column("owner_name", text_key(IDENTITY_LENGTH), primary_key=True),
+    Column("target_hash", text_key(HASH_LENGTH), primary_key=True),
+)
+Index("oep_document_incoming", DOCUMENT_LINKS.c.target_hash)
+
 ACTIVATIONS = archive_table(
     "oep_plan_activations",
     Column("activated_at", String(TIMESTAMP_LENGTH), primary_key=True),

@@ -16,6 +16,7 @@ from open_energy_planner.storage.adapters.payloads import (
     encode_payload,
 )
 
+from .document_references import forget_value
 from .evidence import activation_history
 from .schema import (
     ACTIVATION_CONTEXTS,
@@ -88,6 +89,8 @@ def collect_blocks(connection):
     ).all()
     if leaves:
         connection.execute(VALUES.delete().where(VALUES.c.digest.in_(leaves)))
+        for identity in leaves:
+            forget_value(connection, identity)
     return removed + len(leaves)
 
 

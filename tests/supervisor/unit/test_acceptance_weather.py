@@ -106,7 +106,9 @@ def test_acceptance_weather_feeds_real_training_and_horizon_prediction(
             if temperature_sample.start != omitted
         )
     configuration = DemandConfiguration("Europe/Amsterdam", 0, (EnergyTerm("sensor.fixture", 1),))
-    model, forecast, selection = component(configuration, samples, temperatures, now, True)
+    model, forecast, selection, _baseline = component(
+        configuration, samples, temperatures, now, True
+    )
     assert forecast.model == "weekday-hour-v2"
     assert model.model_id == "weekday-hour-v2"
     assert selection["selected"] == "baseline"

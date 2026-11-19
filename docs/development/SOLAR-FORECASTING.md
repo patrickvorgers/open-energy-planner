@@ -7,6 +7,28 @@ ownership are described in [installation planning](INSTALLATION-PLANNING.md).
 
 ## Setup and source identity
 
+`DailySolarTraining` persists one successful daily attempt per source/inverter/site
+and model-policy binding. Ordinary forecast/weather updates reuse that fit,
+including after restart. An unchanged completed historical cohort also reuses
+the fit on a later HA local date. Incomplete attempts retry on changed inputs.
+Transient failure or insufficient new evidence preserves the previous usable
+same-binding model. Configuration and native-library/policy changes bind a new
+attempt. Reports preserve original creation time, checked shared weights and
+challenger metadata. Unreferenced forecast/report families can expire after
+30 elapsed days under the [reference-safe archive policy](DATABASE-SCHEMA.md#oep_document_metadata).
+Daily quality and retained original plans protect their evidence dependencies.
+Withdrawal or correction of accepted training evidence advances a durable
+source revision and invalidates the old model and its fallback. Original weather
+run replacement is distinguished from additive forecast refreshes. Captured jobs
+keep their original revision, preventing a stale worker from assigning an old
+fit to newer evidence. Ordinary appended current feedback retains daily reuse.
+Live weather and historical import batches are partial admissions. Runs not yet
+loaded after restart remain accepted. Explicit authoritative cohort replacement
+can withdraw runs. Partial batches still invalidate genuinely replaced run data.
+Shared weather replacements advance a site generation for all source bindings,
+including temporarily removed sources. Entity and site generations are returned
+with their committed admission snapshot, avoiding post-commit reload gaps.
+
 Open the app's `/setup` wizard, directly or through the integration/device configuration link, and use the **Solar production** step.
 HA Energy defines the solar source catalogue. Missing/incomplete Energy configuration
 must be corrected in Home Assistant. Sources cannot be independently added or

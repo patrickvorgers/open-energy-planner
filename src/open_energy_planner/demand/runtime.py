@@ -5,8 +5,6 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
 from open_energy_planner.demand.calculation.forecasting import (
-    RidgeDemandModel,
-    WeekdayProfile,
     predict,
 )
 from open_energy_planner.demand.calculation.model import digest
@@ -16,6 +14,7 @@ from open_energy_planner.history.storage import HistoryArchive
 from ..planning_policy import FINE_INTERVAL_MINUTES
 from .evaluation import compare, evaluation_cutoffs
 from .reconstruction import DemandReconstructor
+from .training import daily_models
 from .wire import configuration_document, forecast_document
 
 HISTORY_RETRY_MINUTES = 15
@@ -291,21 +290,32 @@ class DemandRuntime:
         issue, comparison, daily_selection = None, None, None
         reconstruction = DemandReconstructor().analyze(configuration, histories, before=now)
         samples = reconstruction.samples
-        baseline = WeekdayProfile.fit(configuration, samples)
+        known_weather = tuple(
+            temperature for temperature in temperatures if temperature.known_at <= now
+        )
+        fitted = daily_models(
+            self.store.documents,
+            configuration,
+            samples,
+            now,
+            temperatures=known_weather,
+            weather_sensitive=True,
+            include_weather=False,
+        )
+        baseline = fitted["baseline"]
         if reconstruction.notification_required:
             issue = "demand_boundary_inconsistent"
         selected, ridge, candidate = baseline, None, None
         status = "insufficient_training_history"
-        known_weather = tuple(
-            temperature for temperature in temperatures if temperature.known_at <= now
-        )
         try:
-            ridge = RidgeDemandModel.fit(configuration, samples, temperatures=known_weather)
+            ridge = fitted.get("ridge")
+            if ridge is None:
+                raise ValueError("Demand model needs more completed training history")
             candidate = predict(configuration, samples, now, ridge, temperatures=known_weather)
             status = "shadow_waiting_for_decision_evidence"
             if learned_preferred:
                 selected, status = ridge, "active"
-            if self.scorer is not None:
+            if self.scorer is not None and samples:
                 last = samples[-1].start + timedelta(hours=1)
                 cutoffs = evaluation_cutoffs(last)
                 comparison = compare(
@@ -324,7 +334,10 @@ class DemandRuntime:
         baseline_forecast = predict(
             configuration, samples, now, baseline, temperatures=known_weather
         )
-        from open_energy_planner.appliances.forecasting import build_components
+        from open_energy_planner.appliances.forecasting import (
+            build_components,
+            component_history_ready,
+        )
 
         controlled_days = self.control_days(now)
         composite, consumer_result = build_components(
@@ -358,20 +371,27 @@ class DemandRuntime:
             # component independently retains its baseline until daily proof.
             forecast = composite or baseline_forecast
         else:
-            if self.scorer is None and baseline.residual_profile:
+            if (
+                self.scorer is None
+                and baseline.residual_profile
+                and component_history_ready(configuration, samples)
+            ):
                 from open_energy_planner.appliances.forecasting import component
 
                 excluded_dates = sorted({day for days in controlled_days.values() for day in days})
-                selected, forecast, daily_selection = component(
+                selected, forecast, daily_selection, _ = component(
                     configuration,
                     samples,
                     known_weather,
                     now,
                     True,
                     documents=self.store.documents,
+                    include_weather=False,
                     excluded_dates=excluded_dates,
                 )
                 status = daily_selection["status"]
+            elif self.scorer is None:
+                selected, status = baseline, "insufficient_training_history"
             forecast = predict(configuration, samples, now, selected, temperatures=known_weather)
         self.store.archive(baseline_forecast, baseline)
         if not consumers[1]:
@@ -392,10 +412,7 @@ class DemandRuntime:
                 },
             )
         if composite is not None:
-            self.store.documents.write(
-                "consumer-forecast-" + composite.version + ".json",
-                {"forecast": forecast_document(composite), "components": consumer_result},
-            )
+            self.store.archive_composite(composite, consumer_result)
         if composite is not None or consumer_result and consumer_result.get("devices"):
             self.store.archive_components(forecast, composite, consumer_result)
             self.store.archive_components(baseline_forecast, composite, consumer_result)

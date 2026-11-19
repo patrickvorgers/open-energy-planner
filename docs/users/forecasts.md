@@ -4,6 +4,22 @@ OEP needs an expectation of household use, solar production and prices before it
 
 ## Household consumption
 
+Models normally train once per Home Assistant local day when new usable history
+exists. Forecasts still refresh with current weather throughout the day. Restart
+reuses the stored model. Changed source settings require a matching new model.
+Missing or failed new training retains the last usable matching model. An
+incomplete model can retry when additional history arrives.
+If previously accepted training measurements or historical weather runs are
+corrected or withdrawn, OEP invalidates the affected old solar model. It keeps
+the simpler forecast available while rebuilding from valid evidence.
+
+OEP shares unchanged model parameters instead of storing another full copy with
+each forecast. Unused forecast and training details may expire after 30 days.
+Evidence required by retained plans, daily forecast quality and current models
+remains available. Existing archives receive a fresh grace period during index
+initialization. This reduces future storage growth. It does not immediately
+reduce the size of an existing SQLite file or change HA Recorder retention.
+
 The household forecast starts from the configured energy boundary. Without sufficient usable history, an annual consumption estimate scales a provisional daily pattern. As suitable history becomes available, OEP can use weekday/hour patterns and evaluate a learned candidate.
 
 The startup estimate includes the household's normal background use. There is no separate baseload value to add again. Selecting individual consumers can explain parts of the household total, but their consumption must not be counted a second time.

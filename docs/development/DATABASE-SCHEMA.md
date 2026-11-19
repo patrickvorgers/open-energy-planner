@@ -417,6 +417,37 @@ Owned by [`SqlDocuments`](../../src/open_energy_planner/storage/adapters/documen
 and each typed store. Document names ending in `.json` are database keys, not files.
 The adapter permits updates. Immutability and payload validation belong to the owner.
 
+### `oep_document_metadata`
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `namespace` | String(128), PK | Owning namespace with the same capacity as `oep_documents.namespace`. |
+| `name` | String(128), PK | Exact flat key in `oep_documents`. |
+| `created_at` | String(40), required | First storage time as fixed-width UTC ISO microseconds. Rewrites preserve this age. Legacy backfill starts a fresh grace period. |
+| `identity` | String(64), nullable | SHA-256 family identity for explicitly expiring solar/demand document kinds. |
+| `kind` | String(32), nullable | Recognized forecast, model-parameter or diagnostic archive kind. Other documents are roots and do not expire here. |
+
+The lifecycle owner writes metadata and payloads in the same transaction. The
+`oep_document_expiry` index covers `kind`, `created_at`, `namespace`, `name`. The
+`oep_document_family` index covers `namespace`, `identity`. The logical document
+relationship is maintained by transactional write/delete hooks rather than a
+foreign key, allowing bounded initialization of existing archives.
+
+### `oep_document_links`
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `owner_kind` | String(32), PK | `document` or shared plan `value`. |
+| `owner_namespace` | String(128), PK | Document namespace with the same capacity as `oep_documents.namespace`, or empty for a plan value. |
+| `owner_name` | String(128), PK | Flat document name or plan-value digest. |
+| `target_hash` | String(64), PK | Conservatively recognized lowercase SHA-256 reference in an owner's JSON keys or values. |
+
+`oep_document_incoming` indexes `target_hash`. Owners logically reference
+`oep_documents` or `oep_archive_values` without a polymorphic foreign key. Their
+existence is checked before protecting targets. Replacement/deletion of owners
+replaces/removes outgoing links atomically. Hash-shaped nonreferences may retain
+extra evidence. Cross-family cycles are retained conservatively.
+
 ### `oep_documents`
 
 | Field | Type / key | Meaning and use |
@@ -424,6 +455,76 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `namespace` | String(128), PK | Validated module namespace from the list below. |
 | `name` | String(128), PK | Flat document key, such as `current.json`, a version or an evaluation pointer. |
 | `payload` | Text | Finite JSON object, array, scalar or null, decoded and validated by its typed owner. |
+
+Solar `training-current-<binding>.json` selects a durable daily training attempt
+and last usable same-binding report. Its fields are `binding`, HA-local `day`,
+completed historical `inputs` digest, UTC `validation_end`, `report` and nullable
+`usable` report. Incomplete attempts retry when the UTC validation window advances,
+even within the same HA local date. Successful fits keep their daily reuse policy.
+Bindings include source/inverter/location, model/training/weather policies and
+native library version. `ml-training-<hash>.json` additionally records that
+binding and optional challenger metadata. Native weights remain shared.
+
+Solar `training-evidence-<entity-hash>.json` stores `{entity_id, revision}` with a
+nonnegative integer revision. Missing records mean revision zero. Destructive
+accepted-history or historical-feedback changes advance that source's revision
+in the same transaction as the evidence update. Revision is part of the model
+binding, so an older model and its fallback cannot be reused after withdrawal,
+including after restart. `training-site-evidence-<location-hash>.json` stores
+`{site, revision}` for the shared original-weather cohort. Its nonnegative site
+revision is captured in every source's binding, including sources temporarily
+absent when a run is replaced. Worker jobs retain both captured revisions.
+`training-runs-<location-hash>.json` maps original run initialization ISO instants
+to run-version hashes. Only identities are stored. Replacement or authoritative
+withdrawal advances the site revision. Partial live/history-reader batches merge
+admitted identities and do not treat not-yet-loaded runs as withdrawals. They
+preserve saved models during startup without bulk-restoring weather payloads.
+Routine additive inputs retain daily model reuse.
+Run admissions read and return the entity/site revision snapshot inside the same
+transaction as evidence updates. Snapshot failures roll back admission. Even an
+unchanged admission refreshes the runtime snapshot from the committed evidence.
+
+Demand `daily-training-<binding>.json` contains `schema` (1), `binding`, local
+`day`, `input_version`, `reference` and boolean `complete`. It selects immutable
+`daily-models-<hash>.json` containing schema, binding and validated baseline,
+optional Ridge and optional existing weather-model parameters. Forecast
+`model_parameters` now uses `{reference: <hash>}` to shared
+`model-parameters-<hash>.json`. Existing inline parameter documents remain
+readable. Composite predictions and individual-device evidence remain inline.
+
+Demand weather metadata uses `weights_reference` instead of copying `model_json`
+into each bundle or parameter body. Non-expiring demand
+`ml-weights-<hash>.json` stores `{model_json: <native JSON string>}` once. Its
+content digest and the model metadata's `model_digest` are verified before native
+loading. Inline historical native parameters remain readable. Expiry of an
+unused daily model bundle or parameter record does not remove native weights.
+Legacy demand records that still embed native JSON remain non-expiring roots.
+They keep their exact original payload instead of requiring a development-schema
+conversion. New records share weights separately.
+An unavailable optional native library omits the weather candidate while the
+validated saved baseline and Ridge remain usable. Malformed evidence still
+fails validation.
+
+Savings `archive-retention.json` stores `stage` (`documents`, `values`,
+`complete`) and nullable lexical `after` cursor. Document backfill uses
+`[namespace, name]`, value backfill uses a digest and expiry uses
+`[kind, created_at, namespace, name]`. Expiry seeks each admitted kind's indexed
+age range without scanning non-expiring roots or young forecasts. All owner payloads are indexed
+in batches of at most 128 before expiry starts. Existing documents get a fresh
+30-day grace period when indexed. Subsequent batches inspect/delete at most
+128 eligible detail rows. Only unreferenced solar/demand forecasts, companion
+bindings, training reports, historical-fit/assessment diagnostics, shared model
+parameters and daily model bundles older than 30 elapsed days may expire.
+Every family member must be old. Retained original plan values, daily quality
+contexts and current pointers protect their complete reference closure.
+Imported measurements, provider weather runs, immutable configuration and native
+weights do not expire under this policy. Daily quality documents remain reference
+roots, rather than newly compacted scores. No automatic SQLite VACUUM runs.
+Forecast maintenance runs independently of settlement prerequisites under the
+shared writer guard. Historical settlement uses retained calculation contexts,
+tariffs and measured evidence rather than forecast/model diagnostic documents.
+Cancellation drains any pending maintenance transaction, including rollback,
+before the worker exits and the database engine is disposed.
 
 | Namespace | Owner / payload contents | Version and pointer use |
 | --- | --- | --- |

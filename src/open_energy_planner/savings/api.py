@@ -22,6 +22,7 @@ from open_energy_planner.runtime.diagnostics.logging import (
 )
 
 from ..storage.adapters.documents import SqlDocuments
+from ..storage.adapters.lifecycle.document_retention import maintain_documents
 from ..storage.adapters.lifecycle.retention import recompress, thin
 from ..storage.writes import complete_write
 from .daily import (
@@ -603,6 +604,7 @@ def register(
         settlement_logger = BackgroundLog(_LOGGER, "Settlement processing")
         last_state = None
         last_maintenance_failure = None
+        last_document_failure = None
         while True:
             financial_ready = False
             try:
@@ -650,6 +652,8 @@ def register(
                     _LOGGER.warning("Settlement paused: %s", TIMEZONE_PAUSE_MESSAGE)
                 last_state = runtime.issue, runtime.attention
             except Exception:
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError from None
                 runtime.issue = "Settlement processing failed. Inspect application logs"
                 runtime.attention = True
                 last_state = runtime.issue, runtime.attention
@@ -675,6 +679,8 @@ def register(
                         )
                     last_maintenance_failure = None
                 except Exception as error:  # noqa: BLE001 - Isolate maintenance failures and log only sanitized traces.
+                    if asyncio.current_task().cancelling():
+                        raise asyncio.CancelledError from None
                     trace = failure_trace(error)
                     failure = type(error), trace
                     _LOGGER.log(
@@ -685,6 +691,31 @@ def register(
                         trace if failure != last_maintenance_failure else "",
                     )
                     last_maintenance_failure = failure
+            try:
+                async with mutation_lock:
+                    cancelled = await complete_write(
+                        maintain_documents, runtime.documents, datetime.now(UTC)
+                    )
+                    if cancelled:
+                        raise cancelled
+                if last_document_failure is not None:
+                    _LOGGER.info(
+                        "Forecast archive maintenance recovered. Bounded processing continues."
+                    )
+                last_document_failure = None
+            except Exception as error:  # noqa: BLE001 - Isolate maintenance failures and log only sanitized traces.
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError from None
+                trace = failure_trace(error)
+                failure = type(error), trace
+                _LOGGER.log(
+                    logging.ERROR if failure != last_document_failure else logging.DEBUG,
+                    "Forecast archive maintenance failed (%s). Unprocessed documents remain retained. Planning and financial results are unchanged. Inspect storage diagnostics. Next check in %d seconds.\n%s",
+                    type(error).__name__,
+                    SAVINGS_WORKER_SECONDS,
+                    trace if failure != last_document_failure else "",
+                )
+                last_document_failure = failure
             await asyncio.sleep(SAVINGS_WORKER_SECONDS)
 
     async def evaluations(request):

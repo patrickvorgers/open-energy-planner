@@ -7,6 +7,10 @@ from threading import local
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from open_energy_planner.storage.adapters.lifecycle.document_references import (
+    forget_document,
+    index_document,
+)
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENTS, IDENTITY_LENGTH
 from open_energy_planner.storage.adapters.lifecycle.transactions import lifecycle_transaction
 from open_energy_planner.storage.adapters.payloads import decode_payload, encode_payload
@@ -131,15 +135,14 @@ class SqlDocuments:
     def write(self, name, value):
         """Persist finite JSON without exposing connection parameters in errors."""
         key = self._key(name)
-        payload = encode_payload(
-            json.dumps(
-                value,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-                default=lambda value: value.isoformat(),
-            )
+        serialized = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+            default=lambda value: value.isoformat(),
         )
+        payload = encode_payload(serialized)
         with self.transaction():
             connection = self.pending.connection
             if connection.scalar(select(DOCUMENTS.c.name).where(key)) is not None:
@@ -148,6 +151,7 @@ class SqlDocuments:
                 connection.execute(
                     DOCUMENTS.insert().values(namespace=self.namespace, name=name, payload=payload)
                 )
+            index_document(connection, self.namespace, name, json.loads(serialized))
 
     def first_before(self, prefix, boundary):
         """Read the first namespace-owned document below a lexical boundary without scanning payloads."""
@@ -179,6 +183,7 @@ class SqlDocuments:
         key = self._key(name)
         with self.transaction():
             self.pending.connection.execute(DOCUMENTS.delete().where(key))
+            forget_document(self.pending.connection, self.namespace, name)
 
     def iter_prefix(self, prefix):
         """Stream namespace-bound JSON, reusing an active transaction and bounding reconstruction memory."""

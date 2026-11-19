@@ -461,9 +461,15 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                             else None,
                                         )
                                         if isinstance(source, OpenMeteoSolarSource):
-                                            runtime.set_forecast_runs(
-                                                location, source.forecast_runs
+                                            cancellation = await complete_write(
+                                                partial(
+                                                    runtime.set_forecast_runs, authoritative=False
+                                                ),
+                                                location,
+                                                source.forecast_runs,
                                             )
+                                            if cancellation:
+                                                raise cancellation
                                         installed = True
                                         if weather:
                                             weather_logger.success(
@@ -502,6 +508,8 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                             else "No new usable solar weather. Check forecast validity.",
                                         )
                             except Exception as error:
+                                if asyncio.current_task().cancelling():
+                                    raise asyncio.CancelledError from error
                                 weather_logger.exception(
                                     "Retaining only valid forecasts. Planning still requires usable solar data.",
                                     retry_seconds=WEATHER_RETRY_MINUTES * SECONDS_PER_MINUTE,
@@ -554,8 +562,16 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                         and runtime.configuration
                                         and runtime.configuration.sources
                                     ):
-                                        runtime.set_forecast_runs(location, runs)
+                                        cancellation = await complete_write(
+                                            partial(runtime.set_forecast_runs, authoritative=False),
+                                            location,
+                                            runs,
+                                        )
+                                        if cancellation:
+                                            raise cancellation
                             except Exception as error:
+                                if asyncio.current_task().cancelling():
+                                    raise asyncio.CancelledError from error
                                 history_logger.exception(
                                     "Current solar forecasts remain available. Missing historical original forecasts are retried after the import backoff.",
                                     expected=isinstance(error, ValueError),
