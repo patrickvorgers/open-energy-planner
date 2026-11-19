@@ -57,8 +57,8 @@ def test_home_assistant_frame_loads_before_notices_and_simulations(app_page):
     )
     open_primary_navigation(shell)
     shell.get_by_role("link", name="Savings", exact=True).click()
-    expect(content.get_by_role("heading", name="Evaluated savings", exact=True)).to_be_visible()
-    expect(content.locator("#coverage")).not_to_be_empty()
+    expect(content.get_by_role("heading", name="Savings", exact=True)).to_be_visible()
+    expect(content.locator("#savings-status")).to_contain_text("Waiting for completed measurements")
     assert len(savings) == 1
 
 
@@ -75,14 +75,16 @@ def test_savings_opens_independently_and_failed_reads_retry(app_page):
     page.goto(url + "/overview#savings")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#coverage")).to_contain_text("503")
+    expect(page.locator("#savings-status")).to_contain_text("could not be loaded")
+    expect(page.locator("#savings-total")).to_have_text("Not available")
     assert not plans
     page.unroute("**/v1/savings?*")
     with page.expect_response("**/v1/savings?*") as recovered:
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     assert recovered.value.status == 200
-    expect(page.locator("#coverage")).to_contain_text("Quarters evaluated: 0 of 96")
-    expect(page.locator("#coverage")).not_to_contain_text("503")
+    expect(page.locator("#savings-status")).to_contain_text("Waiting for completed measurements")
+    expect(page.locator("#savings-status")).not_to_contain_text("could not be loaded")
+    expect(page.locator("#savings-total")).to_have_text("Not available")
     assert not plans
 
 

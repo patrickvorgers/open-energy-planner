@@ -3,7 +3,6 @@
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.control_layout import assert_field_actions_aligned
 from tests.frontend.browser.helpers import (
     TOKEN,
     connect,
@@ -59,10 +58,17 @@ def test_savings_overview_authentication_empty_coverage_and_mobile_layout(app_pa
     expect(page.locator("#overview-status")).to_have_text("Connected")
     open_primary_navigation(page)
     page.get_by_role("link", name="Savings", exact=True).click()
-    expect(page.locator("#savings-total")).to_contain_text("No evaluated savings yet")
-    expect(page.locator("#coverage")).to_contain_text("Missing coverage is not zero savings")
+    expect(page.locator("#savings-total")).to_have_text("Not available")
+    expect(page.locator("#savings-status")).to_contain_text("Waiting for completed measurements")
+    expect(page.locator("#savings-actual")).to_have_text("Unavailable")
+    expect(page.locator("#savings-without")).to_have_text("Unavailable")
     page.evaluate("document.fonts.ready")
-    assert_field_actions_aligned(page.locator("#period"), expected_buttons=1, expected_fields=2)
+    buttons = page.locator("#savings-period .period-control button")
+    expect(buttons).to_have_count(3)
+    centers = buttons.evaluate_all(
+        "buttons => buttons.map(button => {const bounds=button.getBoundingClientRect(); return bounds.top + bounds.height / 2;})"
+    )
+    assert max(centers) - min(centers) < 1.5
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     open_primary_navigation(page)
     page.get_by_role("link", name="Installation", exact=True).click()

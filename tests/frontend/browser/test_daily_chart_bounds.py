@@ -34,7 +34,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
     page, url = app_page
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
-    discover(page, url, timezone=timezone)
+    discover(page, url)
     start = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo(timezone)).astimezone(UTC)
     end = start + timedelta(hours=hours)
     fixture_day = datetime.now(ZoneInfo("Europe/Amsterdam")).date().isoformat()
@@ -42,6 +42,11 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
         url + f"/v1/planning-performance?day={fixture_day}",
         headers={"Authorization": f"Bearer {TOKEN}"},
     ).json()
+    assert evidence["timezone"] == "Europe/Amsterdam"
+    assert len(evidence["calculations"]) == 3
+    # Read the fixture in its own timezone before testing another installation day.
+    if timezone != "Europe/Amsterdam":
+        discover(page, url, timezone=timezone)
     evidence["day"] = day
     evidence["timezone"] = timezone
     evidence["retention"] = {
