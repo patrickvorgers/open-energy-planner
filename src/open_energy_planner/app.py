@@ -461,7 +461,9 @@ def create_app(
     ):
         live.basis_source = contract_basis
 
-    async def persist_then_install(save, candidate, install=None, *, contract_input=True):
+    async def persist_then_install(
+        save, candidate, install=None, *, contract_input=True, force_replan=True
+    ):
         """Save under the caller-held app lock, then install before propagating cancellation.
 
         Drain repeated request cancellations while the storage thread owns its
@@ -469,6 +471,7 @@ def create_app(
         successful save becomes authoritative before cancellation is re-raised.
         Contract-related writes activate contract inputs. Unrelated settings must
         pass contract_input=False to retain the existing future-input adapter.
+        Background evidence writes use the normal scheduling limit with force_replan=False.
         """
         cancellation = await complete_write(save, candidate)
         if install is not None:
@@ -476,7 +479,7 @@ def create_app(
         if live:
             if contract_input:
                 live.basis_source = contract_basis
-            await live.refresh_async(force=True)
+            await live.refresh_async(force=force_replan)
         _LOGGER.info(
             "Configuration saved (%s). Updated settings are now active%s.",
             type(candidate).__name__,
