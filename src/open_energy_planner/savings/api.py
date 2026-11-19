@@ -80,6 +80,7 @@ PUBLIC_VALIDATION_MESSAGES = (
 
 PLAN_VIEW_FIELDS = (
     "plan_id",
+    "reference_policy",
     "generated_at",
     "strategy",
     "solution_status",
@@ -101,6 +102,7 @@ PLAN_SNAPSHOT_FIELDS = (
 PLAN_DISPLAY_FIELDS = ("display_sources", "comparison_bindings", "forecast_quality_names")
 SIMULATION_FIELDS = (
     "plan_id",
+    "reference_policy",
     "generated_at",
     "currency",
     "input_snapshot",
@@ -163,7 +165,7 @@ def simulation_view(result):
             projected["comparison"] = {
                 field: value
                 for field, value in reference.items()
-                if field not in {"intervals", "reference"}
+                if field not in {"intervals", "reference", "service_flows"}
             }
             projected["comparison"]["reference"] = [
                 {

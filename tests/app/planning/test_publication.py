@@ -6,12 +6,68 @@ from datetime import timedelta
 
 import pytest
 
+from open_energy_planner.appliances.ev.model import EVWork
 from open_energy_planner.installation.model import BatteryState, InstallationProblem
 from open_energy_planner.optimization.domain import Battery, Interval
 from open_energy_planner.planning import PlanningCoordinator, battery_dispatch_available
 from open_energy_planner.solar.calculation.model import SolarInverter
 from open_energy_planner.synthetic import capture
 from tests.app.planning.test_planning_pipeline import NOW, ImmediateSolver, service
+
+
+@pytest.mark.parametrize(
+    ("current_soc", "first_charge", "elapsed_minutes", "reason"),
+    [
+        (51, 0.5, 0, None),
+        (99, 0, 0, None),
+        (99, 0.5, 0, "ev_capacity_unavailable"),
+        (99, 0.5, 4, None),
+    ],
+)
+def test_ev_publication_checks_only_charge_before_command_expiry(
+    current_soc, first_charge, elapsed_minutes, reason
+):
+    """Only one third of the first quarter can execute in five minutes. Later charge is replanned."""
+    vehicle = EVWork(
+        "session", "point", "car", NOW, NOW + timedelta(hours=1), 10, 50, 100, 0, 4000, "variable"
+    )
+    original = capture(NOW, 0.5)
+    original = replace(
+        original,
+        maximum_input_age_s=300,
+        problem=replace(
+            original.problem, intervals=original.problem.intervals[:2], ev_work=(vehicle,)
+        ),
+    )
+    current = replace(
+        original,
+        measured_at=NOW + timedelta(minutes=elapsed_minutes),
+        problem=replace(original.problem, ev_work=(replace(vehicle, initial_soc=current_soc),)),
+    )
+    document = {
+        "input_snapshot_id": original.snapshot_id,
+        "valid_until": (NOW + timedelta(minutes=5)).isoformat(),
+        "expected_flows": [
+            {
+                "batteries": [{"device_id": "battery", "end_kwh": 0.5}],
+                "ev": [{"session_id": "session", "stored_kwh": first_charge}],
+            },
+            {
+                "batteries": [{"device_id": "battery", "end_kwh": 0.5}],
+                "ev": [{"session_id": "session", "stored_kwh": 5 - first_charge}],
+            },
+        ],
+    }
+    coordinator = PlanningCoordinator(service(), None)
+    coordinator.active = original
+    assert coordinator.publication_rejection(document, current.measured_at, current) == reason
+    assert original.problem.ev_work[0].initial_soc == 50
+    assert document["expected_flows"][1]["ev"][0]["stored_kwh"] == 5 - first_charge
+    disconnected = replace(current, problem=replace(current.problem, ev_work=()))
+    assert (
+        coordinator.publication_rejection(document, current.measured_at, disconnected)
+        == "ev_session_unavailable"
+    )
 
 
 def test_planning_activity_captures_the_actual_calculation_horizon(tmp_path):

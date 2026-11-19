@@ -543,9 +543,15 @@ price inputs. Show the reference above the optimized balance and the factual
 explanation below. Available solar/household forecasts and spot-market, import and
 export prices must be readable over the complete horizon, not only in the selected
 interval. Distinguish available DC forecasts from clipped/converted production.
-Conditional bonuses are separate from base rates. No-battery expected benefit
-includes storage and optimization, excludes investment, and uses the plan's
-recorded bonus budget. It is not continuous historical savings.
+Conditional bonuses are separate from base rates. For new plans, both references serve the original EV targets, thermal comfort
+and appliance tasks without price-based shifting. Charge vehicles as soon as
+permitted, run ready cycles at their earliest allowed starts and regulate heat
+to its requested temperature. Preserve running cycles, availability, shared
+connection limits and physical device bounds. Insufficient comparable service
+makes the monetary comparison unavailable. Freeze this reference policy in each
+new plan and retain older archived expectations unchanged. No-battery expected
+benefit includes storage and load optimization, excludes investment, and uses
+the plan's recorded bonus budget. It is not continuous historical savings.
 
 The planning page shows all three scenario balances without a comparison selector. Costs remain beside each scenario. Planned commands, inputs and selected-interval values belong under Understand this plan, with keyboard access. Avoid duplicate whole-horizon tables and technical forecast-version labels in the user view. Preserve original archival metadata and separate financial valuations.
 Each graph identifies its original expected economic cost, net grid cash, wear and

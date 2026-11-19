@@ -22,7 +22,14 @@ For duration and solver-progress questions, use [Planning performance](planning-
 | **Battery self-consumption** | The same installation storing surplus solar and covering demand without price optimization |
 | **Without battery: Baseline** | The same household and solar forecasts without battery storage |
 
-The scenarios share a time range, units and kW scale. The value-axis bounds combine visible data across all three charts, so the same bar height represents the same power. Zooming, toggling a series or resizing updates their shared scale. The baseline retains planned EV and thermal loads. Self-consumption aims for zero on the meter within physical limits, rather than guaranteeing it.
+The scenarios share a time range, units and kW scale. The value-axis bounds combine visible data across all three charts, so the same bar height represents the same power. Zooming, toggling a series or resizing updates their shared scale. For new plans, both references use price-independent consumption: vehicles charge as soon as permitted, ready appliance cycles start immediately and heating maintains its requested temperature. The same needs, availability and physical limits apply. Older archived plans retain their original EV and heating schedules and are labelled accordingly. If the reference cannot provide comparable charging or comfort, its benefit is unavailable. Self-consumption aims for zero on the meter within physical limits, rather than guaranteeing it.
+
+Devices with **Allow shifting complete cycles** disabled retain the same forecast
+consumption in every scenario, including weather-sensitive heat pumps and air
+conditioners. Weather dependence does not grant shifting permission. Only an
+explicit ready cycle, EV charging request or controllable thermal store can
+receive a different reference timeline. A physically started appliance cycle
+keeps its fixed start in every scenario.
 
 **Grid exchange comparison** shows the net grid power for these scenarios in W.
 These are net grid flows, not a whole-installation balance.

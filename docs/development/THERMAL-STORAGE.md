@@ -167,9 +167,17 @@ profile, temperatures and electrical flows. Backend transfer includes these
 documents and archives through the existing transfer mechanism. No new SQL table
 or column is required.
 
-Battery references hold the OEP thermal schedule fixed. Their savings compare
-battery strategies with identical boiler service. They do not prove savings
-caused by thermal scheduling itself.
+New versioned Planning references regulate explicitly controllable thermal
+stores toward their requested ending temperature without price lookahead. The
+reference retains the same heat demand, temperature bounds, efficiencies and
+shared electrical limits. Thermostat cycling uses mean billing-segment intake
+with the same exponential balance. These hypothetical flows are not executable
+OEP heater commands. Insufficient comparable comfort or ending stock makes the
+financial comparison unavailable. Earlier archived references keep the original
+OEP thermal timing. Ordinary weather-sensitive heat pumps or air conditioners
+without explicit shifting permission retain identical forecast consumption in
+all scenarios. Planning benefits remain expectations. Historical Savings is
+still a measured battery-only comparison.
 
 Regression coverage includes independent heat arithmetic, hard limits, comfort
 priority, horizon stock, joint PV/battery/EV/appliance dispatch, incomplete source
