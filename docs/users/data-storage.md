@@ -43,7 +43,10 @@ For local SQLite, the page can show database size and available volume space. It
 
 ## Follow database growth
 
-**Database growth** shows daily database size, with **1 month** selected by default.
+**Database growth** opens on the last month of daily observations. Open the date
+control for shortcuts such as **Last 7 days**, **This month** and **All history**,
+or choose **Custom period** and apply an inclusive start and end date. The arrows
+move the selected period within the available history.
 On opening the page, the **Database size** card and graph show the saved daily
 observations. The card uses the latest saved observation, including its backend
 and estimation status. If it is older than the selected period, widen the period
@@ -59,7 +62,7 @@ overwrites or adds a saved daily observation.
 
 [![After Refresh, the database card and Current graph point use the same live measurement.](../assets/data-storage-current.png)](../assets/data-storage-current.png)
 
-Use **Period** to choose one week, three months, one year or all retained history.
+Open **Period** and choose a standard shortcut or **Custom period**. For three months or a rolling year, enter **From** and **To**, then select **Apply period**. The graph shows the inclusive selected dates.
 The summary shows the change between the first and last available observation
 and the average change per elapsed day. A decrease can reflect database
 maintenance. It is not a prediction of when storage will run out.

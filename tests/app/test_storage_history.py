@@ -66,6 +66,25 @@ def test_history_authentication_background_sampling_and_safe_failures(tmp_path, 
             assert (
                 await (await client.get("/v1/storage/history?period=all", headers=headers)).json()
             )["samples"] == body["samples"]
+            custom_response = await client.get(
+                "/v1/storage/history?start=2026-11-17&end=2026-11-17", headers=headers
+            )
+            assert custom_response.status == 200
+            custom = await custom_response.json()
+            assert custom["start"] == custom["end"] == "2026-11-17"
+            assert custom["samples"] == body["samples"]
+            assert custom["calendar"] == {"min_day": "2026-11-17", "max_day": "2026-11-17"}
+            for query in (
+                "start=2026-11-18&end=2026-11-17",
+                "start=2026-11-17",
+                "start=2026-11-17&end=2026-11-18",
+                "start=2026-02-30&end=2026-11-17",
+            ):
+                invalid_range = await client.get("/v1/storage/history?" + query, headers=headers)
+                assert invalid_range.status == 400
+                assert (await invalid_range.json())[
+                    "error"
+                ] == "Choose increasing calendar dates no later than today."
             Clock.instant = datetime(2027, 1, 17, 12, tzinfo=UTC)
             older = await (await client.get("/v1/storage/history", headers=headers)).json()
             assert older["samples"] == []

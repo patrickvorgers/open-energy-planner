@@ -299,6 +299,21 @@ SAVINGS_DAYS = archive_table(
     Column("self_consumption_comparison_seconds", Double, nullable=False),
 )
 Index("oep_savings_day_finalization", SAVINGS_DAYS.c.finalized_at, SAVINGS_DAYS.c.start)
+SAVINGS_CASH_DAYS = archive_table(
+    "oep_savings_cash_days",
+    Column(
+        "start", String(TIMESTAMP_LENGTH), ForeignKey("oep_savings_days.start"), primary_key=True
+    ),
+    Column("end", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("day", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("currency", String(AREA_LENGTH), nullable=False),
+    Column("policy", String(VERSION_LENGTH), nullable=False),
+    Column("actual_cost", Double),
+    Column("without_battery_cost", Double),
+    Column("savings", Double),
+    Column("coverage_seconds", Double, nullable=False),
+    Column("estimated_seconds", Double, nullable=False),
+)
 PUBLISHED_PRICES = archive_table(
     "oep_published_prices",
     Column("area", String(AREA_LENGTH), primary_key=True),

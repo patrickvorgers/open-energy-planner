@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from .lifecycle.schema import STORAGE_SAMPLES
@@ -86,5 +86,15 @@ class StorageHistory:
             with self.engine.connect() as connection:
                 row = connection.execute(statement).mappings().first()
                 return dict(row) if row is not None else None
+        except SQLAlchemyError:
+            raise OSError("Database growth history could not be read") from None
+
+    def first_day(self, end: str):
+        """Expose the earliest retained local sampling date as a calendar bound, without loading payloads."""
+        try:
+            with self.engine.connect() as connection:
+                return connection.scalar(
+                    select(func.min(STORAGE_SAMPLES.c.day)).where(STORAGE_SAMPLES.c.day <= end)
+                )
         except SQLAlchemyError:
             raise OSError("Database growth history could not be read") from None

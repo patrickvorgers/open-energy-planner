@@ -5,8 +5,8 @@ is expected next. Activity is the last item in the Insights group.
 
 ## Find an activity
 
-The page opens on today in the Home Assistant timezone. Choose **Day** to inspect
-another date or **Activity type** to filter the list. History covers seven rolling
+The page opens on today in the Home Assistant timezone. Open the date control to choose **Today**, **Yesterday** or one calendar day.
+Use the arrows to move one day. Choose **Activity type** to filter the list. History covers seven rolling
 days. Each page shows up to 25 activities. Use **Next** for older activities and
 **Previous** to go back. The page number shows your position within the selected
 day and type. Changing the day opens its newest page and keeps the type filter.

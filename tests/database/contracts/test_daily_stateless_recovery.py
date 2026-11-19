@@ -1,6 +1,5 @@
-"""Only a reference with no battery stock or allowance state can resume independently after a gap."""
+"""Measured cash resumes after gaps without battery stock, while missing measurements remain excluded."""
 
-from copy import deepcopy
 from dataclasses import replace
 from datetime import timedelta
 
@@ -16,21 +15,11 @@ from tests.app.savings.support.scenarios import END, START, bindings, contract, 
 
 
 @pytest.mark.parametrize("stateful", [None, "battery", "bonus"])
-def test_only_stateless_reference_recovers_after_a_missing_quarter(settlement, stateful):
+def test_measured_cash_recovers_after_a_missing_quarter_without_stock_replay(settlement, stateful):
     """Two recorded 1-kWh quarters cost .60. The middle gap never receives coverage or invented stock/counters."""
-    runtime, store, _documents, engine, plans = settlement
-    plan = deepcopy(plans.get_plan("original-plan"))
+    runtime, store, _documents, engine, _plans = settlement
     no_battery = stateful != "battery"
-    if no_battery:
-        plan["input_snapshot"]["problem"]["batteries"] = []
-        plan["input_snapshot"]["problem"]["terminal_valuations"] = []
-    plan["plan_id"] = "gap-recovery"
-    plans.state["plan"] = plan
-    plans.save()
-    from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS
-
     with engine.begin() as connection:
-        connection.execute(ACTIVATIONS.update().values(plan_id=plan["plan_id"]))
         connection.execute(delete(SETTLEMENT_FRAMES))
         retain(
             connection,
@@ -61,8 +50,8 @@ def test_only_stateless_reference_recovers_after_a_missing_quarter(settlement, s
     rows = tuple(
         replace(
             frame(start=START + timedelta(minutes=15 * index)),
-            battery_start={} if no_battery else {"battery": 2},
-            battery_end={} if no_battery else {"battery": 2},
+            battery_start={},
+            battery_end={},
         )
         for index in (0, 2)
     )
@@ -80,45 +69,38 @@ def test_only_stateless_reference_recovers_after_a_missing_quarter(settlement, s
         START,
         None,
     )
-    reference = report["scenarios"]["reference"]
     assert report["scenarios"]["actual"]["coverage_seconds"] == 1800
-    assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.60)
-    assert reference["coverage_seconds"] == (1800 if stateful is None else 900)
-    if stateful is None:
-        assert reference["totals"]["purchase"] == pytest.approx(0.60)
-        assert report["comparison_seconds"] == 1800
-        assert any(
-            item["start"] == END.isoformat()
-            and item["end"] == (END + timedelta(minutes=15)).isoformat()
-            for item in reference["missing"]
-        )
-        assert reference["closing"]["at"] == (START + timedelta(minutes=45)).isoformat()
-        assert reference["closing"]["stored_kwh"] == {}
-    else:
-        assert not report["checkpoint"]["reference_known"]
+    assert report["cash"]["actual_cost"] == pytest.approx(0.60)
+    assert report["cash"]["without_battery_cost"] == pytest.approx(0.60)
+    assert report["cash"]["savings"] == 0
+    assert report["cash"]["coverage_seconds"] == 1800
+    assert any(
+        item["start"] == END.isoformat()
+        and item["end"] == (END + timedelta(minutes=15)).isoformat()
+        for item in report["scenarios"]["without_battery"]["missing"]
+    )
+    assert set(report["checkpoint"]) == {"end", "cash_counters"}
 
 
-def test_absent_solar_meter_does_not_invent_measured_zero_or_break_no_solar_physics(settlement):
-    """No installed PV legitimately has zero modeled generation, while its absent meter stays unavailable."""
-    runtime, store, _documents, engine, plans = settlement
-    plan = deepcopy(plans.get_plan("original-plan"))
-    plan["plan_id"] = "no-solar"
-    plan["input_snapshot"]["problem"]["pv_sources"] = []
-    for interval in plan["input_snapshot"]["problem"]["intervals"]:
-        interval["pv_sources"] = []
-    plans.state["plan"] = plan
-    plans.save()
-    from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATIONS
-
+def test_absent_solar_meter_preserves_cash_without_inventing_measured_zero(settlement):
+    """No installed PV requires no solar channel. Measured solar remains unknown while the matched grid cost is .30."""
+    runtime, store, _documents, engine, _plans = settlement
     with engine.begin() as connection:
-        connection.execute(ACTIVATIONS.update().values(plan_id=plan["plan_id"]))
         connection.execute(delete(SETTLEMENT_FRAMES))
     selected = bindings()
     selected["solar"] = []
-    store.put_frames((frame(),), {"bindings": selected, "seeds": [], "location": None})
+    selected["terms"] = [term for term in selected["terms"] if term["entity_id"] != "sensor.pv"]
+    measured = replace(
+        frame(),
+        channels={key: value for key, value in frame().channels.items() if key != "sensor.pv"},
+    )
+    store.put_frames((measured,), {"bindings": selected, "seeds": [], "location": None})
     report = DailySavings(runtime).calculate(
         "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
     )
     assert report["energy"]["solar_ac"] == {"kwh": None, "coverage_seconds": 0}
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.3)
-    assert report["scenarios"]["reference"]["coverage_seconds"] == 900
+    assert report["cash"]["coverage_seconds"] == 900
+    assert report["cash"]["actual_cost"] == pytest.approx(0.3)
+    assert report["cash"]["without_battery_cost"] == pytest.approx(0.3)
+    assert report["cash"]["savings"] == 0

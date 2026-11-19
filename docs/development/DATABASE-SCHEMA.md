@@ -1018,18 +1018,21 @@ fragments at configuration boundaries. Conflicting replacement fails explicitly.
 Inside `frame`: `start`/`end`, `channels` (non-negative AC kWh deltas by HA
 entity ID), `battery_start`/`battery_end` (internal kWh by virtual battery ID),
 `meter_start` (cumulative start readings for counter initialization), and `quality`
-(`recorded`, `estimated_hourly`, `estimated_boundary` or `estimated_soc`).
-`estimated_soc` marks bounded historical unavailable-SoC reconstruction with
-equal valid bounding percentages and unchanged charge/discharge counters. It
-may also include estimated energy endpoints. It never resets the independent
-reference stock or replaces existing immutable evidence. Direction comes from
-source bindings. Absent channels remain absent. Context retains bindings, counter seeds and location. The applicable plan is
-resolved separately through activation history and the immutable plan archive.
+(`recorded`, `estimated_hourly`, `estimated_boundary` or legacy `estimated_soc`).
+New cash capture leaves battery endpoint maps empty and never reads SoC history.
+Legacy `estimated_soc` retains its original reconstruction label and endpoints.
+No original immutable evidence is rewritten. Direction comes from
+source bindings. Absent channels remain absent. Context retains bindings, counter seeds, location and optional frozen
+`market_identity` with currency and market area. New capture copies identity
+from the original plan metadata. Older frames can use retained compact plan
+metadata for the same guard without reconstructing physical dispatch. A known
+identity mismatch excludes monetary coverage while preserving measured energy.
 
 ### `oep_settlement_evaluations`
 
-Immutable interval result per evaluation revision. Repricing produces a new
-revision rather than modifying the original result. Typed numeric projections
+Legacy immutable interval result per evaluation revision. Current cash processing
+does not write this simulation table. Existing revisions remain readable and
+transfer unchanged. Typed numeric projections
 support SQL period aggregation without loading years of JSON.
 
 | Field | Type / key | Meaning and use |
@@ -1138,27 +1141,51 @@ Null costs mean unavailable, while a measured/evaluated zero is stored as zero.
 | `self_consumption_savings` | Double, nullable | Without-battery minus self-consumption economic cost on matching quarters. |
 | `self_consumption_comparison_seconds` | Double | Pairwise accepted self-consumption/without-battery duration, or zero. |
 
-The report contains each scenario's `complete`, `partial` or `unavailable` status,
-cost breakdown, accepted and estimated seconds, coalesced missing UTC ranges with
-owned reasons, and opening/closing battery stock and value. `energy` retains
-measured gross import/export, household and AC solar kWh with independent coverage
-even when the original accounting context or financial prices are missing.
-Associations are validated before any metric in a frame is added. Invalid
-associations cannot partially contribute energy or coverage. Captured installation definitions,
-contract/counter versions, published price versions, policy versions, evaluation
-time, recovery deadline and optional retained daily-plan ID remain permanent.
+The scenario columns above preserve the original historical archive contract.
+New `measured-battery-cash-v1` reports populate actual and without-battery cash
+components and accepted seconds. They do not populate reference, wear, inventory,
+economic-cost or old comparison totals. Existing finalized reports remain unchanged.
 
-`checkpoint` contains independent physical stock/readiness, financial reference
-state/readiness, actual inventory, and separate actual/reference/without-battery counters. An unknown
-continuation is explicit. The public daily overview omits this internal checkpoint.
-Missing physical coverage never initializes a replacement reference from actual SoC.
+New report JSON contains `actual` and `without_battery` scenarios with complete,
+partial or unavailable status, accepted/estimated seconds and coalesced missing UTC
+ranges. `cash` contains only matching-interval actual cost, without-battery cost,
+saving and coverage. Monetary values use the report currency. `energy` retains
+measured gross import/export, household and AC solar kWh with independent coverage.
+Contract/counter versions, published price versions, accounting policy, evaluation
+time, recovery deadline and optional daily-plan ID remain in the permanent report.
 
-`counter_seed_evidence` retains the opening counter records keyed by content hash.
-`inventory_movements` retains timestamped external battery additions, removals and
-capacity corrections with their kWh and value. `display_sources` maps frozen device
-identities to Energy source identities for current-name display without rewriting
-the archived day. The actual inventory checkpoint includes stored kWh, capacities,
-valuation curves and closing value independently of reference availability.
+`checkpoint` contains the exclusive UTC `end` and `cash_counters`, with independent
+actual/without-battery rule-period usage in kWh. Null means unknown continuation.
+It contains no simulated battery stock. The public daily response omits checkpoints.
+`counter_seed_evidence` retains opening records keyed by content hash. Older
+physical/inventory checkpoint fields remain readable historical JSON only.
+
+### `oep_savings_cash_days`
+
+Owned by `SettlementStore`. One matched cash index per new-policy daily report.
+The parent report, this index and daily progress commit in the same transaction.
+Finalized parent immutability protects both. Legacy reports are never relabelled or
+indexed as this policy. Shared schema creation adds the empty table to existing
+archives without rewriting old results. All four backend transfers include it.
+Deleting a mutable parent requires deleting its child first. No cascade is declared.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `start` | String(40), PK, FK to `oep_savings_days.start` | Inclusive fixed-width UTC day start. |
+| `end` | String(40) | Exclusive fixed-width UTC day end. |
+| `day` | String(40) | HA-local ISO date for daily/monthly chart bins. |
+| `currency` | String(32) | Cost currency. Mixed-currency aggregates are rejected. |
+| `policy` | String(64) | `measured-battery-cash-v1` accounting identity. |
+| `actual_cost` | Double, nullable | Purchase minus export and bonus revenue on matching quarters. |
+| `without_battery_cost` | Double, nullable | Same tariff bill after removing measured battery AC exchange. |
+| `savings` | Double, nullable | Without-battery cost minus actual cost on that same coverage. Negative means extra cost. |
+| `coverage_seconds` | Double | Matching elapsed seconds. Zero means no accepted comparison. |
+| `estimated_seconds` | Double | Matching seconds using reconstructed measurements or split tariffs. |
+
+Null money means unavailable. A known zero remains zero. Range reads aggregate in
+SQL and share a repeatable snapshot with bounded parent details. Charts use daily
+bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
+key supports inclusive-start/exclusive-end period reads without loading raw quarters.
 
 ## Indexes and query ownership
 
@@ -1559,27 +1586,15 @@ The `solar` namespace additionally retains immutable `quality-source-models-<for
 
 Forecast-quality reads snapshot the bounded daily-pointer set in one SQL statement through `SqlDocuments.read_many`. Referenced blocks are immutable, so a concurrent Recorder baseline correction cannot mix old and new cumulative endpoints across midnight. This avoids holding the app's planning lock while rendering a quality page. Missing pointers remain absent. The existing namespace/name key supports the bounded lookup on all four backends.
 
-### Counter-free physical checkpoint
+### Legacy physical checkpoint
 
-The legacy `savings` document `physical-reference.json` persists one chronological physical
-continuation independently of evaluation revisions. `end` is the ISO interval end.
-`reference_stored` and `actual_stored` map battery IDs to kWh. `capacities` maps the
-same IDs to usable capacity in kWh. Original measurement frames and activation
-chronology establish its provenance. It has no contract foreign key or bonus budget.
-Existing successful continuation supplies its initial independent stock once.
-Each validated measured frame advances it atomically under the settlement lock.
-Financial corrections cannot rewind it. Missing physical intervals cannot be skipped.
-The daily worker instead stores separate physical and financial continuation in
-`oep_savings_days.payload.checkpoint`. Known physical progress can outlive a
-financial outage, while a finalized physical gap leaves an explicit unknown state.
-An intact physical checkpoint can support independently billed reference costs
-even when its bonus counter is unknown. Exact zero bonus payments do not create
-counter keys. Partial counter mappings retain known families and leave absent
-families unknown. Monetary coverage can therefore be complete while bonus usage
-continuation remains unknown. Later quota-dependent payments remain uncovered.
-No checkpoint, finalized result or opening stock is reset to establish coverage.
-The normal document archive and backend transfer include it on SQLite, PostgreSQL,
-MariaDB and MySQL. No additional table or database connection is introduced.
+The `savings` document `physical-reference.json` is retained historical data only.
+Earlier versions stored independent battery stock and capacities here. New Savings
+processing neither reads nor advances a simulated battery trajectory. Legacy
+checkpoint documents transfer unchanged with the document archive. Current daily
+continuation uses only `oep_savings_days.payload.checkpoint.cash_counters`.
+Unknown usage remains unknown until a valid baseline or contractual reset exists.
+Exact zero bonus payments can still be calculated without inventing a budget.
 
 ### Historical bonus counter documents
 

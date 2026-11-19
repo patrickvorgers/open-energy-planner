@@ -1,9 +1,7 @@
 """Independent per-kWh wear arithmetic across capacity, losses and planning decisions."""
 
 import json
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +10,6 @@ from open_energy_planner.installation.storage import document, parse
 from open_energy_planner.installation.validation import validate
 from open_energy_planner.optimization.adapters.highs import HighsSolver
 from open_energy_planner.optimization.domain import Battery, Interval, Status
-from open_energy_planner.savings.accounting import actual_flows
 from open_energy_planner.savings.reference import dispatch
 from open_energy_planner.solar.calculation.model import SolarInverter
 from tests.app.installation.support.problems import installation_problem
@@ -74,31 +71,6 @@ def test_self_consumption_reference_uses_the_same_internal_discharge_rate(capaci
     assert discharged["wear"] == pytest.approx(0.1)
     assert discharged["stored"]["battery"] == pytest.approx(0)
     assert discharged["import_kwh"] == pytest.approx(0)
-
-
-@pytest.mark.parametrize("capacity", [2, 8])
-def test_measured_ac_discharge_recovers_internal_energy_before_applying_wear(capacity):
-    """.36 measured AC kWh uses one internal kWh through .5 cell, .9 DC and .8 inverter efficiency."""
-    inputs = installation_problem(
-        (Interval(START, 1, 0.3, 0.1, 0, 0),),
-        Battery(capacity, 1, discharge_efficiency=0.5, wear_cost_per_kwh=0.025),
-    )
-    inputs = replace(
-        inputs,
-        batteries=(replace(inputs.batteries[0], dc_efficiency=0.9),),
-        inverters=(replace(inputs.inverters[0], efficiency=0.8),),
-    )
-    frame = SimpleNamespace(
-        channels={"sensor.import": 0, "sensor.export": 0.36, "sensor.discharge": 0.36},
-        battery_start={"battery": 1},
-        battery_end={"battery": 0},
-    )
-    bindings = {
-        "imports": ["sensor.import"],
-        "exports": ["sensor.export"],
-        "batteries": [{"device_id": "battery", "energy_entity": "sensor.discharge"}],
-    }
-    assert actual_flows(inputs, frame, bindings) == pytest.approx((0, 0.36, 0.025))
 
 
 def test_installation_roundtrip_preserves_the_explicit_rate_and_configuration_identity():

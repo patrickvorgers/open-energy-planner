@@ -246,7 +246,7 @@ def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarte
 
 @pytest.mark.parametrize("damage", ["missing", "physics", "market"])
 def test_measured_energy_survives_unavailable_plan_accounting(settlement, monkeypatch, damage):
-    """A measured quarter retains 1 kWh and 900 seconds even when no financial scenario is usable."""
+    """Measured energy survives missing metadata. Cash requires historical identity but no usable physical problem."""
     from copy import deepcopy
 
     runtime, _store, _docs, _engine, plans = settlement
@@ -267,13 +267,16 @@ def test_measured_energy_survives_unavailable_plan_accounting(settlement, monkey
         "household": {"kwh": 1, "coverage_seconds": 900},
         "solar_ac": {"kwh": 0, "coverage_seconds": 900},
     }
-    assert all(
-        scenario["totals"] is None and scenario["coverage_seconds"] == 0
-        for scenario in report["scenarios"].values()
-    )
-    assert report["savings"] is None
+    if damage in ("market", "missing"):
+        assert report["cash"]["coverage_seconds"] == 0
+        assert report["cash"]["savings"] is None
+    else:
+        assert report["cash"]["coverage_seconds"] == 900
+        assert report["cash"]["actual_cost"] == pytest.approx(0.30)
+        assert report["cash"]["without_battery_cost"] == pytest.approx(0.30)
+        assert report["cash"]["savings"] == 0
     assert "PRIVATE-MARKET-SENTINEL" not in str(report)
-    assert "PRIVATE-MARKET-SENTINEL" not in runtime.issue
+    assert "PRIVATE-MARKET-SENTINEL" not in (runtime.issue or "")
 
 
 def test_invalid_energy_bindings_do_not_abort_later_measured_quarters(settlement):
@@ -340,11 +343,7 @@ def test_malformed_price_only_invalidates_its_original_frame_overlap(settlement)
         "end": third.isoformat(),
         "reason": "Required prices, counters or physical evidence are unavailable.",
     } in actual["missing"]
-    reference = report["scenarios"]["reference"]
     # The valid meter-only middle quarter advances stock. Accepted costs are .20 then .30.
-    assert reference["totals"]["economic_cost"] == pytest.approx(0.5)
-    assert reference["coverage_seconds"] == 1800
-    assert report["checkpoint"]["reference_known"] is False
     assert report["energy"]["grid_import"] == {"kwh": 3, "coverage_seconds": 2700}
     assert "PRIVATE" not in str(report) and "PRIVATE" not in runtime.issue
 
@@ -431,7 +430,7 @@ def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_reco
                 )
             ).json()
             assert data["issue"] == expected
-            assert data["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+            assert data["cash"]["actual_cost"] == pytest.approx(0.6)
             assert not any(
                 "processing is running" in record.getMessage() for record in caplog.records
             )
@@ -451,7 +450,7 @@ def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_reco
                 )
             ).json()
             assert data["issue"] is None
-            assert data["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+            assert data["cash"]["actual_cost"] == pytest.approx(0.6)
 
     with caplog.at_level(logging.INFO, logger="open_energy_planner.savings"):
         asyncio.run(observe())
@@ -479,94 +478,6 @@ def test_prerequisite_recovery_does_not_clear_an_unrelated_issue_before_a_day_ca
         connection.execute(ACTIVATIONS.delete())
     assert DailySavings(runtime).process(None, None, now, None) is None
     assert runtime.issue == "An unrelated retained warning"
-
-
-@pytest.mark.parametrize("damage", ["expired", "hash"])
-def test_daily_context_cache_cannot_hide_later_missing_or_corrupt_evidence(settlement, damage):
-    """A new replay must reject newly corrupt evidence or mark expired context unavailable, never reuse last replay's .60 cost."""
-    from open_energy_planner.storage.adapters.lifecycle.schema import PLAN_CONTEXTS
-
-    runtime, _store, _docs, engine, _plans = settlement
-    daily = DailySavings(runtime)
-    arguments = ("2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None)
-    assert daily.calculate(*arguments)["scenarios"]["actual"]["totals"][
-        "purchase"
-    ] == pytest.approx(0.6)
-    with engine.begin() as connection:
-        connection.execute(
-            PLAN_CONTEXTS.update()
-            .where(PLAN_CONTEXTS.c.plan_id == "original-plan")
-            .values(payload=None if damage == "expired" else "{}")
-        )
-    if damage == "hash":
-        with pytest.raises(ValueError, match="Historical calculation context hash mismatch"):
-            daily.calculate(*arguments)
-    else:
-        report = daily.calculate(*arguments)
-        assert report["scenarios"]["actual"]["totals"] is None
-        assert report["scenarios"]["actual"]["coverage_seconds"] == 0
-        assert report["savings"] is None
-
-
-def test_daily_context_reads_are_shared_with_advice_and_expire_after_calculation(
-    settlement, monkeypatch
-):
-    """Two plans bill .60 actual/.40 reference and supply .25 advice each, with one decode per plan per day replay."""
-    from copy import deepcopy
-
-    from open_energy_planner.savings import daily as daily_module
-
-    runtime, _store, _docs, engine, plans = settlement
-    original = plans.get_plan("original-plan")
-    for identity, start in (("first", START), ("second", END)):
-        document = deepcopy(original)
-        document.update(
-            plan_id=identity,
-            generated_at=start.isoformat(),
-            expected_flows=[{"grid_import": 0.25, "grid_export": 0}],
-        )
-        document["input_snapshot"]["problem"]["intervals"][0]["start"] = start.isoformat()
-        plans.state["plan"] = document
-        plans.save()
-    with engine.begin() as connection:
-        from open_energy_planner.storage.adapters.lifecycle.schema import ACTIVATION_CONTEXTS
-
-        connection.execute(ACTIVATION_CONTEXTS.delete())
-        connection.execute(ACTIVATIONS.delete())
-        connection.execute(
-            ACTIVATIONS.insert(),
-            [
-                {"activated_at": stamp(START), "plan_id": "first"},
-                {"activated_at": stamp(END), "plan_id": "second"},
-            ],
-        )
-    reads, advice = [], []
-    original_context, original_advice = plans.get_context, daily_module.active_advice
-
-    def counted_context(identity):
-        """Count actual repository decodes rather than cache dictionary accesses."""
-        reads.append(identity)
-        return original_context(identity)
-
-    def recorded_advice(*arguments, **keywords):
-        """Retain independently expected advice amounts alongside the daily financial oracle."""
-        result = original_advice(*arguments, **keywords)
-        advice.append(result)
-        return result
-
-    monkeypatch.setattr(plans, "get_context", counted_context)
-    monkeypatch.setattr(daily_module, "active_advice", recorded_advice)
-    daily = DailySavings(runtime)
-    for iteration in range(2):
-        report = daily.calculate(
-            "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
-        )
-        assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
-        assert report["scenarios"]["reference"]["totals"]["economic_cost"] == pytest.approx(0.4)
-        assert report["comparison_seconds"] == 1800
-        assert reads == ["first", "second"] * (iteration + 1)
-    assert [item["import_kwh"] for item in advice] == [0.25] * 4
-    assert [item["coverage_seconds"] for item in advice] == [900] * 4
 
 
 def test_timezone_pause_is_owned_visible_and_recovers_without_rewriting_days(
@@ -629,7 +540,7 @@ def test_timezone_pause_is_owned_visible_and_recovers_without_rewriting_days(
             assert response.status == 200
             body = await response.json()
             assert body["issue"] == worker.issue
-            assert body["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+            assert body["cash"]["actual_cost"] == pytest.approx(0.6)
             assert docs.read("daily-progress.json") == original_progress
             assert store.day(latest=True) == original_day
             assert not docs.exists("daily-upgrade.json")
@@ -653,7 +564,7 @@ def test_timezone_pause_is_owned_visible_and_recovers_without_rewriting_days(
                 )
             ).json()
             assert body["issue"] is None
-            assert body["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+            assert body["cash"]["actual_cost"] == pytest.approx(0.6)
 
     with caplog.at_level(logging.INFO, logger="open_energy_planner.savings"):
         asyncio.run(observe())
@@ -663,7 +574,7 @@ def test_timezone_pause_is_owned_visible_and_recovers_without_rewriting_days(
 
 
 def test_daily_partial_results_keep_measured_totals_without_extrapolating(settlement):
-    """Two measured quarters cost .60 actual and .40 reference, rather than pretending to cover a whole day."""
+    """Two measured import-only quarters cost .60 on both sides and compare exactly 1800 seconds."""
     runtime, _store, _docs, _engine, _plans = settlement
     daily = DailySavings(runtime)
     report = daily.calculate(
@@ -673,16 +584,14 @@ def test_daily_partial_results_keep_measured_totals_without_extrapolating(settle
     assert report["scenarios"]["actual"]["coverage_seconds"] == 1800
     assert report["scenarios"]["actual"]["status"] == "partial"
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
-    assert report["scenarios"]["reference"]["totals"]["economic_cost"] == pytest.approx(0.4)
-    assert report["scenarios"]["without_battery"]["totals"]["economic_cost"] == pytest.approx(0.6)
-    assert report["savings"] == pytest.approx(-0.2)
-    assert report["comparison_seconds"] == 1800
-    assert report["checkpoint"]["reference_known"] is False
+    assert report["scenarios"]["without_battery"]["totals"]["grid_cash"] == pytest.approx(0.6)
+    assert report["cash"]["savings"] == 0
+    assert report["cash"]["coverage_seconds"] == 1800
     assert report["scenarios"]["actual"]["missing"][-1]["end"] == "2026-10-23T00:00:00+00:00"
 
 
-def test_later_actual_and_without_battery_do_not_reset_unknown_reference(settlement):
-    """A missing opening quarter leaves reference unavailable while two valid actual intervals still cost .60."""
+def test_later_cash_intervals_do_not_require_continuous_battery_history(settlement):
+    """A missing opening quarter does not block two later valid cash intervals costing .60 on both sides."""
     runtime, _store, _docs, _engine, _plans = settlement
     report = DailySavings(runtime).calculate(
         "2026-10-22",
@@ -693,12 +602,9 @@ def test_later_actual_and_without_battery_do_not_reset_unknown_reference(settlem
         START - timedelta(minutes=15),
         None,
     )
-    assert report["scenarios"]["reference"]["status"] == "unavailable"
-    assert report["scenarios"]["reference"]["totals"] is None
-    assert report["savings"] is None
+    assert report["cash"]["savings"] == 0
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
     assert report["scenarios"]["without_battery"]["totals"]["purchase"] == pytest.approx(0.6)
-    assert report["checkpoint"]["reference_known"] is False
 
 
 def test_final_day_survives_restart_and_rejects_corrections(settlement):
@@ -755,7 +661,7 @@ def test_finalization_respects_three_complete_local_days_across_dst(day, expecte
 def test_complete_days_use_every_quarter_and_independent_cost_oracles(
     settlement, day, timezone, quarters
 ):
-    """Actual imports cost .30 per quarter. Two reference battery kWh avoid .60 but consume .40 inventory value."""
+    """Each quarter imports 1 kWh and costs .30 on both sides. Both 96- and 100-quarter days save zero."""
     runtime, store, _docs, engine, _plans = settlement
     start, end = day_window(day, timezone)
     with engine.begin() as connection:
@@ -794,16 +700,11 @@ def test_complete_days_use_every_quarter_and_independent_cost_oracles(
     report = daily.calculate(day, timezone, contract(), None, end + timedelta(hours=1), start, None)
     assert report["expected_seconds"] == quarters * 900
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(quarters * 0.3)
-    assert report["scenarios"]["reference"]["totals"]["purchase"] == pytest.approx(
-        (quarters - 2) * 0.3
-    )
-    assert report["scenarios"]["reference"]["totals"]["inventory_change"] == pytest.approx(-0.4)
     assert report["scenarios"]["without_battery"]["totals"]["purchase"] == pytest.approx(
         quarters * 0.3
     )
-    assert report["savings"] == pytest.approx(-0.2)
+    assert report["cash"]["savings"] == 0
     assert all(scenario["status"] == "complete" for scenario in report["scenarios"].values())
-    assert report["checkpoint"]["reference"]["reference_stored"] == {"battery": 0}
 
 
 def test_upgrade_does_not_immediately_seal_old_missing_data(settlement):
@@ -817,8 +718,8 @@ def test_upgrade_does_not_immediately_seal_old_missing_data(settlement):
     assert store.day(finalized=True) is None
 
 
-def test_missing_price_does_not_erase_physical_reference_progress(settlement):
-    """The unpriced first quarter still consumes one reference kWh, so the priced second quarter starts with one."""
+def test_missing_price_does_not_block_a_later_cash_interval(settlement):
+    """An unpriced first quarter leaves a gap while the later import-only quarter compares at zero saving."""
     runtime, _store, _docs, engine, _plans = settlement
     with engine.begin() as connection:
         connection.execute(
@@ -827,17 +728,15 @@ def test_missing_price_does_not_erase_physical_reference_progress(settlement):
     report = DailySavings(runtime).calculate(
         "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
     )
-    reference = report["scenarios"]["reference"]
-    assert reference["coverage_seconds"] == 900
-    assert reference["opening"]["stored_kwh"] == {"battery": 1}
-    assert reference["closing"]["stored_kwh"] == {"battery": 0}
-    assert reference["totals"]["economic_cost"] == pytest.approx(0.2)
-    assert report["savings"] == pytest.approx(-0.1)
+    assert report["cash"]["savings"] == 0
+    assert report["cash"]["coverage_seconds"] == 900
+    assert report["cash"]["actual_cost"] == pytest.approx(0.30)
+    assert report["cash"]["without_battery_cost"] == pytest.approx(0.30)
     assert report["energy"]["grid_import"] == {"kwh": 2, "coverage_seconds": 1800}
 
 
 def test_unpriced_export_consumes_each_scenarios_own_bonus_allowance(settlement):
-    """Unpriced .50-kWh export exhausts actual/no-battery quota while self-consumption stores PV. Next priced benefit is -.15."""
+    """Unpriced .50-kWh export exhausts both remaining allowances. The next export pays no bonus on either side."""
     import json
     from dataclasses import asdict, replace
 
@@ -884,18 +783,15 @@ def test_unpriced_export_consumes_each_scenarios_own_bonus_allowance(settlement)
     report = DailySavings(runtime).calculate(
         "2026-10-22", "UTC", contract(bonus=True), None, END + timedelta(days=1), START, None
     )
-    assert report["scenarios"]["reference"]["coverage_seconds"] == 900
-    assert report["scenarios"]["reference"]["opening"]["stored_kwh"] == {"battery": 2.5}
-    assert report["scenarios"]["reference"]["totals"]["economic_cost"] == pytest.approx(-0.1)
-    assert report["scenarios"]["actual"]["totals"]["economic_cost"] == pytest.approx(0.05)
+    assert report["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(0.05)
     assert report["scenarios"]["actual"]["totals"]["bonus"] == 0
     assert report["scenarios"]["without_battery"]["totals"]["bonus"] == 0
     assert report["scenarios"]["without_battery"]["coverage_seconds"] == 900
-    assert report["savings"] == pytest.approx(-0.15)
+    assert report["cash"]["savings"] == 0
 
 
 def test_partial_price_day_continues_after_sealing_and_expiring_raw_quarters(settlement):
-    """After one unpriced quarter, 95 priced quarters cost 28.50 actual and 28.40 reference. Next day both cost .30."""
+    """After one unpriced quarter, 95 import-only quarters cost 28.50 on both cash sides. Next day both cost .30."""
     import json
     from dataclasses import asdict
 
@@ -951,11 +847,7 @@ def test_partial_price_day_continues_after_sealing_and_expiring_raw_quarters(set
     report = daily.calculate(
         "2026-10-22", "UTC", contract(bonus=True), None, end + timedelta(days=4), start, None
     )
-    assert report["scenarios"]["actual"]["totals"]["economic_cost"] == pytest.approx(28.5)
-    assert report["scenarios"]["reference"]["totals"]["economic_cost"] == pytest.approx(28.4)
-    assert report["checkpoint"]["physical_known"] is True
-    assert report["checkpoint"]["reference_known"] is True
-    assert list(report["checkpoint"]["reference_counters"].values()) == [1.5]
+    assert report["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(28.5)
     report["finalized_at"] = (end + timedelta(days=4)).isoformat()
     store.put_day(report, docs, "2026-10-23")
     thin(plans, docs, end + timedelta(days=4), "UTC")
@@ -970,14 +862,12 @@ def test_partial_price_day_continues_after_sealing_and_expiring_raw_quarters(set
         start,
         store.day(finalized=True)["checkpoint"],
     )
-    assert following["scenarios"]["actual"]["totals"]["economic_cost"] == pytest.approx(0.3)
-    assert following["scenarios"]["reference"]["totals"]["economic_cost"] == pytest.approx(0.3)
-    assert following["scenarios"]["reference"]["opening"]["stored_kwh"] == {"battery": 0}
-    assert following["savings"] == pytest.approx(0)
+    assert following["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(0.3)
+    assert following["cash"]["savings"] == pytest.approx(0)
 
 
 def test_daily_read_cannot_mix_concurrently_corrected_details_and_totals(settlement, monkeypatch):
-    """A .60/- .20 snapshot remains consistent while another connection publishes a .80/- .40 correction."""
+    """A .60 cash snapshot stays consistent while another connection publishes a .80 cash correction."""
     runtime, store, docs, _engine, _plans = settlement
     daily = DailySavings(runtime)
     old = daily.calculate(
@@ -987,23 +877,39 @@ def test_daily_read_cannot_mix_concurrently_corrected_details_and_totals(settlem
         "2026-10-22", "UTC", contract(buy=".4"), None, END + timedelta(days=2), START, None
     )
     store.put_day(old, docs, "2026-10-23")
-    summary = store.daily_summary
+    from sqlalchemy import event
 
-    def publish_after_totals(*arguments, **keywords):
-        """Correct the real database after the first SELECT has established the read snapshot."""
-        result = summary(*arguments, **keywords)
-        store.put_day(corrected, docs, "2026-10-23")
-        return result
+    published = False
 
-    monkeypatch.setattr(store, "daily_summary", publish_after_totals)
-    result = daily.overview(START.replace(hour=0), START.replace(hour=0) + timedelta(days=1))
-    assert result["totals"]["actual"]["purchase"] == pytest.approx(0.6)
+    def publish_after_totals(_connection, _cursor, statement, _parameters, _context, _many):
+        """Publish between the actual aggregate query and the following chart query."""
+        nonlocal published
+        if (
+            not published
+            and "sum(oep_savings_cash_days" in statement
+            and "GROUP BY" not in statement
+        ):
+            published = True
+            store.put_day(corrected, docs, "2026-10-23")
+
+    event.listen(_engine, "after_cursor_execute", publish_after_totals)
+    try:
+        result = daily.overview(START.replace(hour=0), START.replace(hour=0) + timedelta(days=1))
+    finally:
+        event.remove(_engine, "after_cursor_execute", publish_after_totals)
+    assert published
+    assert result["cash"]["actual_cost"] == pytest.approx(0.6)
     assert result["days"][0]["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
-    assert result["chart"][0]["savings"] == pytest.approx(-0.2)
-    assert store.day()["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.8)
+    assert result["cash"]["chart"][0]["actual_cost"] == pytest.approx(0.6)
+    assert daily.overview(START.replace(hour=0), START.replace(hour=0) + timedelta(days=1))["cash"][
+        "actual_cost"
+    ] == pytest.approx(0.8)
 
 
-def test_daily_http_projection_returns_three_scenarios_without_internal_checkpoint(settlement):
+@pytest.mark.parametrize("completed", [False, True])
+def test_daily_http_projection_returns_matching_cash_without_internal_checkpoint(
+    settlement, monkeypatch, completed
+):
     """The real route serves sealed daily costs and coverage instead of replaying or exposing internal continuation."""
     import asyncio
     from types import SimpleNamespace
@@ -1011,14 +917,24 @@ def test_daily_http_projection_returns_three_scenarios_without_internal_checkpoi
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
+    from open_energy_planner.savings import api as savings_api
     from open_energy_planner.savings.api import register
 
+    class CalendarNow(datetime):
+        """Keep the HTTP calendar at the first activation day or the following day."""
+
+        @classmethod
+        def now(cls, timezone=None):
+            return (START + timedelta(days=int(completed))).astimezone(timezone)
+
+    monkeypatch.setattr(savings_api, "datetime", CalendarNow)
     runtime, store, docs, _engine, plans = settlement
     report = DailySavings(runtime).calculate(
         "2026-10-22", "UTC", contract(), None, END + timedelta(days=4), START, None
     )
     report["finalized_at"] = (END + timedelta(days=4)).isoformat()
     report["device_names"] = {"battery": "Archived battery"}
+    report["display_sources"] = {"battery": "sensor.discharge"}
     store.put_day(report, docs, "2026-10-23")
 
     async def request_report():
@@ -1054,9 +970,14 @@ def test_daily_http_projection_returns_three_scenarios_without_internal_checkpoi
             assert response.status == 200
             data = await response.json()
             assert data["daily"] is True
-            assert set(data["totals"]) == {"actual", "reference", "without_battery"}
-            assert data["totals"]["actual"]["purchase"] == pytest.approx(0.6)
-            assert data["savings"] == pytest.approx(-0.2)
+            assert data["calendar"] == {
+                "has_completed_days": completed,
+                "min_day": "2026-10-22" if completed else None,
+                "max_day": "2026-10-22" if completed else None,
+            }
+            assert data["cash"]["without_battery_cost"] == pytest.approx(0.6)
+            assert data["cash"]["actual_cost"] == pytest.approx(0.6)
+            assert data["cash"]["savings"] == 0
             assert data["days"][0]["finalized_at"] is not None
             assert "checkpoint" not in data["days"][0]
             assert response.headers["Cache-Control"] == "no-store"
@@ -1071,7 +992,7 @@ def test_daily_http_projection_returns_three_scenarios_without_internal_checkpoi
             )
             renamed_data = await renamed.json()
             assert renamed_data["days"][0]["device_names"]["battery"] == "Renamed battery"
-            assert renamed_data["totals"] == data["totals"]
+            assert renamed_data["cash"] == data["cash"]
             catalogue.value["suggestions"]["batteries"] = []
             removed = await client.get(
                 "/v1/savings",

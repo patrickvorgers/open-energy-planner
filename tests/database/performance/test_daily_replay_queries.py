@@ -20,7 +20,7 @@ from tests.app.savings.support.scenarios import bindings, contract, frame
 def test_full_day_replay_query_budget_preserves_independent_amounts(
     settlement, day, zone, quarters, record_testsuite_property
 ):
-    """A full day costs .30 per measured quarter, minus .20 economic reference benefit from its original 2-kWh stock."""
+    """Import-only quarters cost .30 on both sides. Repricing raises both costs equally within the same query budget."""
     runtime, store, _docs, engine, _plans = settlement
     start, end = day_window(day, zone)
     with engine.begin() as connection:
@@ -74,10 +74,10 @@ def test_full_day_replay_query_budget_preserves_independent_amounts(
             assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(
                 quarters * 0.3
             )
-            assert report["scenarios"]["reference"]["totals"]["economic_cost"] == pytest.approx(
-                quarters * 0.3 - 0.2
-            )
-            assert report["scenarios"]["reference"]["coverage_seconds"] == quarters * 900
+            assert report["cash"]["without_battery_cost"] == pytest.approx(quarters * 0.3)
+            assert report["cash"]["actual_cost"] == pytest.approx(quarters * 0.3)
+            assert report["cash"]["coverage_seconds"] == quarters * 900
+            assert report["cash"]["savings"] == 0
             counts.append(len(statements))
     finally:
         event.remove(engine, "before_cursor_execute", count)
@@ -109,5 +109,7 @@ def test_full_day_replay_query_budget_preserves_independent_amounts(
     assert corrected["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(
         quarters * 0.3 + 0.3
     )
-    assert corrected["savings"] == pytest.approx(-0.5)
+    assert corrected["cash"]["actual_cost"] == pytest.approx(quarters * 0.3 + 0.3)
+    assert corrected["cash"]["without_battery_cost"] == pytest.approx(quarters * 0.3 + 0.3)
+    assert corrected["cash"]["savings"] == 0
     assert corrected["published_price_versions"] != reports[0]["published_price_versions"]

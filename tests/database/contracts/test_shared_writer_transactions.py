@@ -13,13 +13,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from open_energy_planner.contracts.storage import ContractStore
 from open_energy_planner.prices.selection import ForecastPair, ForecastSelection
 from open_energy_planner.prices.storage.adapters.selection_store import SqlAlchemySelectionStore
-from open_energy_planner.savings.accounting import evaluate
+from open_energy_planner.savings.daily import DailySavings
 from open_energy_planner.storage.adapters.activities import ActivityStore
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle import transactions
-from open_energy_planner.storage.adapters.lifecycle.schema import PAIRS
+from open_energy_planner.storage.adapters.lifecycle.schema import PAIRS, SAVINGS_CASH_DAYS
 from open_energy_planner.storage.writes import complete_write
-from tests.app.savings.support.scenarios import END, START, bindings, contract, frame, problem
+from tests.app.savings.support.scenarios import END, START, contract, frame
 from tests.database.support.writer_guard import observe_guard
 
 
@@ -35,7 +35,7 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
     settlement, monkeypatch, writer, rollback
 ):
     """A held real domain write cannot fail a contract save or block reads and the event loop."""
-    _runtime, store, _docs, engine, _plans = settlement
+    runtime, store, documents_savings, engine, _plans = settlement
     documents = SqlDocuments(engine, "contracts")
     contracts = ContractStore(documents)
     original = contract(bonus=True)
@@ -56,17 +56,9 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
     selection = SqlAlchemySelectionStore(engine)
     selection.load("NL")
     selector = ForecastSelection(selection, "NL", "primary", "alternative")
-    result, continuation = evaluate(
-        problem(),
-        frame(),
-        bindings(),
-        None,
-        contract(),
-        (),
-        store.published(START, END, "NL", "EUR"),
-        None,
+    result = DailySavings(runtime).calculate(
+        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
     )
-    result.update(market_area="NL", currency="EUR")
     new_frame = frame(start=END + timedelta(minutes=15))
     started, release = Event(), Event()
     probe = observe_guard(engine, monkeypatch, "contract-writer")
@@ -75,7 +67,7 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
         "prune": "DELETE FROM oep_activities",
         "restart": "UPDATE oep_activities",
         "frames": "INSERT INTO oep_settlement_frames",
-        "settlement": "INSERT INTO oep_settlement_state",
+        "settlement": "INSERT INTO oep_documents",
         "selection": "INSERT INTO " + selection.decisions.name,
     }[writer]
 
@@ -101,7 +93,9 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
             elif writer == "frames":
                 store.put_frames((new_frame,), {"synthetic": True})
             elif writer == "settlement":
-                store.commit("synthetic-writer", result, continuation)
+                store.put_day(
+                    result, documents_savings, (START.date() + timedelta(days=1)).isoformat()
+                )
             else:
                 selection.update(
                     "NL",
@@ -160,8 +154,13 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
     elif writer == "frames":
         assert bool(store.frames(new_frame.start)) is not rollback
     elif writer == "settlement":
-        assert store.state("synthetic-writer") == (None if rollback else continuation)
-        assert len(store.results("synthetic-writer", START, END)) == (0 if rollback else 1)
+        saved_day = store.day()
+        assert (saved_day is not None) is not rollback
+        assert documents_savings.exists("daily-progress.json") is not rollback
+        with engine.connect() as connection:
+            assert bool(connection.execute(select(SAVINGS_CASH_DAYS)).first()) is not rollback
+        if saved_day:
+            assert saved_day["cash"]["savings"] == 0
     else:
         assert bool(selection.load("NL")) is not rollback
         with engine.connect() as connection:

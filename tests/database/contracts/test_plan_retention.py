@@ -122,9 +122,9 @@ def test_final_daily_totals_survive_expiring_temporary_quarters(settlement):
     thin(plans, docs, END + timedelta(days=5), "UTC")
     assert store.frames() == []
     assert store.day(finalized=True) == report
-    assert store.daily_summary(START.replace(hour=0), START.replace(hour=0) + timedelta(days=1))[
-        "actual_purchase"
-    ] == pytest.approx(0.6)
+    assert DailySavings(runtime).overview(
+        START.replace(hour=0), START.replace(hour=0) + timedelta(days=1)
+    )["cash"]["actual_cost"] == pytest.approx(0.6)
 
 
 def test_existing_plain_json_is_recompressed_without_changing_its_value(settlement):
@@ -184,6 +184,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
     from open_energy_planner.storage.adapters.lifecycle.schema import (
         ACTIVATION_CONTEXTS,
         ARCHIVE_INCOMING_INDEXES,
+        SAVINGS_CASH_DAYS,
         SAVINGS_DAYS,
     )
     from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
@@ -193,6 +194,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
     with engine.begin() as connection:
         ACTIVATION_CONTEXTS.drop(connection)
         PLAN_CONTEXTS.drop(connection)
+        SAVINGS_CASH_DAYS.drop(connection)
         SAVINGS_DAYS.drop(connection)
         for index in ARCHIVE_INCOMING_INDEXES:
             column = next(iter(index.columns))
@@ -203,6 +205,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
             index.drop(connection)
     reopened = SqlPlanRepository(".", engine=engine)
     assert reopened.get_plan("original-plan") == original
+    assert SAVINGS_CASH_DAYS.name in inspect(engine).get_table_names()
     for index in ARCHIVE_INCOMING_INDEXES:
         assert index.name in {
             item["name"] for item in inspect(engine).get_indexes(index.table.name)

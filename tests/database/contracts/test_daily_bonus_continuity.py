@@ -1,4 +1,4 @@
-"""Known scenario export usage survives a pending historical baseline without inventing unknown openings."""
+"""Independent cash allowance usage survives missing prices and never resets across meter gaps."""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -35,8 +35,7 @@ def export_day(settlement, *, fault=None):
         "physical": None,
         "physical_known": False,
         "actual": None,
-        "actual_counters": {counter: 1.5},
-        "without_battery_counters": {counter: 0.5},
+        "cash_counters": {"actual": {counter: 1.5}, "without_battery": {counter: 0.5}},
         "reference_counters": None,
     }
     plan = deepcopy(plans.get_plan("original-plan"))
@@ -149,10 +148,9 @@ def test_later_malformed_price_preserves_earlier_independent_bonus_usage(settlem
         assert scenario["coverage_seconds"] == 85500
         assert scenario["totals"]["export_kwh"] == 47.5
         assert scenario["totals"]["bonus"] == pytest.approx(expected_bonus)
-        assert scenario["totals"]["economic_cost"] == pytest.approx(expected_cost)
-    assert report["scenarios"]["reference"]["totals"] is None
-    assert report["checkpoint"]["actual_counters"] == {counter: 49.5}
-    assert report["checkpoint"]["without_battery_counters"] == {counter: 48.5}
+        assert scenario["totals"]["grid_cash"] == pytest.approx(expected_cost)
+    assert report["checkpoint"]["cash_counters"]["actual"] == {counter: 49.5}
+    assert report["checkpoint"]["cash_counters"]["without_battery"] == {counter: 48.5}
     assert report["energy"]["grid_export"] == {"kwh": 48, "coverage_seconds": 86400}
     assert "PRIVATE" not in str(report) and "PRIVATE" not in runtime.issue
 
@@ -176,19 +174,14 @@ def test_pending_baseline_preserves_known_actual_billing_through_seal_and_expiry
     now = end + timedelta(days=4)
     daily = DailySavings(runtime)
     report = daily.calculate("2026-10-22", "UTC", selected, None, now, initial, previous)
-    assert runtime.bonus.pending is not None
-    assert runtime.bonus.pending.periods == (("bonus", START - timedelta(days=1)),)
     assert report["scenarios"]["actual"]["coverage_seconds"] == 86400
     assert report["scenarios"]["actual"]["totals"]["bonus"] == pytest.approx(0.05)
-    assert report["scenarios"]["actual"]["totals"]["economic_cost"] == pytest.approx(4.75)
+    assert report["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(4.75)
     assert report["scenarios"]["without_battery"]["coverage_seconds"] == 86400
     assert report["scenarios"]["without_battery"]["totals"]["bonus"] == pytest.approx(0.15)
-    assert report["scenarios"]["without_battery"]["totals"]["economic_cost"] == pytest.approx(4.65)
-    assert report["checkpoint"]["actual_counters"] == {counter: 49.5}
-    assert report["checkpoint"]["without_battery_counters"] == {counter: 48.5}
-    assert report["checkpoint"]["reference_counters"] is None
-    assert report["scenarios"]["reference"]["status"] == "unavailable"
-    assert report["savings"] is None
+    assert report["scenarios"]["without_battery"]["totals"]["grid_cash"] == pytest.approx(4.65)
+    assert report["checkpoint"]["cash_counters"]["actual"] == {counter: 49.5}
+    assert report["checkpoint"]["cash_counters"]["without_battery"] == {counter: 48.5}
     report["finalized_at"] = now.isoformat()
     store.put_day(report, docs, "2026-10-23")
     sealed = store.day(finalized=True)
@@ -211,14 +204,10 @@ def test_pending_baseline_preserves_known_actual_billing_through_seal_and_expiry
     following = daily.calculate(
         "2026-10-23", "UTC", selected, CounterBook(end, (seed,)), now, initial, sealed["checkpoint"]
     )
-    assert following["scenarios"]["actual"]["totals"]["economic_cost"] == pytest.approx(4.8)
-    assert following["scenarios"]["without_battery"]["totals"]["economic_cost"] == pytest.approx(
-        4.8
-    )
-    assert following["checkpoint"]["actual_counters"] == {counter: 97.5}
-    assert following["checkpoint"]["without_battery_counters"] == {counter: 96.5}
-    assert following["checkpoint"]["reference_counters"] is None
-    assert following["savings"] is None
+    assert following["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(4.8)
+    assert following["scenarios"]["without_battery"]["totals"]["grid_cash"] == pytest.approx(4.8)
+    assert following["checkpoint"]["cash_counters"]["actual"] == {counter: 97.5}
+    assert following["checkpoint"]["cash_counters"]["without_battery"] == {counter: 96.5}
     assert store.day(finalized=True) == sealed
 
 
@@ -242,12 +231,10 @@ def test_physical_gap_invalidates_known_export_continuation(settlement):
         "2026-10-22", "UTC", selected, None, end + timedelta(days=4), initial, previous
     )
     assert report["scenarios"]["actual"]["coverage_seconds"] == 43200
-    assert report["scenarios"]["actual"]["totals"]["economic_cost"] == pytest.approx(2.35)
-    assert report["scenarios"]["without_battery"]["totals"]["economic_cost"] == pytest.approx(2.25)
-    assert report["checkpoint"]["actual_counters"] is None
-    assert report["checkpoint"]["without_battery_counters"] is None
-    assert report["checkpoint"]["reference_counters"] is None
-    assert report["savings"] is None
+    assert report["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(2.35)
+    assert report["scenarios"]["without_battery"]["totals"]["grid_cash"] == pytest.approx(2.25)
+    assert report["checkpoint"]["cash_counters"]["actual"] is None
+    assert report["checkpoint"]["cash_counters"]["without_battery"] is None
 
 
 @pytest.mark.parametrize("seed_kind", ["valid_actual", "changed_source", "reset"])
@@ -269,12 +256,12 @@ def test_unknown_simulated_openings_cannot_borrow_a_later_actual_confirmation(
         _start,
         end,
     ) = export_day(settlement)
-    previous.update(actual_counters=None, without_battery_counters=None)
+    previous["cash_counters"] = {"actual": None, "without_battery": None}
     daily = DailySavings(runtime)
     now = end + timedelta(days=4)
     report = daily.calculate("2026-10-22", "UTC", selected, None, now, initial, previous)
     assert all(value["status"] == "unavailable" for value in report["scenarios"].values())
-    assert report["checkpoint"]["actual_counters"] is None
+    assert report["checkpoint"]["cash_counters"]["actual"] is None
     report["finalized_at"] = now.isoformat()
     store.put_day(report, docs, "2026-10-23")
     sealed = store.day(finalized=True)
@@ -305,105 +292,11 @@ def test_unknown_simulated_openings_cannot_borrow_a_later_actual_confirmation(
         "2026-10-23", "UTC", selected, CounterBook(end, (seed,)), now, initial, sealed["checkpoint"]
     )
     if seed_kind == "valid_actual":
-        assert following["scenarios"]["actual"]["totals"]["economic_cost"] == pytest.approx(4.8)
-        assert following["checkpoint"]["actual_counters"] == {counter: 97.5}
+        assert following["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(4.8)
+        assert following["checkpoint"]["cash_counters"]["actual"] == {counter: 97.5}
     else:
         assert following["scenarios"]["actual"]["totals"] is None
-        assert following["checkpoint"]["actual_counters"] is None
-    assert following["checkpoint"]["reference_counters"] is None
-    assert following["checkpoint"]["without_battery_counters"] is None
-    assert following["scenarios"]["reference"]["totals"] is None
+        assert following["checkpoint"]["cash_counters"]["actual"] is None
+    assert following["checkpoint"]["cash_counters"]["without_battery"] is None
     assert following["scenarios"]["without_battery"]["totals"] is None
-    assert following["savings"] is None
-    assert store.day(finalized=True) == sealed
-
-
-@pytest.mark.parametrize("later_export", [False, True])
-def test_unknown_allowance_does_not_hide_exact_costs_from_retained_physics(
-    settlement, later_export
-):
-    """Unknown bonus usage preserves exact no-export costs and the reference's own 1-kWh opening stock."""
-    from open_energy_planner.savings.accounting import inventory_curves
-    from open_energy_planner.savings.context import physical_context
-    from open_energy_planner.savings.runtime import SavingsRuntime
-
-    (
-        runtime,
-        store,
-        docs,
-        engine,
-        plans,
-        selected,
-        counter,
-        previous,
-        context,
-        initial,
-        start,
-        end,
-    ) = export_day(settlement)
-    with engine.begin() as connection:
-        connection.execute(SETTLEMENT_FRAMES.delete())
-    rows = tuple(frame(start=start + timedelta(minutes=index * 15)) for index in range(96))
-    if later_export:
-        rows = (
-            *rows[:-1],
-            frame(start=end - timedelta(minutes=15), imported_kwh=0, exported_kwh=0.5, pv_kwh=0.5),
-        )
-    store.put_frames(rows, context)
-    previous.update(
-        physical_known=True,
-        physical={
-            "end": start.isoformat(),
-            "reference_stored": {"battery": 1},
-            "actual_stored": {"battery": 2},
-            "capacities": {"battery": 4},
-            "inventory": {"actual": 0.4, "reference": 0.2},
-            "curves": inventory_curves(physical_context(plans.get_context("export-continuity"))),
-            "counters": {"actual": {}, "reference": {}},
-        },
-        reference_counters=None,
-        without_battery_counters=None,
-    )
-    now = end + timedelta(days=4)
-    report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", selected, None, now, initial, previous
-    )
-    actual, reference, without = (
-        report["scenarios"][kind] for kind in ("actual", "reference", "without_battery")
-    )
-    assert actual["status"] == reference["status"] == "complete"
-    assert reference["opening"]["stored_kwh"] == {"battery": 1}
-    assert actual["totals"]["economic_cost"] == pytest.approx(28.5 if later_export else 28.8)
-    assert reference["totals"]["economic_cost"] == pytest.approx(28.3 if later_export else 28.7)
-    assert without["coverage_seconds"] == (85500 if later_export else 86400)
-    assert without["totals"]["economic_cost"] == pytest.approx(28.5 if later_export else 28.8)
-    assert report["savings"] == pytest.approx(-0.2 if later_export else -0.1)
-    assert report["battery_savings"] == pytest.approx(0)
-    assert report["checkpoint"]["reference_counters"] is None
-    assert report["checkpoint"]["without_battery_counters"] is None
-    assert report["checkpoint"]["actual_counters"][counter] == pytest.approx(
-        2 if later_export else 1.5
-    )
-    if later_export:
-        assert without["status"] == "partial"
-        assert len(without["missing"]) == 1
-        assert without["missing"][0]["start"] == rows[-1].start.isoformat()
-        return
-    report["finalized_at"] = now.isoformat()
-    store.put_day(report, docs, "2026-10-23")
-    sealed = store.day(finalized=True)
-    thin(plans, docs, now, "UTC")
-    assert store.frames() == []
-    store.put_frames(
-        tuple(frame(start=end + timedelta(minutes=index * 15)) for index in range(96)), context
-    )
-    restarted = SavingsRuntime(store, docs, plans)
-    following = DailySavings(restarted).calculate(
-        "2026-10-23", "UTC", selected, None, now, initial, sealed["checkpoint"]
-    )
-    assert all(scenario["status"] == "complete" for scenario in following["scenarios"].values())
-    assert following["savings"] == pytest.approx(0)
-    assert following["scenarios"]["reference"]["opening"]["stored_kwh"] == {"battery": 0}
-    assert following["checkpoint"]["reference_counters"] is None
-    assert following["checkpoint"]["without_battery_counters"] is None
     assert store.day(finalized=True) == sealed

@@ -12,8 +12,11 @@ from playwright.sync_api import expect
 from tests.frontend.browser.helpers import (
     TOKEN,
     assert_floating_save_bar,
+    choose_day,
     connect,
+    day_trigger,
     discover,
+    expect_day,
     show_installation_sources,
 )
 from tests.frontend.browser.quality_helpers import show_hour
@@ -176,11 +179,12 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
             }""",
             arg={"width": viewport["width"]},
         )
-        day_control = page.get_by_label("Day", exact=True).bounding_box()
+        day_control = day_trigger(page).bounding_box()
         refresh_button = page.get_by_role("button", name="Refresh evidence", exact=True)
         refresh_box = refresh_button.bounding_box()
         assert day_control["y"] < page.locator("#quality-subjects").bounding_box()["y"]
         assert refresh_box["height"] >= 44
+    page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(
         path=f"results/ci/quality-refresh-alignment-{original_size['width']}-{'ingress' in url}.png",
         full_page=True,
@@ -238,7 +242,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     )
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
     expect(page.locator("#quality-status")).to_contain_text("Day 10/26/2026")
-    expect(page.locator("#quality-day")).to_have_value("2026-10-26")
+    expect_day(page, "2026-10-26")
     expect(page.locator("#quality-charts")).to_contain_text("24 of 24 hours measured.")
     expect(page.locator("#quality-charts .quality-daily")).to_contain_text(
         re.compile(r"Difference-0[.,]5 kWh")
@@ -291,13 +295,16 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         ),
     )
     page.get_by_role("button", name="Load older days", exact=True).click()
-    expect(page.locator("#quality-day option")).to_have_count(3)
-    assert page.locator("#quality-day option").all_text_contents() == [
-        "10/27/2026",
-        "10/26/2026",
-        "10/25/2026",
-    ]
-    expect(page.locator("#quality-day")).to_have_value("2026-10-26")
+    day_trigger(page).click()
+    calendar = page.get_by_role("dialog", name="Choose day").get_by_role(
+        "group", name="Calendar dates"
+    )
+    expect(calendar.locator("button:enabled")).to_have_count(3)
+    assert calendar.locator("button:enabled").evaluate_all(
+        "buttons => buttons.map(button => button.getAttribute('aria-label'))"
+    ) == ["10/25/2026", "10/26/2026", "10/27/2026"]
+    page.get_by_role("button", name="Close date selector").click()
+    expect_day(page, "2026-10-26")
     expect(show_hour(page)).to_be_visible()
     page.locator("#quality-chart-0").press("Escape")
     # Repeated local hours keep independent rows without exposing timezone names.
@@ -310,7 +317,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     page.route(
         "**/v1/forecast-quality/days/2026-10-25", lambda route: route.fulfill(json=fold_body)
     )
-    page.locator("#quality-day").select_option("2026-10-25")
+    choose_day(page, "2026-10-25")
     local_labels = page.evaluate("""() => {
         const options = {timeZone: 'Europe/Amsterdam', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'};
         return [0, 1, 2].map(hour => new Date(`2026-10-25T0${hour}:00:00Z`).toLocaleString(undefined, options));
@@ -334,7 +341,7 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
         arg=expected_title,
     )
     assert canvas.evaluate("canvas => Chart.getChart(canvas).tooltip.title") == expected_title
-    page.locator("#quality-day").select_option("2026-10-26")
+    choose_day(page, "2026-10-26")
     expect(page.locator("#quality-status")).to_contain_text("Day 10/26/2026")
     page.route(
         "**/v1/forecast-quality/days/2026-10-26",
@@ -857,7 +864,7 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     expect(
         page.get_by_role("navigation").get_by_role("link", name="Device forecasts", exact=True)
     ).to_have_count(0)
-    expect(page.get_by_label("Day", exact=True)).to_have_value("2026-10-26")
+    expect_day(page, "2026-10-26")
     page.get_by_role("button", name="Devices", exact=True).click()
     expect(page.locator("#quality-charts canvas")).to_have_count(1)
     page.get_by_label("Device", exact=True).select_option("heat")
@@ -900,7 +907,7 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     expect(evidence).to_contain_text("Midnight heat model")
     expect(evidence).to_contain_text("Temperature features: Used")
     page.locator("#quality-chart-0").press("Escape")
-    page.get_by_label("Day", exact=True).select_option("2026-10-25")
+    choose_day(page, "2026-10-25")
     expect(page.get_by_label("Device", exact=True)).to_have_value("heat")
     expect(page.locator(".quality-daily")).to_contain_text(
         re.compile(r"Difference1[.,]25 kWh") if score_eligible else "DifferenceNot scored yet"
@@ -1161,7 +1168,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     solar.focus()
     solar.press("Space")
     expect(page.locator("#quality-charts h2")).to_have_text("South roof")
-    expect(page.get_by_label("Day", exact=True)).to_have_value("2026-10-26")
+    expect_day(page, "2026-10-26")
     expect(page.get_by_label("Solar source", exact=True)).to_have_value("roof")
     expect(page.locator("#quality-charts canvas")).to_have_count(1)
     expect(page.get_by_role("link", name="Appliances settings", exact=True)).to_be_hidden()
@@ -1249,7 +1256,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     assert solar.evaluate("button => getComputedStyle(button).borderBottomWidth") == "3px"
     page.get_by_role("button", name="Devices", exact=True).click()
     expect(page.locator("#quality-charts canvas")).to_have_count(0)
-    expect(page.get_by_label("Day", exact=True)).to_have_value("2026-10-26")
+    expect_day(page, "2026-10-26")
     page.get_by_role("button", name="Solar", exact=True).click()
     expect(page.get_by_label("Solar source", exact=True)).to_have_value("roof")
     original["radiation"]["issue"] = (

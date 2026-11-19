@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
+from open_energy_planner.savings.daily import DailySavings
 from open_energy_planner.savings.runtime import SavingsRuntime
 from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore
 from open_energy_planner.storage.adapters.documents import SqlDocuments
@@ -14,9 +15,11 @@ from tests.app.savings.support.scenarios import END, START, contract
 
 
 def test_settlement_replay_survives_removal_of_complete_original_plan(settlement):
-    """Compact original physics reproduces .80 actual costs and -.40 benefit after a provisional tariff correction."""
+    """Measured cash remains .80 on both sides after the complete original plan is removed."""
     runtime, store, _documents, engine, plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
+    DailySavings(runtime).calculate(
+        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+    )
     expected_context = plans.get_context("original-plan")
     plans.preserve_history()
     plans.state["plan"] = None
@@ -33,11 +36,13 @@ def test_settlement_replay_survives_removal_of_complete_original_plan(settlement
     assert reopened.get_context("original-plan") == expected_context
     assert store.context_plan(START) == "original-plan"
     restored = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), reopened)
-    restored.process(contract(buy="0.4"), END + timedelta(hours=2))
-    result = restored.overview(START, END + timedelta(minutes=15))
-    assert result["totals"]["actual"]["purchase"] == pytest.approx(0.8)
-    assert result["savings"] == pytest.approx(-0.4)
-    assert result["coverage"] == {"evaluated": 2, "expected": 2, "estimated": 0}
+    result = DailySavings(restored).calculate(
+        "2026-10-22", "UTC", contract(buy="0.4"), None, END + timedelta(days=1), START, None
+    )
+    assert result["cash"]["actual_cost"] == pytest.approx(0.8)
+    assert result["cash"]["without_battery_cost"] == pytest.approx(0.8)
+    assert result["cash"]["savings"] == 0
+    assert result["cash"]["coverage_seconds"] == 1800
 
 
 def test_context_corruption_cannot_silently_change_historical_physics(settlement):

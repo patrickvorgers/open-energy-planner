@@ -11,7 +11,7 @@
 <section class="evidence-card"><h2>Available space</h2><dl><dt>Free space</dt><dd id="free-space"></dd><dt>Volume size</dt><dd id="volume-size"></dd><dt>Capacity status</dt><dd id="capacity-status"></dd></dl><p id="capacity-note" class="muted"></p></section>
 </div>
 <section class="evidence-card storage-history" aria-labelledby="storage-history-title">
-<div class="storage-history-heading"><h2 id="storage-history-title">Database growth</h2><label>Period<select id="storage-period"><option value="week">1 week</option><option value="month" selected>1 month</option><option value="quarter">3 months</option><option value="year">1 year</option><option value="all">All history</option></select></label></div>
+<div class="storage-history-heading"><h2 id="storage-history-title">Database growth</h2><div id="storage-period" class="period-selector-host"></div></div>
 <p id="storage-history-summary" role="status" aria-live="polite"></p>
 <div class="storage-history-plot" id="storage-history-plot" hidden><canvas id="storage-history-chart" tabindex="0" role="img" aria-label="Daily database size. Use Left and Right arrow keys to inspect measurements." aria-describedby="storage-history-selected"></canvas></div>
 <div id="storage-observation-field" hidden><label for="storage-observation">Observation</label><select id="storage-observation"></select></div>

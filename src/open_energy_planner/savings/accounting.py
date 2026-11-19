@@ -1,15 +1,12 @@
 """Independent measured billing and chronological reference accounting. No optimization."""
 
-from dataclasses import replace
 from datetime import datetime
 from itertools import pairwise
 from math import fsum
 
 from ..contracts.compilation import BonusCompiler
 from ..contracts.export_meter import seed_reading
-from .model import ENERGY_TOLERANCE_KWH, POLICY_VERSION, PendingSettlement
-from .physical import advance, measured_step, transition_scenario
-from .reference import dispatch
+from .model import ENERGY_TOLERANCE_KWH, PendingSettlement
 
 
 def inventory(problem, stored):
@@ -17,39 +14,6 @@ def inventory(problem, stored):
     if problem.batteries and not problem.terminal_valuations:
         raise ValueError("Battery valuation evidence is missing")
     return fsum(curve.value(stored[curve.device_id]) for curve in problem.terminal_valuations)
-
-
-def inventory_curves(problem):
-    """Freeze reserve kWh, useful kWh and currency/kWh rates needed for a later hardware removal."""
-    return {
-        curve.device_id: {
-            "reserve": curve.reserve_kwh,
-            "usable": curve.usable_kwh,
-            "rate": curve.rate,
-        }
-        for curve in problem.terminal_valuations
-    }
-
-
-def value_movements(problem, previous, movements):
-    """Return valued copies of physical installation changes, separate from operational costs."""
-    movements = [dict(movement) for movement in movements]
-    curves = {curve.device_id: curve for curve in problem.terminal_valuations}
-    external = {"actual": 0.0, "reference": 0.0}
-    for movement in movements:
-        identity = movement["device_id"]
-        before, after = movement.pop("before"), movement.pop("after")
-        if movement["kwh"] > 0:
-            amount = curves[identity].value(after) - curves[identity].value(before)
-        else:
-            curve = previous["curves"][identity]
-            amount = (
-                min(max(0, after - curve["reserve"]), curve["usable"])
-                - min(max(0, before - curve["reserve"]), curve["usable"])
-            ) * curve["rate"]
-        movement["value"] = amount
-        external[movement["scenario"]] += amount
-    return movements, external
 
 
 def bonus_payment(contract, start, end, market, exported, counters, seeds, meter_start, location):
@@ -110,7 +74,7 @@ def opening_counter_key(identity, period, start, counters, seeds, meter_start):
 def advance_counters(contract, frame, exported, previous, seeds, location):
     """Advance gross-export usage without prices or payment formulas when metering is known.
 
-    The caller must first establish simulated opening usage. Exact annual and
+    Unknown families stay unknown while independently known usage advances. Exact annual and
     activation boundaries use the same uniform within-quarter split as billing.
     This advances a detached copy, so a failed attempt cannot partly consume quota.
     Exported energy and every counter value are gross kWh, independent of rates.
@@ -130,17 +94,15 @@ def advance_counters(contract, frame, exported, previous, seeds, location):
                 policy.contract_start is not None and left < policy.contract_start
             ):
                 continue
-            key = opening_counter_key(
-                identity, policy.period_start(left), left, counters, seeds, frame.meter_start
-            )
+            try:
+                key = opening_counter_key(
+                    identity, policy.period_start(left), left, counters, seeds, frame.meter_start
+                )
+            except ValueError:
+                counters.pop(identity + "|" + policy.period_start(left).isoformat(), None)
+                continue
             counters[key] += exported * fraction
     return counters
-
-
-def without_battery_flows(problem, frame, bindings):
-    """Use the shared measured-load/available-PV boundary with the original converters and no batteries."""
-    step, estimated = measured_step(problem, frame, bindings)
-    return dispatch(replace(problem, batteries=(), terminal_valuations=()), step, {}), estimated
 
 
 def bill(contract, frame, imported, exported, counters, seeds, market_rows, location):
@@ -228,186 +190,56 @@ def bill(contract, frame, imported, exported, counters, seeds, market_rows, loca
     }
 
 
-def evaluate(
-    problem, frame, bindings, previous, contract, seeds, market_rows, location, *, physical=None
-):
-    """Advance both scenarios exactly once from stored continuation. Date filters never reach this function."""
-    physical = advance(problem, frame, bindings, previous) if physical is None else physical
-    channels = frame.channels
-    load = physical["load_kwh"]
-    estimated_pv = physical["estimated_pv"]
-    reference_stored = physical["reference_start"]
-    reference = physical["reference"]
-    movements, external_value = value_movements(problem, previous, physical["movements"])
-    actual_import, actual_export, actual_wear = actual_flows(problem, frame, bindings)
-    counters = {
-        kind: dict(previous["counters"][kind]) if previous else {}
-        for kind in ("actual", "reference")
-    }
-    actual = bill(
-        contract,
-        frame,
-        actual_import,
-        actual_export,
-        counters["actual"],
-        seeds,
-        market_rows,
-        location,
-    )
-    simulated = bill(
-        contract,
-        frame,
-        reference["import_kwh"],
-        reference["export_kwh"],
-        counters["reference"],
-        seeds,
-        market_rows,
-        location,
-    )
-    state = {
-        "end": frame.end.isoformat(),
-        "reference_stored": reference["stored"],
-        "counters": counters,
-        "actual_stored": frame.battery_end,
-    }
-    for kind, result, stored_start, stored_end, wear in (
-        ("actual", actual, frame.battery_start, frame.battery_end, actual_wear),
-        ("reference", simulated, reference_stored, reference["stored"], reference["wear"]),
-    ):
-        start_value = previous["inventory"][kind] if previous else inventory(problem, stored_start)
-        start_value += external_value[kind]
-        end_value = inventory(problem, stored_end)
-        result.update(
-            wear=wear,
-            inventory_start=start_value,
-            inventory_end=end_value,
-            inventory_change=end_value - start_value,
-            economic_cost=result["grid_cash"] + wear - (end_value - start_value),
-        )
-        state.setdefault("inventory", {})[kind] = end_value
-    state["capacities"] = {
-        battery.device_id: battery.battery.capacity_kwh for battery in problem.batteries
-    }
-    state["curves"] = inventory_curves(problem)
-    actual.update(import_kwh=actual_import, export_kwh=actual_export, stored=frame.battery_end)
-    simulated.update(
-        import_kwh=reference["import_kwh"],
-        export_kwh=reference["export_kwh"],
-        stored=reference["stored"],
-    )
-    return {
-        "start": frame.start.isoformat(),
-        "end": frame.end.isoformat(),
-        "policy": POLICY_VERSION,
-        "actual": actual,
-        "reference": simulated,
-        "savings": simulated["economic_cost"] - actual["economic_cost"],
-        "avoided_import_kwh": simulated["import_kwh"] - actual_import,
-        "quality": frame.quality,
-        "available_pv_estimated": estimated_pv,
-        "subinterval_estimated": len(actual["tariffs"]) > 1,
-        "inventory_movements": movements,
-        "load_kwh": max(0, load),
-        "measured_pv_kwh": sum(
-            channels[solar_flow["entity_id"]] for solar_flow in bindings["solar"]
-        ),
-    }, state
+def measured_cash_flows(frame, bindings):
+    """Reconstruct AC grid kWh without storage from the same measured home and solar.
 
-
-def actual_flows(problem, frame, bindings):
-    """Read actual grid kWh and measured battery wear without requiring a simulated PV or SoC history."""
-    identities = {unit.device_id for unit in problem.batteries}
-    if set(frame.battery_start) != identities or set(frame.battery_end) != identities:
-        raise ValueError("Battery endpoint coverage is missing")
-    inverters = {inverter.inverter_id: inverter for inverter in problem.inverters}
+    The frozen household terms already remove battery charging and add discharge.
+    Subtracting measured AC solar gives the no-battery net grid exchange. Apply
+    its change to recorded gross import/export, retaining both when the battery
+    made no net contribution. No SoC, forecast, converter dispatch
+    or battery efficiency is applied to these already AC-normalized meters.
+    Curtailment and flexible-load timing remain as measured. This is a battery
+    cash comparison, not a simulation of all behavior without energy management.
+    """
     imported = fsum(frame.channels[entity] for entity in bindings["imports"])
     exported = fsum(frame.channels[entity] for entity in bindings["exports"])
-    wear = 0.0
-    for unit in problem.batteries:
-        if (
-            max(frame.battery_start[unit.device_id], frame.battery_end[unit.device_id])
-            > unit.battery.capacity_kwh + ENERGY_TOLERANCE_KWH
-        ):
-            raise ValueError("Measured battery energy exceeds capacity")
-        binding = next(
-            (item for item in bindings["batteries"] if item["device_id"] == unit.device_id),
-            None,
-        )
-        if binding is None:
-            raise ValueError("Settlement battery binding is missing for a planned battery")
-        discharged = frame.channels[binding["energy_entity"]]
-        wear += (
-            discharged
-            / (
-                unit.battery.discharge_efficiency
-                * unit.dc_efficiency
-                * inverters[unit.inverter_id].efficiency
-            )
-            * unit.battery.wear_cost_per_kwh
-        )
-    return imported, exported, wear
-
-
-def independent_account(
-    problem,
-    frame,
-    bindings,
-    kind,
-    previous,
-    contract,
-    seeds,
-    prices,
-    location,
-    *,
-    common_start=False,
-    inventory_previous=None,
-    physical=None,
-):
-    """Bill independently known flows without inventing reference stock or bonus usage.
-
-    Actual inventory endpoints come from measurements. Without-battery flows
-    use the same measured demand and available-PV policy as self-consumption.
-    Unknown simulated bonus counters cannot use an actual export seed. Zero
-    export or a zero bonus rate can still establish the exact interval cost.
-    Reference flows require the independently continued physical calculation.
-    An actual ``inventory_previous`` checkpoint contains end, actual_stored,
-    capacities, curves and scalar inventory value. Contiguous hardware movements
-    are excluded from operating cost even when reference stock is unavailable.
-    """
-    movements = []
-    if kind == "actual":
-        imported, exported, wear = actual_flows(problem, frame, bindings)
-        opening = inventory(problem, frame.battery_start)
-        closing = inventory(problem, frame.battery_end)
-        stored = frame.battery_end
-        estimated = False
-        if inventory_previous and inventory_previous["end"] == frame.start.isoformat():
-            _stored, changes = transition_scenario(problem, frame, inventory_previous, "actual")
-            movements, external = value_movements(problem, inventory_previous, changes)
-            opening = inventory_previous["inventory"] + external["actual"]
-    elif kind == "without_battery":
-        flows, estimated = without_battery_flows(problem, frame, bindings)
-        imported, exported, wear = flows["import_kwh"], flows["export_kwh"], 0.0
-        opening = closing = 0.0
-        stored = {}
-    elif kind == "reference" and physical is not None:
-        flows = physical["reference"]
-        imported, exported, wear = flows["import_kwh"], flows["export_kwh"], flows["wear"]
-        opening = inventory(problem, physical["reference_start"])
-        closing = inventory(problem, flows["stored"])
-        stored = flows["stored"]
-        estimated = physical["estimated_pv"]
-        if inventory_previous:
-            movements, external = value_movements(
-                problem, inventory_previous, physical["movements"]
-            )
-            opening = inventory_previous["inventory"]["reference"] + external["reference"]
+    terms = bindings["terms"]
+    if not terms:
+        raise ValueError("Measured household balance is unavailable")
+    if len({term["entity_id"] for term in terms}) != len(terms):
+        raise ValueError("Duplicate measured energy bindings")
+    if any(term["sign"] not in (-1, 1) for term in terms):
+        raise ValueError("Invalid measured household sign")
+    household = fsum(frame.channels[term["entity_id"]] * term["sign"] for term in terms)
+    if household < -ENERGY_TOLERANCE_KWH:
+        raise ValueError("Measured household balance is negative")
+    if any(source.get("measurement_boundary", "ac") != "ac" for source in bindings["solar"]):
+        raise PendingSettlement("Without-battery comparison requires measured AC solar energy")
+    solar = fsum(frame.channels[source["entity_id"]] for source in bindings["solar"])
+    difference = max(0.0, household) - solar - (imported - exported)
+    if difference >= 0:
+        without_import = imported + max(0.0, difference - exported)
+        without_export = max(0.0, exported - difference)
     else:
-        raise ValueError("Unsupported independent savings scenario")
-    counters = dict(previous) if previous is not None else {}
-    known = kind == "actual" or simulated_counters_ready(
+        without_import = max(0.0, imported + difference)
+        without_export = exported + max(0.0, -difference - imported)
+    return {"actual": (imported, exported), "without_battery": (without_import, without_export)}
+
+
+def cash_account(
+    contract, frame, flows, previous, seeds, prices, location, *, actual=False, common_start=False
+):
+    """Bill detached measured/reconstructed flows while preserving independent bonus usage.
+
+    Unknown no-battery usage never borrows a diverged actual seed. A zero bonus
+    payment remains exact without establishing the missing usage. Missing prices
+    do not erase independently known gross export progress.
+    """
+    imported, exported = flows
+    known = actual or comparison_counters_ready(
         contract, frame.start, previous, common_start=common_start
     )
+    counters = dict(previous or {})
     try:
         result = bill(
             contract, frame, imported, exported, counters, seeds if known else (), prices, location
@@ -415,27 +247,16 @@ def independent_account(
     except ValueError as error:
         if not known and error.args == ("Bonus comparison baseline is missing",):
             raise PendingSettlement(
-                "Simulated bonus counters are unknown after missing measurements"
+                "Without-battery bonus usage is unknown after missing measurements"
             ) from None
         raise
-    result.update(
-        wear=wear,
-        inventory_start=opening,
-        inventory_end=closing,
-        inventory_change=closing - opening,
-        economic_cost=result["grid_cash"] + wear - (closing - opening),
-        import_kwh=imported,
-        export_kwh=exported,
-        stored=stored,
-        available_pv_estimated=estimated,
-        inventory_movements=movements,
-    )
-    return result, (
-        counters if counters or simulated_counters_ready(contract, frame.start, counters) else None
-    )
+    result.update(import_kwh=imported, export_kwh=exported)
+    return result, counters if counters or comparison_counters_ready(
+        contract, frame.start, counters
+    ) else None
 
 
-def simulated_counters_ready(contract, start, counters, *, common_start=False):
+def comparison_counters_ready(contract, start, counters, *, common_start=False):
     """Admit known usage, a true reset or the original common start.
 
     Counter keys combine rule ID and original period start. Values are gross kWh.

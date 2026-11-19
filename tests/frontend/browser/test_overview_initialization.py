@@ -7,6 +7,7 @@ from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import (
     TOKEN,
+    choose_period,
     discover,
     open_primary_navigation,
     wait_for_product_reads,
@@ -18,10 +19,10 @@ def test_initialization_render_error_is_safe_and_explicit_retry_recovers(app_pag
     """A private initialization exception never reaches the UI. Connect retries the failed read/render step."""
     page, url = app_page
     page.add_init_script("""(() => {
-      const value=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+      const value=Object.getOwnPropertyDescriptor(Node.prototype,'textContent');
       let fail=true;
-      Object.defineProperty(HTMLInputElement.prototype,'value',{...value,set(next){
-        if(this.id==='period-start'&&fail){fail=false;throw new Error('PRIVATE-INIT-SENTINEL');}
+      Object.defineProperty(Node.prototype,'textContent',{...value,set(next){
+        if(this.classList?.contains('period-trigger')&&fail){fail=false;throw new Error('PRIVATE-INIT-SENTINEL');}
         value.set.call(this,next);
       }});
     })();""")
@@ -61,14 +62,14 @@ def test_late_savings_connection_cannot_clear_newer_view_or_period_failure(app_p
         page.get_by_role("link", name="Planning", exact=True).click()
         expect(page.locator("#overview-status")).to_contain_text("503")
     else:
-        page.get_by_role("button", name="Show period", exact=True).click()
-        expect(page.locator("#coverage")).to_contain_text("503")
+        page.get_by_role("button", name="Refresh overview", exact=True).click()
+        expect(page.locator("#savings-status")).to_contain_text("could not be loaded")
     retained_status = page.locator("#overview-status").inner_text()
     held[0].fulfill(response=held[0].fetch())
     wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_have_text(retained_status)
     if newer_failure == "period":
-        expect(page.locator("#coverage")).to_contain_text("503")
+        expect(page.locator("#savings-status")).to_contain_text("could not be loaded")
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -105,14 +106,12 @@ def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
     expect(page.locator("body")).not_to_contain_text("PRIVATE-SESSION-SENTINEL")
     if stalled == 1:
         expect(page.locator("#overview-status")).to_contain_text("took too long")
-        page.locator("#period-start").fill("2026-10-01")
-        page.locator("#period-end").fill("2026-10-30")
+        expect(page.locator("#savings-period").locator(".period-trigger")).to_be_disabled()
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     if stalled == 1:
-        expect(page.locator("#period-start")).to_have_value("2026-10-01")
-        expect(page.locator("#period-end")).to_have_value("2026-10-30")
+        expect(page.locator("#savings-period").locator(".period-trigger")).to_be_enabled()
     if stalled == 2:
         page.clock.fast_forward(31000)
     page.wait_for_function("() => window.sessionReads.length > window.stalledSessionRead")
@@ -234,8 +233,8 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
         "window.overviewReads.filter(record=>!record.armed).every(record=>record.budget===5000)"
     )
     assert page.evaluate("window.overviewReads[0].signal!==window.overviewReads[1].signal")
-    page.locator("#period-start").fill("2026-10-01")
-    page.locator("#period-end").fill("2026-10-30")
+    choose_period(page, "2026-10-01", "2026-10-30", host="#savings-period")
+    wait_for_product_reads(page)
     if stalled == "plan":
         open_primary_navigation(page)
         page.get_by_role("link", name="Planning", exact=True).click()
@@ -268,9 +267,9 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
         expect(page.locator("#overview-status")).to_contain_text("Connected")
     page.clock.fast_forward(5100)
     page.wait_for_function("() => window.overviewReads.some(record=>record.aborted)", timeout=1500)
-    expect(page.locator("#overview-status" if stalled == "plan" else "#coverage")).to_contain_text(
-        "took too long"
-    )
+    expect(
+        page.locator("#overview-status" if stalled == "plan" else "#savings-status")
+    ).to_contain_text("took too long" if stalled == "plan" else "could not be loaded")
     expect(page.locator("body")).not_to_contain_text("PRIVATE-READ-SENTINEL")
     open_primary_navigation(page)
     page.get_by_role(
@@ -286,9 +285,11 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     )
     wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#coverage")).not_to_contain_text("took too long")
-    expect(page.locator("#period-start")).to_have_value("2026-10-01")
-    expect(page.locator("#period-end")).to_have_value("2026-10-30")
+    expect(page.locator("#savings-status")).to_contain_text("Waiting for completed measurements")
+    expect(page.locator("#savings-status")).not_to_contain_text("could not be loaded")
+    expect(page.locator("#savings-period .period-trigger")).to_contain_text(
+        "10/1/2026 – 10/30/2026"
+    )
     assert page.evaluate(
         "() => {const reads=window.overviewReads.filter(record=>record.armed);return new Set(reads.map(record=>record.signal)).size===reads.length;}"
     )

@@ -3,7 +3,11 @@
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    choose_day,
+    discover,
+)
 from tests.frontend.browser.quality_helpers import show_hour
 
 
@@ -30,7 +34,7 @@ def test_partial_solar_plan_accuracy_and_daily_chart_remain_distinct(app_page, r
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     page.evaluate("window.__oepProductReadsIdle()")
-    page.get_by_label("Day", exact=True).select_option("2026-06-15")
+    choose_day(page, "2026-06-15")
     page.evaluate("window.__oepProductReadsIdle()")
     page.get_by_role("button", name="Solar", exact=True).click()
     source = page.locator("#quality-charts article").filter(has_text="Synthetic south roof")

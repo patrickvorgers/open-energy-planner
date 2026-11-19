@@ -9,7 +9,14 @@ from zoneinfo import ZoneInfo
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    choose_day,
+    choose_today,
+    day_trigger,
+    discover,
+    expect_day,
+)
 
 
 @pytest.fixture
@@ -73,39 +80,41 @@ def daily_history(app_page):
 
 @pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
 def test_date_picker_exposes_retention_and_bounds_older_dates(daily_history):
-    """A full synthetic day remains visible, while native date constraints and manual inputs respect fourteen dates."""
-    page, evidence, _details, _reads = daily_history
-    picker = page.get_by_label("Day", exact=True)
+    """The shared day calendar rejects dates outside backend retention before requesting or changing chart data."""
+    page, evidence, _details, reads = daily_history
     today = datetime.fromisoformat(evidence["day"])
     first = today - timedelta(days=13)
-    expect(picker).to_have_attribute("min", first.date().isoformat())
-    expect(picker).to_have_attribute("max", today.date().isoformat())
-    expect(picker).to_have_attribute("aria-describedby", "performance-retention")
+    expect(day_trigger(page)).to_have_attribute("aria-describedby", "performance-retention")
     expect(page.locator("#performance-retention")).to_contain_text("14 days, including today")
     expect(page.locator("#performance-retention")).to_contain_text("automatically deleted")
+    for outside, validity in (
+        (first - timedelta(days=1), "rangeUnderflow"),
+        (today + timedelta(days=1), "rangeOverflow"),
+    ):
+        count = len(reads)
+        day_trigger(page).click()
+        dialog = page.get_by_role("dialog", name="Choose day", exact=True)
+        picker = dialog.get_by_label("Day", exact=True)
+        expect(picker).to_have_attribute("min", first.date().isoformat())
+        expect(picker).to_have_attribute("max", today.date().isoformat())
+        expect(picker).to_have_attribute("aria-describedby", "performance-retention")
+        picker.fill(outside.date().isoformat())
+        assert picker.evaluate("(input, key) => input.validity[key]", validity)
+        dialog.get_by_role("button", name="Apply day", exact=True).click()
+        expect(dialog).to_be_visible()
+        assert len(reads) == count
+        dialog.get_by_role("button", name="Close date selector").click()
+        expect_day(page, evidence["day"])
+    choose_day(page, first.date().isoformat())
+    expect(page.get_by_role("button", name="Previous day", exact=True)).to_be_disabled()
+    expect(page.locator("#performance-summary")).to_contain_text("No completed calculations")
     captures = Path("results/ci/planning-performance")
     captures.mkdir(parents=True, exist_ok=True)
     width = page.viewport_size["width"]
-    page.screenshot(path=str(captures / f"retention-overview-{width}.png"), full_page=True)
-    for outside, validity, expected in (
-        (first - timedelta(days=1), "rangeUnderflow", first),
-        (today + timedelta(days=1), "rangeOverflow", today),
-    ):
-        assert picker.evaluate(
-            "(input, data) => {const previous=input.value; input.value=data.day; const invalid=input.validity[data.validity]; input.value=previous; return invalid;}",
-            {"day": outside.date().isoformat(), "validity": validity},
-        )
-        picker.fill(outside.date().isoformat())
-        expect(picker).to_have_value(expected.date().isoformat())
-        if validity == "rangeUnderflow":
-            expect(page.locator("#performance-summary")).to_contain_text(
-                "No completed calculations"
-            )
-            page.screenshot(path=str(captures / f"retention-boundary-{width}.png"), full_page=True)
-        else:
-            expect(page.locator("#performance-summary")).to_contain_text(
-                "96 completed calculations"
-            )
+    page.screenshot(path=str(captures / f"retention-boundary-{width}.png"), full_page=True)
+    choose_today(page)
+    expect(page.get_by_role("button", name="Next day", exact=True)).to_be_disabled()
+    expect(page.locator("#performance-summary")).to_contain_text("96 completed calculations")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
@@ -180,9 +189,9 @@ def test_chart_keyboard_access_preserves_all_records_and_detail_identity(daily_h
     expect(page.locator("#performance-status")).to_have_text("")
     expect(selection).to_have_attribute("aria-valuenow", "95")
     previous_day = (datetime.fromisoformat(evidence["day"]) - timedelta(days=1)).date().isoformat()
-    page.get_by_label("Day", exact=True).fill(previous_day)
+    choose_day(page, previous_day)
     expect(selection).to_have_attribute("aria-valuemax", "0")
-    page.get_by_role("button", name="Today", exact=True).click()
+    choose_today(page)
     expect(selection).to_have_attribute("aria-valuemax", "95")
 
 
@@ -225,22 +234,22 @@ def test_chart_access_waits_for_reads_and_recovers_without_stale_day_data(daily_
     expect(selection).to_have_attribute("aria-valuemax", "95")
     old_day = (datetime.fromisoformat(evidence["day"]) - timedelta(days=2)).date().isoformat()
     empty_day = (datetime.fromisoformat(evidence["day"]) - timedelta(days=3)).date().isoformat()
-    page.get_by_label("Day", exact=True).fill(old_day)
+    choose_day(page, old_day)
     page.wait_for_function("count => window.calculationReadCount === count", arg=3)
-    page.get_by_role("button", name="Today", exact=True).click()
+    choose_today(page)
     page.wait_for_function("count => window.calculationReadCount === count", arg=4)
     assert len(pending) == 2
     old_read, current_read = pending
     current_read.fulfill(json=evidence)
     expect(page.locator("#performance-summary")).to_contain_text("96 completed calculations")
     old_read.fulfill(json={**evidence, "day": old_day, "calculations": []})
-    expect(page.get_by_label("Day", exact=True)).to_have_value(evidence["day"])
+    expect_day(page, evidence["day"])
     expect(selection).to_have_attribute("aria-valuemax", "95")
     page.route(
         "**/v1/planning-performance?day=" + empty_day,
         lambda route: route.fulfill(json={**evidence, "day": empty_day, "calculations": []}),
     )
-    page.get_by_label("Day", exact=True).fill(empty_day)
+    choose_day(page, empty_day)
     expect(page.locator("#performance-summary")).to_contain_text("No completed calculations")
     expect(selection).to_have_attribute("aria-disabled", "true")
     expect(page.locator("#performance-open")).to_have_count(0)
@@ -520,7 +529,7 @@ def test_calculation_history_coalesces_refresh_and_settles_replaced_day(daily_hi
     refresh.click()
     refresh.click()
     assert page.evaluate("calculationReads.starts") == 1
-    page.get_by_label("Day", exact=True).fill(previous_day)
+    choose_day(page, previous_day)
     expect(page.locator("#performance-chart")).to_have_attribute("aria-disabled", "true")
     assert page.evaluate("calculationReads.aborted") == 1
     assert page.evaluate("calculationReads.starts") == 1
@@ -528,7 +537,7 @@ def test_calculation_history_coalesces_refresh_and_settles_replaced_day(daily_hi
     page.wait_for_function("() => calculationReads.starts === 2")
     page.evaluate("value => calculationReads.finish(value)", {**evidence, "day": previous_day})
     expect(page.locator("#performance-status")).to_have_text("")
-    expect(page.get_by_label("Day", exact=True)).to_have_value(previous_day)
+    expect_day(page, previous_day)
     assert page.evaluate("calculationReads.active") == 0
     assert page.evaluate("calculationReads.maximum") == 1
 
@@ -645,3 +654,29 @@ def test_calculation_fetch_error_cannot_impersonate_authentication_failure(daily
         "Calculation history could not be loaded. Try Refresh."
     )
     expect(page.locator("#connect")).not_to_be_visible()
+
+
+@pytest.mark.parametrize("app_site", ["planning_performance"], indirect=True)
+def test_retention_refresh_clamps_an_expired_selection_using_backend_bounds(daily_history):
+    """A refreshed server window advances an expired selection and reloads it without using the browser clock."""
+    page, evidence, _details, reads = daily_history
+    first = datetime.fromisoformat(evidence["retention"]["min_day"])
+    choose_day(page, first.date().isoformat())
+    expect(page.locator("#performance-summary")).to_contain_text("No completed calculations")
+    new_first = (first + timedelta(days=1)).date().isoformat()
+    new_last = (
+        (datetime.fromisoformat(evidence["retention"]["max_day"]) + timedelta(days=1))
+        .date()
+        .isoformat()
+    )
+    evidence["retention"] = {"days": 14, "min_day": new_first, "max_day": new_last}
+    count = len(reads)
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    expect_day(page, new_first)
+    expect(page.locator("#performance-status")).to_have_text("")
+    assert reads[count:] == [first.date().isoformat(), new_first]
+    expect(page.get_by_role("button", name="Previous day", exact=True)).to_be_disabled()
+    day_trigger(page).click()
+    dialog = page.get_by_role("dialog", name="Choose day", exact=True)
+    expect(dialog.get_by_label("Day", exact=True)).to_have_attribute("max", new_last)
+    dialog.get_by_role("button", name="Close date selector").click()

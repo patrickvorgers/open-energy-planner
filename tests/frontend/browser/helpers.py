@@ -380,3 +380,52 @@ def balances(page, url, plan):
         "async plan => {const {energyBalances} = await import('./setup/balance.js'); return energyBalances(plan, new Map([...Object.entries(plan.comparison_names || {}), ['battery','Home battery']]));}",
         plan,
     )
+
+
+def day_trigger(page):
+    """Locate the shared compact day control without opening its calendar."""
+    return page.locator(".period-trigger")
+
+
+def choose_day(page, value):
+    """Apply one whole day through the same calendar form users operate."""
+    day_trigger(page).click()
+    dialog = page.get_by_role("dialog", name="Choose day", exact=True)
+    dialog.get_by_label("Day", exact=True).fill(value)
+    dialog.get_by_role("button", name="Apply day", exact=True).click()
+
+
+def selected_day(page):
+    """Read the committed single day and dismiss without changing the filter."""
+    day_trigger(page).click()
+    dialog = page.get_by_role("dialog", name="Choose day", exact=True)
+    value = dialog.get_by_label("Day", exact=True).input_value()
+    dialog.get_by_role("button", name="Close date selector").click()
+    return value
+
+
+def expect_day(page, value):
+    """Wait for a server-selected day through the visible calendar control."""
+    from playwright.sync_api import expect
+
+    day_trigger(page).click()
+    dialog = page.get_by_role("dialog", name="Choose day", exact=True)
+    expect(dialog.get_by_label("Day", exact=True)).to_have_value(value)
+    dialog.get_by_role("button", name="Close date selector").click()
+
+
+def choose_today(page):
+    """Apply the Home Assistant local Today shortcut in the day calendar."""
+    day_trigger(page).click()
+    page.get_by_role("dialog", name="Choose day", exact=True).get_by_role(
+        "button", name="Today", exact=True
+    ).click()
+
+
+def choose_period(page, start, end, host="#storage-period"):
+    """Apply an inclusive custom range through the shared visible date form."""
+    page.locator(host).locator(".period-trigger").click()
+    dialog = page.get_by_role("dialog", name="Choose period", exact=True)
+    dialog.get_by_label("From", exact=True).fill(start)
+    dialog.get_by_label("To", exact=True).fill(end)
+    dialog.get_by_role("button", name="Apply period", exact=True).click()

@@ -282,3 +282,10 @@ evaluation, use [Savings](savings.md).
 If a source or day is unavailable, check its specific reason in the page and [troubleshooting](troubleshooting.md). Developer details remain in [demand forecasting](../development/DEMAND-FORECASTING.md), [solar forecasting](../development/SOLAR-FORECASTING.md), [model selection](../development/MODEL-SELECTION.md) and [forecast quality contracts](../development/FORECAST-QUALITY.md).
 
 **Next:** [Read your plan](read-your-plan.md).
+
+## Select a forecast quality day
+
+Open the date control to choose one whole day, or use its previous/next arrows.
+Only archived forecast days are selectable. **Load older days** makes earlier
+archived days available. This changes the day control only. Graphs, evidence and
+quality scores continue to describe the selected day, not a multi-day aggregate.

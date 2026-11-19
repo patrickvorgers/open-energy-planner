@@ -6,7 +6,6 @@ recovery days. Missing evidence never becomes zero or a whole-day extrapolation.
 """
 
 import json
-from bisect import bisect_left, bisect_right
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from math import fsum
@@ -19,33 +18,23 @@ from open_energy_planner.installation.location import SiteLocation
 
 from .accounting import (
     advance_counters,
-    evaluate,
-    independent_account,
-    inventory,
-    inventory_curves,
-    simulated_counters_ready,
-    value_movements,
-    without_battery_flows,
+    cash_account,
+    comparison_counters_ready,
+    measured_cash_flows,
 )
-from .advice import active_advice
-from .context import physical_context
 from .model import (
+    CASH_POLICY_VERSION,
     MISSING_MEASUREMENTS,
-    POLICY_VERSION,
     PendingSettlement,
     parse_frame,
 )
-from .physical import advance
-from .repricing import corrected_problem
 from .runtime import capture_start, settlement_issue, version
 from .storage.adapters.sqlalchemy import TOTAL_KEYS, stamp
 
 RECOVERY_CALENDAR_DAYS = 3
-DAILY_POLICY_VERSION = "daily-savings-v1"
-SCENARIOS = ("actual", "reference", "without_battery")
-MISSING_CONTEXT = "The historical installation context is unavailable."
+DAILY_POLICY_VERSION = CASH_POLICY_VERSION
+SCENARIOS = ("actual", "without_battery")
 MISSING_ACCOUNT = "Required prices, counters or physical evidence are unavailable."
-UNKNOWN_REFERENCE = "Earlier missing evidence prevents a continuous battery or bonus comparison. No state was reset."
 TIMEZONE_PAUSE_MESSAGE = "Historical savings are paused because the Home Assistant timezone changed. Restore the original Home Assistant timezone to resume. Existing daily results are retained."
 CONTRACT_PREREQUISITE_MESSAGE = "Contract configuration is required for settlement"
 LOCATION_PREREQUISITE_MESSAGE = (
@@ -82,8 +71,6 @@ def empty_scenario():
         "coverage_seconds": 0.0,
         "estimated_seconds": 0.0,
         "missing": [],
-        "opening": None,
-        "closing": None,
     }
 
 
@@ -99,25 +86,15 @@ def missing(scenario, start, end, reason):
 
 
 def include(scenario, result, frame, estimated):
-    """Add only accepted interval amounts, with explicit inventory endpoints and reconstruction quality."""
+    """Add accepted cash/energy totals with independent reconstruction coverage."""
     seconds = (frame.end - frame.start).total_seconds()
     scenario["totals"] = {
         key: fsum((scenario["totals"][key] if scenario["totals"] else 0.0, result[key]))
         for key in TOTAL_KEYS
+        if key in result
     }
     scenario["coverage_seconds"] += seconds
     scenario["estimated_seconds"] += seconds if estimated else 0.0
-    if scenario["opening"] is None:
-        scenario["opening"] = {
-            "at": frame.start.isoformat(),
-            "value": result["inventory_start"],
-            "stored_kwh": result.get("opening_stored", {}),
-        }
-    scenario["closing"] = {
-        "at": frame.end.isoformat(),
-        "value": result["inventory_end"],
-        "stored_kwh": result["stored"],
-    }
 
 
 class DailySavings:
@@ -130,24 +107,8 @@ class DailySavings:
         self.documents = runtime.documents
 
     def overview(self, start, end):
-        """Read daily reports and full-period SQL totals without recalculation or loading old plans."""
-        summary, reports, chart = self.store.daily_overview(start, end)
-        if summary["currencies"] > 1:
-            raise ValueError("Choose a period with one historical currency")
-        expected = (end - start).total_seconds()
-        coverage = {}
-        for kind in SCENARIOS:
-            seconds = summary[f"{kind}_coverage_seconds"] or 0.0
-            coverage[kind] = {
-                "seconds": seconds,
-                "expected_seconds": expected,
-                "status": "complete"
-                if seconds == expected
-                else "partial"
-                if seconds
-                else "unavailable",
-            }
-        # Checkpoints are internal continuation, not an instruction to restart a scenario from the UI.
+        """Read matching measured-cash totals without mixing legacy economic/reference policies."""
+        cash, reports, count = self.store.daily_overview(start, end)
         reports = [
             {key: value for key, value in report.items() if key != "checkpoint"}
             for report in reports
@@ -157,26 +118,10 @@ class DailySavings:
             "start": start.isoformat(),
             "end": end.isoformat(),
             "days": reports,
-            "day_count": int(summary["days"]),
-            "details_truncated": len(reports) < summary["days"],
-            "chart": chart,
-            "currency": summary["currency"],
-            "coverage": coverage,
-            "totals": {
-                kind: {key: summary[f"{kind}_{key}"] for key in TOTAL_KEYS} for kind in SCENARIOS
-            },
-            **{
-                key: summary[key]
-                for key in (
-                    "savings",
-                    "avoided_import_kwh",
-                    "comparison_seconds",
-                    "battery_savings",
-                    "battery_comparison_seconds",
-                    "self_consumption_savings",
-                    "self_consumption_comparison_seconds",
-                )
-            },
+            "day_count": count,
+            "details_truncated": len(reports) < count,
+            "currency": cash["currency"],
+            "cash": cash,
             "issue": self.runtime.issue,
         }
 
@@ -285,64 +230,41 @@ class DailySavings:
         return report
 
     def calculate(self, day, timezone, contract, book, now, initial, previous):
-        """Evaluate original quarters in order and preserve per-scenario missing ranges and continuation.
+        """Settle independent measured quarters without simulating a battery trajectory.
 
-        An absent battery/counter continuation remains unknown. A measured actual
-        interval can still be billed independently when a reference is unavailable.
-        Partial benefit uses only intervals accepted for both compared scenarios.
+        Keep actual and reconstructed bonus counters separate. A missing quarter
+        only removes its own comparison coverage. Unknown allowance usage stays
+        unknown until an independently valid opening or contractual reset exists.
         """
         self.runtime.issue, self.runtime.attention = None, False
-        self.runtime.physical_issue = None
-        contexts = {}
-
-        def get_context(identity):
-            """Decode each distinct plan once during this bounded daily replay, including active advice."""
-            if identity not in contexts:
-                contexts[identity] = self.runtime.plans.get_context(identity)
-            return contexts[identity]
-
         start, end = day_window(day, timezone)
-        initial_plan, activations, market_rows = self.store.daily_inputs(
-            start, end, contract.market_area, contract.currency
-        )
-        # Match SQL's canonical UTC ordering. Advice validates retained dates inside the frame.
-        activation_times = [row["activated_at"] for row in activations]
-        context_ids = []
-        context_id = initial_plan
-        for activation in activations:
-            context_id = activation["plan_id"] or context_id
-            context_ids.append(context_id)
+        market_rows = self.store.published(start, end, contract.market_area, contract.currency)
         scenarios = {kind: empty_scenario() for kind in SCENARIOS}
         cursor = max(start, initial)
         if cursor > start:
             for scenario in scenarios.values():
                 missing(scenario, start, min(end, cursor), "Comparison had not started yet.")
-        state = previous.get("reference") if previous else None
-        reference_known = previous["reference_known"] if previous else cursor == initial
-        physical_state = previous.get("physical", state) if previous else None
-        physical_known = (
-            previous.get("physical_known", reference_known) if previous else reference_known
-        )
-        actual_counters = previous.get("actual_counters") if previous else {}
-        reference_counters = previous.get("reference_counters") if previous else {}
-        without_counters = previous.get("without_battery_counters") if previous else {}
-        actual_checkpoint = previous.get("actual") if previous else None
-        benefit, avoided, paired_seconds = [], [], 0.0
-        battery_benefit, self_consumption_benefit = [], []
-        battery_seconds = self_consumption_seconds = 0.0
-        versions, names, installations, price_versions = set(), {}, {}, set()
-        inventory_changes = []
-        counter_seed_evidence = {}
-        display_sources = {}
+        counters = (previous or {}).get("cash_counters", {})
+        counters = {
+            "actual": counters.get("actual", (previous or {}).get("actual_counters")),
+            "without_battery": counters.get("without_battery"),
+        }
+        if previous is None and cursor == initial:
+            counters = {kind: {} for kind in SCENARIOS}
+        paired = {
+            "actual_cost": None,
+            "without_battery_cost": None,
+            "savings": None,
+            "coverage_seconds": 0.0,
+            "estimated_seconds": 0.0,
+        }
         energy = {
             key: {"kwh": None, "coverage_seconds": 0.0}
-            for key in (
-                "grid_import",
-                "grid_export",
-                "household",
-                "solar_ac",
-            )
+            for key in ("grid_import", "grid_export", "household", "solar_ac")
         }
+        seed_evidence, price_versions = {}, set()
+        historical_markets = {}
+        historical_activations = None
         while cursor < end:
             rows = self.store.frames(cursor, end=end)
             if not rows:
@@ -354,133 +276,62 @@ class DailySavings:
                 if frame.start > cursor:
                     for scenario in scenarios.values():
                         missing(scenario, cursor, frame.start, MISSING_MEASUREMENTS)
-                    state, reference_known, actual_counters, without_counters = (
-                        None,
-                        False,
-                        None,
-                        None,
-                    )
-                    actual_checkpoint = None
-                    reference_counters = None
-                    physical_state, physical_known = None, False
-                    self.runtime.physical_issue = UNKNOWN_REFERENCE
-                active_index = bisect_right(activation_times, stamp(frame.start))
-                plan_id = context_ids[active_index - 1] if active_index else initial_plan
-                plan = get_context(plan_id) if plan_id else None
-                accepted = {}
-                common_start = frame.start == initial
-                estimated = frame.quality != "recorded"
-                pv_estimated = False
-                physical, physical_advanced = None, False
+                    counters = {kind: None for kind in SCENARIOS}
+                accepted, flows = {}, {}
+                context = row["context"]
                 try:
-                    bindings = row["context"]["bindings"]
+                    bindings = context["bindings"]
                     add_energy(energy, frame, bindings)
-                    bindings = dict(bindings)
-                    if plan is None:
-                        raise KeyError("context")
-                    problem = physical_context(plan)
-                    if (
-                        plan.get("currency", contract.currency) != contract.currency
-                        or plan.get("market_area", contract.market_area) != contract.market_area
-                    ):
-                        raise ValueError("Historical market identity changed")
-                    original_physics = plan["input_snapshot"]["problem"]
-                    installation = {
-                        key: original_physics[key]
-                        for key in (
-                            "inverters",
-                            "batteries",
-                            "pv_sources",
-                            "grid_import_limit_w",
-                            "grid_export_limit_w",
+                    market_identity = context.get("market_identity")
+                    if market_identity is None:
+                        # Older frames retain their market in compact plan metadata, never in simulated physics.
+                        if historical_activations is None:
+                            historical_activations = [
+                                (start, self.store.context_plan(start)),
+                                *(
+                                    (datetime.fromisoformat(item["activated_at"]), item["plan_id"])
+                                    for item in self.store.activations(start, end)
+                                    if item["plan_id"]
+                                    and datetime.fromisoformat(item["activated_at"]) > start
+                                ),
+                            ]
+                        identity = next(
+                            (
+                                plan_id
+                                for instant, plan_id in reversed(historical_activations)
+                                if instant <= frame.start
+                            ),
+                            None,
                         )
-                        if key in original_physics
-                    }
-                    installations[version(installation)] = installation
-                    original_contract = plan["input_snapshot"].get("contract_version")
-                    if original_contract and original_contract != contract.version:
-                        problem, _tariffs = corrected_problem(plan, contract)
-                    if isinstance(plan.get("display_sources"), dict):
-                        display_sources.update(
-                            {
-                                key: value
-                                for key, value in plan["display_sources"].items()
-                                if isinstance(key, str) and isinstance(value, str)
-                            }
-                        )
-                    display_sources.update(
-                        {
-                            battery["device_id"]: battery["energy_entity"]
-                            for battery in bindings["batteries"]
-                            if isinstance(battery.get("device_id"), str)
-                            and isinstance(battery.get("energy_entity"), str)
-                        }
-                    )
-                    display_sources.update(
-                        {
-                            source["source_id"]: source["entity_id"]
-                            for source in bindings["solar"]
-                            if isinstance(source.get("source_id"), str)
-                            and isinstance(source.get("entity_id"), str)
-                        }
-                    )
-                    advice = active_advice(
-                        frame,
-                        activations[
-                            max(0, active_index - 1) : bisect_left(
-                                activation_times, stamp(frame.end)
+                        if identity not in historical_markets:
+                            original = (
+                                self.runtime.plans.get_context(identity) if identity else None
                             )
-                        ],
-                        get_context,
-                    )
-                    bindings["curtailed"] = {key: True for key in advice["possible_curtailment"]}
-                    if not physical_known and not problem.batteries and not contract.bonuses:
-                        # No stock or allowance can carry an unknown quantity across this gap.
-                        physical_state = state = None
-                        physical_known = reference_known = True
-                    previous_physical = physical_state
-                    if physical_known:
-                        try:
-                            physical = advance(problem, frame, bindings, previous_physical)
-                            physical_state = {
-                                **physical["state"],
-                                "inventory": {"actual": None, "reference": None},
-                                "curves": inventory_curves(problem),
-                                "counters": {"actual": {}, "reference": {}},
-                            }
-                            physical_advanced = True
-                            pv_estimated = physical["estimated_pv"]
-                            if not problem.batteries or problem.terminal_valuations:
-                                physical_state["inventory"] = {
-                                    "actual": inventory(problem, frame.battery_end),
-                                    "reference": inventory(
-                                        problem, physical["reference"]["stored"]
-                                    ),
+                            historical_markets[identity] = (
+                                {
+                                    key: original[key]
+                                    for key in ("currency", "market_area")
+                                    if key in original
                                 }
-                        except (ValueError, KeyError, TypeError) as error:
-                            physical_state, physical_known = None, False
-                            self.runtime.physical_issue = settlement_issue(error)
-                    # Monetary outages do not erase independently established stock or usage.
-                    if (
-                        not reference_known
-                        and physical_advanced
-                        and previous_physical
-                        and all(
-                            value is not None for value in previous_physical["inventory"].values()
-                        )
-                        and simulated_counters_ready(
-                            contract, frame.start, reference_counters, common_start=common_start
-                        )
+                                if original
+                                else {}
+                            )
+                        market_identity = historical_markets[identity]
+                    if not all(key in market_identity for key in ("currency", "market_area")):
+                        raise PendingSettlement("Historical market identity is unresolved")
+                    if any(
+                        market_identity.get(key, getattr(contract, key)) != getattr(contract, key)
+                        for key in ("currency", "market_area")
                     ):
-                        state = {
-                            **previous_physical,
-                            "counters": {
-                                "actual": dict(actual_counters or {}),
-                                "reference": dict(reference_counters or {}),
-                            },
-                        }
-                        reference_known = True
-                    context = row["context"]
+                        raise PendingSettlement("Historical market identity changed")
+                    flows["actual"] = (
+                        fsum(frame.channels[entity] for entity in bindings["imports"]),
+                        fsum(frame.channels[entity] for entity in bindings["exports"]),
+                    )
+                    try:
+                        flows.update(measured_cash_flows(frame, bindings))
+                    except (ValueError, KeyError, TypeError) as error:
+                        self._problem(error)
                     seeds = (
                         parse_counters({"seeds": context["seeds"]}, now).seeds
                         if context["seeds"]
@@ -488,264 +339,104 @@ class DailySavings:
                     )
                     try:
                         seeds = self.runtime.bonus.prepare(
-                            contract, frame, bindings, seeds, book, now, version(bindings), state
+                            contract,
+                            frame,
+                            bindings,
+                            seeds,
+                            book,
+                            now,
+                            version(bindings),
+                            {
+                                "counters": {
+                                    "actual": counters["actual"] or {},
+                                    "reference": counters["without_battery"] or {},
+                                }
+                            },
                         )
                     except PendingSettlement as error:
                         self._problem(error)
-                        # Known scenario usage can continue. Unvalidated openings cannot seed it.
                         seeds = ()
                     for seed in seeds:
-                        seed_record = json.loads(
+                        record = json.loads(
                             json.dumps(asdict(seed), default=lambda value: value.isoformat())
                         )
-                        counter_seed_evidence[version(seed_record)] = seed_record
-                    # Match the original SQL overlap before billing validates selected timestamps.
-                    frame_start_stamp, frame_end_stamp = stamp(frame.start), stamp(frame.end)
+                        seed_evidence[version(record)] = record
+                    frame_start, frame_end = stamp(frame.start), stamp(frame.end)
                     prices = [
-                        row
-                        for row in market_rows
-                        if row["start"] < frame_end_stamp and row["end"] > frame_start_stamp
+                        price
+                        for price in market_rows
+                        if price["start"] < frame_end and price["end"] > frame_start
                     ]
                     site = SiteLocation(**context["location"]) if context["location"] else None
-                    if reference_known and not simulated_counters_ready(
-                        contract,
-                        frame.start,
-                        reference_counters,
-                        common_start=common_start,
-                    ):
-                        reference_known = False
-                    if reference_known:
+                    for kind in SCENARIOS:
+                        if kind not in flows:
+                            counters[kind] = None
+                            continue
                         try:
-                            opening_reference = (
-                                dict(state["reference_stored"])
-                                if state
-                                else dict(frame.battery_start)
-                            )
-                            result, state = evaluate(
-                                problem,
-                                frame,
-                                bindings,
-                                state,
+                            accepted[kind], counters[kind] = cash_account(
                                 contract,
+                                frame,
+                                flows[kind],
+                                counters[kind],
                                 seeds,
                                 prices,
                                 site,
-                                physical=physical,
+                                actual=kind == "actual",
+                                common_start=frame.start == initial,
                             )
-                            accepted.update(
-                                {kind: result[kind] for kind in ("actual", "reference")}
-                            )
-                            accepted["reference"]["opening_stored"] = opening_reference
-                            actual_counters = state["counters"]["actual"]
-                            reference_counters = state["counters"]["reference"]
-                            pv_estimated = result["available_pv_estimated"]
-                        except (ValueError, KeyError, TypeError) as error:
-                            self._problem(error)
-                            state, reference_known = None, False
-                    if "actual" not in accepted:
-                        try:
-                            accepted["actual"], actual_counters = independent_account(
-                                problem,
-                                frame,
-                                bindings,
-                                "actual",
-                                actual_counters,
-                                contract,
-                                seeds,
-                                prices,
-                                site,
-                                inventory_previous=actual_checkpoint,
+                            price_versions.update(
+                                tariff["source_version"] for tariff in accepted[kind]["tariffs"]
                             )
                         except (ValueError, KeyError, TypeError) as error:
                             self._problem(error)
                             try:
-                                actual_counters = advance_counters(
+                                known = kind == "actual" or comparison_counters_ready(
                                     contract,
-                                    frame,
-                                    fsum(frame.channels[entity] for entity in bindings["exports"]),
-                                    actual_counters,
-                                    seeds,
-                                    site,
+                                    frame.start,
+                                    counters[kind],
+                                    common_start=frame.start == initial,
+                                )
+                                counters[kind] = (
+                                    advance_counters(
+                                        contract,
+                                        frame,
+                                        flows[kind][1],
+                                        counters[kind],
+                                        seeds if known else (),
+                                        site,
+                                    )
+                                    or None
                                 )
                             except (ValueError, KeyError, TypeError):
-                                actual_counters = None
-                    if "reference" not in accepted:
-                        if physical_advanced:
-                            try:
-                                accepted["reference"], reference_counters = independent_account(
-                                    problem,
-                                    frame,
-                                    bindings,
-                                    "reference",
-                                    reference_counters,
-                                    contract,
-                                    seeds,
-                                    prices,
-                                    site,
-                                    common_start=common_start,
-                                    inventory_previous=previous_physical,
-                                    physical=physical,
-                                )
-                                accepted["reference"]["opening_stored"] = dict(
-                                    physical["reference_start"]
-                                )
-                            except (ValueError, KeyError, TypeError) as error:
-                                self._problem(error)
-                        if (
-                            "reference" not in accepted
-                            and physical_advanced
-                            and simulated_counters_ready(
-                                contract, frame.start, reference_counters, common_start=common_start
-                            )
-                        ):
-                            try:
-                                reference_counters = advance_counters(
-                                    contract,
-                                    frame,
-                                    physical["reference"]["export_kwh"],
-                                    reference_counters,
-                                    seeds,
-                                    site,
-                                )
-                            except (ValueError, KeyError, TypeError):
-                                reference_counters = None
-                        elif "reference" not in accepted:
-                            reference_counters = None
-                    try:
-                        accepted["without_battery"], without_counters = independent_account(
-                            problem,
-                            frame,
-                            bindings,
-                            "without_battery",
-                            without_counters,
-                            contract,
-                            seeds,
-                            prices,
-                            site,
-                            common_start=common_start,
-                        )
-                    except (ValueError, KeyError, TypeError) as error:
-                        self._problem(error)
-                        if simulated_counters_ready(
-                            contract, frame.start, without_counters, common_start=common_start
-                        ):
-                            try:
-                                flows, _estimated = without_battery_flows(problem, frame, bindings)
-                                without_counters = advance_counters(
-                                    contract,
-                                    frame,
-                                    flows["export_kwh"],
-                                    without_counters,
-                                    seeds,
-                                    site,
-                                )
-                            except (ValueError, KeyError, TypeError):
-                                without_counters = None
-                        else:
-                            without_counters = None
-                    if "actual" in accepted:
-                        accepted["actual"]["opening_stored"] = dict(frame.battery_start)
-                        actual_checkpoint = {
-                            "end": frame.end.isoformat(),
-                            "inventory": accepted["actual"]["inventory_end"],
-                            "actual_stored": dict(frame.battery_end),
-                            "curves": inventory_curves(problem),
-                            "capacities": {
-                                unit.device_id: unit.battery.capacity_kwh
-                                for unit in problem.batteries
-                            },
-                        }
-                        price_versions.update(
-                            tariff["source_version"] for tariff in accepted["actual"]["tariffs"]
-                        )
-                    else:
-                        actual_checkpoint = None
-                    versions.add(
-                        plan.get("input_snapshot", {}).get("contract_version") or "unrecorded"
-                    )
-                    if isinstance(plan.get("comparison_names"), dict):
-                        names.update(
-                            {
-                                key: value
-                                for key, value in plan["comparison_names"].items()
-                                if isinstance(key, str) and isinstance(value, str)
-                            }
-                        )
+                                counters[kind] = None
                 except (ValueError, KeyError, TypeError) as error:
                     self._problem(error)
-                    state, reference_known, actual_counters, without_counters = (
-                        None,
-                        False,
-                        None,
-                        None,
-                    )
-                    reference_counters = None
-                    if not physical_advanced:
-                        physical_state, physical_known = None, False
-                        self.runtime.physical_issue = settlement_issue(error)
-                if physical_advanced:
-                    try:
-                        changed, _external = value_movements(
-                            problem, previous_physical, physical["movements"]
-                        )
-                    except (ValueError, KeyError, TypeError):
-                        changed = [
-                            {**movement, "value": None} for movement in physical["movements"]
-                        ]
-                else:
-                    changed = accepted.get("actual", {}).get("inventory_movements", [])
-                inventory_changes.extend(
-                    {**movement, "at": frame.start.isoformat()} for movement in changed
+                    counters = {kind: None for kind in SCENARIOS}
+                estimated = frame.quality != "recorded" or any(
+                    len(result["tariffs"]) > 1 for result in accepted.values()
                 )
                 for kind, scenario in scenarios.items():
                     if kind in accepted:
-                        include(
-                            scenario,
-                            accepted[kind],
-                            frame,
-                            estimated
-                            or (kind != "actual" and pv_estimated)
-                            or accepted[kind].get("available_pv_estimated", False)
-                            or len(accepted[kind]["tariffs"]) > 1,
-                        )
+                        include(scenario, accepted[kind], frame, estimated)
                     else:
-                        reason = (
-                            MISSING_CONTEXT
-                            if plan is None
-                            else UNKNOWN_REFERENCE
-                            if kind == "reference" and not reference_known
-                            else MISSING_ACCOUNT
-                        )
-                        missing(scenario, frame.start, frame.end, reason)
-                if "actual" in accepted and "reference" in accepted:
-                    benefit.append(
-                        accepted["reference"]["economic_cost"] - accepted["actual"]["economic_cost"]
-                    )
-                    avoided.append(
-                        accepted["reference"]["import_kwh"] - accepted["actual"]["import_kwh"]
-                    )
-                    paired_seconds += (frame.end - frame.start).total_seconds()
-                if "actual" in accepted and "without_battery" in accepted:
-                    battery_benefit.append(
-                        accepted["without_battery"]["economic_cost"]
-                        - accepted["actual"]["economic_cost"]
-                    )
-                    battery_seconds += (frame.end - frame.start).total_seconds()
-                if "reference" in accepted and "without_battery" in accepted:
-                    self_consumption_benefit.append(
-                        accepted["without_battery"]["economic_cost"]
-                        - accepted["reference"]["economic_cost"]
-                    )
-                    self_consumption_seconds += (frame.end - frame.start).total_seconds()
+                        missing(scenario, frame.start, frame.end, MISSING_ACCOUNT)
+                if all(kind in accepted for kind in SCENARIOS):
+                    actual_cost = accepted["actual"]["grid_cash"]
+                    without_cost = accepted["without_battery"]["grid_cash"]
+                    for key, value in (
+                        ("actual_cost", actual_cost),
+                        ("without_battery_cost", without_cost),
+                        ("savings", without_cost - actual_cost),
+                    ):
+                        paired[key] = fsum((paired[key] or 0.0, value))
+                    seconds = (frame.end - frame.start).total_seconds()
+                    paired["coverage_seconds"] += seconds
+                    paired["estimated_seconds"] += seconds if estimated else 0.0
                 cursor = frame.end
         if cursor < end:
             for scenario in scenarios.values():
                 missing(scenario, cursor, end, MISSING_MEASUREMENTS)
-            state, reference_known, actual_counters, without_counters = None, False, None, None
-            actual_checkpoint = None
-            reference_counters = None
-            physical_state, physical_known = None, False
-            self.runtime.physical_issue = UNKNOWN_REFERENCE
+            counters = {kind: None for kind in SCENARIOS}
         expected = (end - start).total_seconds()
         for scenario in scenarios.values():
             scenario["status"] = (
@@ -764,41 +455,18 @@ class DailySavings:
             "evaluated_at": now.isoformat(),
             "finalized_at": None,
             "policy": DAILY_POLICY_VERSION,
-            "accounting_policy": POLICY_VERSION,
+            "accounting_policy": DAILY_POLICY_VERSION,
             "day_plan_id": self.runtime.plans.day_plan(start, end),
             "contract_version": contract.version,
             "counter_version": book.version if book else None,
-            "original_contract_versions": sorted(versions),
-            "installations": installations,
             "published_price_versions": sorted(price_versions),
             "currency": contract.currency,
             "market_area": contract.market_area,
-            "device_names": names,
-            "display_sources": display_sources,
             "energy": energy,
-            "inventory_movements": inventory_changes,
-            "counter_seed_evidence": counter_seed_evidence,
+            "counter_seed_evidence": seed_evidence,
             "scenarios": scenarios,
-            "savings": fsum(benefit) if benefit else None,
-            "avoided_import_kwh": fsum(avoided) if avoided else None,
-            "comparison_seconds": paired_seconds,
-            "battery_savings": fsum(battery_benefit) if battery_benefit else None,
-            "battery_comparison_seconds": battery_seconds,
-            "self_consumption_savings": fsum(self_consumption_benefit)
-            if self_consumption_benefit
-            else None,
-            "self_consumption_comparison_seconds": self_consumption_seconds,
-            "checkpoint": {
-                "end": end.isoformat(),
-                "reference": state,
-                "reference_known": reference_known,
-                "actual_counters": actual_counters,
-                "reference_counters": reference_counters,
-                "without_battery_counters": without_counters,
-                "actual": actual_checkpoint,
-                "physical": physical_state,
-                "physical_known": physical_known,
-            },
+            "cash": paired,
+            "checkpoint": {"end": end.isoformat(), "cash_counters": counters},
         }
 
     def _problem(self, error):
@@ -824,6 +492,10 @@ def add_energy(totals, frame, bindings):
     for key, terms in members.items():
         if len({term.entity_id for term in terms}) != len(terms):
             raise ValueError("Duplicate measured energy bindings")
+        if key == "solar_ac" and any(
+            source.get("measurement_boundary", "ac") != "ac" for source in bindings["solar"]
+        ):
+            continue
         if terms and all(term.entity_id in frame.channels for term in terms):
             amount = fsum(frame.channels[term.entity_id] * term.sign for term in terms)
             if amount < 0:

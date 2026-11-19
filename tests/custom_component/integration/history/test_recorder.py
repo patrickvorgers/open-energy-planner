@@ -1101,168 +1101,71 @@ def test_settlement_bridge_counter_roundoff_never_admits_resets(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        "idle",
-        "idle_hourly",
-        "charge",
-        "discharge",
-        "changed_soc",
-        "no_return",
-        "too_long",
-        "missing_charge",
-        "missing_discharge",
-        "missing_metadata",
-        "invalid_unit",
-        "invalid_value",
-        "invalid_return",
-        "nonfinite_value",
-        "out_of_range",
-        "missing_meter",
-        "no_prior",
-    ],
-)
-def test_settlement_bridge_only_reconstructs_bounded_proven_idle_soc(monkeypatch, case, caplog):
-    """A restart gap needs equal valid bounding SoC and unchanged counters. Later valid intervals remain usable."""
-    from homeassistant.core import State
-
+@pytest.mark.parametrize("soc", ["unavailable", "nan", "90"])
+def test_settlement_bridge_captures_ac_energy_without_historical_soc(monkeypatch, soc):
+    """Missing or invalid SoC cannot block two measured AC quarters or label their energy as estimated."""
     from custom_components.open_energy_planner import settlement as bridge_module
 
     async def scenario():
-        """A 50% 10-kWh battery remains at 5 kWh. No current state can substitute for missing history."""
+        """Read independent five-minute cumulative energy through Recorder ownership, without any SoC history."""
         async with running_chain(live=True, recorder=True) as (hass, _entry, _url, _root):
-            start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=4)
-            energy_entities = ["sensor.import", "sensor.charge", "sensor.discharge"]
-            metadata = {
-                entity: (index, {"has_sum": True, "unit_of_measurement": "kWh"})
-                for index, entity in enumerate(energy_entities)
-            }
-            if case == "missing_metadata":
-                del metadata["sensor.charge"]
-            monkeypatch.setattr(bridge_module, "get_metadata", lambda *_args, **_kwargs: metadata)
+            start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+            entities = ["sensor.import", "sensor.charge", "sensor.discharge"]
+            monkeypatch.setattr(
+                bridge_module,
+                "get_metadata",
+                lambda *_args, **_kwargs: {
+                    entity: (index, {"has_sum": True, "unit_of_measurement": "kWh"})
+                    for index, entity in enumerate(entities)
+                },
+            )
 
-            def statistics(*_args):
-                """Meter endpoints encompass both sides of the outage. Missing and active counters are distinct."""
-                hourly = _args[4] == "hour"
+            def statistics(*arguments):
+                """Each channel rises .10 kWh per five minutes, making a measured quarter .30 kWh."""
                 return {
                     entity: [
                         {
-                            "start": (start + timedelta(minutes=offset)).timestamp()
-                            - (3600 if hourly else 300),
-                            "sum": 100
-                            + (0.1 if entity == "sensor." + case and offset >= 30 else 0),
-                            "state": 100,
+                            "start": (start + timedelta(minutes=offset - 5)).timestamp(),
+                            "sum": 100 + offset / 50,
+                            "state": 100 + offset / 50,
                         }
-                        for offset in range(-60, 136, 60 if hourly else 5)
-                        if not (case == "idle_hourly" and not hourly and 10 <= offset <= 40)
-                        and not (
-                            case == "missing_meter"
-                            and entity == "sensor.charge"
-                            and (hourly or offset == 45)
-                        )
+                        for offset in range(0, 35, 5)
                     ]
-                    for entity in energy_entities
+                    for entity in entities
                 }
 
             monkeypatch.setattr(bridge_module, "statistics_during_period", statistics)
-            before = State(
-                "sensor.soc",
-                {"invalid_value": "bad", "nonfinite_value": "nan", "out_of_range": "101"}.get(
-                    case, "50"
-                ),
-                {"unit_of_measurement": "kWh" if case == "invalid_unit" else "%"},
-                last_updated=start - timedelta(hours=1),
-            )
-            missing = State(
-                "sensor.soc", "unavailable", {}, last_updated=start + timedelta(minutes=8)
-            )
-            after = State(
-                "sensor.soc",
-                {"changed_soc": "51", "invalid_return": "bad"}.get(case, "50"),
-                {"unit_of_measurement": "%"},
-                last_updated=start
-                + timedelta(minutes=80 if case == "too_long" else 40, seconds=43),
-            )
-            history = (
-                ([] if case == "no_prior" else [before])
-                + [missing]
-                + ([] if case == "no_return" else [after])
-            )
-
-            def historical_soc(_hass, left, right, *_args, **_kwargs):
-                """Verify lookback finds a valid state before a gap even when it predates the requested quarter."""
-                assert left == start - timedelta(hours=1)
-                assert right == start + timedelta(hours=2, seconds=1)
-                return {"sensor.soc": history}
-
-            monkeypatch.setattr(bridge_module, "get_significant_states", historical_soc)
-            hass.states.async_set("sensor.soc", "90", {"unit_of_measurement": "%"})
-            battery = {
-                "device_id": "battery",
-                "soc_entity": "sensor.soc",
-                "capacity_kwh": 10,
-                "energy_entity": None if case == "missing_discharge" else "sensor.discharge",
-                "charge_energy_entity": None if case == "missing_charge" else "sensor.charge",
-            }
+            hass.states.async_set("sensor.soc", soc, {"unit_of_measurement": "%"})
             report = await bridge_module.SettlementBridge(hass).capture(
                 {
-                    "version": "soc-gap",
+                    "version": "measured-ac-without-soc",
                     "start": start.isoformat(),
-                    "end": (start + timedelta(hours=2)).isoformat(),
+                    "end": (start + timedelta(minutes=30)).isoformat(),
                     "bindings": {
-                        "terms": [{"entity_id": entity, "sign": 1} for entity in energy_entities],
+                        "terms": [
+                            {"entity_id": entity, "sign": -1 if entity == "sensor.charge" else 1}
+                            for entity in entities
+                        ],
                         "solar": [],
-                        "batteries": [battery],
                         "imports": ["sensor.import"],
                         "exports": [],
+                        "batteries": [
+                            {
+                                "device_id": "battery",
+                                "soc_entity": "sensor.soc",
+                                "energy_entity": "sensor.discharge",
+                                "charge_energy_entity": "sensor.charge",
+                            }
+                        ],
                     },
                 }
             )
-            if case in ("idle", "idle_hourly"):
-                assert len(report["frames"]) == 8
-                assert all(
-                    row["battery_start"] == row["battery_end"] == {"battery": 5}
-                    for row in report["frames"]
-                )
-                assert [row["quality"] for row in report["frames"]] == ["estimated_soc"] * 3 + [
-                    "recorded"
-                ] * 5
-            else:
-                if case == "missing_discharge":
-                    assert report is None
-                else:
-                    first_valid = {
-                        "charge": 45,
-                        "discharge": 45,
-                        "changed_soc": 45,
-                        "too_long": 90,
-                        "missing_charge": 45,
-                        "invalid_unit": 45,
-                        "invalid_value": 45,
-                        "nonfinite_value": 45,
-                        "out_of_range": 45,
-                        "missing_meter": 60,
-                        "no_prior": 45,
-                    }.get(case, 120)
-                    assert [row["start"] for row in report["frames"]] == [
-                        (start + timedelta(minutes=offset)).isoformat()
-                        for offset in range(first_valid, 120, 15)
-                    ]
-                    assert report["scanned_until"] == (start + timedelta(hours=2)).isoformat()
-                expected = {
-                    "charge": "Battery energy changed during unavailable SoC: sensor.charge",
-                    "discharge": "Battery energy changed during unavailable SoC: sensor.discharge",
-                    "missing_charge": "Battery energy meter charge_energy_entity is required to prove idle SoC for sensor.soc: None",
-                    "missing_discharge": "Battery energy meter energy_entity is required for sensor.soc: None",
-                    "missing_metadata": "Energy statistics metadata is unusable: sensor.charge",
-                    "invalid_value": "Historical battery state is invalid: sensor.soc",
-                    "invalid_return": "Historical battery state is invalid: sensor.soc",
-                    "nonfinite_value": "Historical battery state is invalid: sensor.soc",
-                    "out_of_range": "Historical battery state is invalid: sensor.soc",
-                    "missing_meter": f"Settlement statistics have a gap: sensor.charge at {(start + timedelta(minutes=45)).isoformat()}",
-                }.get(case, "Historical battery state is missing: sensor.soc")
-                assert expected in caplog.text
+            assert len(report["frames"]) == 2
+            assert report["scanned_until"] == (start + timedelta(minutes=30)).isoformat()
+            for row in report["frames"]:
+                assert row["battery_start"] == row["battery_end"] == {}
+                assert row["quality"] == "recorded"
+                assert row["channels"] == pytest.approx({entity: 0.30 for entity in entities})
 
     asyncio.run(scenario())
 

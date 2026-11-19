@@ -200,13 +200,7 @@ def register(app):
         return web.json_response({"accepted": True})
 
     async def bonus_wait(_request):
-        """Publish the production historical-bonus explanation with independently chosen synthetic dates."""
-        from open_energy_planner.savings.runtime import (
-            EvaluationResult,
-            EvaluationState,
-            settlement_activity_detail,
-        )
-
+        """Publish an independent historical-bonus message to test safe activity presentation."""
         start = datetime(2026, 11, 1, 12, 15, tzinfo=UTC)
         end = start + timedelta(minutes=15)
         events = app[EVENTS]
@@ -216,15 +210,10 @@ def register(app):
             "Evaluate measured savings",
             context={"start": start.isoformat(), "end": end.isoformat()},
         )
-        result = EvaluationResult(
-            EvaluationState.PENDING, 0, 96, start.isoformat(), end.isoformat()
-        )
         await events.finish(
             identity,
             Outcome.SKIPPED,
-            settlement_activity_detail(
-                result, "Historical bonus baseline awaits captured export evidence"
-            ),
+            "This attempt processed 0 of 96 measured intervals. The historical bonus calculation needs stored export measurements around its checkpoint. Do not change a valid contract start date or enter an estimated bonus total to bypass this wait. Previous published financial results remain available.",
             context={"waiting_start": start.isoformat(), "waiting_end": end.isoformat()},
         )
         await events.flush()

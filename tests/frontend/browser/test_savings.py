@@ -110,17 +110,9 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         open_primary_navigation(page)
         page.get_by_role("link", name="Savings", exact=True).click()
-    seeded_day = (
-        datetime.fromisoformat(original["input_snapshot"]["problem"]["intervals"][0]["start"])
-        .date()
-        .isoformat()
-    )
-    page.locator("#period-start").fill(seeded_day)
-    page.locator("#period-end").fill(seeded_day)
-    page.get_by_role("button", name="Show period").click()
-    expect(page.locator("#evaluation-rows tr")).to_have_count(2)
-    page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
-    page.get_by_role("button", name="View original plan").first.click()
+    open_primary_navigation(page)
+    page.get_by_role("link", name="Planning", exact=True).click()
+    page.locator("#plan-version").select_option("browser-original-plan")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Garage battery")
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
@@ -174,87 +166,18 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-def test_savings_overview_compares_realized_costs_and_original_plan(app_page):
-    """Desktop/mobile show -.20 measured-versus-simulated benefit and open original expectations without command changes."""
+def test_savings_overview_uses_the_real_matched_cash_route(app_page):
+    """Two import-only quarters cost .60 on both sides and show a real zero saving without simulation detail."""
+    from tests.frontend.browser.helpers import choose_period
+
     page, url = app_page
-    page.goto(url + "/overview")
+    page.goto(url + "/overview#savings")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#overview-status")).to_contain_text("Connected")
-    seeded = (datetime.now(UTC) - timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    yesterday = (
-        seeded.date().isoformat()
-    )  # This fixture installation is UTC. The browser is New York.
-    open_primary_navigation(page)
-    page.get_by_role("link", name="Savings", exact=True).click()
-    page.locator("#period-start").fill(yesterday)
-    page.locator("#period-end").fill(yesterday)
-    page.get_by_role("button", name="Show period").click()
-    # The local day can have 92 or 100 quarters across daylight-saving transitions.
-    expect(page.locator("#coverage")).to_contain_text("2 of ")
-    expect(page.locator("#savings-total")).to_contain_text("-0.20 EUR")
-    expect(page.locator("#evaluation-rows tr")).to_have_count(2)
-    expect(page.locator("#cost-rows tr").filter(has_text="Net electricity cost")).to_have_count(1)
-    assert (
-        page.evaluate(
-            "Chart.getChart(document.getElementById('energy-chart')).data.datasets.length"
-        )
-        == 3
-    )
-    page.locator("summary").filter(has_text="Advice, realization and evaluation evidence").click()
-    page.get_by_role("button", name="View original plan").first.click()
-    expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize cost")
-    expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
-    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-
-
-@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-@pytest.mark.parametrize("aggregated", [False, True])
-def test_savings_chart_breaks_missing_coverage_without_timezone_labels(app_page, aggregated):
-    """Renderer-only sparse intervals/bins draw separate segments. Aggregated dates keep UTC binning without timezone labels on desktop/mobile."""
-    page, url = app_page
-    first = (datetime.now(UTC) - timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    response = page.request.get(
-        url + "/v1/savings",
-        params={"start": first.isoformat(), "end": (first + timedelta(days=1)).isoformat()},
-        headers={"Authorization": "Bearer " + TOKEN},
-    )
-    assert response.ok
-    body = response.json()
-    body["details_truncated"] = aggregated
-    if aggregated:
-        body["chart"] = [
-            {"start": "2026-10-20", "end": "2026-10-21", "savings": 1},
-            {"start": "2026-10-22", "end": "2026-10-23", "savings": -1},
-        ]
-    else:
-        body["intervals"][1].update(
-            start=(first + timedelta(minutes=30)).isoformat(),
-            end=(first + timedelta(minutes=45)).isoformat(),
-        )
-    # Isolate chart rendering. The production evaluator itself never skips a reference gap.
-    page.route("**/v1/savings?**", lambda route: route.fulfill(json=body))
-    page.goto(url + "/overview")
-    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
-    page.get_by_role("button", name="Connect", exact=True).click()
-    open_primary_navigation(page)
-    page.get_by_role("link", name="Savings", exact=True).click()
-    expect(page.locator("#savings-chart-legend")).to_contain_text("Benefit")
-    assert (
-        page.evaluate(
-            "Chart.getChart(document.getElementById('savings-chart')).data.datasets[0].data.filter(p => p.y === null).length"
-        )
-        == 1
-    )
-    if aggregated:
-        expect(page.locator("#savings-chart-range")).to_have_text("From 10/20/2026 to 10/23/2026")
-        assert (
-            page.locator("#savings-chart").evaluate(
-                "canvas => Chart.getChart(canvas).options.scales.x.title.text"
-            )
-            == "Calendar date"
-        )
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+    choose_period(page, yesterday, yesterday, host="#savings-period")
+    expect(page.locator("#savings-total")).to_have_text("0.00 EUR")
+    expect(page.locator("#savings-actual")).to_have_text("0.60 EUR")
+    expect(page.locator("#savings-without")).to_have_text("0.60 EUR")
+    expect(page.locator("#savings-status")).to_contain_text("Partial period")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

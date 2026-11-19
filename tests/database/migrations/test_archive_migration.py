@@ -380,7 +380,7 @@ def test_transfer_progress_reports_real_copy_and_verification_counts(route):
 
 
 def test_final_daily_results_and_controls_survive_every_transfer_route_without_source(route):
-    """A sealed partial day's .60 cost and -.20 benefit remain usable after full plans, raw quarters and source schema disappear."""
+    """A sealed partial day retains .60 on both sides and zero saving after full plans, raw quarters and source schema disappear."""
     from dataclasses import asdict
 
     from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
@@ -401,6 +401,8 @@ def test_final_daily_results_and_controls_survive_every_transfer_route_without_s
     identity = "daily-transfer-original"
     original.state["plan"] = {
         "plan_id": identity,
+        "currency": "EUR",
+        "market_area": "NL",
         "generated_at": START.isoformat(),
         "strategy": "minimize cost",
         "solution_status": "optimal",
@@ -475,8 +477,10 @@ def test_final_daily_results_and_controls_survive_every_transfer_route_without_s
         SavingsRuntime(restored_store, SqlDocuments(target, "savings"), restored_plans)
     )
     result = restored.overview(START.replace(hour=0), START.replace(hour=0) + timedelta(days=1))
-    assert result["totals"]["actual"]["purchase"] == pytest.approx(0.6)
-    assert result["savings"] == pytest.approx(-0.2)
+    assert result["cash"]["actual_cost"] == pytest.approx(0.6)
+    assert result["cash"]["without_battery_cost"] == pytest.approx(0.6)
+    assert result["cash"]["savings"] == 0
+    assert result["cash"]["coverage_seconds"] == 1800
     assert result["days"][0]["scenarios"]["actual"]["status"] == "partial"
 
 

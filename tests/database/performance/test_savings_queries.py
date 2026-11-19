@@ -1,11 +1,8 @@
 """Large settlement history must stay aggregated and bounded on every backend."""
 
-from datetime import timedelta
-
 import pytest
 
-from tests.app.savings.support.scenarios import END, START, contract
-from tests.database.support.history_datasets import settlement_batches
+from tests.database.support.history_datasets import retained_evaluation, settlement_batches
 
 
 def test_three_year_period_query_aggregates_without_loading_all_detail(settlement):
@@ -18,10 +15,8 @@ def test_three_year_period_query_aggregates_without_loading_all_detail(settlemen
         SETTLEMENT_FRAMES,
     )
 
-    runtime, store, docs, engine, _plans = settlement
-    runtime.process(contract(), END + timedelta(hours=1))
-    head = docs.read("head.json")
-    sample = store.results(head["revision"], START, END)[0]
+    runtime, _store, docs, engine, _plans = settlement
+    head, sample = retained_evaluation(docs)
     first, last = datetime(2022, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC)
     count = int((last - first).total_seconds() / 900)
     for frames, evaluations in settlement_batches(sample, head["revision"], first, last):

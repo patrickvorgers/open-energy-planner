@@ -5,7 +5,7 @@ import logging
 from calendar import monthrange
 from contextlib import suppress
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiohttp import web
@@ -21,6 +21,7 @@ CALENDAR_PERIOD_MONTHS = {"month": 1, "quarter": 3, "year": 12}
 HISTORY_PERIODS = {"week", "all", *CALENDAR_PERIOD_MONTHS}
 DAYS_PER_WEEK = 7
 INVALID_PERIOD = "Choose a supported database history period."
+INVALID_HISTORY_RANGE = "Choose increasing calendar dates no later than today."
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -61,8 +62,22 @@ def register(app, engine, timezone):
         """Return a bounded calendar window without exposing connection credentials or paths."""
         try:
             period = request.query.get("period", "month")
-            if period not in HISTORY_PERIODS:
+            custom = "start" in request.query or "end" in request.query
+            if period not in HISTORY_PERIODS and not (custom and period == "custom"):
                 raise ValueError(INVALID_PERIOD)
+            if custom:
+                try:
+                    start, end = (
+                        date.fromisoformat(request.query[key]) for key in ("start", "end")
+                    )
+                    if (
+                        start.isoformat() != request.query["start"]
+                        or end.isoformat() != request.query["end"]
+                        or start > end
+                    ):
+                        raise ValueError
+                except (ValueError, KeyError):
+                    raise ValueError(INVALID_HISTORY_RANGE) from None
             zone = timezone()
             if not zone:
                 return web.json_response(
@@ -78,20 +93,28 @@ def register(app, engine, timezone):
                     headers={"Cache-Control": "no-store"},
                 )
             today = datetime.now(UTC).astimezone(ZoneInfo(zone)).date()
-            start = period_start(today, period)
+            if custom:
+                if end > today:
+                    raise ValueError(INVALID_HISTORY_RANGE)
+                period = "custom"
+            else:
+                end = today
+                start = period_start(today, period)
             rows = await asyncio.to_thread(
-                history.read, start.isoformat() if start else None, today.isoformat()
+                history.read, start.isoformat() if start else None, end.isoformat()
             )
-            latest = (
-                rows[-1] if rows else await asyncio.to_thread(history.latest, today.isoformat())
-            )
+            latest = rows[-1] if rows else await asyncio.to_thread(history.latest, end.isoformat())
             return web.json_response(
                 {
                     "period": period,
                     "start": start.isoformat()
                     if start
                     else (rows[0]["day"] if rows else today.isoformat()),
-                    "end": today.isoformat(),
+                    "end": end.isoformat(),
+                    "calendar": {
+                        "min_day": await asyncio.to_thread(history.first_day, today.isoformat()),
+                        "max_day": today.isoformat(),
+                    },
                     "timezone": zone,
                     "sample_hour": DAILY_SAMPLE_HOUR,
                     "samples": rows,
@@ -104,12 +127,12 @@ def register(app, engine, timezone):
                 error,
                 logger=_LOGGER,
                 operation="Read database growth",
-                safe_messages=(INVALID_PERIOD,),
+                safe_messages=(INVALID_PERIOD, INVALID_HISTORY_RANGE),
                 fallback="Database history unavailable. Check the database connection and refresh.",
             )
             return web.json_response(
                 {"error": message},
-                status=400 if message == INVALID_PERIOD else 503,
+                status=400 if message in (INVALID_PERIOD, INVALID_HISTORY_RANGE) else 503,
                 headers={"Cache-Control": "no-store"},
             )
 

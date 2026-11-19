@@ -4,11 +4,10 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
-from math import ceil, isfinite
+from math import isfinite
 
 from homeassistant.components.energy.data import async_get_manager
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
 from homeassistant.util import dt as dt_util
 
@@ -23,18 +22,16 @@ MAX_CAPTURE_REQUEST_BACKOFFS = MAX_CAPTURE_INTERVALS
 MAX_SETTLEMENT_REPORT_BYTES = 192 * 1024
 CAPTURE_TIMEOUT_SECONDS = 30
 RETRY_MINUTES = 15
-FULL_SOC_PERCENT = 100
 # One micro-Wh absorbs unit-conversion roundoff without admitting real counter resets.
 COUNTER_ROUNDING_KWH = 1e-9
 # Match the app's settlement wire bounds before accepting a frame into the batch.
 MAX_SETTLEMENT_ENERGY_KWH = 1_000_000
 MAX_SETTLEMENT_METER_KWH = 1_000_000_000
-MAX_IDLE_SOC_GAP = timedelta(hours=1)
 _LOGGER = logging.getLogger(__name__)
 
 
 class SettlementBridge:
-    """Transfer only requested Energy meters and battery endpoints, with explicit reconstruction quality."""
+    """Transfer requested AC energy meters, with explicit reconstruction quality and no SoC dependency."""
 
     def __init__(self, hass):
         """Keep retry bookkeeping local. Financial arithmetic and persistence belong to the app."""
@@ -95,10 +92,9 @@ class SettlementBridge:
         entities.update(battery_item["energy_entity"] for battery_item in bindings["batteries"])
         if "recorder" not in self.hass.config.components:
             return None
-        batteries = bindings["batteries"]
 
         def read():
-            """Use Recorder-owned execution, units, sum-reset handling and historical SoC state."""
+            """Use Recorder-owned execution, units and sum-reset handling for measured energy."""
             metadata = {}
             for batch in channel_batches(entities):
                 metadata.update(get_metadata(self.hass, statistic_ids=set(batch)))
@@ -138,18 +134,6 @@ class SettlementBridge:
                             for entity_item in entities
                         },
                         seconds,
-                    )
-                )
-            soc = {}
-            for batch in channel_batches(battery_item["soc_entity"] for battery_item in batteries):
-                soc.update(
-                    get_significant_states(
-                        self.hass,
-                        start - MAX_IDLE_SOC_GAP,
-                        end + timedelta(seconds=1),
-                        batch,
-                        include_start_time_state=True,
-                        significant_changes_only=False,
                     )
                 )
 
@@ -196,132 +180,6 @@ class SettlementBridge:
                     f"Settlement statistics have a gap: {entity} at {instant.isoformat()}"
                 )
 
-            def soc_percentage(state, entity):
-                """Validate a recorded SoC sample and identify its source in every failure.
-
-                Args:
-                    state: Historical HA state, or None when no as-of sample exists.
-                    entity: Configured battery SoC entity ID used only for diagnostics.
-
-                Returns:
-                    A finite percentage within the battery's physical 0..100 range.
-
-                Raises:
-                    ValueError: The sample or percentage unit is missing, or its
-                        value is nonnumeric, nonfinite or outside the physical range.
-                """
-                if state is None or state.attributes.get("unit_of_measurement") != "%":
-                    raise ValueError(f"Historical battery state is missing: {entity}")
-                try:
-                    value = float(state.state)
-                except (TypeError, ValueError):
-                    raise ValueError(f"Historical battery state is invalid: {entity}") from None
-                if not isfinite(value) or not 0 <= value <= FULL_SOC_PERCENT:
-                    raise ValueError(f"Historical battery state is invalid: {entity}")
-                return value
-
-            def stored(instant):
-                """Read historical SoC at an aware frame boundary.
-
-                Bridge unknown or unavailable spans up to MAX_IDLE_SOC_GAP only
-                with equal valid bounding percentages and unchanged charge and
-                discharge sums over the enclosing five-minute boundaries.
-
-                Args:
-                    instant: Aware historical frame boundary, never a current-state lookup.
-
-                Returns:
-                    Stored kWh by virtual battery ID and a boolean indicating
-                    whether any battery endpoint was reconstructed.
-
-                Raises:
-                    ValueError: Historical SoC or required meter evidence is
-                        missing, invalid or inconsistent, or the outage is too long.
-                """
-                result, reconstructed = {}, False
-                for battery in batteries:
-                    history = soc.get(battery["soc_entity"], ())
-                    state = next(
-                        (
-                            source_item
-                            for source_item in reversed(history)
-                            if source_item.last_updated <= instant
-                        ),
-                        None,
-                    )
-                    if state is not None and state.state in ("unknown", "unavailable"):
-                        before = next(
-                            (
-                                soc_state
-                                for soc_state in reversed(history)
-                                if soc_state.last_updated < state.last_updated
-                                and soc_state.state not in ("unknown", "unavailable")
-                            ),
-                            None,
-                        )
-                        after = next(
-                            (
-                                soc_state
-                                for soc_state in history
-                                if soc_state.last_updated > instant
-                                and soc_state.state not in ("unknown", "unavailable")
-                            ),
-                            None,
-                        )
-                        missing_since = next(
-                            (
-                                soc_state.last_updated
-                                for soc_state in history
-                                if before is not None
-                                and before.last_updated < soc_state.last_updated <= instant
-                                and soc_state.state in ("unknown", "unavailable")
-                            ),
-                            state.last_updated,
-                        )
-                        if (
-                            before is None
-                            or after is None
-                            or after.last_updated - missing_since > MAX_IDLE_SOC_GAP
-                            or soc_percentage(before, battery["soc_entity"])
-                            != soc_percentage(after, battery["soc_entity"])
-                        ):
-                            raise ValueError(
-                                f"Historical battery state is missing: {battery['soc_entity']}"
-                            )
-                        left = datetime.fromtimestamp(
-                            int(missing_since.timestamp()) // STATISTIC_SECONDS * STATISTIC_SECONDS,
-                            instant.tzinfo,
-                        )
-                        right = datetime.fromtimestamp(
-                            ceil(after.last_updated.timestamp() / STATISTIC_SECONDS)
-                            * STATISTIC_SECONDS,
-                            instant.tzinfo,
-                        )
-                        for meter_key, meter_entity in (
-                            ("charge_energy_entity", battery.get("charge_energy_entity")),
-                            ("energy_entity", battery["energy_entity"]),
-                        ):
-                            if meter_entity not in entities:
-                                raise ValueError(
-                                    f"Battery energy meter {meter_key} is required to prove "
-                                    f"idle SoC for {battery['soc_entity']}: {meter_entity!r}"
-                                )
-                            initial, _, _ = endpoint(meter_entity, left, True)
-                            final, _, _ = endpoint(meter_entity, right, True)
-                            if (
-                                not isfinite(final - initial)
-                                or abs(final - initial) > COUNTER_ROUNDING_KWH
-                            ):
-                                raise ValueError(
-                                    f"Battery energy changed during unavailable SoC: {meter_entity}"
-                                )
-                        state, reconstructed = before, True
-                    value = soc_percentage(state, battery["soc_entity"])
-                    result[battery["device_id"]] = (
-                        value / FULL_SOC_PERCENT * battery["capacity_kwh"]
-                    )
-                return result, reconstructed
-
             frames, cursor, unavailable = [], start, False
             base_report = {
                 "request_version": request["version"],
@@ -366,18 +224,14 @@ class SettlementBridge:
                                 candidate == "estimated_boundary" and quality == "recorded"
                             ):
                                 quality = candidate
-                    battery_start, start_reconstructed = stored(cursor)
-                    battery_end, end_reconstructed = stored(right)
                     frame = {
                         "start": cursor.isoformat(),
                         "end": right.isoformat(),
                         "channels": channels,
-                        "battery_start": battery_start,
-                        "battery_end": battery_end,
+                        "battery_start": {},
+                        "battery_end": {},
                         "meter_start": meters,
-                        "quality": "estimated_soc"
-                        if start_reconstructed or end_reconstructed
-                        else quality,
+                        "quality": quality,
                     }
                     added_bytes = len(json.dumps(frame, allow_nan=False).encode()) + (
                         2 if frames else 0

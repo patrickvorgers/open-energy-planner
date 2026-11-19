@@ -7,16 +7,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from open_energy_planner.core.units import SECONDS_PER_HOUR
-from open_energy_planner.savings.model import MAX_BATCH_INTERVALS, PendingSettlement
+from open_energy_planner.savings.model import CASH_POLICY_VERSION, MAX_BATCH_INTERVALS
 from open_energy_planner.storage.adapters.lifecycle.evidence import activation_history
 from open_energy_planner.storage.adapters.lifecycle.schema import (
-    PUBLISHED_EVENTS,
     PUBLISHED_PRICES,
+    SAVINGS_CASH_DAYS,
     SAVINGS_DAYS,
     SETTLEMENT_EVALUATIONS,
     SETTLEMENT_FRAMES,
-    SETTLEMENT_STATE,
 )
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import canonical, digest
 from open_energy_planner.storage.adapters.lifecycle.transactions import lifecycle_transaction
@@ -135,22 +133,22 @@ class SettlementStore:
                 "payload": encode_payload(canonical(report)),
                 "payload_hash": digest(report),
                 **{
-                    f"{scenario}_{key}": report["scenarios"][scenario]["totals"][key]
-                    if report["scenarios"][scenario]["totals"] is not None
+                    f"{scenario}_{key}": report["scenarios"][scenario]["totals"].get(key)
+                    if report["scenarios"].get(scenario, {}).get("totals") is not None
                     else None
                     for scenario in ("actual", "reference", "without_battery")
                     for key in TOTAL_KEYS
                 },
                 **{
-                    f"{scenario}_coverage_seconds": report["scenarios"][scenario][
-                        "coverage_seconds"
-                    ]
+                    f"{scenario}_coverage_seconds": report["scenarios"]
+                    .get(scenario, {})
+                    .get("coverage_seconds", 0.0)
                     for scenario in ("actual", "reference", "without_battery")
                 },
-                "savings": report["savings"],
-                "avoided_import_kwh": report["avoided_import_kwh"],
+                "savings": report.get("savings"),
+                "avoided_import_kwh": report.get("avoided_import_kwh"),
                 **{
-                    key: report[key]
+                    key: report.get(key, 0.0 if key.endswith("seconds") else None)
                     for key in (
                         "comparison_seconds",
                         "battery_savings",
@@ -166,6 +164,17 @@ class SettlementStore:
                 )
             else:
                 connection.execute(SAVINGS_DAYS.insert().values(start=key, **values))
+            connection.execute(SAVINGS_CASH_DAYS.delete().where(SAVINGS_CASH_DAYS.c.start == key))
+            if "cash" in report:
+                cash_values = {
+                    "start": key,
+                    "end": stamp(report["end"]),
+                    "day": report["day"],
+                    "currency": report["currency"],
+                    "policy": report["policy"],
+                    **report["cash"],
+                }
+                connection.execute(SAVINGS_CASH_DAYS.insert().values(**cash_values))
             documents.write(
                 "daily-progress.json", {"next": next_day, "timezone": report["timezone"]}
             )
@@ -178,33 +187,97 @@ class SettlementStore:
                 ) < datetime.fromisoformat(report["end"]):
                     documents.write("capture.json", {"end": report["end"]})
 
+    def activations(self, start, end):
+        """Read the last advice state and subsequent changes for one metering interval."""
+        history = activation_history()
+        with self.engine.connect() as connection:
+            initial = (
+                connection.execute(
+                    select(history)
+                    .where(history.c.activated_at <= stamp(start))
+                    .order_by(history.c.activated_at.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            later = (
+                connection.execute(
+                    select(history)
+                    .where(
+                        history.c.activated_at > stamp(start),
+                        history.c.activated_at < stamp(end),
+                    )
+                    .order_by(history.c.activated_at)
+                )
+                .mappings()
+                .all()
+            )
+        return [dict(row) for row in ([initial] if initial else []) + list(later)]
+
     def daily_overview(self, start, end):
         """Read mutable provisional details, SQL totals and chart bins from one repeatable database snapshot."""
         try:
             with _read_snapshot(self.engine) as connection:
+                count = connection.scalar(
+                    select(func.count())
+                    .select_from(SAVINGS_DAYS)
+                    .where(SAVINGS_DAYS.c.start >= stamp(start), SAVINGS_DAYS.c.end <= stamp(end))
+                )
                 return (
-                    self.daily_summary(start, end, _connection=connection),
+                    self.cash_overview(start, end, connection),
                     self.days(start, end, _connection=connection),
-                    self.daily_chart(start, end, _connection=connection),
+                    count,
                 )
         except SQLAlchemyError:
             raise OSError("Daily savings archive unavailable") from None
 
-    def daily_inputs(self, start, end, area, currency):
-        """Snapshot one day's original activation chronology and published prices for one replay.
-
-        The initial physical context may precede a disabled/null activation.
-        Price receipt identities remain intact. No forecasts or process cache are used.
-        """
-        try:
-            with _read_snapshot(self.engine) as connection:
-                return (
-                    self.context_plan(start, _connection=connection),
-                    self.activations(start, end, _connection=connection),
-                    self.published(start, end, area, currency, _connection=connection),
+    def cash_overview(self, start, end, connection):
+        """Aggregate matching cash quarters separately from immutable legacy simulation results."""
+        table = SAVINGS_CASH_DAYS
+        columns = (
+            "actual_cost",
+            "without_battery_cost",
+            "savings",
+            "coverage_seconds",
+            "estimated_seconds",
+        )
+        bounds = (table.c.start >= stamp(start), table.c.end <= stamp(end))
+        summary = dict(
+            connection.execute(
+                select(
+                    func.count().label("days"),
+                    func.count(func.distinct(table.c.currency)).label("currencies"),
+                    func.min(table.c.currency).label("currency"),
+                    *(func.sum(table.c[key]).label(key) for key in columns),
+                ).where(*bounds)
+            )
+            .mappings()
+            .one()
+        )
+        if summary.pop("currencies") > 1:
+            raise ValueError("Choose a period with one historical currency")
+        month = end - start > timedelta(days=DAILY_CHART_WINDOW_DAYS)
+        summary["aggregation"] = "month" if month else "day"
+        calendar_bin = func.substr(table.c.day, 1, 7 if month else 10)
+        summary["chart"] = [
+            dict(row)
+            for row in connection.execute(
+                select(
+                    func.min(table.c.start).label("start"),
+                    func.max(table.c.end).label("end"),
+                    *(func.sum(table.c[key]).label(key) for key in columns),
                 )
-        except SQLAlchemyError:
-            raise OSError("Daily savings archive unavailable") from None
+                .where(*bounds)
+                .group_by(calendar_bin)
+                .order_by(calendar_bin)
+            ).mappings()
+        ]
+        summary["expected_seconds"] = (end - start).total_seconds()
+        summary["coverage_seconds"] = summary["coverage_seconds"] or 0.0
+        summary["estimated_seconds"] = summary["estimated_seconds"] or 0.0
+        summary["policy"] = CASH_POLICY_VERSION
+        return summary
 
     def days(self, start, end, *, _connection=None):
         """Read bounded daily details without retaining or loading quarter measurement payloads."""
@@ -222,67 +295,6 @@ class SettlementStore:
                 .all()
             )
         return [self._day_report(row) for row in rows]
-
-    def daily_summary(self, start, end, *, _connection=None):
-        """Sum only reported measured coverage. SQL NULL stays unavailable when no day supplies evidence."""
-        table = SAVINGS_DAYS
-        columns = [
-            table.c[f"{scenario}_{key}"]
-            for scenario in ("actual", "reference", "without_battery")
-            for key in (*TOTAL_KEYS, "coverage_seconds")
-        ] + [
-            table.c[key]
-            for key in (
-                "savings",
-                "avoided_import_kwh",
-                "comparison_seconds",
-                "battery_savings",
-                "battery_comparison_seconds",
-                "self_consumption_savings",
-                "self_consumption_comparison_seconds",
-            )
-        ]
-        with (
-            nullcontext(_connection) if _connection is not None else self.engine.connect()
-        ) as connection:
-            return dict(
-                connection.execute(
-                    select(
-                        func.count().label("days"),
-                        func.count(func.distinct(table.c.currency)).label("currencies"),
-                        func.min(table.c.currency).label("currency"),
-                        *(func.sum(column).label(column.name) for column in columns),
-                    ).where(table.c.start >= stamp(start), table.c.end <= stamp(end))
-                )
-                .mappings()
-                .one()
-            )
-
-    def daily_chart(self, start, end, *, _connection=None):
-        """Aggregate local calendar bins in SQL while retaining UTC instants and genuine missing benefit."""
-        table = SAVINGS_DAYS
-        month = end - start > timedelta(days=DAILY_CHART_WINDOW_DAYS)
-        day = func.substr(table.c.day, 1, 7 if month else 10)
-        with (
-            nullcontext(_connection) if _connection is not None else self.engine.connect()
-        ) as connection:
-            return [
-                dict(row)
-                for row in connection.execute(
-                    select(
-                        func.min(table.c.start).label("start"),
-                        func.max(table.c.end).label("end"),
-                        func.sum(table.c.savings).label("savings"),
-                        *(
-                            func.sum(table.c[f"{kind}_import_kwh"]).label(f"{kind}_import_kwh")
-                            for kind in ("actual", "reference", "without_battery")
-                        ),
-                    )
-                    .where(table.c.start >= stamp(start), table.c.end <= stamp(end))
-                    .group_by(day)
-                    .order_by(day)
-                ).mappings()
-            ]
 
     def put_frames(self, frames, context=None, active_connection=None):
         """Idempotently retain original metering. Conflicting replacements require explicit correction handling."""
@@ -360,118 +372,6 @@ class SettlementStore:
                 .limit(1)
             )
 
-    def state(self, revision):
-        """Return detached continuous reference/counter state or an explicit uninitialized value."""
-        with self.engine.connect() as connection:
-            payload = connection.scalar(
-                select(SETTLEMENT_STATE.c.payload).where(SETTLEMENT_STATE.c.revision == revision)
-            )
-        return json.loads(decode_payload(payload)) if payload else None
-
-    def activations(self, start, end, *, _connection=None):
-        """Read the last advice state and subsequent changes for one metering interval."""
-        history = activation_history()
-        with (
-            nullcontext(_connection)
-            if _connection is not None
-            else self.engine.connect() as connection
-        ):
-            initial = (
-                connection.execute(
-                    select(history)
-                    .where(history.c.activated_at <= stamp(start))
-                    .order_by(history.c.activated_at.desc())
-                    .limit(1)
-                )
-                .mappings()
-                .first()
-            )
-            later = (
-                connection.execute(
-                    select(history)
-                    .where(
-                        history.c.activated_at > stamp(start),
-                        history.c.activated_at < stamp(end),
-                    )
-                    .order_by(history.c.activated_at)
-                )
-                .mappings()
-                .all()
-            )
-        return [dict(row) for row in ([initial] if initial else []) + list(later)]
-
-    def commit(self, revision, result, state):
-        """Commit an interval and both scenarios' continuation together. Retries cannot double-count."""
-        with lifecycle_transaction(self.engine) as connection:
-            current = self.published(
-                datetime.fromisoformat(result["start"]),
-                datetime.fromisoformat(result["end"]),
-                result["market_area"],
-                result["currency"],
-            )
-            for used in result["actual"]["tariffs"]:
-                available = [
-                    published_interval
-                    for published_interval in current
-                    if datetime.fromisoformat(published_interval["start"])
-                    <= datetime.fromisoformat(used["start"])
-                    and datetime.fromisoformat(published_interval["end"])
-                    >= datetime.fromisoformat(used["end"])
-                ]
-                latest = max(
-                    available,
-                    key=lambda published_price: published_price["received_at"],
-                    default=None,
-                )
-                if latest is None or latest["price"] != used["market_price"]:
-                    raise PendingSettlement("Published prices changed during settlement. Retrying")
-            key = (SETTLEMENT_EVALUATIONS.c.revision == revision) & (
-                SETTLEMENT_EVALUATIONS.c.start == stamp(result["start"])
-            )
-            old = connection.scalar(select(SETTLEMENT_EVALUATIONS.c.payload).where(key))
-            payload = encode_payload(canonical(result))
-            if old is not None:
-                if decode_payload(old) != decode_payload(payload):
-                    raise ValueError("Evaluation revision is immutable")
-                return
-            connection.execute(
-                SETTLEMENT_EVALUATIONS.insert().values(
-                    revision=revision,
-                    start=stamp(result["start"]),
-                    payload=payload,
-                    **{
-                        f"{scenario}_{key}": result[scenario][key]
-                        for scenario in ("actual", "reference")
-                        for key in TOTAL_KEYS
-                    },
-                    savings=result["savings"],
-                    avoided_import_kwh=result["avoided_import_kwh"],
-                    estimated=int(
-                        result["quality"] != "recorded"
-                        or result["available_pv_estimated"]
-                        or result["subinterval_estimated"]
-                    ),
-                    duration_h=(
-                        datetime.fromisoformat(result["end"])
-                        - datetime.fromisoformat(result["start"])
-                    ).total_seconds()
-                    / SECONDS_PER_HOUR,
-                )
-            )
-            where = SETTLEMENT_STATE.c.revision == revision
-            if connection.scalar(select(SETTLEMENT_STATE.c.revision).where(where)) is None:
-                connection.execute(
-                    SETTLEMENT_STATE.insert().values(
-                        revision=revision, payload=encode_payload(canonical(state))
-                    )
-                )
-            else:
-                connection.execute(
-                    SETTLEMENT_STATE.update()
-                    .where(where)
-                    .values(payload=encode_payload(canonical(state)))
-                )
-
     def results(self, revision, start, end):
         """Read only one bounded requested period, preserving date-selection independence."""
         try:
@@ -512,31 +412,6 @@ class SettlementStore:
                     .order_by(PUBLISHED_PRICES.c.start)
                 ).mappings()
             ]
-
-    def price_cursor(self, area, currency):
-        """Read committed ingestion order, independent of provider receipt time or HTTP duration."""
-        with self.engine.connect() as connection:
-            return (
-                connection.scalar(
-                    select(func.max(PUBLISHED_EVENTS.c.sequence)).where(
-                        PUBLISHED_EVENTS.c.area == area, PUBLISHED_EVENTS.c.currency == currency
-                    )
-                )
-                or 0
-            )
-
-    def corrected_prices(self, before, since, area, currency="EUR", through=None):
-        """Find committed semantic changes affecting already evaluated intervals in one bounded event range."""
-        query = select(PUBLISHED_EVENTS.c.start, PUBLISHED_EVENTS.c.version).where(
-            PUBLISHED_EVENTS.c.area == area,
-            PUBLISHED_EVENTS.c.currency == currency,
-            PUBLISHED_EVENTS.c.sequence > since,
-            PUBLISHED_EVENTS.c.start < stamp(before),
-        )
-        if through is not None:
-            query = query.where(PUBLISHED_EVENTS.c.sequence <= through)
-        with self.engine.connect() as connection:
-            return list(connection.execute(query))
 
     def summary(self, revision, start, end):
         """Aggregate full periods in SQL without loading years of interval JSON into RAM or a browser."""
