@@ -124,6 +124,10 @@ def app_site(request, savings_now):
             from tests.frontend.browser.documentation_fixture import seed
 
             seed(Path(directory))
+        if getattr(request, "param", None) == "unoptimized_loads":
+            from tests.frontend.browser.flexible_reference_fixture import seed as seed_flexible
+
+            seed_flexible(Path(directory))
         if getattr(request, "param", None) in (
             "device_planning",
             "device_planning_precision",

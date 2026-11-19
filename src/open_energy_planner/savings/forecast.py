@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 from ..optimization.export_bonus import ExportBonus, settle
 from .accounting import inventory
 from .context import physical_context
+from .flexible import REFERENCE_POLICY, reference_context, service_issue
 from .model import POLICY_VERSION
 from .reference import dispatch
 
@@ -15,14 +16,20 @@ def comparison(plan, reference_start=None, *, without_battery=False):
 
     An explicit reference_start replays legacy archived expectations. New plans
     share the EMS initial stock and bonus budgets, independently of settlement.
+    Versioned new references schedule their own price-independent flexible loads.
+    Archives without that version retain the original optimized EV/thermal loads.
     """
     if {work["task_id"] for work in plan["input_snapshot"]["problem"].get("appliances", [])} != {
         row["task_id"] for row in plan.get("appliance_schedule", [])
     }:
         raise ValueError("Unscheduled appliance work is not a comparable completed service")
-    problem = physical_context(plan)
-    actual_problem = problem
-    if plan["input_snapshot"]["problem"].get("appliances"):
+    actual_problem = physical_context(plan)
+    services = None
+    if plan.get("reference_policy") not in (None, REFERENCE_POLICY):
+        raise ValueError("Unsupported Planning reference policy")
+    if plan.get("reference_policy") == REFERENCE_POLICY:
+        problem, services = reference_context(plan)
+    else:
         problem = physical_context(plan, immediate_appliances=True)
     if without_battery:
         problem = replace(problem, batteries=(), terminal_valuations=())
@@ -52,7 +59,9 @@ def comparison(plan, reference_start=None, *, without_battery=False):
         wear += flow["wear"]
         reference.append({"start": step.start.isoformat(), "duration_h": step.duration_h, **flow})
     bonus = 0.0
-    financial_issue = reference_start.get("financial_issue")
+    financial_issue = reference_start.get("financial_issue") or (
+        service_issue(plan, services) if services is not None else None
+    )
     for definition in plan["input_snapshot"]["problem"].get("export_bonuses", ()):
         prepared = ExportBonus(
             **{
@@ -77,6 +86,11 @@ def comparison(plan, reference_start=None, *, without_battery=False):
     ems_cost = actual["cash_cost"] - (actual["terminal_value"] - actual_start_value)
     return {
         "policy": POLICY_VERSION,
+        **(
+            {"service_flows": services, "reference_policy": REFERENCE_POLICY}
+            if services is not None
+            else {}
+        ),
         "scenario": "without_battery" if without_battery else "self_consumption",
         "reference_start": reference_start,
         "reference": reference,

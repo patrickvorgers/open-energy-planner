@@ -252,6 +252,15 @@ closed rather than making previously controlled loads appear uncontrolled.
 
 ### Current plan JSON and archived evidence
 
+New plans optionally freeze `reference_policy: unoptimized-loads-v1`. Its
+`reference_forecast.service_flows` array has one object per original interval,
+with `ev` and `thermal` rows using the same identities, kWh, mean watts,
+temperatures and shortfall units as `expected_flows`. These are hypothetical
+non-price-driven service quantities for reference charts and billing. They are
+not execution commands or measurements. The absence of this policy preserves
+legacy fixed EV/thermal service. Shared JSON storage, hashes and cross-backend
+transfer preserve the exact policy and reference rows. No SQL schema changes.
+
 The SQL archive schema remains version 1. The execution document's `schema: 2`
 is a separate JSON protocol version. It does not imply a SQL table migration.
 Current calculations freeze an `InstallationProblem` under

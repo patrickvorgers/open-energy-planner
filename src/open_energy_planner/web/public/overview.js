@@ -959,6 +959,9 @@ async function showPlan(signal, background = false) {
         if (selectedOption) selectedOption.textContent = planName(plan);
         $("inspect-time").disabled = false;
         const currency = plan.currency || "";
+        $("reference-description").textContent = plan.reference_policy === "unoptimized-loads-v1"
+            ? "Without battery or price-based load shifting. Both references charge vehicles as soon as permitted, start ready cycles and maintain heating targets within physical limits."
+            : "Archived comparison: Without battery storage, retaining the original EV and heating schedule. Ready appliance cycles start at their earliest allowed time.";
         $("plan-description").textContent = "";
         if (plan.consumption_objective) {
             const objective = plan.consumption_objective;
