@@ -54,6 +54,43 @@ def plan(identity="plan-a", *, minute="00", changed_measurement=False):
     }
 
 
+def test_reference_policy_and_nonoptimized_service_are_preserved_on_every_backend(archive):
+    """The exact versioned reference and its service rows survive ordinary reads and projections."""
+    repository, _engine, _root = archive
+    document = plan("unoptimized-reference")
+    document.update(
+        reference_policy="unoptimized-loads-v1",
+        reference_forecast={
+            "reference_policy": "unoptimized-loads-v1",
+            "service_flows": [
+                {
+                    "ev": [
+                        {"session_id": "car", "ac_kwh": 0.2875, "stored_kwh": 0.23, "power_w": 1150}
+                    ],
+                    "thermal": [
+                        {
+                            "device_id": "boiler",
+                            "ac_kwh": 0.5,
+                            "end_c": 40,
+                            "shortfall_kwh": 0,
+                            "unmet_draw_kwh": 0,
+                            "power_w": 2000,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    repository.state["plan"] = document
+    repository.save()
+    assert repository.get_plan("unoptimized-reference") == document
+    projected = repository.get_plan(
+        "unoptimized-reference", fields=("reference_policy", "reference_forecast")
+    )
+    assert projected["reference_policy"] == "unoptimized-loads-v1"
+    assert projected["reference_forecast"] == document["reference_forecast"]
+
+
 def test_backend_exact_reconstruction_reuse_and_restart(archive):
     """Two plans reuse unchanged input blocks and recover original floats, timestamps and modes after reopen."""
     repository, engine, root = archive

@@ -195,8 +195,10 @@ def create_app(
             if installation.current and solar.configuration and demand.configuration:
                 from dataclasses import asdict
 
+                from .savings.flexible import REFERENCE_POLICY
                 from .savings.forecast import comparison
 
+                document["reference_policy"] = REFERENCE_POLICY
                 document["comparison_bindings"] = {
                     "terms": [asdict(energy_term) for energy_term in demand.configuration.terms],
                     "solar": [asdict(source_item) for source_item in solar.configuration.sources],

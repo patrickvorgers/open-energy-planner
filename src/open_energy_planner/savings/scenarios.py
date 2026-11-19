@@ -53,12 +53,13 @@ def scenario(plan, reference, *, without_battery=False, calculated=False):
         }
     }
     basis = view["input_snapshot"]["problem"]
+    service_flows = reference.get("service_flows", plan.get("expected_flows", ()))
     if basis.get("appliances") or basis.get("ev_work") or basis.get("thermal_work"):
         basis["intervals"] = deepcopy(reference["intervals"])
         basis.pop("appliances", None)
     if basis.get("ev_work") or basis.get("thermal_work"):
-        view["expected_flows"] = deepcopy(plan["expected_flows"])
-        for step, flow in zip(basis["intervals"], plan["expected_flows"], strict=True):
+        view["expected_flows"] = deepcopy(service_flows)
+        for step, flow in zip(basis["intervals"], service_flows, strict=True):
             step["load_kwh"] -= sum(
                 row["ac_kwh"] for key in ("ev", "thermal") for row in flow.get(key, [])
             )
@@ -101,10 +102,10 @@ def scenario(plan, reference, *, without_battery=False, calculated=False):
                 ],
                 "inverters": flow["inverters"],
                 "solar": flow["solar"],
-                "ev": deepcopy(plan["expected_flows"][len(physical_flows)]["ev"])
+                "ev": deepcopy(service_flows[len(physical_flows)]["ev"])
                 if basis.get("ev_work")
                 else [],
-                "thermal": deepcopy(plan["expected_flows"][len(physical_flows)]["thermal"])
+                "thermal": deepcopy(service_flows[len(physical_flows)]["thermal"])
                 if basis.get("thermal_work")
                 else [],
             }

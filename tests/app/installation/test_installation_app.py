@@ -467,9 +467,12 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                 plan = state["plan"]
                 WirePlan.parse(plan, config["revision"])
                 assert plan["device_commands"] is True
+                assert plan["reference_policy"] == "unoptimized-loads-v1"
                 if not reference_error:
                     archived = read_plan(tmp_path, plan["plan_id"])
                     reference = archived["reference_forecast"]
+                    assert archived["reference_policy"] == "unoptimized-loads-v1"
+                    assert reference["reference_policy"] == "unoptimized-loads-v1"
                     assert reference["reference_start"] == {
                         "stored": None,
                         "counters": {},

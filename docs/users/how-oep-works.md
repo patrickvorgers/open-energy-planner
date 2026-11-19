@@ -49,7 +49,14 @@ Mandatory reserve recovery and supported appliance service priorities can take p
 | **Battery self-consumption** | What would the same batteries do by storing solar surplus and covering demand without price optimization? |
 | **Without battery: Baseline** | What would the same household and solar forecasts cost without battery storage? |
 
-Both battery scenarios compare their expected benefit with the same without-battery baseline. The baseline retains the included EV and thermal loads. It is not a hypothetical household with every appliance switched off.
+Devices with **Allow shifting complete cycles** disabled retain the same forecast
+consumption in every scenario, including weather-sensitive heat pumps and air
+conditioners. Weather dependence does not grant shifting permission. Only an
+explicit ready cycle, EV charging request or controllable thermal store can
+receive a different reference timeline. A physically started appliance cycle
+keeps its fixed start in every scenario.
+
+Both battery scenarios compare their expected benefit with the same without-battery baseline. For new plans, the references charge vehicles as soon as permitted, start ready cycles at their earliest allowed time and maintain heating targets without price optimization. They retain the same service needs and physical limits. A reference that cannot provide comparable service has no monetary benefit. Earlier archived plans retain their original comparison policy. Historical Savings remains a separate measured battery-only comparison.
 
 ## Keep time and uncertainty in view
 

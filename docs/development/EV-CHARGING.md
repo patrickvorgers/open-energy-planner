@@ -328,9 +328,14 @@ points. A five-percentage-point vehicle SoC deviation from the published traject
 requests a new round behind the normal five-minute throttle.
 
 The balance chart includes EV AC consumption and predicted vehicle SoC. Charging
-losses are already in AC intake, not added as stationary converter losses. Both
-stationary-battery references retain identical planned EV service/timing. Their
-savings do not claim a separately measured EV scheduling benefit.
+losses are already in AC intake, not added as stationary converter losses. For new versioned Planning
+references, connected vehicles charge as soon as permitted at the available
+rating, within the original target, deadline and shared connection limits. They
+do not inherit optimizer timing. A final pulse stops at the target. Missing
+comparable service makes the financial comparison unavailable. Old archived
+comparisons retain their original timing. These are expected total planning
+benefits, not separately measured EV savings. Forecast-only consumers retain
+their original timelines regardless of weather sensitivity.
 
 ## Plan-only demand and execution feedback
 

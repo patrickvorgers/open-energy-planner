@@ -30,6 +30,38 @@ ROUTES = [
 ]
 
 
+def test_unoptimized_reference_policy_and_service_transfer_without_source(route):
+    """All backend routes preserve the exact reference policy and precision after the source closes."""
+    (source, target), root = route
+    repository = SqlPlanRepository(root / "source", engine=source)
+    document = plan("unoptimized-service-transfer")
+    document.update(
+        reference_policy="unoptimized-loads-v1",
+        reference_forecast={
+            "reference_policy": "unoptimized-loads-v1",
+            "service_flows": [
+                {
+                    "ev": [
+                        {"session_id": "car", "ac_kwh": 0.2875, "stored_kwh": 0.23, "power_w": 1150}
+                    ],
+                    "thermal": [],
+                }
+            ],
+        },
+    )
+    repository.state["plan"] = deepcopy(document)
+    repository.save()
+    migrate_archive(source, target, overwrite_target=True)
+    repository.close()
+    source.dispose()
+    restored = SqlPlanRepository(root / "target", engine=target)
+    try:
+        assert restored.state["plan"] == document
+        assert restored.get_plan(document["plan_id"]) == document
+    finally:
+        restored.close()
+
+
 def test_raw_state_profile_original_frame_and_frozen_task_transfer_without_source(route):
     """Every real backend route retains exact irregular phases, original Recorder provenance and accepted work."""
     from open_energy_planner.appliances.cycles.model import instant
