@@ -315,7 +315,7 @@ class DemandRuntime:
             status = "shadow_waiting_for_decision_evidence"
             if learned_preferred:
                 selected, status = ridge, "active"
-            if self.scorer is not None:
+            if self.scorer is not None and samples:
                 last = samples[-1].start + timedelta(hours=1)
                 cutoffs = evaluation_cutoffs(last)
                 comparison = compare(
@@ -334,7 +334,10 @@ class DemandRuntime:
         baseline_forecast = predict(
             configuration, samples, now, baseline, temperatures=known_weather
         )
-        from open_energy_planner.appliances.forecasting import build_components
+        from open_energy_planner.appliances.forecasting import (
+            build_components,
+            component_history_ready,
+        )
 
         controlled_days = self.control_days(now)
         composite, consumer_result = build_components(
@@ -368,20 +371,27 @@ class DemandRuntime:
             # component independently retains its baseline until daily proof.
             forecast = composite or baseline_forecast
         else:
-            if self.scorer is None and baseline.residual_profile:
+            if (
+                self.scorer is None
+                and baseline.residual_profile
+                and component_history_ready(configuration, samples)
+            ):
                 from open_energy_planner.appliances.forecasting import component
 
                 excluded_dates = sorted({day for days in controlled_days.values() for day in days})
-                selected, forecast, daily_selection = component(
+                selected, forecast, daily_selection, _ = component(
                     configuration,
                     samples,
                     known_weather,
                     now,
                     True,
                     documents=self.store.documents,
+                    include_weather=False,
                     excluded_dates=excluded_dates,
                 )
                 status = daily_selection["status"]
+            elif self.scorer is None:
+                selected, status = baseline, "insufficient_training_history"
             forecast = predict(configuration, samples, now, selected, temperatures=known_weather)
         self.store.archive(baseline_forecast, baseline)
         if not consumers[1]:

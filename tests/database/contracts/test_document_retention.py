@@ -3,6 +3,7 @@
 import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import event, select
@@ -342,3 +343,44 @@ def test_expiry_cursor_resumes_across_kinds_ages_and_namespaces(settlement):
     assert all(demand.exists(f"forecast-{identity}.json") for identity in protected)
     demand.delete(root)
     assert maintain_documents(reopened, NOW) == 128
+
+
+@pytest.mark.parametrize("local_now", ["2026-04-15T12:00:00", "2026-11-15T12:00:00"])
+def test_exact_thirty_elapsed_days_survives_both_dst_transitions(settlement, local_now):
+    """Thirty elapsed UTC days retain the boundary through spring and autumn clock changes."""
+    _runtime, _store, maintenance, engine, _plans = settlement
+    solar = SqlDocuments(engine, "solar")
+    now = datetime.fromisoformat(local_now).replace(tzinfo=ZoneInfo("Europe/Amsterdam"))
+    cutoff = now.astimezone(UTC) - timedelta(days=30)
+    boundary = archived(solar, "forecast", "a" * 64, {"kwh": 0.25})
+    older = archived(solar, "forecast", "b" * 64, {"kwh": 0.5})
+    with engine.begin() as connection:
+        for name, age in ((boundary, cutoff), (older, cutoff - timedelta(microseconds=1))):
+            connection.execute(
+                DOCUMENT_METADATA.update()
+                .where(DOCUMENT_METADATA.c.namespace == "solar", DOCUMENT_METADATA.c.name == name)
+                .values(created_at=age.isoformat(timespec="microseconds"))
+            )
+    finish_index(maintenance, now)
+    assert maintain_documents(maintenance, now) == 1
+    assert solar.exists(boundary) and not solar.exists(older)
+    assert maintain_documents(maintenance, now + timedelta(microseconds=1)) == 1
+    assert not solar.exists(boundary)
+
+
+def test_new_original_plan_after_finished_backfill_immediately_protects_forecast(settlement):
+    """The ordinary plan save hook publishes new reference links after one-time backfill is complete."""
+    _runtime, _store, maintenance, engine, plans = settlement
+    solar = SqlDocuments(engine, "solar")
+    protected, orphan = "c" * 64, "d" * 64
+    protected_name = archived(solar, "forecast", protected, {"version": protected})
+    orphan_name = archived(solar, "forecast", orphan, {"version": orphan})
+    finish_index(maintenance)
+    original = plans.get_plan("original-plan")
+    plan = {**deepcopy(original), "plan_id": "saved-after-reference-backfill"}
+    plan["input_snapshot"]["solar_evidence"] = {"version": protected}
+    plans.state["plan"] = plan
+    plans.save()
+    assert maintain_documents(maintenance, NOW) == 1
+    assert plans.get_plan(plan["plan_id"]) == plan
+    assert solar.exists(protected_name) and not solar.exists(orphan_name)

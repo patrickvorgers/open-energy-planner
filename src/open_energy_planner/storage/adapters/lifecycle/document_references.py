@@ -67,6 +67,20 @@ def archive_family(namespace, name):
     return None, None
 
 
+def inline_native_weights(value):
+    """Keep legacy demand originals with embedded native weights outside automatic expiry."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            if "model_json" in item:
+                return True
+            pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+    return False
+
+
 def _replace_links(connection, owner_kind, owner_namespace, owner_name, value):
     """Replace one validated owner's outgoing references in its already-open transaction."""
     connection.execute(
@@ -102,6 +116,8 @@ def index_document(connection, namespace, name, value, now=None):
     key = (DOCUMENT_METADATA.c.namespace == namespace) & (DOCUMENT_METADATA.c.name == name)
     if connection.scalar(select(DOCUMENT_METADATA.c.name).where(key)) is None:
         kind, identity = archive_family(namespace, name)
+        if namespace == "demand" and inline_native_weights(value):
+            kind, identity = None, None
         connection.execute(
             DOCUMENT_METADATA.insert().values(
                 namespace=namespace,

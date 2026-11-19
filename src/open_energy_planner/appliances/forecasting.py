@@ -281,7 +281,7 @@ def build_components(
                 configuration.timezone, 0, (EnergyTerm(item["entity_id"], 1),)
             )
             samples = DemandReconstructor().reconstruct(single, histories, before=now)
-            model, forecast, selection = component(
+            model, forecast, selection, baseline_forecast = component(
                 single,
                 samples,
                 temperatures,
@@ -291,21 +291,6 @@ def build_components(
                 excluded_dates=("*",)
                 if control_history_unavailable
                 else controlled_days.get(item["entity_id"], ()),
-            )
-            baseline_forecast = forecast_document(
-                predict(
-                    single,
-                    samples,
-                    now,
-                    daily_models(
-                        documents,
-                        single,
-                        samples,
-                        now,
-                        temperatures=temperatures,
-                        weather_sensitive=item["weather_sensitive"],
-                    )["baseline"],
-                )
             )
         except ValueError:
             has_unavailable_components = True
@@ -320,7 +305,7 @@ def build_components(
                     "model_selection": selection,
                     "weather_features_used": bool(getattr(model, "temperature_enabled", False)),
                     "forecast": forecast_document(forecast),
-                    "baseline_forecast": baseline_forecast,
+                    "baseline_forecast": forecast_document(baseline_forecast),
                 }
             )
     configuration = replace(
@@ -335,7 +320,7 @@ def build_components(
             configuration, (*household_histories, *histories), before=now
         )
         residual_configuration = replace(configuration, exclusions=())
-        model, remaining, residual_selection = component(
+        model, remaining, residual_selection, baseline_forecast = component(
             residual_configuration,
             residual,
             temperatures,
@@ -354,22 +339,7 @@ def build_components(
                 }
             ),
         )
-        baseline = forecast_document(
-            predict(
-                residual_configuration,
-                residual,
-                now,
-                daily_models(
-                    documents,
-                    residual_configuration,
-                    residual,
-                    now,
-                    temperatures=temperatures,
-                    weather_sensitive=True,
-                    boundary=configuration.version,
-                )["baseline"],
-            )
-        )
+        baseline = forecast_document(baseline_forecast)
     except ValueError:
         return None, {
             "status": "history_or_weather_not_ready",
@@ -440,6 +410,13 @@ def build_components(
         }
 
 
+def component_history_ready(configuration, samples):
+    """Require current measured coverage before authorizing component separation or daily selection."""
+    return len(samples) >= MIN_PROFILE_TRAINING_DAYS * HOURS_PER_DAY and {
+        sample.start.astimezone(ZoneInfo(configuration.timezone)).hour for sample in samples
+    } == set(range(HOURS_PER_DAY))
+
+
 def component(
     configuration,
     samples,
@@ -448,6 +425,7 @@ def component(
     weather_sensitive,
     *,
     documents=None,
+    include_weather=True,
     boundary=None,
     excluded_dates=(),
 ):
@@ -460,12 +438,13 @@ def component(
         now: Aware prediction time and knowledge cutoff.
         weather_sensitive: Whether temperature features and a weather candidate apply.
         documents: Optional demand archive used for original daily comparisons.
+        include_weather: Whether weather sensitivity also fits a separate weather candidate.
         boundary: Identity of the separated measurement component.
         excluded_dates: Local ISO dates of controlled use, or '*' to exclude all days.
 
     Returns:
-        Three values: the selected fitted model, its forecast in AC kWh, and daily
-        selection evidence. Unusable Ridge or weather candidate fits are omitted
+        Four values: the selected fitted model, its forecast in AC kWh, daily
+        selection evidence and the baseline forecast. Unusable candidate fits are omitted
         while the weekday baseline remains available.
 
     Raises:
@@ -479,9 +458,7 @@ def component(
     """
     from open_energy_planner.forecast_selection.accuracy import choose_daily
 
-    if len(samples) < MIN_PROFILE_TRAINING_DAYS * HOURS_PER_DAY or {
-        sample.start.astimezone(ZoneInfo(configuration.timezone)).hour for sample in samples
-    } != set(range(HOURS_PER_DAY)):
+    if not component_history_ready(configuration, samples):
         raise ValueError("At least seven complete days covering every hour are required")
     fitted = daily_models(
         documents,
@@ -490,6 +467,7 @@ def component(
         now,
         temperatures=temperatures,
         weather_sensitive=weather_sensitive,
+        include_weather=include_weather,
         boundary=boundary,
     )
     baseline = fitted["baseline"]
@@ -540,4 +518,4 @@ def component(
                 for start, end, reason in weather_model.excluded_periods
             ],
         }
-    return models[chosen], forecasts[chosen], selection
+    return models[chosen], forecasts[chosen], selection, forecasts["baseline"]

@@ -17,6 +17,11 @@ attempt. Reports preserve original creation time, checked shared weights and
 challenger metadata. Unreferenced forecast/report families can expire after
 30 elapsed days under the [reference-safe archive policy](DATABASE-SCHEMA.md#oep_document_metadata).
 Daily quality and retained original plans protect their evidence dependencies.
+Withdrawal or correction of accepted training evidence advances a durable
+source revision and invalidates the old model and its fallback. Original weather
+run replacement is distinguished from additive forecast refreshes. Captured jobs
+keep their original revision, preventing a stale worker from assigning an old
+fit to newer evidence. Ordinary appended current feedback retains daily reuse.
 
 Open the app's `/setup` wizard, directly or through the integration/device configuration link, and use the **Solar production** step.
 HA Energy defines the solar source catalogue. Missing/incomplete Energy configuration

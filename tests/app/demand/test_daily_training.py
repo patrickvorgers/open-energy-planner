@@ -19,8 +19,10 @@ from open_energy_planner.demand.calculation.model import (
     DemandHour,
     EnergyTerm,
 )
+from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.demand.training import daily_models
+from open_energy_planner.history.model import EnergyHistory, EnergyHour
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from tests.app.demand.daily_training_support import NOW, samples_before, temperatures_for
 from tests.database.support.archive import list_documents, make_store
@@ -348,4 +350,62 @@ def test_cached_component_cannot_replace_missing_current_measurement_coverage(
             False,
             documents=demand_store.documents,
         )
+    assert [learner.call_count for learner in fit_counts] == [1, 1, 0]
+
+
+def household_runtime(store, configuration):
+    """Provide a real household runtime with forty completed measured days and no selected devices."""
+    store.save(configuration)
+    runtime = DemandRuntime(store)
+    samples = samples_before(NOW)
+    total = 100
+    rows = [EnergyHour(samples[0].start - timedelta(hours=1), total, total)]
+    for sample in samples:
+        total += sample.residual_kwh
+        rows.append(EnergyHour(sample.start, total, total))
+    runtime.histories["sensor.house"] = EnergyHistory("sensor.house", tuple(rows))
+    runtime.data_versions["sensor.house"] = "complete"
+    return runtime
+
+
+def test_household_runtime_uses_one_daily_binding_without_weather_candidate(
+    demand_store, configuration, fit_counts
+):
+    """Household selection and repeated quarters reuse the same baseline and Ridge fit policy."""
+    runtime = household_runtime(demand_store, configuration)
+    for instant in (NOW, NOW + timedelta(minutes=15)):
+        assert runtime.install(runtime.build(runtime.job(instant)), instant)
+    assert [learner.call_count for learner in fit_counts] == [1, 1, 0]
+    assert len(list(demand_store.documents.iter_prefix("daily-training-"))) == 1
+    assert runtime.forecast.model == "weekday-hour-v2"
+
+
+@pytest.mark.parametrize("remaining_hours,scorer", [(144, False), (0, False), (0, True)])
+def test_household_runtime_keeps_cached_baseline_when_current_history_shrinks(
+    demand_store, configuration, fit_counts, remaining_hours, scorer
+):
+    """Reduced current evidence blocks fresh selection without discarding an existing household model."""
+    runtime = household_runtime(demand_store, configuration)
+    assert runtime.install(runtime.build(runtime.job(NOW)), NOW)
+    original = runtime.forecast
+    if remaining_hours:
+        history = runtime.histories["sensor.house"]
+        runtime.histories["sensor.house"] = replace(
+            history, hours=history.hours[-(remaining_hours + 1) :]
+        )
+    else:
+        runtime.histories.clear()
+    if scorer:
+        runtime.scorer = lambda *_args: pytest.fail(
+            "Empty current history must not invoke a scorer"
+        )
+    else:
+        runtime.learned_preferred = True
+    later = NOW + timedelta(minutes=15)
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.forecast.model == original.model == "weekday-hour-v2"
+    assert sum(step.kwh for step in runtime.forecast.steps) == pytest.approx(
+        sum(step.kwh for step in original.steps)
+    )
+    assert runtime.daily_selection is None
     assert [learner.call_count for learner in fit_counts] == [1, 1, 0]

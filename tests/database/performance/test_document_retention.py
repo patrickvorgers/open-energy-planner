@@ -186,6 +186,20 @@ def test_expiry_seeks_index_ranges_despite_many_old_roots_and_young_forecasts(
         first_steps = sum(counts)
         cursor = maintenance.read("archive-retention.json")["after"]
         assert len(cursor) == 4 and cursor[0] == "forecast"
+        with engine.begin() as connection:
+            connection.execute(
+                DOCUMENT_METADATA.insert(),
+                [
+                    {
+                        "namespace": "demand",
+                        "name": f"forecast-{index + 200000:064x}.json",
+                        "created_at": old,
+                        "identity": f"{index + 200000:064x}",
+                        "kind": "forecast",
+                    }
+                    for index in range(20000)
+                ],
+            )
         counts.clear()
         reopened = SqlDocuments(engine, "savings")
         assert maintain_documents(reopened, NOW) == 128
@@ -205,3 +219,93 @@ def test_expiry_seeks_index_ranges_despite_many_old_roots_and_young_forecasts(
     assert all(solar.exists(f"forecast-{identity}.json") for identity in protected)
     record_testsuite_property("document_retention_first_page_vm_steps", first_steps)
     record_testsuite_property("document_retention_resumed_page_vm_steps", second_steps)
+
+
+def test_mysql_resumed_expiry_uses_full_scalar_composite_index_range(
+    settlement, record_testsuite_property
+):
+    """MySQL seeks beyond twenty thousand earlier same-age keys using all four expiry index parts."""
+    _runtime, _store, maintenance, engine, _plans = settlement
+    if engine.dialect.name != "mysql" or engine.dialect.is_mariadb:
+        pytest.skip("MySQL JSON EXPLAIN index-range instrumentation")
+    solar = SqlDocuments(engine, "solar")
+    old = (NOW - timedelta(days=31)).isoformat(timespec="microseconds")
+    for index in range(128):
+        solar.write(f"forecast-{index + 60000:064x}.json", {"version": f"{index + 60000:064x}"})
+    with engine.begin() as connection:
+        connection.execute(
+            DOCUMENT_METADATA.update()
+            .where(DOCUMENT_METADATA.c.kind == "forecast")
+            .values(created_at=old)
+        )
+        connection.execute(
+            DOCUMENT_METADATA.insert(),
+            [
+                {
+                    "namespace": "solar",
+                    "name": f"forecast-{index:064x}.json",
+                    "created_at": old,
+                    "identity": f"{index:064x}",
+                    "kind": "forecast",
+                }
+                for index in range(20000)
+            ],
+        )
+    with engine.begin() as connection:
+        connection.execute(
+            DOCUMENT_METADATA.insert(),
+            [
+                {
+                    "namespace": "solar",
+                    "name": f"forecast-{index + 26000:064x}.json",
+                    "created_at": old,
+                    "identity": None,
+                    "kind": None,
+                }
+                for index in range(20000)
+            ],
+        )
+    maintenance.write(
+        "archive-retention.json",
+        {"stage": "complete", "after": ["forecast", old, "solar", f"forecast-{25000:064x}.json"]},
+    )
+    plans = []
+
+    def explain(_connection, cursor, statement, parameters, _context, _many):
+        """Inspect the exact production keyset query with the server's optimizer."""
+        if (
+            statement.lstrip().upper().startswith("SELECT")
+            and "oep_document_metadata.kind =" in statement
+        ):
+            probe = cursor.connection.cursor()
+            try:
+                probe.execute("EXPLAIN FORMAT=JSON " + statement, parameters)
+                plans.append(json.loads(probe.fetchone()[0]))
+            finally:
+                probe.close()
+
+    event.listen(engine, "before_cursor_execute", explain)
+    try:
+        assert maintain_documents(maintenance, NOW) == 128
+    finally:
+        event.remove(engine, "before_cursor_execute", explain)
+    assert plans
+    pending = [plans[0]]
+    tables = []
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if "used_key_parts" in value:
+                tables.append(value)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    assert len(tables) == 1
+    table = tables[0]
+    assert table["key"] == "oep_document_expiry"
+    assert table["access_type"] == "range"
+    assert table["used_key_parts"] == ["kind", "created_at", "namespace", "name"]
+    assert table["rows_examined_per_scan"] < 512
+    record_testsuite_property(
+        "document_retention_mysql_resume_estimated_rows", table["rows_examined_per_scan"]
+    )

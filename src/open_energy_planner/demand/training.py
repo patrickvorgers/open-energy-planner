@@ -15,6 +15,7 @@ from open_energy_planner.demand.calculation.forecasting import (
     features,
 )
 from open_energy_planner.demand.calculation.model import digest, quantity
+from open_energy_planner.demand.storage import resolve_native_weights, share_native_weights
 from open_energy_planner.prices.model import aware
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
@@ -33,7 +34,7 @@ def _training_log(documents, binding, kind):
 
 
 def _parameters(model):
-    """Detach native-free coefficients using the database's explicit ISO clock representation."""
+    """Detach scalar metadata and optional native JSON using the archive's ISO clock representation."""
     return json.loads(json.dumps(asdict(model), default=lambda value: value.isoformat()))
 
 
@@ -141,10 +142,23 @@ def _read(documents, pointer, binding, configuration, now):
         or "baseline" not in body["models"]
     ):
         raise ValueError("Invalid daily demand model archive")
-    models = {
-        kind: _restore(kind, parameters, configuration, now)
-        for kind, parameters in body["models"].items()
-    }
+    models = {}
+    for kind, parameters in body["models"].items():
+        parameters = resolve_native_weights(documents, parameters)
+        try:
+            models[kind] = _restore(kind, parameters, configuration, now)
+        except (ImportError, OSError):
+            if kind != "weather":
+                raise
+            _training_log(documents, binding, "weather restoration").exception(
+                "Stored weather model loading is unavailable. Baseline and regression models remain usable. Retrying on the next forecast update.",
+                expected=True,
+            )
+        else:
+            if kind == "weather":
+                restore_log = _training_log(documents, binding, "weather restoration")
+                if restore_log.failure_key is not None:
+                    restore_log.success("The stored weather model is available for forecasts.")
     return state, models
 
 
@@ -252,13 +266,16 @@ def daily_models(
             models.setdefault(kind, model)
         return models
     if documents is not None:
-        body = {
-            "schema": MODEL_DOCUMENT_SCHEMA,
-            "binding": binding,
-            "models": {kind: _parameters(model) for kind, model in models.items()},
-        }
-        reference = digest(body)
         with documents.transaction():
+            body = {
+                "schema": MODEL_DOCUMENT_SCHEMA,
+                "binding": binding,
+                "models": {
+                    kind: share_native_weights(documents, _parameters(model))
+                    for kind, model in models.items()
+                },
+            }
+            reference = digest(body)
             target = "daily-models-" + reference + ".json"
             if documents.exists(target):
                 if documents.read(target) != body:

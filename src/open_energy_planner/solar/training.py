@@ -1,8 +1,9 @@
 """Persist one source-bound daily learning result independently of live forecast issuance."""
 
 from dataclasses import replace
-from datetime import UTC
+from datetime import UTC, date, datetime
 from importlib.metadata import version as distribution_version
+from re import fullmatch
 from zoneinfo import ZoneInfo
 
 from .boosting import (
@@ -58,7 +59,64 @@ class DailySolarTraining:
         self.store = store
         self.results = {}
 
-    def prepare(self, source, inverter, location, history, weather, runs, feedback, now):
+    def revision(self, entity):
+        """Read one compact durable evidence generation without scanning retained source history."""
+        name = "training-evidence-" + version(entity) + ".json"
+        if not self.store.documents.exists(name):
+            return 0
+        value = self.store.documents.read(name)
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"entity_id", "revision"}
+            or value["entity_id"] != entity
+            or type(value["revision"]) is not int
+            or value["revision"] < 0
+        ):
+            raise ValueError("Invalid solar training evidence revision")
+        return value["revision"]
+
+    def invalidate(self, entities):
+        """Revoke both current weights and usable fallback after destructive evidence changes."""
+        with self.store.transaction():
+            for entity in sorted(set(entities)):
+                self.store.documents.write(
+                    "training-evidence-" + version(entity) + ".json",
+                    {"entity_id": entity, "revision": self.revision(entity) + 1},
+                )
+
+    def accept_runs(self, site, runs, entities):
+        """Persist only original-run identities so withdrawal remains detectable across restart."""
+        name = "training-runs-" + site + ".json"
+        incoming = {run.initialized_at.isoformat(): run.version for run in runs}
+        with self.store.transaction():
+            previous = self.store.documents.read(name) if self.store.documents.exists(name) else {}
+            if not isinstance(previous, dict) or any(
+                not isinstance(at, str)
+                or not isinstance(reference, str)
+                or fullmatch("[0-9a-f]{64}", reference) is None
+                for at, reference in previous.items()
+            ):
+                raise ValueError("Invalid solar training forecast-run cohort")
+            withdrawn = any(incoming.get(at) != reference for at, reference in previous.items())
+            if withdrawn:
+                self.invalidate(entities)
+            if previous != incoming:
+                self.store.documents.write(name, incoming)
+        return withdrawn
+
+    def prepare(
+        self,
+        source,
+        inverter,
+        location,
+        history,
+        weather,
+        runs,
+        feedback,
+        now,
+        *,
+        evidence_revision=None,
+    ):
         """Reuse today's completed result, retry changed incomplete inputs and skip unchanged new days.
 
         Live weather and newly issued forecasts are deliberately absent from the
@@ -70,6 +128,9 @@ class DailySolarTraining:
         binding = version(
             {
                 "source": document(source),
+                "evidence_revision": self.revision(source.entity_id)
+                if evidence_revision is None
+                else evidence_revision,
                 "inverter": document(inverter),
                 "location": document(location),
                 "model": MODEL_ID,
@@ -87,8 +148,35 @@ class DailySolarTraining:
             or pointer["binding"] != binding
             or not isinstance(pointer["day"], str)
             or pointer["day"] > day
+            or not isinstance(pointer["report"], str)
+            or fullmatch("[0-9a-f]{64}", pointer["report"]) is None
+            or not isinstance(pointer["inputs"], str)
+            or fullmatch("[0-9a-f]{64}", pointer["inputs"]) is None
+            or (
+                pointer["usable"] is not None
+                and (
+                    not isinstance(pointer["usable"], str)
+                    or fullmatch("[0-9a-f]{64}", pointer["usable"]) is None
+                )
+            )
+            or not isinstance(pointer["validation_end"], str)
         ):
             raise ValueError("Invalid solar training pointer")
+        if pointer:
+            try:
+                validation_end = datetime.fromisoformat(pointer["validation_end"])
+                if (
+                    date.fromisoformat(pointer["day"]).isoformat() != pointer["day"]
+                    or validation_end.tzinfo is None
+                    or validation_end.utcoffset() != boundary.utcoffset()
+                    or validation_end
+                    != validation_end.replace(hour=0, minute=0, second=0, microsecond=0)
+                    or validation_end > boundary
+                    or validation_end.isoformat() != pointer["validation_end"]
+                ):
+                    raise ValueError("Invalid solar training pointer")
+            except ValueError:
+                raise ValueError("Invalid solar training pointer") from None
         previous = self.read(pointer["report"], binding) if pointer else None
         token = {
             "name": name,

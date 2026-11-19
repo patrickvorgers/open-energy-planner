@@ -468,14 +468,22 @@ def test_new_background_runs_do_not_discard_usable_jobs_and_remain_coalesced(tmp
     runtime.set_weather(SITE, weather, service=source.service)
     captured = []
 
-    def candidates(*arguments, feedback=None):
+    def candidates(*arguments, feedback=None, evidence_revisions=None):
         """Record exactly the immutable forecast-run snapshot passed to the learning worker."""
         captured.append(arguments[-1])
         assert feedback == {}
+        assert evidence_revisions == {"sensor.pv0": 0}
         return {}
 
     monkeypatch.setattr(runtime, "_learned_candidates", candidates)
-    queued = runtime.job(now)
+
+    def unexpected_revision_read(*args):
+        """Forbid storage reads while the event-loop caller captures a model job."""
+        raise AssertionError("A job snapshot must use restored in-memory evidence revisions")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime.training, "revision", unexpected_revision_read)
+        queued = runtime.job(now)
     result = runtime.build(queued)
     assert captured == [()]
     assert runtime.set_forecast_runs(SITE, source.forecast_runs)
@@ -507,6 +515,20 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
 
     monkeypatch.setattr("open_energy_planner.solar.api.SOLAR_WORKER_POLL_SECONDS", 0.01)
     monkeypatch.setattr(SolarRuntime, "_learned_candidates", lambda *_arguments, **_options: {})
+    original_set_runs = SolarRuntime.set_forecast_runs
+    writes_off_loop = []
+
+    def persist_original_runs(runtime, *arguments):
+        """Observe whether durable cohort writes execute outside the application's event loop."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            writes_off_loop.append(True)
+        else:
+            writes_off_loop.append(False)
+        return original_set_runs(runtime, *arguments)
+
+    monkeypatch.setattr(SolarRuntime, "set_forecast_runs", persist_original_runs)
 
     async def scenario():
         """Publish a usable forecast through authenticated HTTP while an independent history request stays pending."""
@@ -560,6 +582,7 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
             else:
                 raise AssertionError(document)
             assert document["weather_service"]["model"] == "ecmwf_ifs"
+            assert writes_off_loop and all(writes_off_loop)
             assert not cancelled.is_set()
         assert cancelled.is_set()
 

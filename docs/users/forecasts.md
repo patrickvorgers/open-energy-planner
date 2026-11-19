@@ -9,6 +9,9 @@ exists. Forecasts still refresh with current weather throughout the day. Restart
 reuses the stored model. Changed source settings require a matching new model.
 Missing or failed new training retains the last usable matching model. An
 incomplete model can retry when additional history arrives.
+If previously accepted training measurements or historical weather runs are
+corrected or withdrawn, OEP invalidates the affected old solar model. It keeps
+the simpler forecast available while rebuilding from valid evidence.
 
 OEP shares unchanged model parameters instead of storing another full copy with
 each forecast. Unused forecast and training details may expire after 30 days.

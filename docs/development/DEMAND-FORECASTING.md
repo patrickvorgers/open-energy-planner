@@ -26,6 +26,11 @@ keeps its existing baseline/Ridge candidates without adding a weather XGBoost
 candidate. Forecasts share parameter documents while preserving original component
 predictions. See the [archive contracts](DATABASE-SCHEMA.md#oep_document_metadata)
 for reference-safe 30-day expiry and protected historical dependencies.
+Native weather weights are shared in non-expiring archives. Failure to load the
+optional native runtime preserves scalar candidates. A retained household model
+can still forecast when current history loses coverage. Component separation
+continues to require current measured coverage, and scoring requires current
+samples. Household lookups share the same baseline/Ridge policy.
 
 | Component | Implementation |
 |---|---|

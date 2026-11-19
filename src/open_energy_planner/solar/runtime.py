@@ -53,6 +53,7 @@ class SolarRuntime:
         self.training = DailySolarTraining(store)
         self.configuration_lock = Lock()
         self.configuration, self.issue = store.current, store.issue
+        self.restore_training_revisions()
         self.location, self.weather = None, ()
         self.forecast_runs, self.weather_service = (), {}
         self.forecast_runs_revision, self.last_fit_at = 0, None
@@ -131,6 +132,7 @@ class SolarRuntime:
             if entity in unchanged
         }
         self.configuration, self.issue = configuration, None
+        self.restore_training_revisions()
         self.restore_feedback()
         self.history_revision += 1
         self.ranges, self.history_issues = {}, issues
@@ -150,6 +152,17 @@ class SolarRuntime:
         self.failed_key, self.retry_after = None, None
         self.source_selection = {}
         self.learning = {}
+
+    def restore_training_revisions(self):
+        """Restore compact generations during worker-owned state changes, keeping job snapshots memory-only."""
+        self.evidence_revisions = (
+            {
+                source.entity_id: self.training.revision(source.entity_id)
+                for source in self.configuration.sources
+            }
+            if self.configuration
+            else {}
+        )
 
     def restore_feedback(self):
         """Restore only configured sensor identities without treating unreadable evidence as absent feedback."""
@@ -317,7 +330,16 @@ class SolarRuntime:
             raise FeedbackRequestError("Invalid or outdated solar curtailment feedback") from None
         if incoming.entity_id in self.feedback_issues:
             raise RuntimeError("Solar feedback archive is unreadable")
-        accepted = save_feedback(self.store, previous, incoming, start)
+        boundary = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        with self.store.transaction():
+            accepted = save_feedback(self.store, previous, incoming, start)
+            if any(at < boundary for at, _state in incoming.readings):
+                self.training.invalidate(
+                    source.entity_id
+                    for source in self.configuration.sources
+                    if source.curtailment_entity_id == incoming.entity_id
+                )
+        self.restore_training_revisions()
         self.feedback[incoming.entity_id] = accepted
         if (
             previous is None
@@ -373,10 +395,21 @@ class SolarRuntime:
         ) or len({run.initialized_at for run in selected}) != len(selected):
             raise ValueError("Invalid original solar forecast run cohort")
         selected = tuple(replace(run, forecast_origin=None) for run in selected)
-        if selected == self.forecast_runs:
+        destructive = self.training.accept_runs(
+            site,
+            selected,
+            (source.entity_id for source in self.configuration.sources)
+            if self.configuration
+            else (),
+        )
+        if destructive:
+            self.restore_training_revisions()
+        if selected == self.forecast_runs and not destructive:
             return False
         incoming = {run.initialized_at: run.version for run in selected}
-        if any(incoming.get(run.initialized_at) != run.version for run in self.forecast_runs):
+        if destructive or any(
+            incoming.get(run.initialized_at) != run.version for run in self.forecast_runs
+        ):
             self.forecast_cohort_revision += 1
             self.last_key = None
             self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
@@ -413,15 +446,22 @@ class SolarRuntime:
         entity = pending["entity_id"]
         if not error:
             try:
-                accepted = self.history_import.receive(pending, report, now)
+                with self.history_import.transaction():
+                    accepted = self.history_import.receive(pending, report, now)
+                    previous = self.histories.get(entity)
+                    fresh = (
+                        {hour.start: hour.total_kwh for hour in accepted.hours} if accepted else {}
+                    )
+                    destructive = previous and any(
+                        fresh.get(hour.start) != hour.total_kwh for hour in previous.hours
+                    )
+                    if destructive:
+                        self.training.invalidate((entity,))
             except HistoryContinuityError:
                 error = "history_continuity_unavailable"
             else:
-                previous = self.histories.get(entity)
-                fresh = {hour.start: hour.total_kwh for hour in accepted.hours} if accepted else {}
-                if previous and any(
-                    fresh.get(hour.start) != hour.total_kwh for hour in previous.hours
-                ):
+                if destructive:
+                    self.restore_training_revisions()
                     self.last_key = None
                     self.forecast, self.candidate, self.calibrations = self.baseline, None, ()
                     self.source_selection, self.learning = {}, {}
@@ -530,6 +570,7 @@ class SolarRuntime:
             self.forecast_runs,
             dict(self.weather_service),
             dict(self.feedback),
+            dict(self.evidence_revisions),
         )
 
     def build(self, job):
@@ -547,6 +588,7 @@ class SolarRuntime:
             forecast_runs,
             weather_service,
             feedback,
+            evidence_revisions,
         ) = job
         if not weather:
             energies, issues = ha_energies(configuration, None, ha_predictions, now)
@@ -647,6 +689,7 @@ class SolarRuntime:
             now,
             forecast_runs,
             feedback=feedback,
+            evidence_revisions=evidence_revisions,
         )
         models_by_source = {
             source_id: result.model
@@ -867,6 +910,7 @@ class SolarRuntime:
         forecast_runs=(),
         *,
         feedback=None,
+        evidence_revisions=None,
     ):
         """Persist bounded tree weights once and retain separate source/cleaning provenance per fit."""
         from .backtest import assess_forecasts, validation_baselines
@@ -888,6 +932,7 @@ class SolarRuntime:
                     forecast_runs,
                     (feedback or {}).get(source.curtailment_entity_id),
                     now,
+                    evidence_revision=(evidence_revisions or {}).get(source.entity_id),
                 )
                 if cached is not None:
                     learning[source.source_id] = cached

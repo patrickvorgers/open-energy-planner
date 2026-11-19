@@ -187,3 +187,225 @@ def test_inadequate_new_attempt_preserves_usable_model_after_restart(tmp_path):
     )
     restored = DailySolarTraining(SolarStore(runtime.store.documents))
     assert restored.prepare(*arguments, now + timedelta(days=1, minutes=15))[0] == original
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("report", []),
+        ("report", "bad"),
+        ("inputs", {}),
+        ("inputs", "bad"),
+        ("usable", []),
+        ("usable", "bad"),
+        ("day", "2026-08-19garbage"),
+        ("validation_end", []),
+        ("validation_end", "2026-08-20T00:00:00"),
+        ("validation_end", "2026-08-20T01:00:00+00:00"),
+        ("validation_end", "2026-08-21T00:00:00+00:00"),
+    ],
+)
+def test_malformed_pointer_fields_are_explicit_value_errors(tmp_path, field, value):
+    """Invalid persisted hashes, calendar values and validation bounds cannot escape forecast recovery."""
+    store, _learner, arguments, _original = training_case(tmp_path)
+    [name] = [
+        name for name in list_documents(tmp_path, "solar") if name.startswith("training-current-")
+    ]
+    pointer = store.documents.read(name)
+    store.documents.write(name, {**pointer, field: value})
+    with pytest.raises(ValueError, match="Invalid solar training pointer"):
+        DailySolarTraining(SolarStore(store.documents)).prepare(*arguments, NOW)
+
+
+def test_invalid_pointer_keeps_physical_runtime_forecast_available(tmp_path):
+    """A malformed usable reference is handled as failed ML while the independently computed forecast remains usable."""
+    runtime, now = runtime_case(tmp_path)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    [name] = [
+        name for name in list_documents(tmp_path, "solar") if name.startswith("training-current-")
+    ]
+    pointer = runtime.store.documents.read(name)
+    runtime.store.documents.write(name, {**pointer, "usable": []})
+    later = now + timedelta(minutes=15)
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.forecast is not None
+    assert runtime.learning["pv0"].model is None
+    assert runtime.learning["pv0"].summary.status == TrainingStatus.FAILED
+
+
+def test_withdrawn_source_hours_revoke_persisted_model_and_fallback_after_restart(
+    tmp_path, monkeypatch
+):
+    """An accepted-history withdrawal atomically changes the binding and survives runtime restoration."""
+    from open_energy_planner.solar.storage.history import parse_report
+    from tests.app.solar.history_support import HISTORY_IDENTITY, discover
+    from tests.app.solar.support import weather
+
+    runtime, now = runtime_case(tmp_path)
+    history = runtime.histories["sensor.pv0"]
+    runtime.histories = {}
+    imported_at = now
+    discover(runtime, imported_at, first=history.hours[0].start.isoformat())
+    pending = runtime.request(imported_at)
+    end = datetime.fromisoformat(pending["end"])
+    rows = [
+        [hour.start.timestamp(), hour.total_kwh, hour.total_kwh]
+        for hour in history.hours
+        if hour.start < end
+    ]
+
+    def transfer(request, values):
+        """Submit original raw endpoints through the real source-bound importer envelope."""
+        return parse_report(
+            {
+                "basis": "solar_history_chunk",
+                "request_version": request["version"],
+                "entity_id": "sensor.pv0",
+                "statistics_identity": HISTORY_IDENTITY,
+                "unit": "kWh",
+                "hours": values,
+            }
+        )
+
+    report = transfer(pending, rows)
+    runtime.receive(pending["version"], report.history, imported_at, report=report)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    original = runtime.learning["pv0"]
+    assert original.model is not None
+    before = runtime.training.revision("sensor.pv0")
+    withdrawn_at = now + timedelta(days=1)
+    pending = runtime.request(withdrawn_at)
+    revised = transfer(pending, rows[:100] + rows[102:])
+    accepted_before = runtime.histories["sensor.pv0"]
+    original_write = runtime.store.documents.write
+
+    def interrupt_revision(name, value):
+        """Fail the generation update after accepted-history writes to prove their shared rollback."""
+        if name.startswith("training-evidence-"):
+            raise OSError("Synthetic evidence revision write failure")
+        return original_write(name, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime.store.documents, "write", interrupt_revision)
+        with pytest.raises(OSError, match="Synthetic evidence revision"):
+            runtime.receive(pending["version"], revised.history, withdrawn_at, report=revised)
+    assert runtime.training.revision("sensor.pv0") == before
+    assert runtime.histories["sensor.pv0"] == accepted_before
+    assert (
+        SolarRuntime(SolarStore(runtime.store.documents)).histories["sensor.pv0"] == accepted_before
+    )
+    runtime.receive(pending["version"], revised.history, withdrawn_at, report=revised)
+    runtime.set_weather(
+        SITE,
+        tuple(
+            replace(row, received_at=withdrawn_at)
+            for row in (
+                *tuple(row for row in runtime.weather if row.start < now),
+                *weather(now, days=5),
+            )
+        ),
+    )
+    assert runtime.training.revision("sensor.pv0") == before + 1
+
+    def insufficient(*args, **kwargs):
+        """Make fallback selection observable rather than relying on a newly admitted native model."""
+        return TrainingResult(
+            None, TrainingSummary(TrainingStatus.INSUFFICIENT_HISTORY, 1, 0, 0, {}, ())
+        )
+
+    monkeypatch.setattr("open_energy_planner.solar.runtime.fit_boosted_model", insufficient)
+    later = withdrawn_at + timedelta(minutes=15)
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.learning["pv0"].model is None
+    assert runtime.learning["pv0"].archive_reference != original.archive_reference
+    restored = SolarRuntime(SolarStore(runtime.store.documents))
+    restored.set_weather(SITE, runtime.weather)
+    restored.set_forecast_runs(SITE, runtime.forecast_runs)
+    later += timedelta(minutes=15)
+    assert restored.install(restored.build(restored.job(later)), later)
+    assert restored.learning["pv0"].model is None
+    assert restored.training.revision("sensor.pv0") == before + 1
+
+
+def test_original_run_withdrawal_is_durable_and_does_not_restore_last_usable_model(
+    tmp_path, monkeypatch
+):
+    """Replacing a restarted runtime's original-run cohort revokes same-day cached weights and fallback."""
+    runtime, now = runtime_case(tmp_path)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    assert runtime.learning["pv0"].model is not None
+    before = runtime.training.revision("sensor.pv0")
+    restored = SolarRuntime(SolarStore(runtime.store.documents))
+    restored.histories = runtime.histories
+    restored.set_weather(SITE, runtime.weather)
+    restored.set_forecast_runs(SITE, runtime.forecast_runs[1:])
+    assert restored.training.revision("sensor.pv0") == before + 1
+
+    def insufficient(*args, **kwargs):
+        """A withdrawn training cohort cannot fall back to its former usable model."""
+        return TrainingResult(
+            None, TrainingSummary(TrainingStatus.INSUFFICIENT_HISTORY, 1, 0, 0, {}, ())
+        )
+
+    monkeypatch.setattr("open_energy_planner.solar.runtime.fit_boosted_model", insufficient)
+    later = now + timedelta(minutes=15)
+    assert restored.install(restored.build(restored.job(later)), later)
+    assert restored.learning["pv0"].model is None
+
+
+def test_worker_captured_before_withdrawal_cannot_publish_under_new_revision(tmp_path, monkeypatch):
+    """An obsolete worker retains its captured evidence generation even if destructive imports happen before it runs."""
+    runtime, now = runtime_case(tmp_path)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    original = runtime.learning["pv0"]
+    later = now + timedelta(minutes=15)
+    stale_job = runtime.job(later)
+    runtime.set_forecast_runs(SITE, runtime.forecast_runs[1:])
+
+    def insufficient(*args, **kwargs):
+        """Expose accidental stale-model fallback under the replacement generation."""
+        return TrainingResult(
+            None, TrainingSummary(TrainingStatus.INSUFFICIENT_HISTORY, 1, 0, 0, {}, ())
+        )
+
+    monkeypatch.setattr("open_energy_planner.solar.runtime.fit_boosted_model", insufficient)
+    stale_result = runtime.build(stale_job)
+    assert stale_result[-1]["pv0"].archive_reference == original.archive_reference
+    assert not runtime.install(stale_result, later)
+    later += timedelta(minutes=15)
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.learning["pv0"].model is None
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_feedback_only_revises_training_for_changed_historical_observations(tmp_path, historical):
+    """Appending current curtailment transitions preserves daily reuse; changed prior-day classifications revoke it."""
+    from open_energy_planner.solar.curtailment import CurtailmentHistory, save_feedback
+
+    entity = "binary_sensor.pv_curtailed"
+    definition = plant()
+    definition = replace(
+        definition, sources=(replace(definition.sources[0], curtailment_entity_id=entity),)
+    )
+    store = make_store(tmp_path, SolarStore)
+    store.save(definition)
+    start = NOW - timedelta(days=1) if historical else NOW
+    save_feedback(store, None, CurtailmentHistory(entity, start, ()), start - timedelta(hours=1))
+    runtime = SolarRuntime(store)
+    until = start + timedelta(minutes=5)
+    runtime.receive_feedback(
+        {
+            "configuration_version": definition.version,
+            "start": start.isoformat(),
+            "feedback": {
+                "entity_id": entity,
+                "checked_until": until.isoformat(),
+                "readings": [[start.isoformat(), True]],
+            },
+        },
+        NOW + timedelta(minutes=5),
+    )
+    assert runtime.training.revision("sensor.pv0") == int(historical)
+    assert SolarRuntime(SolarStore(store.documents)).training.revision("sensor.pv0") == int(
+        historical
+    )

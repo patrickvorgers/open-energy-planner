@@ -465,6 +465,16 @@ Bindings include source/inverter/location, model/training/weather policies and
 native library version. `ml-training-<hash>.json` additionally records that
 binding and optional challenger metadata. Native weights remain shared.
 
+Solar `training-evidence-<entity-hash>.json` stores `{entity_id, revision}` with a
+nonnegative integer revision. Missing records mean revision zero. Destructive
+accepted-history or historical-feedback changes advance that source's revision
+in the same transaction as the evidence update. Revision is part of the model
+binding, so an older model and its fallback cannot be reused after withdrawal,
+including after restart. Worker jobs retain their captured revisions.
+`training-runs-<location-hash>.json` maps original run initialization ISO instants
+to run-version hashes. Only identities are stored. Replacement or withdrawal
+advances affected revisions. Routine additive inputs retain daily model reuse.
+
 Demand `daily-training-<binding>.json` contains `schema` (1), `binding`, local
 `day`, `input_version`, `reference` and boolean `complete`. It selects immutable
 `daily-models-<hash>.json` containing schema, binding and validated baseline,
@@ -472,6 +482,19 @@ optional Ridge and optional existing weather-model parameters. Forecast
 `model_parameters` now uses `{reference: <hash>}` to shared
 `model-parameters-<hash>.json`. Existing inline parameter documents remain
 readable. Composite predictions and individual-device evidence remain inline.
+
+Demand weather metadata uses `weights_reference` instead of copying `model_json`
+into each bundle or parameter body. Non-expiring demand
+`ml-weights-<hash>.json` stores `{model_json: <native JSON string>}` once. Its
+content digest and the model metadata's `model_digest` are verified before native
+loading. Inline historical native parameters remain readable. Expiry of an
+unused daily model bundle or parameter record does not remove native weights.
+Legacy demand records that still embed native JSON remain non-expiring roots.
+They keep their exact original payload instead of requiring a development-schema
+conversion. New records share weights separately.
+An unavailable optional native library omits the weather candidate while the
+validated saved baseline and Ridge remain usable. Malformed evidence still
+fails validation.
 
 Savings `archive-retention.json` stores `stage` (`documents`, `values`,
 `complete`) and nullable lexical `after` cursor. Document backfill uses
@@ -488,6 +511,11 @@ contexts and current pointers protect their complete reference closure.
 Imported measurements, provider weather runs, immutable configuration and native
 weights do not expire under this policy. Daily quality documents remain reference
 roots, rather than newly compacted scores. No automatic SQLite VACUUM runs.
+Forecast maintenance runs independently of settlement prerequisites under the
+shared writer guard. Historical settlement uses retained calculation contexts,
+tariffs and measured evidence rather than forecast/model diagnostic documents.
+Cancellation drains any pending maintenance transaction, including rollback,
+before the worker exits and the database engine is disposed.
 
 | Namespace | Owner / payload contents | Version and pointer use |
 | --- | --- | --- |

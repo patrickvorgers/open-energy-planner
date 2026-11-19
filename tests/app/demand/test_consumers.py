@@ -3,6 +3,7 @@
 import json
 from dataclasses import replace
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 
@@ -11,11 +12,47 @@ from open_energy_planner.appliances.forecasting import (
     build_components,
     parse_selection,
 )
+from open_energy_planner.appliances.weather_model import WeatherDemandModel
 from open_energy_planner.demand.calculation.model import TemperatureHour
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
 from tests.app.demand.test_demand import START, channel, config
 from tests.database.support.archive import make_store
+
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_component_baselines_reuse_the_original_fit_even_during_transient_weather_failure(
+    tmp_path, persisted
+):
+    """Device and remainder each train once and return their original baseline despite a failed candidate."""
+    from open_energy_planner.appliances import forecasting
+
+    store = make_store(tmp_path, DemandStore)
+    consumers = ConsumerForecasts(store.documents)
+    consumers.sync(catalogue())
+    consumers.save(
+        parse_selection([{"entity_id": "sensor.heat", "weather_sensitive": True}]),
+        consumers.version,
+    )
+    consumers.histories["sensor.heat"] = channel("sensor.heat", [0.1] * (35 * 24))
+    with (
+        patch.object(forecasting, "daily_models", wraps=forecasting.daily_models) as fitting,
+        patch.object(
+            WeatherDemandModel, "fit", side_effect=RuntimeError("Transient native fit")
+        ) as weather_fit,
+    ):
+        total, result = build_components(
+            config(),
+            (channel("sensor.house", [0.5] * (35 * 24)),),
+            (),
+            START + timedelta(days=35),
+            consumers.inputs(),
+            documents=store.documents if persisted else None,
+        )
+    assert total is not None
+    assert fitting.call_count == weather_fit.call_count == 2
+    assert result["devices"][0]["baseline_forecast"] == result["devices"][0]["forecast"]
+    assert result["residual_baseline"] == result["residual"]
 
 
 def catalogue():

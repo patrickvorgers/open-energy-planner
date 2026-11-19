@@ -1,9 +1,9 @@
 """Expire only old, unreferenced forecast families after bounded reference-index backfill."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, or_, select, tuple_
+from sqlalchemy import and_, or_, select
 
 from open_energy_planner.storage.adapters.payloads import decode_payload
 
@@ -174,7 +174,7 @@ def _old_family(connection, namespace, identity, cutoff):
 
 def _expire(connection, progress, now):
     """Seek one indexed kind/age range at a time, inspecting at most 128 candidate rows per tick."""
-    cutoff = utc_stamp(now - timedelta(days=DOCUMENT_RETENTION_DAYS))
+    cutoff = utc_stamp(now.astimezone(UTC) - timedelta(days=DOCUMENT_RETENTION_DAYS))
     cursor = progress["after"]
     kinds = sorted(EXPIRING_KINDS)
     rows = []
@@ -184,26 +184,34 @@ def _expire(connection, progress, now):
         query = select(DOCUMENT_METADATA).where(
             DOCUMENT_METADATA.c.kind == kind, DOCUMENT_METADATA.c.created_at < cutoff
         )
+        ranges = [()]
         if cursor is not None and kind == cursor[0]:
-            query = query.where(
-                tuple_(
-                    DOCUMENT_METADATA.c.created_at,
-                    DOCUMENT_METADATA.c.namespace,
-                    DOCUMENT_METADATA.c.name,
+            age, namespace, name = cursor[1:]
+            ranges = [
+                (
+                    DOCUMENT_METADATA.c.created_at == age,
+                    DOCUMENT_METADATA.c.namespace == namespace,
+                    DOCUMENT_METADATA.c.name > name,
+                ),
+                (DOCUMENT_METADATA.c.created_at == age, DOCUMENT_METADATA.c.namespace > namespace),
+                (DOCUMENT_METADATA.c.created_at > age,),
+            ]
+        for bounds in ranges:
+            rows.extend(
+                connection.execute(
+                    query.where(*bounds)
+                    .order_by(
+                        DOCUMENT_METADATA.c.created_at,
+                        DOCUMENT_METADATA.c.namespace,
+                        DOCUMENT_METADATA.c.name,
+                    )
+                    .limit(DOCUMENT_RETENTION_BATCH_ROWS - len(rows))
                 )
-                > tuple(cursor[1:])
+                .mappings()
+                .all()
             )
-        rows.extend(
-            connection.execute(
-                query.order_by(
-                    DOCUMENT_METADATA.c.created_at,
-                    DOCUMENT_METADATA.c.namespace,
-                    DOCUMENT_METADATA.c.name,
-                ).limit(DOCUMENT_RETENTION_BATCH_ROWS - len(rows))
-            )
-            .mappings()
-            .all()
-        )
+            if len(rows) == DOCUMENT_RETENTION_BATCH_ROWS:
+                break
         if len(rows) == DOCUMENT_RETENTION_BATCH_ROWS:
             break
     removed = 0
