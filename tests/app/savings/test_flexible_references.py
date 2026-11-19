@@ -271,20 +271,26 @@ def test_thermostat_compensates_draw_and_loss_without_inheriting_optimized_heati
     assert all(flow["thermal"][0]["shortfall_kwh"] == 0 for flow in rows)
 
 
-def test_multiple_vehicle_order_is_deadline_then_identity_not_prices_or_input_order():
-    """Two cars share one 2.3-kW connection in stable order without claiming simultaneous power."""
+@pytest.mark.parametrize("earlier_deadline", [False, True])
+def test_multiple_vehicle_order_is_deadline_then_identity_not_prices_or_input_order(
+    earlier_deadline,
+):
+    """The earlier deadline wins 0.575 kWh first. Equal deadlines use session identity."""
     plan = document(grid_limit=2300)
     inputs = plan["input_snapshot"]["problem"]
     inputs["thermal_work"] = []
     first = inputs["ev_work"][0]
     second = {
         **first,
-        "session_id": "later-session",
+        "session_id": "z-session",
         "point_id": "other-point",
         "vehicle_id": "other-car",
     }
+    if earlier_deadline:
+        second["deadline"] = (START + timedelta(minutes=15)).isoformat()
     inputs["ev_work"] = [first, second]
     _, rows = reference_context(plan)
+    assert rows[0]["ev"][0]["session_id"] == ("z-session" if earlier_deadline else "session")
     expected = [[0.575, 0], [0, 0.575]]
     assert [[row["ac_kwh"] for row in step["ev"]] for step in rows] == expected
     inputs["ev_work"].reverse()
