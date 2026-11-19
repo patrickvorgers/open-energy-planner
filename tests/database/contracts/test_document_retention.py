@@ -18,33 +18,9 @@ from open_energy_planner.storage.adapters.lifecycle.schema import (
     DOCUMENTS,
     PLANS,
 )
+from tests.database.support.document_retention import archived, finish_index
 
 NOW = datetime(2026, 5, 1, 12, tzinfo=UTC)
-
-
-def archived(documents, kind, identity, value, *, age_days=31):
-    """Write real indexed evidence, then assign its independently specified synthetic storage age."""
-    name = f"{kind}-{identity}.json"
-    documents.write(name, value)
-    with documents.engine.begin() as connection:
-        connection.execute(
-            DOCUMENT_METADATA.update()
-            .where(
-                DOCUMENT_METADATA.c.namespace == documents.namespace,
-                DOCUMENT_METADATA.c.name == name,
-            )
-            .values(created_at=(NOW - timedelta(days=age_days)).isoformat(timespec="microseconds"))
-        )
-    return name
-
-
-def finish_index(documents, now=NOW):
-    """Resume maintenance until both legacy owner classes have been indexed without expiring data."""
-    for _attempt in range(64):
-        assert maintain_documents(documents, now) == 0
-        if documents.read("archive-retention.json")["stage"] == "complete":
-            return
-    pytest.fail("Synthetic reference-index backfill did not finish")
 
 
 def finish_collection(documents, now=NOW):
@@ -339,3 +315,30 @@ def test_interrupted_family_deletion_rolls_back_documents_links_metadata_and_cur
             == identity
         )
     assert maintain_documents(maintenance, NOW) == 1
+
+
+def test_expiry_cursor_resumes_across_kinds_ages_and_namespaces(settlement):
+    """Every backend seeks past a protected full page and reaches older rows in another namespace and kind."""
+    _runtime, _store, maintenance, engine, _plans = settlement
+    solar, demand = SqlDocuments(engine, "solar"), SqlDocuments(engine, "demand")
+    protected = []
+    for index in range(128):
+        identity = f"{index:064x}"
+        protected.append(identity)
+        archived(demand, "forecast", identity, {"version": identity}, age_days=33)
+    root = "quality-day-frozen.json"
+    demand.write(root, {"references": protected})
+    solar_name = archived(solar, "forecast", "c" * 64, {"kwh": 0.25}, age_days=32)
+    other_kind = archived(demand, "model-parameters", "d" * 64, {"coefficient": 0.375})
+    young = archived(demand, "forecast", "e" * 64, {"kwh": 0.5}, age_days=29)
+    finish_index(maintenance)
+    assert maintain_documents(maintenance, NOW) == 0
+    cursor = maintenance.read("archive-retention.json")["after"]
+    assert cursor[0] == "forecast" and len(cursor) == 4
+    reopened = SqlDocuments(engine, "savings")
+    assert maintain_documents(reopened, NOW) == 2
+    assert not solar.exists(solar_name) and not demand.exists(other_kind)
+    assert demand.exists(young)
+    assert all(demand.exists(f"forecast-{identity}.json") for identity in protected)
+    demand.delete(root)
+    assert maintain_documents(reopened, NOW) == 128

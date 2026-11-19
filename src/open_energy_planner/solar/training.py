@@ -66,7 +66,7 @@ class DailySolarTraining:
         Configuration, measurement boundary and model policy changes bind a new fit.
         """
         local = now.astimezone(ZoneInfo(location.timezone))
-        boundary = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+        boundary = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         binding = version(
             {
                 "source": document(source),
@@ -83,14 +83,20 @@ class DailySolarTraining:
         day = local.date().isoformat()
         if pointer is not None and (
             not isinstance(pointer, dict)
-            or set(pointer) != {"binding", "day", "inputs", "report", "usable"}
+            or set(pointer) != {"binding", "day", "inputs", "report", "usable", "validation_end"}
             or pointer["binding"] != binding
             or not isinstance(pointer["day"], str)
             or pointer["day"] > day
         ):
             raise ValueError("Invalid solar training pointer")
         previous = self.read(pointer["report"], binding) if pointer else None
-        token = {"name": name, "binding": binding, "day": day, "previous": pointer}
+        token = {
+            "name": name,
+            "binding": binding,
+            "day": day,
+            "previous": pointer,
+            "validation_end": boundary.isoformat(),
+        }
         if pointer and pointer["day"] == day and previous.summary.status not in RETRYABLE_TRAINING:
             return self.usable(pointer, previous), token
         inputs = version(
@@ -107,7 +113,14 @@ class DailySolarTraining:
             }
         )
         token["inputs"] = inputs
-        if pointer and pointer["inputs"] == inputs:
+        if (
+            pointer
+            and pointer["inputs"] == inputs
+            and (
+                previous.summary.status not in RETRYABLE_TRAINING
+                or pointer["validation_end"] == token["validation_end"]
+            )
+        ):
             if pointer["day"] != day:
                 self.store.documents.write(name, {**pointer, "day": day})
             return self.usable(pointer, previous), token
@@ -146,6 +159,7 @@ class DailySolarTraining:
             "binding": token["binding"],
             "day": token["day"],
             "inputs": token["inputs"],
+            "validation_end": token["validation_end"],
             "report": reference,
             "usable": reference
             if result.model is not None

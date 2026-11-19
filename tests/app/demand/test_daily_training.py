@@ -18,38 +18,12 @@ from open_energy_planner.demand.calculation.model import (
     DemandConfiguration,
     DemandHour,
     EnergyTerm,
-    TemperatureHour,
 )
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.demand.training import daily_models
 from open_energy_planner.storage.adapters.documents import SqlDocuments
+from tests.app.demand.daily_training_support import NOW, samples_before, temperatures_for
 from tests.database.support.archive import list_documents, make_store
-
-NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
-
-
-def samples_before(before, *, hours=40 * 24):
-    """Provide independent complete measured hours with a recurring clock and temperature effect."""
-    start = before.replace(minute=0, second=0, microsecond=0) - timedelta(hours=hours)
-    samples = []
-    for offset in range(hours):
-        instant = start + timedelta(hours=offset)
-        temperature = 10 + instant.hour / 2
-        energy = 0.3 + max(0, 18 - temperature) * 0.05
-        samples.append(DemandHour(instant, energy, energy))
-    return tuple(samples)
-
-
-def temperatures_for(samples, now):
-    """Retain historical knowledge and append future weather known at the prediction time."""
-    historical = tuple(
-        TemperatureHour(sample.start, 10 + sample.start.hour / 2, sample.start + timedelta(hours=1))
-        for sample in samples
-    )
-    future = tuple(
-        TemperatureHour(now + timedelta(hours=offset), 12 + offset % 8, now) for offset in range(72)
-    )
-    return historical + future
 
 
 @pytest.fixture

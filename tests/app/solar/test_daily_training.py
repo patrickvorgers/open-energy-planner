@@ -11,8 +11,8 @@ from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.training import DailySolarTraining
 from open_energy_planner.solar.wire import document
+from tests.app.solar.boosting_support import runtime_case
 from tests.app.solar.support import SITE, plant
-from tests.app.solar.test_boosting import runtime_case
 from tests.database.support.archive import list_documents, make_store
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
@@ -108,6 +108,22 @@ def test_corrupt_report_does_not_become_a_valid_cache_hit(tmp_path):
     store.documents.write(name, report)
     with pytest.raises(ValueError, match="checksum"):
         DailySolarTraining(SolarStore(store.documents)).prepare(*arguments, NOW)
+
+
+@pytest.mark.parametrize(
+    "status", [TrainingStatus.INSUFFICIENT_VALIDATION, TrainingStatus.BASELINE_PREFERRED]
+)
+def test_utc_validation_rollover_retries_only_incomplete_local_day_attempt(tmp_path, status):
+    """Amsterdam's same local date crosses UTC midnight, permitting an incomplete validation retry."""
+    _store, learner, arguments, original = training_case(tmp_path, status)
+    local_midnight = datetime(2026, 8, 20, 22, 5, tzinfo=UTC)
+    assert learner.prepare(*arguments, local_midnight)[0] == original
+    cached, token = learner.prepare(*arguments, local_midnight + timedelta(hours=2))
+    if status == TrainingStatus.INSUFFICIENT_VALIDATION:
+        assert cached is None
+        assert token["validation_end"] == "2026-08-21T00:00:00+00:00"
+    else:
+        assert cached == original
 
 
 def test_native_model_survives_runtime_restart_and_new_weather(tmp_path, monkeypatch):

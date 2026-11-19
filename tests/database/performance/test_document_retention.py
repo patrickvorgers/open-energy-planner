@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import event
 
 from open_energy_planner.storage.adapters import documents as document_adapter
@@ -11,17 +12,9 @@ from open_energy_planner.storage.adapters.lifecycle import document_retention
 from open_energy_planner.storage.adapters.lifecycle.document_retention import maintain_documents
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENT_METADATA, DOCUMENTS
 from open_energy_planner.storage.adapters.payloads import encode_payload
+from tests.database.support.document_retention import finish_index
 
 NOW = datetime(2026, 5, 1, 12, tzinfo=UTC)
-
-
-def finish_index(documents):
-    """Complete the synthetic archive's resumable indexing before measuring ordinary cleanup."""
-    for _attempt in range(32):
-        assert maintain_documents(documents, NOW) == 0
-        if documents.read("archive-retention.json")["stage"] == "complete":
-            return
-    raise AssertionError("Synthetic reference-index backfill did not finish")
 
 
 def test_steady_state_expiry_never_loads_large_forecast_or_unrelated_archive_bodies(
@@ -113,3 +106,102 @@ def test_legacy_backfill_decodes_only_128_rows_per_tick_and_resumes_after_restar
     assert second_cursor["stage"] == "documents"
     assert second_cursor["after"] > first_cursor["after"]
     record_testsuite_property("document_retention_backfill_rows_per_tick", len(decoded))
+
+
+def test_expiry_seeks_index_ranges_despite_many_old_roots_and_young_forecasts(
+    settlement, record_testsuite_property
+):
+    """SQLite VM work stays bounded across cursor restart with 40,000 irrelevant metadata rows."""
+    _runtime, _store, maintenance, engine, _plans = settlement
+    if engine.dialect.name != "sqlite":
+        pytest.skip("SQLite query-plan and virtual-machine instrumentation")
+    solar = SqlDocuments(engine, "solar")
+    old = (NOW - timedelta(days=31)).isoformat(timespec="microseconds")
+    young = NOW.isoformat(timespec="microseconds")
+    protected = [f"{index:064x}" for index in range(128)]
+    for index in range(256):
+        identity = f"{index:064x}"
+        solar.write(f"forecast-{identity}.json", {"version": identity})
+    solar.write("quality-day-frozen.json", {"references": protected})
+    with engine.begin() as connection:
+        connection.execute(
+            DOCUMENT_METADATA.update()
+            .where(DOCUMENT_METADATA.c.kind == "forecast")
+            .values(created_at=old)
+        )
+    finish_index(maintenance)
+    with engine.begin() as connection:
+        connection.execute(
+            DOCUMENT_METADATA.insert(),
+            [
+                {
+                    "namespace": "contracts",
+                    "name": f"root-{index:05}.json",
+                    "created_at": old,
+                    "identity": None,
+                    "kind": None,
+                }
+                for index in range(20000)
+            ]
+            + [
+                {
+                    "namespace": "solar",
+                    "name": f"forecast-{index + 100000:064x}.json",
+                    "created_at": young,
+                    "identity": f"{index + 100000:064x}",
+                    "kind": "forecast",
+                }
+                for index in range(20000)
+            ],
+        )
+    counts, plans, handles = [], [], set()
+    costs = {}
+
+    def observe(_connection, cursor, statement, parameters, _context, _many):
+        """Count actual SQLite instructions and inspect the production candidate-selection plan."""
+        raw = cursor.connection
+
+        def tick():
+            costs[statement] = costs.get(statement, 0) + 100
+            counts.append(100)
+            return 0
+
+        raw.set_progress_handler(tick, 100)
+        handles.add(raw)
+        if (
+            statement.lstrip().upper().startswith("SELECT")
+            and "oep_document_metadata.kind =" in statement
+        ):
+            probe = raw.cursor()
+            try:
+                plans.append(
+                    probe.execute("EXPLAIN QUERY PLAN " + statement, parameters).fetchall()
+                )
+            finally:
+                probe.close()
+
+    event.listen(engine, "before_cursor_execute", observe)
+    try:
+        assert maintain_documents(maintenance, NOW) == 0
+        first_steps = sum(counts)
+        cursor = maintenance.read("archive-retention.json")["after"]
+        assert len(cursor) == 4 and cursor[0] == "forecast"
+        counts.clear()
+        reopened = SqlDocuments(engine, "savings")
+        assert maintain_documents(reopened, NOW) == 128
+        second_steps = sum(counts)
+    finally:
+        event.remove(engine, "before_cursor_execute", observe)
+        for handle in handles:
+            handle.set_progress_handler(None, 0)
+    assert plans
+    for plan in plans:
+        detail = " ".join(row[3] for row in plan)
+        assert "SEARCH oep_document_metadata USING INDEX oep_document_expiry" in detail
+        assert "TEMP B-TREE" not in detail
+    assert max(first_steps, second_steps) < 100000, sorted(costs.items(), key=lambda row: -row[1])[
+        :3
+    ]
+    assert all(solar.exists(f"forecast-{identity}.json") for identity in protected)
+    record_testsuite_property("document_retention_first_page_vm_steps", first_steps)
+    record_testsuite_property("document_retention_resumed_page_vm_steps", second_steps)

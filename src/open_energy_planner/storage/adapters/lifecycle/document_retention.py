@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, tuple_
 
 from open_energy_planner.storage.adapters.payloads import decode_payload
 
@@ -46,6 +46,18 @@ def _progress(documents):
     if cursor is not None:
         if progress["stage"] == "values":
             valid = isinstance(cursor, str) and REFERENCE_PATTERN.fullmatch(cursor)
+        elif progress["stage"] == "complete":
+            valid = (
+                isinstance(cursor, list)
+                and len(cursor) == 4
+                and all(isinstance(part, str) and part for part in cursor)
+                and cursor[0] in EXPIRING_KINDS
+            )
+            if valid:
+                try:
+                    valid = utc_stamp(datetime.fromisoformat(cursor[1])) == cursor[1]
+                except ValueError:
+                    valid = False
         else:
             valid = (
                 isinstance(cursor, list)
@@ -132,17 +144,16 @@ def _old_family(connection, namespace, identity, cutoff):
     rows = (
         connection.execute(
             select(DOCUMENT_METADATA)
-            .join(
-                DOCUMENTS,
-                (DOCUMENTS.c.namespace == DOCUMENT_METADATA.c.namespace)
-                & (DOCUMENTS.c.name == DOCUMENT_METADATA.c.name),
-            )
             .where(
                 DOCUMENT_METADATA.c.namespace == namespace,
                 DOCUMENT_METADATA.c.identity == identity,
-                DOCUMENT_METADATA.c.kind.in_(EXPIRING_KINDS),
+                select(DOCUMENTS.c.name)
+                .where(
+                    DOCUMENTS.c.namespace == DOCUMENT_METADATA.c.namespace,
+                    DOCUMENTS.c.name == DOCUMENT_METADATA.c.name,
+                )
+                .exists(),
             )
-            .order_by(DOCUMENT_METADATA.c.name)
             .limit(len(EXPIRING_KINDS) + 1)
         )
         .mappings()
@@ -151,7 +162,10 @@ def _old_family(connection, namespace, identity, cutoff):
     if len(rows) > len(EXPIRING_KINDS):
         raise ValueError("Invalid document retention family size")
     for row in rows:
-        if archive_family(namespace, row["name"]) != (row["kind"], identity):
+        if row["kind"] not in EXPIRING_KINDS or archive_family(namespace, row["name"]) != (
+            row["kind"],
+            identity,
+        ):
             raise ValueError("Invalid document retention family")
         if utc_stamp(datetime.fromisoformat(row["created_at"])) != row["created_at"]:
             raise ValueError("Invalid document retention age")
@@ -159,30 +173,45 @@ def _old_family(connection, namespace, identity, cutoff):
 
 
 def _expire(connection, progress, now):
-    """Inspect and delete bounded old families using indexed incoming links and durable keyset paging."""
+    """Seek one indexed kind/age range at a time, inspecting at most 128 candidate rows per tick."""
     cutoff = utc_stamp(now - timedelta(days=DOCUMENT_RETENTION_DAYS))
-    query = select(DOCUMENT_METADATA).where(
-        DOCUMENT_METADATA.c.kind.in_(EXPIRING_KINDS), DOCUMENT_METADATA.c.created_at < cutoff
-    )
-    if progress["after"] is not None:
-        query = query.where(
-            _after_pair(DOCUMENT_METADATA.c.namespace, DOCUMENT_METADATA.c.name, progress["after"])
+    cursor = progress["after"]
+    kinds = sorted(EXPIRING_KINDS)
+    rows = []
+    for kind in kinds:
+        if cursor is not None and kind < cursor[0]:
+            continue
+        query = select(DOCUMENT_METADATA).where(
+            DOCUMENT_METADATA.c.kind == kind, DOCUMENT_METADATA.c.created_at < cutoff
         )
-    rows = (
-        connection.execute(
-            query.order_by(DOCUMENT_METADATA.c.namespace, DOCUMENT_METADATA.c.name).limit(
-                DOCUMENT_RETENTION_BATCH_ROWS
+        if cursor is not None and kind == cursor[0]:
+            query = query.where(
+                tuple_(
+                    DOCUMENT_METADATA.c.created_at,
+                    DOCUMENT_METADATA.c.namespace,
+                    DOCUMENT_METADATA.c.name,
+                )
+                > tuple(cursor[1:])
             )
+        rows.extend(
+            connection.execute(
+                query.order_by(
+                    DOCUMENT_METADATA.c.created_at,
+                    DOCUMENT_METADATA.c.namespace,
+                    DOCUMENT_METADATA.c.name,
+                ).limit(DOCUMENT_RETENTION_BATCH_ROWS - len(rows))
+            )
+            .mappings()
+            .all()
         )
-        .mappings()
-        .all()
-    )
-    removed, cursor = 0, None
+        if len(rows) == DOCUMENT_RETENTION_BATCH_ROWS:
+            break
+    removed = 0
     for row in rows:
         family = _old_family(connection, row["namespace"], row["identity"], cutoff)
         if removed + len(family) > DOCUMENT_RETENTION_BATCH_ROWS:
             return removed, {"stage": "complete", "after": cursor or progress["after"]}
-        cursor = [row["namespace"], row["name"]]
+        cursor = [row["kind"], row["created_at"], row["namespace"], row["name"]]
         names = [member["name"] for member in family]
         if not names or _referenced(connection, row["namespace"], row["identity"], names):
             continue

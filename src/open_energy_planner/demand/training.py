@@ -226,7 +226,7 @@ def daily_models(
             models["ridge"] = previous["ridge"]
     except (ImportError, OSError, RuntimeError):
         ridge_log.exception(
-            "Retaining usable models; retrying on the next forecast update.", expected=True
+            "Retaining usable models. Retrying on the next forecast update.", expected=True
         )
         failed = True
     if use_weather_model:
@@ -244,7 +244,7 @@ def daily_models(
                 models["weather"] = previous["weather"]
         except (ImportError, OSError, RuntimeError):
             weather_log.exception(
-                "Retaining usable models; retrying on the next forecast update.", expected=True
+                "Retaining usable models. Retrying on the next forecast update.", expected=True
             )
             failed = True
     if failed:

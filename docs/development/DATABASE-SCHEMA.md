@@ -428,7 +428,7 @@ The adapter permits updates. Immutability and payload validation belong to the o
 | `kind` | String(32), nullable | Recognized forecast, model-parameter or diagnostic archive kind. Other documents are roots and do not expire here. |
 
 The lifecycle owner writes metadata and payloads in the same transaction. The
-`oep_document_expiry` index covers `created_at`, `namespace`, `name`. The
+`oep_document_expiry` index covers `kind`, `created_at`, `namespace`, `name`. The
 `oep_document_family` index covers `namespace`, `identity`. The logical document
 relationship is maintained by transactional write/delete hooks rather than a
 foreign key, allowing bounded initialization of existing archives.
@@ -458,7 +458,9 @@ extra evidence. Cross-family cycles are retained conservatively.
 
 Solar `training-current-<binding>.json` selects a durable daily training attempt
 and last usable same-binding report. Its fields are `binding`, HA-local `day`,
-completed historical `inputs` digest, `report` and nullable `usable` report.
+completed historical `inputs` digest, UTC `validation_end`, `report` and nullable
+`usable` report. Incomplete attempts retry when the UTC validation window advances,
+even within the same HA local date. Successful fits keep their daily reuse policy.
 Bindings include source/inverter/location, model/training/weather policies and
 native library version. `ml-training-<hash>.json` additionally records that
 binding and optional challenger metadata. Native weights remain shared.
@@ -472,7 +474,10 @@ optional Ridge and optional existing weather-model parameters. Forecast
 readable. Composite predictions and individual-device evidence remain inline.
 
 Savings `archive-retention.json` stores `stage` (`documents`, `values`,
-`complete`) and nullable lexical `after` cursor. All owner payloads are indexed
+`complete`) and nullable lexical `after` cursor. Document backfill uses
+`[namespace, name]`, value backfill uses a digest and expiry uses
+`[kind, created_at, namespace, name]`. Expiry seeks each admitted kind's indexed
+age range without scanning non-expiring roots or young forecasts. All owner payloads are indexed
 in batches of at most 128 before expiry starts. Existing documents get a fresh
 30-day grace period when indexed. Subsequent batches inspect/delete at most
 128 eligible detail rows. Only unreferenced solar/demand forecasts, companion

@@ -216,6 +216,7 @@ DOCUMENT_METADATA = archive_table(
 )
 Index(
     "oep_document_expiry",
+    DOCUMENT_METADATA.c.kind,
     DOCUMENT_METADATA.c.created_at,
     DOCUMENT_METADATA.c.namespace,
     DOCUMENT_METADATA.c.name,

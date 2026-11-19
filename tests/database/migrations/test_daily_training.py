@@ -19,9 +19,9 @@ from open_energy_planner.storage.adapters.lifecycle.document_retention import ma
 from open_energy_planner.storage.adapters.lifecycle.migration import migrate_archive
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENT_LINKS, DOCUMENT_METADATA
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
-from tests.app.demand.test_daily_training import NOW, samples_before, temperatures_for
-from tests.database.contracts.test_document_retention import archived, finish_index
+from tests.app.demand.daily_training_support import NOW, samples_before, temperatures_for
 from tests.database.migrations.test_archive_migration import route
+from tests.database.support.document_retention import archived, finish_index
 
 __all__ = ["route"]
 
@@ -29,6 +29,41 @@ __all__ = ["route"]
 def disconnected(*args, **kwargs):
     """Fail if reconstruction accesses the disposed source or invokes a statistical learner."""
     pytest.fail("Migrated daily models must restore without source access or fitting")
+
+
+def test_solar_daily_model_restores_without_source_or_training(route, monkeypatch):
+    """Every backend route preserves solar daily pointers, original reports and checked native weights."""
+    from open_energy_planner.solar.storage import SolarStore
+    from open_energy_planner.solar.training import DailySolarTraining
+    from tests.app.solar.boosting_support import runtime_case
+    from tests.app.solar.support import SITE
+
+    (source, target), root = route
+    repository = SqlPlanRepository(root / "source", engine=source)
+    store = SolarStore(SqlDocuments(source, "solar"))
+    runtime, now = runtime_case(root, store=store)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    original = runtime.learning["pv0"]
+    assert original.model is not None
+    definition = store.current
+    migrate_archive(source, target, overwrite_target=True)
+    repository.close()
+    source.dispose()
+    monkeypatch.setattr(source, "connect", disconnected)
+    monkeypatch.setattr(source, "begin", disconnected)
+    monkeypatch.setattr("open_energy_planner.solar.runtime.fit_boosted_model", disconnected)
+    restored = DailySolarTraining(SolarStore(SqlDocuments(target, "solar")))
+    cached, _token = restored.prepare(
+        definition.sources[0],
+        definition.inverters[0],
+        SITE,
+        runtime.histories["sensor.pv0"],
+        runtime.weather,
+        runtime.forecast_runs,
+        None,
+        now,
+    )
+    assert cached == original
 
 
 def index_rows(engine):
