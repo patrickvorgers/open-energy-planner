@@ -13,16 +13,23 @@ export function createSavingsView(host, api) {
     const tooltip = document.createElement("div");
     tooltip.id = "savings-chart-tooltip"; tooltip.className = "chart-tooltip savings-tooltip";
     tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); host.append(tooltip);
-    find("savings-chart").setAttribute("aria-describedby", tooltip.id);
-    host.addEventListener("keydown", event => { if (event.key === "Escape") tooltip.hidden = true; });
-    host.addEventListener("pointerdown", event => { if (event.target !== find("savings-chart") && !tooltip.contains(event.target)) tooltip.hidden = true; });
-    tooltip.onpointerleave = () => { if (document.activeElement !== find("savings-chart")) tooltip.hidden = true; };
+    /** Remove both visible and accessible details when their selection is no longer inspected. */
+    function hideTooltip() {
+        tooltip.hidden = true; tooltip.replaceChildren();
+        find("savings-chart").removeAttribute("aria-describedby");
+        document.removeEventListener("keydown", dismissTooltip);
+    }
+    /** Hover does not move focus, so Escape must also work outside the Savings section. */
+    function dismissTooltip(event) { if (event.key === "Escape") hideTooltip(); }
+    host.addEventListener("pointerdown", event => { if (event.target !== find("savings-chart") && !tooltip.contains(event.target)) hideTooltip(); });
+    window.addEventListener("hashchange", hideTooltip);
+    tooltip.onpointerleave = () => { if (document.activeElement !== find("savings-chart")) hideTooltip(); };
     let chart = null, request = 0, initialized = false, selectedIndex = 0;
     const period = createPeriodSelector(find("savings-period"), {onChange: () => read()});
     /** Never leave an old period's money visible beneath a new selection. */
     function clear(message) {
         chart?.destroy(); chart = null;
-        tooltip.hidden = true;
+        hideTooltip();
         find("savings-chart").onkeydown = null;
         find("savings-chart").tabIndex = -1;
         find("savings-total").textContent = message;
@@ -123,8 +130,10 @@ export function createSavingsView(host, api) {
         const title = bin => `${dateLabel(localDate(bin.start))}${localDate(bin.start) === localDate(Date.parse(bin.end) - 1) ? "" : " – " + dateLabel(localDate(Date.parse(bin.end) - 1))}`;
         /** Present the selected bar's retained costs without calculating financial values in the browser. */
         function showBreakdown({chart: instance, tooltip: state}) {
-            tooltip.hidden = !state.opacity || !state.dataPoints?.length || Boolean(canvas.closest("[hidden]"));
-            if (tooltip.hidden) return;
+            if (canvas.closest("[hidden]")) { hideTooltip(); return; }
+            if (!state.opacity && (tooltip.matches(":hover") || document.activeElement === canvas)) return;
+            if (!state.opacity || !state.dataPoints?.length) { hideTooltip(); return; }
+            tooltip.hidden = false;
             const bin = state.dataPoints[0].raw.bin, heading = document.createElement("p");
             heading.className = "chart-tooltip-title"; heading.textContent = `${title(bin)}: ${currency}`;
             const table = document.createElement("table"), body = document.createElement("tbody");
@@ -136,6 +145,8 @@ export function createSavingsView(host, api) {
             if (bin.coverage_seconds > 0 && (!bin.breakdown?.actual || !bin.breakdown?.without_battery)) total.textContent += "\nSome component details are unavailable for the same comparable time.";
             if (bin.estimated_seconds) total.textContent += "\nIncludes reconstructed measurements.";
             tooltip.replaceChildren(heading, table, total);
+            canvas.setAttribute("aria-describedby", tooltip.id);
+            document.addEventListener("keydown", dismissTooltip);
             const bounds = canvas.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
             tooltip.style.left = `${Math.max(margin, Math.min(bounds.left + state.caretX + margin, innerWidth - tooltip.offsetWidth - margin))}px`;
             tooltip.style.top = `${Math.max(margin, Math.min(bounds.top + state.caretY + margin, innerHeight - tooltip.offsetHeight - margin))}px`;
@@ -159,7 +170,6 @@ export function createSavingsView(host, api) {
             }}],
             options: {
                 responsive: true, maintainAspectRatio: false, animation: false,
-                events: ["mousemove", "click", "touchstart", "touchmove"],
                 layout: {padding: {top: VALUE_LABEL_FONT_PX + CHART_LABEL_GAP_PX}},
                 scales: {x: {type: "linear", min: calendarDayStart(start), max: calendarDayStart(shiftDay(end, 1)), afterBuildTicks: axis => {axis.ticks = points.map(point => ({value: point.x}));}, grid: {display: false}, ticks: {maxRotation: 0, autoSkip: true, autoSkipPadding: CHART_LABEL_GAP_PX, callback: axisDate}}, y: {beginAtZero: true, ticks: {callback: money}}},
                 plugins: {legend: {display: false}, tooltip: {enabled: false, external: showBreakdown}},
@@ -172,9 +182,9 @@ export function createSavingsView(host, api) {
             find("savings-selected").textContent = `${title(point.bin)}: ${point.y == null ? "No comparable measurements" : money(point.y) + " " + currency}`;
             const active = [{datasetIndex: 0, index: selectedIndex}], bar = chart.getDatasetMeta(0).data[selectedIndex];
             chart.setActiveElements(active); chart.tooltip.setActiveElements(active, {x: bar.x, y: bar.y}); chart.update("none");
+            showBreakdown({chart, tooltip: chart.tooltip});
         };
-        canvas.onblur = () => { tooltip.hidden = true; };
-        canvas.onpointerleave = event => { if (!tooltip.contains(event.relatedTarget) && document.activeElement !== canvas) tooltip.hidden = true; };
+        canvas.onblur = hideTooltip;
     }
     return {read, initialize};
 }

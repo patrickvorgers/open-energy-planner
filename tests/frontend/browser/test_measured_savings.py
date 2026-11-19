@@ -110,6 +110,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     dialog.get_by_role("button", name="Apply period", exact=True).click()
     canvas = page.locator("#savings-chart")
     expect(dialog).not_to_be_visible()
+    page.get_by_role("button", name="Refresh overview", exact=True).focus()
     canvas.scroll_into_view_if_needed()
     coordinates = canvas.evaluate("""canvas => {
         const bar=Chart.getChart(canvas).getDatasetMeta(0).data[2], bounds=canvas.getBoundingClientRect();
@@ -130,6 +131,16 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     if page.viewport_size["width"] >= 500:
         bounds = tooltip.bounding_box()
         page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
+        expect(tooltip).to_be_visible()
+        page.mouse.move(1, 1)
+        expect(tooltip).not_to_be_visible()
+        page.mouse.move(coordinates["x"], coordinates["y"])
+        expect(tooltip).to_contain_text("Saving: 8.00 EUR")
+        page.keyboard.press("Escape")
+        expect(tooltip).not_to_be_visible()
+        expect(page.get_by_role("button", name="Refresh overview", exact=True)).to_be_focused()
+        page.mouse.move(1, 1)
+        page.mouse.move(coordinates["x"], coordinates["y"])
         expect(tooltip).to_be_visible()
     assert tooltip.evaluate(
         "element => {const bounds=element.getBoundingClientRect();return bounds.left>=0 && bounds.right<=innerWidth && bounds.top>=0 && bounds.bottom<=innerHeight && element.scrollWidth<=element.clientWidth;}"
@@ -160,6 +171,8 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(tooltip).not_to_be_visible()
     expect(canvas).to_have_attribute("tabindex", "0")
+    expect(page.locator("#savings-chart-tooltip")).to_have_text("")
+    expect(canvas).to_have_accessible_description("")
     canvas.focus()
     page.keyboard.press("Home")
     for _ in range(3):
@@ -171,6 +184,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#savings-total")).to_have_text("Not available")
     expect(tooltip).not_to_be_visible()
+    expect(canvas).to_have_accessible_description("")
 
 
 @pytest.mark.parametrize("app_site", ["savings", "activity_ingress"], indirect=True)
