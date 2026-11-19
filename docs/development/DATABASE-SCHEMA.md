@@ -421,7 +421,7 @@ The adapter permits updates. Immutability and payload validation belong to the o
 
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |
-| `namespace` | String(32), PK | Owning document namespace. |
+| `namespace` | String(128), PK | Owning namespace with the same capacity as `oep_documents.namespace`. |
 | `name` | String(128), PK | Exact flat key in `oep_documents`. |
 | `created_at` | String(40), required | First storage time as fixed-width UTC ISO microseconds. Rewrites preserve this age. Legacy backfill starts a fresh grace period. |
 | `identity` | String(64), nullable | SHA-256 family identity for explicitly expiring solar/demand document kinds. |
@@ -438,7 +438,7 @@ foreign key, allowing bounded initialization of existing archives.
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |
 | `owner_kind` | String(32), PK | `document` or shared plan `value`. |
-| `owner_namespace` | String(32), PK | Document namespace, or empty for a plan value. |
+| `owner_namespace` | String(128), PK | Document namespace with the same capacity as `oep_documents.namespace`, or empty for a plan value. |
 | `owner_name` | String(128), PK | Flat document name or plan-value digest. |
 | `target_hash` | String(64), PK | Conservatively recognized lowercase SHA-256 reference in an owner's JSON keys or values. |
 

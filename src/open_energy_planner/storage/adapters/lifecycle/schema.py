@@ -208,7 +208,7 @@ DOCUMENTS = archive_table(
 
 DOCUMENT_METADATA = archive_table(
     "oep_document_metadata",
-    Column("namespace", text_key(AREA_LENGTH), primary_key=True),
+    Column("namespace", text_key(IDENTITY_LENGTH), primary_key=True),
     Column("name", text_key(IDENTITY_LENGTH), primary_key=True),
     Column("created_at", String(TIMESTAMP_LENGTH), nullable=False),
     Column("identity", text_key(HASH_LENGTH)),
@@ -226,7 +226,7 @@ Index("oep_document_family", DOCUMENT_METADATA.c.namespace, DOCUMENT_METADATA.c.
 DOCUMENT_LINKS = archive_table(
     "oep_document_links",
     Column("owner_kind", text_key(AREA_LENGTH), primary_key=True),
-    Column("owner_namespace", text_key(AREA_LENGTH), primary_key=True),
+    Column("owner_namespace", text_key(IDENTITY_LENGTH), primary_key=True),
     Column("owner_name", text_key(IDENTITY_LENGTH), primary_key=True),
     Column("target_hash", text_key(HASH_LENGTH), primary_key=True),
 )
