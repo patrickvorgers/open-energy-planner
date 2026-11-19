@@ -1187,6 +1187,17 @@ SQL and share a repeatable snapshot with bounded parent details. Charts use dail
 bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
 key supports inclusive-start/exclusive-end period reads without loading raw quarters.
 
+The same repeatable snapshot provides the read-only `cash.breakdown` API object.
+A start-key join to `oep_savings_days` sums existing actual/without-battery
+purchase, sale and bonus columns over days with positive matching cash coverage.
+Each side is available only when every included day's scenario coverage equals
+its cash coverage and all three components are present. Otherwise that side is
+null while matching net costs remain unchanged. Zero-coverage days and legacy
+reports without a cash index never contribute. The aggregate covers the entire
+selection, independently of the bounded daily-detail response. No table, column,
+index, finalized payload or accounting policy changes.
+
+
 ## Indexes and query ownership
 
 Primary keys provide the lookup/order prefixes below. The schema also declares

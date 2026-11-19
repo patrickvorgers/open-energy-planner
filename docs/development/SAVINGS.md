@@ -143,6 +143,18 @@ closure and participates in every database transfer. Period totals and daily or
 monthly chart bins are read from one repeatable snapshot. They never aggregate
 legacy economic/reference columns into the new cash basis.
 
+The overview also returns `cash.breakdown.actual` and
+`cash.breakdown.without_battery`, each containing `purchase`, `sale` and `bonus`,
+or null when comparable component evidence is incomplete. One bounded SQL
+aggregate joins the matched index to existing normalized day columns in the same
+read snapshot. Only days with positive matched coverage contribute. Every such
+day must have all components and scenario coverage equal to matched coverage.
+Matched quarters are a subset of each scenario's accepted quarters, so equal
+coverage proves the same time. A broader actual scenario cannot explain a
+narrower matched net total. The query covers the entire selected range without
+loading raw quarters or bounded daily payloads. Finalized evidence and the
+existing monetary comparison remain unchanged.
+
 Finalized legacy reports and their tables are retained without reinterpretation
 or destructive migration. `GET /v1/evaluations` and explicit revision reads retain
 access to already stored interval evaluations. These readers cannot create new
@@ -156,7 +168,11 @@ All tables use the app-owned active engine and shared SQLAlchemy schema.
 ## Read-only interface and calendar control
 
 Savings shows one cash amount, its two matching costs, a signed daily chart and
-collapsed calculation help. Missing data, loading and failed reads never show a
+a collapsed Savings breakdown and calculation help. The breakdown uses only
+backend-verified comparable components. Amount labels above bars and date labels
+at actual bin centers reduce density to fit the available width, while full
+values and dates remain available through tooltips and keyboard inspection.
+Missing data, loading and failed reads never show a
 zero or a stale previous period's amount. Chart values remain keyboard accessible.
 Large historical tables and the continuous-simulation controls are removed.
 

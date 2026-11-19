@@ -65,9 +65,23 @@ that every saving was caused by the planner.
 Choose the period through the calendar control. The arrows move to the previous
 or next available period. The calendar includes standard periods and **Custom
 period**, where you can choose both dates. The amount, both costs and the daily
-chart always use the same selection. Open **How is this calculated?** for the
-basis and limitations. The chart retains negative values and gaps. Keyboard
-users can focus it and inspect amounts with Left, Right, Home and End.
+chart always use the same selection. **With your battery** appears first in the
+cost comparison. Open **Savings breakdown** to compare **Import cost**, **Export
+income**, **Bonus income** and **Net electricity cost** for both sides. Income is
+subtracted from import cost. The saving is the without-battery net cost minus the
+with-battery net cost. Displayed amounts have two decimal places, so small rounding
+differences are possible.
+
+Component details appear only when their retained daily evidence covers exactly
+the same accepted measured time as the net comparison. If that cannot be proven,
+the component detail stays **Unavailable**. The matching net costs can still be
+known. Opening the breakdown does not recalculate or rewrite historical results.
+
+Open **How is this calculated?** for the basis and limitations. Values above the
+bars and dates below them follow the selected daily or monthly bins. Labels are
+reduced when space is limited. The chart retains negative values and gaps.
+Keyboard users can focus it and inspect every amount and full date with Left,
+Right, Home and End.
 
 The shared date control uses the Home Assistant installation timezone and the
 signed-in user's date format. Forecast quality, Activity and Planning performance
