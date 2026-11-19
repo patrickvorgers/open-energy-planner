@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from math import exp, expm1, fsum
 
-from open_energy_planner.appliances.ev.model import EVWork, delivered_power
+from open_energy_planner.appliances.ev.model import EV_ENERGY_TOLERANCE_KWH, EVWork, delivered_power
 from open_energy_planner.appliances.thermal.model import ThermalWork, active_hours
 from open_energy_planner.core.units import SECONDS_PER_HOUR, WATTS_PER_KW
 
@@ -13,6 +13,9 @@ from .model import ENERGY_TOLERANCE_KWH
 
 REFERENCE_POLICY = "unoptimized-loads-v1"
 REFERENCE_POWER_TOLERANCE_W = 1e-5
+# A priority solve and its frozen lower bound each admit service tolerance.
+# Independent physical replay retains its own energy roundoff allowance.
+REFERENCE_SERVICE_TOLERANCE_KWH = 2 * EV_ENERGY_TOLERANCE_KWH + ENERGY_TOLERANCE_KWH
 SERVICE_ISSUE = (
     "The unoptimized reference cannot provide the same charging and comfort service "
     "within the available period and connection limits. Its benefit is unavailable."
@@ -183,7 +186,7 @@ def reference_context(plan):
 
 
 def service_issue(plan, services):
-    """Refuse a monetary benefit when vehicle service differs or reference comfort is worse."""
+    """Refuse a monetary benefit when charging, comfort or required ending stock are incomparable."""
     original = plan["expected_flows"]
     data = plan["input_snapshot"]["problem"]
     for work in data.get("ev_work", ()):
@@ -197,7 +200,7 @@ def service_issue(plan, services):
             )
             for rows in (services, original)
         ]
-        if abs(totals[0] - totals[1]) > ENERGY_TOLERANCE_KWH:
+        if abs(totals[0] - totals[1]) > REFERENCE_SERVICE_TOLERANCE_KWH:
             return SERVICE_ISSUE
     for work in data.get("thermal_work", ()):
         identity = work["device_id"]
@@ -215,11 +218,12 @@ def service_issue(plan, services):
                 )
                 for rows in (baseline, optimized)
             ]
-            if totals[0] > totals[1] + ENERGY_TOLERANCE_KWH:
+            if abs(totals[0] - totals[1]) > REFERENCE_SERVICE_TOLERANCE_KWH:
                 return SERVICE_ISSUE
-        required_end = min(work["terminal_c"], optimized[-1]["end_c"])
-        if (required_end - baseline[-1]["end_c"]) * work[
-            "capacity_kwh_per_c"
-        ] > ENERGY_TOLERANCE_KWH:
+        deficits = [
+            max(0, work["terminal_c"] - rows[-1]["end_c"]) * work["capacity_kwh_per_c"]
+            for rows in (baseline, optimized)
+        ]
+        if abs(deficits[0] - deficits[1]) > REFERENCE_SERVICE_TOLERANCE_KWH:
             return SERVICE_ISSUE
     return None

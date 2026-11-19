@@ -193,6 +193,40 @@ def test_more_reference_charge_cannot_reward_an_optimizer_that_delivered_less_se
     assert result["expected_savings"] is None
 
 
+def test_more_reference_comfort_cannot_reward_unserved_optimized_heating():
+    """A 2-kW quarter would add 5 C, exceeding the 40-C maximum from 39 C.
+
+    A valid fixed-quarter OEP plan must leave a 0.1-kWh comfort/ending deficit.
+    A cycling thermostat can add the missing 0.1 kWh. Billing those unequal
+    outcomes as a planning saving would credit OEP for not providing comfort.
+    """
+    plan = document()
+    inputs = plan["input_snapshot"]["problem"]
+    inputs["ev_work"] = []
+    inputs["thermal_work"][0].update(initial_c=39, minimum_c=40, maximum_c=40, terminal_c=40)
+    for flow in plan["expected_flows"]:
+        flow.update(grid_import=0, ev=[])
+        flow["thermal"][0].update(ac_kwh=0, end_c=39, shortfall_kwh=0.1, power_w=0)
+    plan["independent_costs"].update(cash_cost=0, import_cost=0)
+    result = comparison(plan, without_battery=True)
+    assert result["reference_costs"] is None
+    assert result["expected_savings"] is None
+
+
+@pytest.mark.parametrize("difference, comparable", [(1.00021095e-7, True), (0.00001, False)])
+def test_numerical_service_roundoff_is_distinct_from_a_real_service_difference(
+    difference, comparable
+):
+    """Observed solver-priority roundoff remains comparable. A ten-micro-kWh service difference does not."""
+    plan = document()
+    stored = 0.46 - difference
+    plan["expected_flows"][1]["ev"][0].update(
+        stored_kwh=stored, ac_kwh=stored / 0.8, power_w=stored / 0.8 / 0.25 * 1000
+    )
+    result = comparison(plan, without_battery=True)
+    assert (result["reference_costs"] is not None) is comparable
+
+
 def test_fixed_running_cycle_and_later_vehicle_availability_are_preserved():
     """A fixed cycle stays at its admitted start and a later-arriving vehicle cannot charge early."""
     plan = document(cycle=True)

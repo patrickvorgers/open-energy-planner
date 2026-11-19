@@ -205,9 +205,13 @@ availability, charging limits, efficiencies, demand and temperature limits.
 A short final charge pulse stops exactly at the requested target.
 
 Reference `service_flows` retain detached EV and thermal rows for the same
-intervals used by the costs and charts. Service shortfall greater than the
-optimizer, or insufficient final thermal stock, makes reference cost and benefit
-unavailable instead of rewarding unserved demand. Earlier plans without this
+intervals used by the costs and charts. Different useful EV charging, served heat draw, integrated comfort deficit or
+required ending-temperature deficit makes reference cost and benefit unavailable
+in either direction. Neither scenario can earn a saving by delivering less
+service. Surplus heat above the requested ending target is not a deficit. Service
+comparison admits the existing priority-solve tolerance, frozen service-bound
+tolerance and physical replay roundoff. This numerical allowance never changes
+the original solver, command or independent-validation tolerances. Earlier plans without this
 policy retain their original optimized EV and thermal timing. No archive is
 rewritten and measured historical Savings is unchanged.
 Each scenario header starts with its expected economic cost. Optimizer and
