@@ -66,6 +66,10 @@ cannot claim a specialized meter, and generic selection writes must retain the
 forecast membership required by configured charge points and boilers.
 Resolved vehicle filters remain pinned across refresh. Missing parents stay visible
 as unavailable choices, preserving the original sensor until an explicit replacement.
+Explicit source requests are served from the authenticated snapshot before observation
+uploads or optional history reads. A failure in those unrelated transfers does not
+prevent vehicle or connection sources from becoming selectable. Known plan
+invalidations revoke commands before the source transfer starts.
 
 The thin HA catalogue adapter projects `integration_domain` and the loaded
 manifest's `integration_display_name` separately from `integration_id` and its
