@@ -462,7 +462,9 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                         )
                                         if isinstance(source, OpenMeteoSolarSource):
                                             cancellation = await complete_write(
-                                                runtime.set_forecast_runs,
+                                                partial(
+                                                    runtime.set_forecast_runs, authoritative=False
+                                                ),
                                                 location,
                                                 source.forecast_runs,
                                             )
@@ -561,7 +563,9 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                         and runtime.configuration.sources
                                     ):
                                         cancellation = await complete_write(
-                                            runtime.set_forecast_runs, location, runs
+                                            partial(runtime.set_forecast_runs, authoritative=False),
+                                            location,
+                                            runs,
                                         )
                                         if cancellation:
                                             raise cancellation

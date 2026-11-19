@@ -379,7 +379,7 @@ def test_worker_captured_before_withdrawal_cannot_publish_under_new_revision(tmp
 
 @pytest.mark.parametrize("historical", [False, True])
 def test_feedback_only_revises_training_for_changed_historical_observations(tmp_path, historical):
-    """Appending current curtailment transitions preserves daily reuse; changed prior-day classifications revoke it."""
+    """Appending current curtailment transitions preserves daily reuse. Changed prior-day classifications revoke it."""
     from open_energy_planner.solar.curtailment import CurtailmentHistory, save_feedback
 
     entity = "binary_sensor.pv_curtailed"
@@ -409,3 +409,99 @@ def test_feedback_only_revises_training_for_changed_historical_observations(tmp_
     assert SolarRuntime(SolarStore(store.documents)).training.revision("sensor.pv0") == int(
         historical
     )
+
+
+def test_restarted_open_meteo_reader_admits_partial_cohorts_without_retraining(
+    tmp_path, monkeypatch
+):
+    """A live-only restart and four-run cache batches retain saved model generations without bulk restoration."""
+    import asyncio
+
+    from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
+    from open_energy_planner.solar.weather import OpenMeteoSolarSource, forecast_weather_query
+    from tests.app.solar.test_forecast_weather import LatestRunSession
+
+    runtime, now = runtime_case(tmp_path)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    original = runtime.learning["pv0"]
+    assert original.model is not None
+    cache = ForecastWeatherCache(runtime.store)
+    for run in runtime.forecast_runs:
+        cache.write(forecast_weather_query(SITE, run.initialized_at), run)
+    original_revision = runtime.training.revision("sensor.pv0")
+    reports = {
+        name for name in list_documents(tmp_path, "solar") if name.startswith("ml-training-")
+    }
+    initialized = now - timedelta(hours=6)
+    session = LatestRunSession(
+        metadata={
+            "last_run_initialisation_time": initialized.timestamp(),
+            "last_run_availability_time": (initialized + timedelta(hours=1)).timestamp(),
+        }
+    )
+    reader = OpenMeteoSolarSource(
+        session, runtime.store, history_start=lambda: now - timedelta(days=56)
+    )
+    assert reader.forecast_runs == ()
+    restored = SolarRuntime(SolarStore(runtime.store.documents))
+    restored.histories = runtime.histories
+    loaded = []
+    original_read = ForecastWeatherCache.read
+
+    def observe_cache_read(cache, query, origin=None):
+        """Count bounded individual run reads instead of allowing a startup cohort scan."""
+        loaded.append(query["initialized_at"])
+        return original_read(cache, query, origin)
+
+    def unexpected_training(*args, **kwargs):
+        """A partially loaded unchanged archive must restore the saved native model without fitting."""
+        raise AssertionError("Partial Open-Meteo cache loading must preserve the daily model")
+
+    monkeypatch.setattr(ForecastWeatherCache, "read", observe_cache_read)
+    monkeypatch.setattr("open_energy_planner.solar.runtime.fit_boosted_model", unexpected_training)
+    weather = asyncio.run(reader.read(SITE, now))
+    assert len(reader.forecast_runs) == 1 and len(loaded) == 2
+    assert len(set(loaded)) == 1
+    restored.set_weather(SITE, weather, service=reader.service)
+    restored.set_forecast_runs(SITE, reader.forecast_runs, authoritative=False)
+    later = now + timedelta(minutes=15)
+    assert restored.install(restored.build(restored.job(later)), later)
+    assert restored.learning["pv0"].archive_reference == original.archive_reference
+    for _batch in range(2):
+        before = len(loaded)
+        runs = asyncio.run(reader.import_runs(SITE, now))
+        assert len(loaded) - before == 4
+        restored.set_forecast_runs(SITE, runs, authoritative=False)
+        later += timedelta(minutes=15)
+        assert restored.install(restored.build(restored.job(later)), later)
+        assert restored.learning["pv0"].archive_reference == original.archive_reference
+        assert restored.training.revision("sensor.pv0") == original_revision
+    assert {
+        name for name in list_documents(tmp_path, "solar") if name.startswith("ml-training-")
+    } == reports
+
+
+def test_partial_run_admissions_preserve_unloaded_keys_but_replacement_and_withdrawal_revoke(
+    tmp_path,
+):
+    """Absence from an admission batch is harmless. Changed supplied keys and authoritative omissions invalidate."""
+    runtime, _now = runtime_case(tmp_path)
+    original = runtime.forecast_runs
+    before = runtime.training.revision("sensor.pv0")
+    selected = original[-1:]
+    runtime.set_forecast_runs(SITE, selected, authoritative=False)
+    assert runtime.forecast_runs == original
+    assert runtime.training.revision("sensor.pv0") == before
+    changed = replace(
+        selected[0],
+        hours=(
+            replace(selected[0].hours[0], ghi=selected[0].hours[0].ghi + 1),
+            *selected[0].hours[1:],
+        ),
+    )
+    runtime.set_forecast_runs(SITE, (changed,), authoritative=False)
+    assert runtime.training.revision("sensor.pv0") == before + 1
+    assert len(runtime.forecast_runs) == len(original)
+    runtime.set_forecast_runs(SITE, (), authoritative=True)
+    assert runtime.forecast_runs == ()
+    assert runtime.training.revision("sensor.pv0") == before + 2

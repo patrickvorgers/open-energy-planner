@@ -22,6 +22,9 @@ source revision and invalidates the old model and its fallback. Original weather
 run replacement is distinguished from additive forecast refreshes. Captured jobs
 keep their original revision, preventing a stale worker from assigning an old
 fit to newer evidence. Ordinary appended current feedback retains daily reuse.
+Live weather and historical import batches are partial admissions. Runs not yet
+loaded after restart remain accepted. Explicit authoritative cohort replacement
+can withdraw runs. Partial batches still invalidate genuinely replaced run data.
 
 Open the app's `/setup` wizard, directly or through the integration/device configuration link, and use the **Solar production** step.
 HA Energy defines the solar source catalogue. Missing/incomplete Energy configuration

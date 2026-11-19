@@ -518,7 +518,7 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
     original_set_runs = SolarRuntime.set_forecast_runs
     writes_off_loop = []
 
-    def persist_original_runs(runtime, *arguments):
+    def persist_original_runs(runtime, *arguments, **options):
         """Observe whether durable cohort writes execute outside the application's event loop."""
         try:
             asyncio.get_running_loop()
@@ -526,7 +526,8 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
             writes_off_loop.append(True)
         else:
             writes_off_loop.append(False)
-        return original_set_runs(runtime, *arguments)
+        assert options == {"authoritative": False}
+        return original_set_runs(runtime, *arguments, **options)
 
     monkeypatch.setattr(SolarRuntime, "set_forecast_runs", persist_original_runs)
 

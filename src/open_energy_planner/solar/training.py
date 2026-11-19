@@ -84,8 +84,8 @@ class DailySolarTraining:
                     {"entity_id": entity, "revision": self.revision(entity) + 1},
                 )
 
-    def accept_runs(self, site, runs, entities):
-        """Persist only original-run identities so withdrawal remains detectable across restart."""
+    def accept_runs(self, site, runs, entities, *, authoritative=True):
+        """Merge partial admissions or reconcile an explicit authoritative snapshot using only run identities."""
         name = "training-runs-" + site + ".json"
         incoming = {run.initialized_at.isoformat(): run.version for run in runs}
         with self.store.transaction():
@@ -97,7 +97,12 @@ class DailySolarTraining:
                 for at, reference in previous.items()
             ):
                 raise ValueError("Invalid solar training forecast-run cohort")
-            withdrawn = any(incoming.get(at) != reference for at, reference in previous.items())
+            withdrawn = any(
+                (authoritative or at in incoming) and incoming.get(at) != reference
+                for at, reference in previous.items()
+            )
+            if not authoritative:
+                incoming = {**previous, **incoming}
             if withdrawn:
                 self.invalidate(entities)
             if previous != incoming:

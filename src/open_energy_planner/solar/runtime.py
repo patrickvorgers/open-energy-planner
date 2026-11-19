@@ -381,8 +381,8 @@ class SolarRuntime:
         self.weather_service = dict(service) if service is not None else {}
         self.weather_revision += 1
 
-    def set_forecast_runs(self, location, runs):
-        """Coalesce added runs but revoke results when captured evidence is replaced or withdrawn."""
+    def set_forecast_runs(self, location, runs, *, authoritative=True):
+        """Admit partial loaded runs, or reconcile an authoritative snapshot including explicit withdrawals."""
         if location != self.location:
             return False
         selected = tuple(runs)
@@ -401,7 +401,12 @@ class SolarRuntime:
             (source.entity_id for source in self.configuration.sources)
             if self.configuration
             else (),
+            authoritative=authoritative,
         )
+        if not authoritative:
+            admitted = {run.initialized_at: run for run in self.forecast_runs}
+            admitted.update((run.initialized_at, run) for run in selected)
+            selected = tuple(admitted[initialized] for initialized in sorted(admitted))
         if destructive:
             self.restore_training_revisions()
         if selected == self.forecast_runs and not destructive:

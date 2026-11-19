@@ -472,8 +472,11 @@ in the same transaction as the evidence update. Revision is part of the model
 binding, so an older model and its fallback cannot be reused after withdrawal,
 including after restart. Worker jobs retain their captured revisions.
 `training-runs-<location-hash>.json` maps original run initialization ISO instants
-to run-version hashes. Only identities are stored. Replacement or withdrawal
-advances affected revisions. Routine additive inputs retain daily model reuse.
+to run-version hashes. Only identities are stored. Replacement or authoritative
+withdrawal advances affected revisions. Partial live/history-reader batches merge
+admitted identities and do not treat not-yet-loaded runs as withdrawals. They
+preserve saved models during startup without bulk-restoring weather payloads.
+Routine additive inputs retain daily model reuse.
 
 Demand `daily-training-<binding>.json` contains `schema` (1), `binding`, local
 `day`, `input_version`, `reference` and boolean `complete`. It selects immutable
