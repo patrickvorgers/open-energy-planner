@@ -1,5 +1,6 @@
 """Verify shared actionable notices, authentication, recovery and stale-data handling."""
 
+import re
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
@@ -8,6 +9,63 @@ from playwright.sync_api import expect
 
 from tests.app.notifications.support import notification_document
 from tests.frontend.browser.helpers import TOKEN, discover, open_primary_navigation
+
+
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+@pytest.mark.parametrize(
+    "reason,title,explanation",
+    [
+        (
+            "battery_dispatch_unavailable",
+            "Waiting to recheck battery limits",
+            "latest battery measurements",
+        ),
+        (
+            "thermal_dispatch_window_elapsed",
+            "Heating start passed during calculation",
+            "scheduled heating start passed",
+        ),
+        (
+            "future_unknown_condition",
+            "Planning is blocked",
+            "no specific explanation yet",
+        ),
+    ],
+)
+def test_publication_notice_explains_retry_and_only_clears_after_publication(
+    app_page, reason, title, explanation
+):
+    """Real desktop/mobile popups distinguish temporary rejections from unknowns and retain recovery until publication."""
+    page, url = app_page
+    page.clock.install()
+    since = datetime(2026, 11, 19, 9, tzinfo=UTC)
+    result = notification_document("not_ready", reason, since)
+    page.route("**/v1/notifications", lambda route: route.fulfill(json=result))
+    page.goto(url + "/quality")
+    page.get_by_role("button", name="Notifications: 1 active", exact=True).click()
+    popup = page.locator("#notification-center-panel")
+    expect(popup.get_by_role("link", name=title, exact=True)).to_be_visible()
+    expect(popup).to_contain_text(explanation)
+    expect(popup).not_to_contain_text("saved settings are unusable")
+    if reason == "future_unknown_condition":
+        expect(popup).not_to_contain_text("automatically")
+        expect(popup.get_by_role("link", name="Planning is blocked", exact=True)).to_have_attribute(
+            "href",
+            re.compile(re.escape(url) + r"/activity(?:\?embedded=1)?#planning-notifications$"),
+        )
+    else:
+        expect(popup).to_contain_text("automatically")
+        expect(popup).to_contain_text("usually temporary")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    popup.screenshot(path=f"results/ci/planning-notice-{reason}-{page.viewport_size['width']}.png")
+    result.update(notification_document("calculating", None, since, block_reason=reason))
+    page.clock.fast_forward(16000)
+    expect(popup).to_contain_text("Calculating a new energy plan")
+    expect(popup).to_contain_text("not yet completed successfully")
+    result.update(notification_document("ready", "validated", None))
+    page.clock.fast_forward(16000)
+    expect(popup).not_to_contain_text("Calculating a new energy plan")
+    expect(popup).not_to_contain_text(title)
 
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
