@@ -47,6 +47,15 @@
         ],
         "createdAt": "2026-11-18T22:35:49.380Z",
         "reason": "Agent: static detector cannot resolve route-mounted /setup/stylesheets and reports all headings16px. Actual planning-performance.css sets h1=1.5rem and h2=1.125rem (24px/18px at default root), a1.33x heading step above inherited16px body. No typography change is needed."
+      },
+      {
+        "rule": "overused-font",
+        "value": "space grotesk",
+        "files": [
+          "docs/assets/courtyard.css"
+        ],
+        "createdAt": "2026-11-19T08:26:17.640Z",
+        "reason": "Agent: docs/assets/courtyard.css intentionally uses the established locally bundled Courtyard heading font. docs/development/COURTYARD-THEME.md documents Outfit and Space Grotesk; preserve the existing identity during the Planning baseline change."
       }
     ]
   }

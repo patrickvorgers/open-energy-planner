@@ -485,7 +485,7 @@ class PlanningCoordinator:
         self._set_status("not_ready", reason)
 
     def publication_rejection(self, document, now, current):
-        """Reject only hard changes, expired inputs or battery dispatch no longer supported by measured storage."""
+        """Keep snapshot evidence and reject hard changes or infeasible unexpired dispatch only."""
         original = self.active
         if original is None or current is None or self.closed:
             return "inputs_unavailable"
@@ -511,13 +511,24 @@ class PlanningCoordinator:
             return "thermal_dispatch_window_elapsed"
         original_ev = getattr(original.problem, "ev_work", ())
         current_ev = {work.session_id: work for work in getattr(current.problem, "ev_work", ())}
+        until = datetime.fromisoformat(document["valid_until"])
         for work in original_ev:
             fresh = current_ev.get(work.session_id)
             if fresh is None:
                 return "ev_session_unavailable"
             charge = sum(
                 row["stored_kwh"]
-                for flow in document["expected_flows"]
+                * max(
+                    0,
+                    (
+                        min(interval.start + timedelta(hours=interval.duration_h), until)
+                        - max(interval.start, current.measured_at)
+                    ).total_seconds(),
+                )
+                / timedelta(hours=interval.duration_h).total_seconds()
+                for interval, flow in zip(
+                    original.problem.intervals, document["expected_flows"], strict=True
+                )
                 for row in flow.get("ev", [])
                 if row["session_id"] == work.session_id
             )

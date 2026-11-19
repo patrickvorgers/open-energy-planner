@@ -4,7 +4,7 @@ import json
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_energy_planner.savings.model import CASH_POLICY_VERSION, MAX_BATCH_INTERVALS
@@ -277,7 +277,62 @@ class SettlementStore:
         summary["coverage_seconds"] = summary["coverage_seconds"] or 0.0
         summary["estimated_seconds"] = summary["estimated_seconds"] or 0.0
         summary["policy"] = CASH_POLICY_VERSION
+        summary["breakdown"] = self.cash_breakdown(start, end, connection)
         return summary
+
+    def cash_breakdown(self, start, end, connection):
+        """Read retained cost components only when every included day's scenario covers exactly its matched cash time.
+
+        Matched quarters are a subset of each scenario's accepted quarters. Equal
+        daily coverage proves that its retained components describe the same time.
+        Never substitute a broader actual total for the matched comparison.
+        """
+        table = SAVINGS_CASH_DAYS
+        kinds, components = ("actual", "without_battery"), ("purchase", "sale", "bonus")
+        available = {
+            kind: and_(
+                SAVINGS_DAYS.c[f"{kind}_coverage_seconds"] == table.c.coverage_seconds,
+                *(SAVINGS_DAYS.c[f"{kind}_{component}"].is_not(None) for component in components),
+            )
+            for kind in kinds
+        }
+        values = (
+            connection.execute(
+                select(
+                    func.count().label("days"),
+                    *(
+                        func.sum(
+                            case(
+                                (available[kind], 1),
+                                else_=0,
+                            )
+                        ).label(f"{kind}_matching_days")
+                        for kind in kinds
+                    ),
+                    *(
+                        func.sum(SAVINGS_DAYS.c[f"{kind}_{component}"]).label(f"{kind}_{component}")
+                        for kind in kinds
+                        for component in components
+                    ),
+                )
+                .select_from(table.join(SAVINGS_DAYS, table.c.start == SAVINGS_DAYS.c.start))
+                .where(
+                    table.c.start >= stamp(start),
+                    table.c.end <= stamp(end),
+                    table.c.coverage_seconds > 0,
+                )
+            )
+            .mappings()
+            .one()
+        )
+        return {
+            kind: {component: values[f"{kind}_{component}"] for component in components}
+            if values["days"]
+            and values[f"{kind}_matching_days"] == values["days"]
+            and all(values[f"{kind}_{component}"] is not None for component in components)
+            else None
+            for kind in kinds
+        }
 
     def days(self, start, end, *, _connection=None):
         """Read bounded daily details without retaining or loading quarter measurement payloads."""

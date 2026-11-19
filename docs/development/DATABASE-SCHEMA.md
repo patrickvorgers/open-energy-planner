@@ -252,6 +252,15 @@ closed rather than making previously controlled loads appear uncontrolled.
 
 ### Current plan JSON and archived evidence
 
+New plans optionally freeze `reference_policy: unoptimized-loads-v1`. Its
+`reference_forecast.service_flows` array has one object per original interval,
+with `ev` and `thermal` rows using the same identities, kWh, mean watts,
+temperatures and shortfall units as `expected_flows`. These are hypothetical
+non-price-driven service quantities for reference charts and billing. They are
+not execution commands or measurements. The absence of this policy preserves
+legacy fixed EV/thermal service. Shared JSON storage, hashes and cross-backend
+transfer preserve the exact policy and reference rows. No SQL schema changes.
+
 The SQL archive schema remains version 1. The execution document's `schema: 2`
 is a separate JSON protocol version. It does not imply a SQL table migration.
 Current calculations freeze an `InstallationProblem` under
@@ -1186,6 +1195,17 @@ Null money means unavailable. A known zero remains zero. Range reads aggregate i
 SQL and share a repeatable snapshot with bounded parent details. Charts use daily
 bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
 key supports inclusive-start/exclusive-end period reads without loading raw quarters.
+
+The same repeatable snapshot provides the read-only `cash.breakdown` API object.
+A start-key join to `oep_savings_days` sums existing actual/without-battery
+purchase, sale and bonus columns over days with positive matching cash coverage.
+Each side is available only when every included day's scenario coverage equals
+its cash coverage and all three components are present. Otherwise that side is
+null while matching net costs remain unchanged. Zero-coverage days and legacy
+reports without a cash index never contribute. The aggregate covers the entire
+selection, independently of the bounded daily-detail response. No table, column,
+index, finalized payload or accounting policy changes.
+
 
 ## Indexes and query ownership
 

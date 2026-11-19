@@ -49,7 +49,14 @@ Mandatory reserve recovery and supported appliance service priorities can take p
 | **Battery self-consumption** | What would the same batteries do by storing solar surplus and covering demand without price optimization? |
 | **Without battery: Baseline** | What would the same household and solar forecasts cost without battery storage? |
 
-Both battery scenarios compare their expected benefit with the same without-battery baseline. The baseline retains the included EV and thermal loads. It is not a hypothetical household with every appliance switched off.
+Devices with **Allow shifting complete cycles** disabled retain the same forecast
+consumption in every scenario, including weather-sensitive heat pumps and air
+conditioners. Weather dependence does not grant shifting permission. Only an
+explicit ready cycle, EV charging request or controllable thermal store can
+receive a different reference timeline. A physically started appliance cycle
+keeps its fixed start in every scenario.
+
+Both battery scenarios compare their expected benefit with the same without-battery baseline. For new plans, the references charge vehicles as soon as permitted, start ready cycles at their earliest allowed time and maintain heating targets without price optimization. They retain the same service needs and physical limits. A reference that cannot provide comparable service has no monetary benefit. Earlier archived plans retain their original comparison policy. Historical Savings remains a separate measured battery-only comparison.
 
 ## Keep time and uncertainty in view
 
@@ -58,5 +65,13 @@ The target planning horizon is 48 hours when the required inputs cover it. Missi
 Home Assistant supplies the installation timezone. Calendar days can contain 23 or 25 hours around daylight-saving changes. Original timestamps, input versions and forecasts stay with each saved plan.
 
 OEP replans as time moves and meaningful inputs change. A new calculation can fail while an older plan remains visible in history. That visibility does not extend its command lifetime. Missing measurements remain unknown rather than becoming zero. Notifications identify the affected source and the next recovery action.
+
+Each calculation uses a fixed snapshot. Normal measurement changes do not restart a
+usable calculation. Meaningful deviations are queued for a later round with the newest
+inputs. Automatic rounds stay at least five minutes apart, including quarter transitions
+and publication retries. Explicit requests, configuration changes and recovery of missing
+required inputs can start sooner. Before publication, current measurements must still
+support the remaining battery and EV commands until their expiry. A disconnected vehicle,
+expired input or infeasible remaining command can therefore still prevent publication.
 
 **Next:** [Prepare your installation](before-you-start.md), or [read a complete plan](read-your-plan.md).
