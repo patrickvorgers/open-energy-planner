@@ -76,9 +76,7 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
     page.goto(url + "/data-storage")
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(
-        page.locator("#storage-period").get_by_role("button", name="Choose period", exact=True)
-    ).to_be_enabled()
+    expect(page.locator("#storage-period").locator(".period-trigger")).to_be_enabled()
     expect(page.locator("#storage-history-summary")).to_contain_text("Average:")
     canvas = page.locator("#storage-history-chart")
     expect(canvas).to_be_visible()
@@ -357,18 +355,22 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
         ],
     }
     capacity_reads = []
+    history_reads = []
     page.route(
         "**/v1/storage",
         lambda route: (capacity_reads.append(route.request), route.fulfill(json=usage)),
     )
     page.route(
         "**/v1/storage/history?*",
-        lambda route: route.fulfill(
-            json={
-                **daily,
-                "calendar": {"min_day": "2026-11-12", "max_day": daily["end"]},
-                "latest": daily["samples"][-1] if daily["samples"] else None,
-            }
+        lambda route: (
+            history_reads.append(route.request.url),
+            route.fulfill(
+                json={
+                    **daily,
+                    "calendar": {"min_day": "2026-11-12", "max_day": daily["end"]},
+                    "latest": daily["samples"][-1] if daily["samples"] else None,
+                }
+            ),
         ),
     )
     page.goto(url + "/data-storage")
@@ -384,6 +386,8 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     assert page.evaluate(
         "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.map(point => point.y)"
     ) == [4, 7]
+    assert len(history_reads) >= 2
+    assert all("period=month" in address for address in history_reads)
     daily["end"] = "2026-11-19"
     daily["samples"].append(
         {

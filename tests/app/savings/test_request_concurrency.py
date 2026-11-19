@@ -128,6 +128,7 @@ def test_interleaved_requests_keep_each_plans_original_bindings(tmp_path):
             first_activation=lambda: START.isoformat(),
             context_plan=lambda _start: selection["plan"],
             next_configuration=lambda *_arguments: None,
+            activations=lambda *_arguments: [],
         )
         runtime = InterleavedRuntime(
             store,

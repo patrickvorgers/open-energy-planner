@@ -41,7 +41,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
     for (const [input, title] of [[from, dayOnly ? "Day" : "From"], [to, "To"]]) {
         input.type = "date"; input.required = true;
         const field = make("label", "", title); field.append(input); form.append(field);
-        input.oninput = () => {preset = "custom"; anchor = null; error.textContent = ""; draw();};
+        input.oninput = () => {preset = "custom"; anchor = null; error.textContent = ""; if (validDate(input.value)) month = input.value.slice(0, 7); draw();};
     }
     if (describedBy) from.setAttribute("aria-describedby", describedBy);
     to.closest("label").hidden = dayOnly; to.required = !dayOnly;
@@ -98,6 +98,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
     /** Publish only a confirmed selection. A cancelled dialog never changes the page's filter. */
     function refresh() {
         trigger.textContent = start ? `${dateLabel(start)}${start === end ? "" : " – " + dateLabel(end)} ⌄` : "Choose " + (dayOnly ? "day" : "period");
+        trigger.setAttribute("aria-label", "Choose " + (dayOnly ? "day" : "period") + (start ? ": " + trigger.textContent : ""));
         trigger.disabled = disabled; previous.disabled = !allowed(shifted(-1).start, shifted(-1).end); next.disabled = !allowed(shifted(1).start, shifted(1).end);
     }
     function open() {

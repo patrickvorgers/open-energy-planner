@@ -180,3 +180,7 @@ Closing an unconfirmed selection leaves the page filter unchanged. Refreshes
 bound stale selections to newly confirmed availability and reread that range.
 Authentication, ingress prefixes, immutable plans and device commands are
 unchanged. No third-party UI package or runtime font request is required.
+
+Capture batches stop at changes to either the measured bindings or the historical market and currency. Older frames without identity use retained plan metadata. If that metadata is unavailable, identity stays unresolved. Published prices alone cannot prove the historical installation market. Missing or mismatched identity excludes the quarter from cash while retaining its measured energy. A missing price preserves each independently known export allowance counter.
+
+The overview cash response explicitly identifies `aggregation` as `day` or `month`. The calendar returns `has_completed_days: false` with null bounds until the first eligible day completes.

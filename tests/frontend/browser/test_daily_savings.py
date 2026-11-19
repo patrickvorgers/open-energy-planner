@@ -85,6 +85,7 @@ def test_monthly_bins_have_month_ranges_and_signed_money(app_page):
 
     page, url = app_page
     data = measured_response()
+    data["cash"]["aggregation"] = "month"
     data["cash"]["chart"] = [
         {"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z", "savings": 2.34},
         {"start": "2026-02-01T00:00:00Z", "end": "2026-03-01T00:00:00Z", "savings": -0.56},
@@ -96,6 +97,7 @@ def test_monthly_bins_have_month_ranges_and_signed_money(app_page):
     choose_period(page, "2026-01-01", "2026-02-28", host="#savings-period")
     expect(page.locator("#savings-daily-heading")).to_have_text("Savings by month")
     canvas = page.locator("#savings-chart")
+    expect(canvas).to_have_attribute("tabindex", "0")
     canvas.focus()
     canvas.press("Home")
     expect(page.locator("#savings-selected")).to_have_text("1/1/2026 – 1/31/2026: 2.34 EUR")

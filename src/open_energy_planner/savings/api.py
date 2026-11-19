@@ -399,14 +399,16 @@ def register(
                 if site:
                     first = await asyncio.to_thread(runtime.store.first_activation)
                     yesterday = now.astimezone(ZoneInfo(site.timezone)).date() - timedelta(days=1)
-                    result["calendar"] = {
-                        "min_day": datetime.fromisoformat(first)
-                        .astimezone(ZoneInfo(site.timezone))
-                        .date()
-                        .isoformat()
+                    first_day = (
+                        datetime.fromisoformat(first).astimezone(ZoneInfo(site.timezone)).date()
                         if first
-                        else None,
-                        "max_day": yesterday.isoformat(),
+                        else None
+                    )
+                    completed = first_day is not None and first_day <= yesterday
+                    result["calendar"] = {
+                        "has_completed_days": completed,
+                        "min_day": first_day.isoformat() if completed else None,
+                        "max_day": yesterday.isoformat() if completed else None,
                     }
                 current_names = energy_source_names(catalogue.value)
                 for day in result["days"]:

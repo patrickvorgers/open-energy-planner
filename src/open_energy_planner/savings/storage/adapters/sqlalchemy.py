@@ -258,6 +258,7 @@ class SettlementStore:
         if summary.pop("currencies") > 1:
             raise ValueError("Choose a period with one historical currency")
         month = end - start > timedelta(days=DAILY_CHART_WINDOW_DAYS)
+        summary["aggregation"] = "month" if month else "day"
         calendar_bin = func.substr(table.c.day, 1, 7 if month else 10)
         summary["chart"] = [
             dict(row)

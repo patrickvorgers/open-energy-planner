@@ -1,6 +1,6 @@
 """Activity is readable and live on desktop and mobile without changing energy configuration."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import pairwise
 from math import isfinite
 from pathlib import Path
@@ -1394,3 +1394,21 @@ def test_historical_bonus_wait_does_not_request_contract_reconfiguration(app_pag
     directory = Path("results/ci/historical-bonus")
     directory.mkdir(parents=True, exist_ok=True)
     waiting.screenshot(path=str(directory / f"waiting-{page.viewport_size['width']}.png"))
+
+
+@pytest.mark.parametrize("app_site", ["activity"], indirect=True)
+def test_refresh_after_midnight_updates_available_day_without_changing_selection(app_page):
+    """Refresh retains the selected history day while making the new local Today available."""
+    page, url = app_page
+    page.goto(url + "/activity")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    wait_for_product_reads(page)
+    choose_day(page, "2026-11-05")
+    wait_for_product_reads(page)
+    page.clock.set_fixed_time(ACTIVITY_SCENARIO_TIME + timedelta(days=1))
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    wait_for_product_reads(page)
+    expect_day(page, "2026-11-05")
+    choose_today(page)
+    expect_day(page, "2026-11-07")

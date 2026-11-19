@@ -71,6 +71,7 @@ def test_savings_a_uses_matched_cash_totals_and_a_custom_calendar(app_page):
     ):
         dialog.get_by_role("button", name="Apply period", exact=True).click()
     expect(dialog).not_to_be_visible()
+    expect(page.locator("#savings-chart")).to_have_attribute("tabindex", "0")
     page.locator("#savings-chart").focus()
     page.keyboard.press("ArrowRight")
     expect(page.locator("#savings-selected")).not_to_be_empty()
@@ -119,3 +120,28 @@ def test_negative_savings_and_failed_refresh_never_show_stale_money(app_page):
     expect(page.locator("#savings-total")).to_have_text("Not available")
     expect(page.locator("#savings-actual")).to_have_text("Unavailable")
     expect(page.locator("#savings-status")).to_contain_text("could not be loaded")
+    expect(page.locator("#savings-chart")).to_have_attribute("tabindex", "-1")
+    assert page.locator("#savings-chart").evaluate("canvas => canvas.onkeydown") is None
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_no_completed_savings_day_disables_selection_until_a_day_completes(app_page):
+    """First-day installations show no active date selection, then recover on a later refresh."""
+    page, url = app_page
+    data = measured_response()
+    data["calendar"] = {"has_completed_days": False, "min_day": None, "max_day": None}
+    page.route("**/v1/savings?**", lambda route: route.fulfill(json=data))
+    page.goto(url + "/overview#savings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#savings-period .period-trigger")).to_be_disabled()
+    expect(page.locator("#savings-period-label")).to_have_text("No completed days")
+    data["calendar"] = {
+        "has_completed_days": True,
+        "min_day": "2026-10-01",
+        "max_day": "2026-10-30",
+    }
+    data["cash"]["aggregation"] = "month"
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#savings-period .period-trigger")).to_be_enabled()
+    expect(page.locator("#savings-daily-heading")).to_have_text("Savings by month")

@@ -192,6 +192,7 @@ function render() {
 
 /** A late page response must not replace newer live outcomes for the same execution. */
 async function load(page = 0) {
+    activityDay.set({max: localDate()});
     const version = ++generation;
     const focusedPageControl = ["activity-previous", "activity-next"].includes(document.activeElement?.id) ? document.activeElement.id : undefined;
     requestedPage = page;

@@ -3,6 +3,8 @@
 from dataclasses import replace
 from datetime import timedelta
 
+import pytest
+
 from open_energy_planner.core.calendar import day_window
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.storage.adapters.published import retain
@@ -53,11 +55,12 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
     docs.write("recovery.json", {"end": END.isoformat()})
     daily = DailySavings(runtime)
     report = daily.calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(buy="market"), None, END + timedelta(days=1), START, None
     )
     runtime.store.put_day(report, docs, "2026-10-23")
     start, end = day_window("2026-10-22", "UTC")
     before = daily.overview(start, end)
+    assert before["cash"]["actual_cost"] == 0.2
     target_directory = tmp_path / "settlement-target"
     target = archive_engine(target_directory)
     try:
@@ -88,10 +91,12 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
                 ),
             )
         corrected = DailySavings(restored).calculate(
-            "2026-10-22", "UTC", contract(buy="0.4"), None, END + timedelta(days=2), START, None
+            "2026-10-22", "UTC", contract(buy="market"), None, END + timedelta(days=2), START, None
         )
         restored.store.put_day(corrected, restored.documents, "2026-10-23")
-        assert DailySavings(restored).overview(start, end)["cash"]["actual_cost"] == 0.8
+        assert DailySavings(restored).overview(start, end)["cash"]["actual_cost"] == pytest.approx(
+            0.8
+        )
     finally:
         target.dispose()
 

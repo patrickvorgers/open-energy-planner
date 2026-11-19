@@ -451,6 +451,7 @@ def test_historical_source_confirmation_survives_a_current_meter_change(settleme
         rows = original(*args, **kwargs)
         for row in rows:
             row["context"]["seeds"] = [record]
+            row["frame"]["channels"]["sensor.export"] = 0.5
         return rows
 
     monkeypatch.setattr(store, "frames", historical_context)
@@ -460,7 +461,7 @@ def test_historical_source_confirmation_survives_a_current_meter_change(settleme
     )
     assert runtime.issue is None
     assert result["cash"]["coverage_seconds"] == 1800
-    assert result["scenarios"]["actual"]["totals"]["bonus"] == 0
+    assert result["scenarios"]["actual"]["totals"]["bonus"] == pytest.approx(0.1)
 
 
 def test_multiple_export_anchors_backdate_on_every_database_backend(settlement):

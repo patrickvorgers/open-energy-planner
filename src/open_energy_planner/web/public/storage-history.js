@@ -12,7 +12,8 @@ const BACKENDS = {sqlite: "SQLite", postgresql: "PostgreSQL", mysql: "MySQL", ma
 export function bindStorageHistory(readToken, bytes, showDatabase) {
     const find = id => document.getElementById(id);
     const base = document.querySelector('meta[name="oep-api-base"]').content;
-    const period = createPeriodSelector(find("storage-period"), {label: "Database history period", onChange: () => load()});
+    let explicitPeriod = false;
+    const period = createPeriodSelector(find("storage-period"), {label: "Database history period", onChange: () => {explicitPeriod = true; load();}});
     let chart = null, requestVersion = 0, samples = [], selected = 0, keyboardSelection = false, currentUsage = null, measurement = null, live = false;
     /** Expose the same measurement to pointer, keyboard and assistive readers. */
     function inspect(index) {
@@ -37,7 +38,7 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
         find("storage-history-summary").textContent = "Loading database history…";
         try {
             const selected = period.value;
-            const query = selected.start ? new URLSearchParams({start: selected.start, end: selected.end}) : new URLSearchParams({period: "month"});
+            const query = explicitPeriod ? new URLSearchParams({start: selected.start, end: selected.end}) : new URLSearchParams({period: "month"});
             const response = await fetch(base + `v1/storage/history?${query}`, {headers: {Authorization: `Bearer ${readToken()}`}, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS)});
             if (!response.ok) throw new Error();
             const history = await response.json();

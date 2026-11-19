@@ -17,7 +17,7 @@ from open_energy_planner.savings.daily import DailySavings
 from open_energy_planner.storage.adapters.activities import ActivityStore
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle import transactions
-from open_energy_planner.storage.adapters.lifecycle.schema import PAIRS
+from open_energy_planner.storage.adapters.lifecycle.schema import PAIRS, SAVINGS_CASH_DAYS
 from open_energy_planner.storage.writes import complete_write
 from tests.app.savings.support.scenarios import END, START, contract, frame
 from tests.database.support.writer_guard import observe_guard
@@ -67,7 +67,7 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
         "prune": "DELETE FROM oep_activities",
         "restart": "UPDATE oep_activities",
         "frames": "INSERT INTO oep_settlement_frames",
-        "settlement": "INSERT INTO oep_savings_cash_days",
+        "settlement": "INSERT INTO oep_documents",
         "selection": "INSERT INTO " + selection.decisions.name,
     }[writer]
 
@@ -156,6 +156,9 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
     elif writer == "settlement":
         saved_day = store.day()
         assert (saved_day is not None) is not rollback
+        assert documents_savings.exists("daily-progress.json") is not rollback
+        with engine.connect() as connection:
+            assert bool(connection.execute(select(SAVINGS_CASH_DAYS)).first()) is not rollback
         if saved_day:
             assert saved_day["cash"]["savings"] == 0
     else:

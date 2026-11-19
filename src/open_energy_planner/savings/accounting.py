@@ -74,7 +74,7 @@ def opening_counter_key(identity, period, start, counters, seeds, meter_start):
 def advance_counters(contract, frame, exported, previous, seeds, location):
     """Advance gross-export usage without prices or payment formulas when metering is known.
 
-    The caller must first establish simulated opening usage. Exact annual and
+    Unknown families stay unknown while independently known usage advances. Exact annual and
     activation boundaries use the same uniform within-quarter split as billing.
     This advances a detached copy, so a failed attempt cannot partly consume quota.
     Exported energy and every counter value are gross kWh, independent of rates.
@@ -94,9 +94,13 @@ def advance_counters(contract, frame, exported, previous, seeds, location):
                 policy.contract_start is not None and left < policy.contract_start
             ):
                 continue
-            key = opening_counter_key(
-                identity, policy.period_start(left), left, counters, seeds, frame.meter_start
-            )
+            try:
+                key = opening_counter_key(
+                    identity, policy.period_start(left), left, counters, seeds, frame.meter_start
+                )
+            except ValueError:
+                counters.pop(identity + "|" + policy.period_start(left).isoformat(), None)
+                continue
             counters[key] += exported * fraction
     return counters
 

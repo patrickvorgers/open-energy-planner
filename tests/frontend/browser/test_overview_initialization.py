@@ -106,16 +106,12 @@ def test_session_reads_timeout_and_retry_with_fresh_signals(app_page, stalled):
     expect(page.locator("body")).not_to_contain_text("PRIVATE-SESSION-SENTINEL")
     if stalled == 1:
         expect(page.locator("#overview-status")).to_contain_text("took too long")
-        expect(
-            page.locator("#savings-period").get_by_role("button", name="Choose period", exact=True)
-        ).to_be_disabled()
+        expect(page.locator("#savings-period").locator(".period-trigger")).to_be_disabled()
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     if stalled == 1:
-        expect(
-            page.locator("#savings-period").get_by_role("button", name="Choose period", exact=True)
-        ).to_be_enabled()
+        expect(page.locator("#savings-period").locator(".period-trigger")).to_be_enabled()
     if stalled == 2:
         page.clock.fast_forward(31000)
     page.wait_for_function("() => window.sessionReads.length > window.stalledSessionRead")
@@ -289,7 +285,8 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     )
     wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#savings-status")).not_to_contain_text("took too long")
+    expect(page.locator("#savings-status")).to_contain_text("Waiting for completed measurements")
+    expect(page.locator("#savings-status")).not_to_contain_text("could not be loaded")
     expect(page.locator("#savings-period .period-trigger")).to_contain_text(
         "10/1/2026 – 10/30/2026"
     )

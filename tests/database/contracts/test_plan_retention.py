@@ -205,6 +205,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
             index.drop(connection)
     reopened = SqlPlanRepository(".", engine=engine)
     assert reopened.get_plan("original-plan") == original
+    assert SAVINGS_CASH_DAYS.name in inspect(engine).get_table_names()
     for index in ARCHIVE_INCOMING_INDEXES:
         assert index.name in {
             item["name"] for item in inspect(engine).get_indexes(index.table.name)

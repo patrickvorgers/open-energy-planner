@@ -299,11 +299,13 @@ class DailySavings:
                                 else {}
                             )
                         market_identity = historical_markets[identity]
+                    if not all(key in market_identity for key in ("currency", "market_area")):
+                        raise PendingSettlement("Historical market identity is unresolved")
                     if any(
                         market_identity.get(key, getattr(contract, key)) != getattr(contract, key)
                         for key in ("currency", "market_area")
                     ):
-                        raise ValueError("Historical market identity changed")
+                        raise PendingSettlement("Historical market identity changed")
                     flows["actual"] = (
                         fsum(frame.channels[entity] for entity in bindings["imports"]),
                         fsum(frame.channels[entity] for entity in bindings["exports"]),
@@ -376,12 +378,14 @@ class DailySavings:
                                     counters[kind],
                                     common_start=frame.start == initial,
                                 )
-                                if known:
-                                    counters[kind] = advance_counters(
-                                        contract, frame, flows[kind][1], counters[kind], seeds, site
-                                    )
-                                else:
-                                    counters[kind] = None
+                                counters[kind] = advance_counters(
+                                    contract,
+                                    frame,
+                                    flows[kind][1],
+                                    counters[kind],
+                                    seeds if known else (),
+                                    site,
+                                )
                             except (ValueError, KeyError, TypeError):
                                 counters[kind] = None
                 except (ValueError, KeyError, TypeError) as error:

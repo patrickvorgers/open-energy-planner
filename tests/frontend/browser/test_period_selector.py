@@ -29,15 +29,18 @@ def test_single_day_calendar_rejects_unavailable_days_and_preserves_cancel(app_p
     """Single-day pages offer no ranges, skip archived holes and do not apply cancelled drafts."""
     page, url = app_page
     host = mount(page, url, day_only=True)
+    expect(host.locator(".period-trigger")).to_have_accessible_name("Choose day: 11/18/2026 ⌄")
     page.evaluate("window.dateControl.set({availableDays:['2026-11-16','2026-11-18']})")
     host.get_by_role("button", name="Previous day").click()
     assert page.evaluate("window.dateChanges") == [{"start": "2026-11-16", "end": "2026-11-16"}]
-    host.get_by_role("button", name="Choose day", exact=True).click()
+    host.locator(".period-trigger").click()
     dialog = page.get_by_role("dialog", name="Choose day", exact=True)
     expect(dialog.get_by_role("button", name="This week", exact=True)).to_have_count(0)
     expect(dialog.get_by_role("button", name="11/17/2026", exact=True)).to_be_disabled()
     expect(dialog.get_by_role("button", name="Yesterday", exact=True)).to_be_disabled()
     expect(dialog.get_by_label("To", exact=True)).to_be_hidden()
+    dialog.get_by_label("Day", exact=True).fill("2026-10-16")
+    expect(dialog.get_by_text("October 2026", exact=True)).to_be_visible()
     dialog.get_by_label("Day", exact=True).fill("2026-11-18")
     page.keyboard.press("Escape")
     assert page.evaluate("window.dateControl.value") == {"start": "2026-11-16", "end": "2026-11-16"}
@@ -50,13 +53,13 @@ def test_period_calendar_roundtrip_returns_to_clipped_current_month(app_page):
     """Previous month and Next return to this elapsed month, while cancelled custom drafts retain month navigation."""
     page, url = app_page
     host = mount(page, url)
-    host.get_by_role("button", name="Choose period", exact=True).click()
+    host.locator(".period-trigger").click()
     page.get_by_role("dialog", name="Choose period").get_by_role(
         "button", name="This month", exact=True
     ).click()
     host.get_by_role("button", name="Previous period").click()
     assert page.evaluate("window.dateControl.value") == {"start": "2026-10-01", "end": "2026-10-31"}
-    host.get_by_role("button", name="Choose period", exact=True).click()
+    host.locator(".period-trigger").click()
     dialog = page.get_by_role("dialog", name="Choose period")
     dialog.get_by_label("From", exact=True).fill("2026-10-05")
     dialog.get_by_role("button", name="Close date selector").click()
@@ -70,7 +73,7 @@ def test_week_navigation_returns_from_a_clipped_first_week(app_page):
     page, url = app_page
     host = mount(page, url)
     page.evaluate("window.dateControl.set({min:'2026-11-12'})")
-    host.get_by_role("button", name="Choose period", exact=True).click()
+    host.locator(".period-trigger").click()
     page.get_by_role("dialog", name="Choose period").get_by_role(
         "button", name="This week", exact=True
     ).click()

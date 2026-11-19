@@ -27,6 +27,8 @@ SHA256_HEX_LENGTH = 64
 
 # Only fixed owned guidance is public. Other caught exceptions may contain stored or driver values.
 PENDING_SETTLEMENT_MESSAGES = {
+    "Historical market identity is unresolved": "The historical electricity market or currency cannot be confirmed for some measurements. Those intervals are excluded from cash savings.",
+    "Historical market identity changed": "Some measurements belong to a different historical electricity market or currency. Those intervals are excluded from cash savings.",
     "Without-battery comparison requires measured AC solar energy": "The solar source measures DC energy. A without-battery cash comparison requires measured AC solar energy at the household boundary.",
     "Without-battery bonus usage is unknown after missing measurements": "The export allowance without a battery cannot be reconstructed from earlier missing evidence. No actual counter was substituted.",
     "A reset inside the bonus anchor interval prevents exact reconstruction": "An export meter reset prevents reconstruction of the bonus starting total.",
@@ -147,6 +149,20 @@ class SavingsRuntime:
         changed = self.store.next_configuration(start, end, bindings)
         if changed:
             end = datetime.fromisoformat(changed)
+        # Unchanged meters do not imply unchanged market or currency during catch-up.
+        for activation in self.store.activations(start, end):
+            boundary = datetime.fromisoformat(activation["activated_at"])
+            if boundary <= start or not activation["plan_id"]:
+                continue
+            original = self.plans.get_context(activation["plan_id"])
+            identity = (
+                {key: original[key] for key in ("currency", "market_area") if key in original}
+                if original
+                else None
+            )
+            if identity != market_identity:
+                end = boundary
+                break
         request = {"start": start.isoformat(), "end": end.isoformat(), "bindings": bindings}
         if market_identity:
             request["market_identity"] = market_identity

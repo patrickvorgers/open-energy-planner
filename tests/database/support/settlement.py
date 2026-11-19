@@ -39,6 +39,8 @@ def settlement(request, tmp_path):
         runtime = SavingsRuntime(store, docs, plans)
         document = {
             "plan_id": "original-plan",
+            "currency": "EUR",
+            "market_area": "NL",
             "generated_at": START.isoformat(),
             "strategy": "minimize cost",
             "solution_status": "optimal",

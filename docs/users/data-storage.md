@@ -62,7 +62,7 @@ overwrites or adds a saved daily observation.
 
 [![After Refresh, the database card and Current graph point use the same live measurement.](../assets/data-storage-current.png)](../assets/data-storage-current.png)
 
-Use **Period** to choose one week, three months, one year or all retained history.
+Open **Period** and choose a standard shortcut or **Custom period**. For three months or a rolling year, enter **From** and **To**, then select **Apply period**. The graph shows the inclusive selected dates.
 The summary shows the change between the first and last available observation
 and the average change per elapsed day. A decrease can reflect database
 maintenance. It is not a prediction of when storage will run out.

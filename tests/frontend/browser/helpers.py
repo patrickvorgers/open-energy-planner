@@ -384,7 +384,7 @@ def balances(page, url, plan):
 
 def day_trigger(page):
     """Locate the shared compact day control without opening its calendar."""
-    return page.get_by_role("button", name="Choose day", exact=True)
+    return page.locator(".period-trigger")
 
 
 def choose_day(page, value):
@@ -424,7 +424,7 @@ def choose_today(page):
 
 def choose_period(page, start, end, host="#storage-period"):
     """Apply an inclusive custom range through the shared visible date form."""
-    page.locator(host).get_by_role("button", name="Choose period", exact=True).click()
+    page.locator(host).locator(".period-trigger").click()
     dialog = page.get_by_role("dialog", name="Choose period", exact=True)
     dialog.get_by_label("From", exact=True).fill(start)
     dialog.get_by_label("To", exact=True).fill(end)

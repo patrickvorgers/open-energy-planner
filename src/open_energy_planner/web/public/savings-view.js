@@ -11,6 +11,8 @@ export function createSavingsView(host, api) {
     /** Never leave an old period's money visible beneath a new selection. */
     function clear(message) {
         chart?.destroy(); chart = null;
+        find("savings-chart").onkeydown = null;
+        find("savings-chart").tabIndex = -1;
         find("savings-total").textContent = message;
         find("savings-total").classList.remove("savings-loss");
         find("savings-outcome").textContent = "Your battery saved";
@@ -22,13 +24,13 @@ export function createSavingsView(host, api) {
     /** Initialize once in the confirmed HA timezone. Today is not a completed Savings day. */
     function initialize() {
         const yesterday = shiftDay(localDate(), -1);
-        if (!initialized) period.set({start: shiftDay(yesterday, -6), end: yesterday, max: yesterday, selection: "seven"});
+        if (!initialized || !period.value.start) period.set({start: shiftDay(yesterday, -6), end: yesterday, max: yesterday, selection: "seven"});
         else period.set({max: yesterday});
         initialized = true;
     }
     /** Read only stored results. Date changes never start a simulation or reset a bonus counter. */
     async function read(signal) {
-        if (!initialized) initialize();
+        initialize();
         const current = ++request, {start, end} = period.value;
         clear("Loading…"); find("savings-status").textContent = "Loading measured savings…";
         find("savings-period-label").textContent = `${dateLabel(start)} – ${dateLabel(end)}`;
@@ -37,6 +39,13 @@ export function createSavingsView(host, api) {
             const data = await api(`v1/savings?${query}`, signal);
             if (current !== request) return false;
             if (data.calendar) {
+                if (data.calendar.has_completed_days === false) {
+                    period.set({start: null, end: null, enabled: false});
+                    clear("Not available");
+                    find("savings-period-label").textContent = "No completed days";
+                    find("savings-status").textContent = "Savings become available after the first measured day has completed.";
+                    return true;
+                }
                 period.set({min: data.calendar.min_day, max: data.calendar.max_day});
                 if (period.value.start !== start || period.value.end !== end) return read(signal);
             }
@@ -59,7 +68,7 @@ export function createSavingsView(host, api) {
             find("savings-status").textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : legacy ? "These retained days use the previous calculation. New measured savings become available for newly evaluated days." : "Waiting for completed measurements and published electricity prices for this period.";
             if (known && cash.estimated_seconds > 0) find("savings-status").textContent += " Includes reconstructed measurements.";
             if (data.issue) find("savings-status").textContent += " " + data.issue;
-            draw(cash?.chart || [], currency, start, end);
+            draw(cash?.chart || [], currency, start, end, cash?.aggregation);
             return true;
         } catch {
             if (current !== request) return false;
@@ -68,12 +77,12 @@ export function createSavingsView(host, api) {
         }
     }
     /** Expose each signed daily/monthly amount through tooltips and native keyboard inspection. */
-    function draw(bins, currency, start, end) {
+    function draw(bins, currency, start, end, aggregation) {
         const canvas = find("savings-chart");
         const points = bins.map(bin => ({x: (Date.parse(bin.start) + Date.parse(bin.end)) / 2, y: bin.savings, bin}));
         selectedIndex = 0;
         canvas.tabIndex = points.length ? 0 : -1;
-        const monthly = bins.some(bin => localDate(bin.start) !== localDate(Date.parse(bin.end) - 1));
+        const monthly = aggregation === "month";
         find("savings-daily-heading").textContent = monthly ? "Savings by month" : "Daily savings";
         canvas.setAttribute("aria-label", "Battery savings. Use Left and Right to inspect values.");
         const title = bin => `${dateLabel(localDate(bin.start))}${localDate(bin.start) === localDate(Date.parse(bin.end) - 1) ? "" : " – " + dateLabel(localDate(Date.parse(bin.end) - 1))}`;
