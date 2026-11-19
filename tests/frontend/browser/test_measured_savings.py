@@ -130,8 +130,11 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     expect(tooltip).to_contain_text("Saving: 8.00 EUR")
     if page.viewport_size["width"] >= 500:
         bounds = tooltip.bounding_box()
-        page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
+        page.mouse.move(
+            bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2, steps=24
+        )
         expect(tooltip).to_be_visible()
+        expect(tooltip).to_contain_text("Saving: 8.00 EUR")
         page.mouse.move(1, 1)
         expect(tooltip).not_to_be_visible()
         page.mouse.move(coordinates["x"], coordinates["y"])
@@ -180,6 +183,10 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     expect(tooltip.get_by_role("row", name="Import cost Unavailable", exact=False)).to_be_visible()
     expect(tooltip).to_contain_text("same comparable time")
     expect(tooltip).not_to_contain_text("9.75 EUR")
+    if page.viewport_size["width"] >= 500:
+        page.keyboard.press("PageDown")
+        expect(tooltip).not_to_be_visible()
+        expect(canvas).to_have_accessible_description("")
     failed = True
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#savings-total")).to_have_text("Not available")

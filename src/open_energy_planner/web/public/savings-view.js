@@ -18,9 +18,12 @@ export function createSavingsView(host, api) {
         tooltip.hidden = true; tooltip.replaceChildren();
         find("savings-chart").removeAttribute("aria-describedby");
         document.removeEventListener("keydown", dismissTooltip);
+        window.removeEventListener("scroll", dismissOnScroll, true);
     }
     /** Hover does not move focus, so Escape must also work outside the Savings section. */
     function dismissTooltip(event) { if (event.key === "Escape") hideTooltip(); }
+    /** Page movement invalidates fixed coordinates, while scrolling the table itself preserves its details. */
+    function dismissOnScroll(event) { if (!(event.target instanceof Node && tooltip.contains(event.target))) hideTooltip(); }
     host.addEventListener("pointerdown", event => { if (event.target !== find("savings-chart") && !tooltip.contains(event.target)) hideTooltip(); });
     window.addEventListener("hashchange", hideTooltip);
     tooltip.onpointerleave = () => { if (document.activeElement !== find("savings-chart")) hideTooltip(); };
@@ -131,7 +134,7 @@ export function createSavingsView(host, api) {
         /** Present the selected bar's retained costs without calculating financial values in the browser. */
         function showBreakdown({chart: instance, tooltip: state}) {
             if (canvas.closest("[hidden]")) { hideTooltip(); return; }
-            if (!state.opacity && (tooltip.matches(":hover") || document.activeElement === canvas)) return;
+            if (!state.opacity && !tooltip.hidden && (canvas.matches(":hover") || tooltip.matches(":hover") || document.activeElement === canvas)) return;
             if (!state.opacity || !state.dataPoints?.length) { hideTooltip(); return; }
             tooltip.hidden = false;
             const bin = state.dataPoints[0].raw.bin, heading = document.createElement("p");
@@ -147,6 +150,7 @@ export function createSavingsView(host, api) {
             tooltip.replaceChildren(heading, table, total);
             canvas.setAttribute("aria-describedby", tooltip.id);
             document.addEventListener("keydown", dismissTooltip);
+            window.addEventListener("scroll", dismissOnScroll, true);
             const bounds = canvas.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
             tooltip.style.left = `${Math.max(margin, Math.min(bounds.left + state.caretX + margin, innerWidth - tooltip.offsetWidth - margin))}px`;
             tooltip.style.top = `${Math.max(margin, Math.min(bounds.top + state.caretY + margin, innerHeight - tooltip.offsetHeight - margin))}px`;
@@ -185,6 +189,7 @@ export function createSavingsView(host, api) {
             showBreakdown({chart, tooltip: chart.tooltip});
         };
         canvas.onblur = hideTooltip;
+        canvas.onpointerleave = event => { if (!tooltip.contains(event.relatedTarget) && document.activeElement !== canvas) hideTooltip(); };
     }
     return {read, initialize};
 }
