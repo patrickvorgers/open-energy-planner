@@ -266,11 +266,21 @@ def test_history_revalidation_failure_blocks_persisted_budget_and_recovers(
 
     import open_energy_planner.app as app_module
     import open_energy_planner.contracts.api as contract_api_module
+    from open_energy_planner.live_inputs import LiveInputs
     from tests.app.history.test_history_app import prepare
 
     async def scenario():
         """Advance one hour through real HTTP without changing the retained reference or deleting old books."""
         async with running(tmp_path, with_export=True) as (session, url):
+            refresh = LiveInputs.refresh_async
+            history_refreshes = []
+
+            async def track_refresh(live, *, force=False):
+                """Record whether background history uses normal admission while keeping real refresh behavior."""
+                history_refreshes.append(force)
+                await refresh(live, force=force)
+
+            monkeypatch.setattr(LiveInputs, "refresh_async", track_refresh)
             # Keep this refresh within one annual period even across New Year's midnight.
             reset = (datetime.now(UTC).month % 12 + 1, 15)
             request, history = await prepare(session, url, reset=reset)
@@ -288,8 +298,10 @@ def test_history_revalidation_failure_blocks_persisted_budget_and_recovers(
                     }
                 ],
             }
+            history_refreshes.clear()
             async with session.post(url + "/v1/history", json=body) as response:
                 assert response.status == 200
+            assert history_refreshes and not any(history_refreshes)
             original = read_current(tmp_path, CounterStore)
             if missing_prefix:
                 async with session.get(url + "/v1/contracts/budgets") as response:
@@ -324,8 +336,10 @@ def test_history_revalidation_failure_blocks_persisted_budget_and_recovers(
                 broken["statistics"][0]["hours"][0][1] -= 1
             else:
                 broken = {"request_version": pending["version"], "error": failure}
+            history_refreshes.clear()
             async with session.post(url + "/v1/history", json=broken) as response:
                 assert response.status == (400 if failure == "invalid_transport" else 200)
+            assert not any(history_refreshes)
             rejected = read_current(tmp_path, CounterStore)
             permanent = failure != "recorder_unavailable"
             assert bool(rejected.seeds[0].statistics.rejected_digest) == permanent
@@ -349,8 +363,10 @@ def test_history_revalidation_failure_blocks_persisted_budget_and_recovers(
                 body["request_version"] = (await response.json())["bonus_history"]["request"][
                     "version"
                 ]
+            history_refreshes.clear()
             async with session.post(url + "/v1/history", json=body) as response:
                 assert response.status == 200, await response.text()
+            assert history_refreshes and not any(history_refreshes)
             restored = read_current(tmp_path, CounterStore)
             if missing_prefix:
                 assert restored.seeds[0].used_kwh is None

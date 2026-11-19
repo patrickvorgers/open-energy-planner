@@ -577,7 +577,7 @@ class ContractAPI:
                         )
                         if invalid is not None and invalid is not self.bonus_counters.current:
                             await self.persist_then_install(
-                                self.bonus_counters.save_statistics, invalid
+                                self.bonus_counters.save_statistics, invalid, force_replan=False
                             )
             else:
                 try:
@@ -603,7 +603,7 @@ class ContractAPI:
                         )
                         if invalid is not None and invalid is not self.bonus_counters.current:
                             await self.persist_then_install(
-                                self.bonus_counters.save_statistics, invalid
+                                self.bonus_counters.save_statistics, invalid, force_replan=False
                             )
                     raise web.HTTPBadRequest(
                         text="Export statistics are incomplete or invalid. Check Recorder continuity"
@@ -611,7 +611,7 @@ class ContractAPI:
                 if not is_preview:
                     if candidate is not self.bonus_counters.current:
                         await self.persist_then_install(
-                            self.bonus_counters.save_statistics, candidate
+                            self.bonus_counters.save_statistics, candidate, force_replan=False
                         )
                     self.report_history_issue(
                         next(
