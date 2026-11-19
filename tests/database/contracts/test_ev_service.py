@@ -206,7 +206,9 @@ def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(
     }
     submitted = []
     clock = [NOW]
-    planner = SimpleNamespace(published=(snapshot, document), submit=submitted.append)
+    planner = SimpleNamespace(
+        published=(snapshot, document), submit=submitted.append, last_calculation_started=None
+    )
     live = LiveInputs(planner, None, clock=lambda: clock[0], ev=service)
     live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
     live.report = SimpleNamespace(readings=())

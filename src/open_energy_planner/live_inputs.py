@@ -131,7 +131,8 @@ class LiveInputs:
 
         Explicit configuration/resume requests and readiness recovery may start
         immediately. Quarters, source versions and deviations share the five-minute
-        limit. Measurement freshness is validated, not a solve timer.
+        limit, measured from the actual start of the preceding calculation.
+        Measurement freshness is validated, not a solve timer.
         """
         self._install(self._prepare(self._capture()), force=force)
 
@@ -230,6 +231,9 @@ class LiveInputs:
         quarter = int(now.timestamp()) // (FINE_INTERVAL_MINUTES * SECONDS_PER_MINUTE)
         elapsed = (now - self.last_submission).total_seconds() if self.last_submission else None
         published = getattr(self.planner, "published", None)
+        last_start = self.planner.last_calculation_started
+        if elapsed is not None and last_start is not None:
+            elapsed = min(elapsed, (now - last_start).total_seconds())
         ev_deviation = bool(
             self.ev is not None
             and self.ev.execution_deviated(published[1] if published else {}, now)
@@ -284,7 +288,7 @@ class LiveInputs:
             _LOGGER.info(
                 "Planning requested: %s. %s",
                 reason,
-                f"Previous request was {elapsed:.0f} seconds ago."
+                f"Previous round was {elapsed:.0f} seconds ago."
                 if elapsed is not None
                 else "This is the first ready request.",
             )

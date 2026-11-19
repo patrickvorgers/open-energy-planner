@@ -89,7 +89,10 @@ def test_material_thermal_deviations_reuse_five_minute_throttle_and_quarter_refr
     }
     submitted = []
     planner = SimpleNamespace(
-        published=(original, document), submit=submitted.append, invalidate=lambda reason: None
+        published=(original, document),
+        submit=submitted.append,
+        invalidate=lambda reason: None,
+        last_calculation_started=None,
     )
     repository = SimpleNamespace(invalidate_plan=lambda: None, store_sources=lambda value: None)
     config = parse_configuration(

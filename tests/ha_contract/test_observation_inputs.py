@@ -508,6 +508,7 @@ def test_forwarding_reports_does_not_replan_on_every_poll():
 
     class Planner:
         latest = None
+        last_calculation_started = None
 
         def __init__(self):
             self.submitted = []
@@ -553,7 +554,7 @@ def test_pending_sensor_deviation_is_latched_until_latest_inputs_can_be_submitte
     from unittest.mock import Mock
 
     clock = [NOW]
-    planner = Mock(published=None)
+    planner = Mock(published=None, last_calculation_started=None)
     live = LiveInputs(planner, Mock(), Mock(), clock=lambda: clock[0])
     config = configuration()
     live.configure(config)
@@ -634,6 +635,8 @@ def test_changing_price_versions_cannot_bypass_five_minute_limit(caplog):
     """New composed prices on every poll coalesce until 300 seconds, including quarter transitions."""
 
     class Planner:
+        last_calculation_started = None
+
         def __init__(self):
             self.submitted = []
 
@@ -682,6 +685,49 @@ def test_changing_price_versions_cannot_bypass_five_minute_limit(caplog):
     assert "300 seconds ago" in requests[1]
     assert "a new quarter-hour started" in requests[-1]
     assert "Last submission" not in caplog.text
+
+
+def test_price_change_waits_five_minutes_from_actual_calculation_start():
+    """A delayed worker start sets the automatic replan deadline."""
+
+    async def scenario():
+        clock = [NOW]
+        config = configuration()
+        starts = []
+
+        async def calculate(_snapshot):
+            starts.append(clock[0])
+            return SimpleNamespace(document=None, reason="test_no_plan")
+
+        async def publish(_document):
+            raise AssertionError("No plan was produced")
+
+        planner = PlanningCoordinator(
+            SimpleNamespace(calculate=calculate), publish, clock=lambda: clock[0]
+        )
+        repository = SimpleNamespace(store_sources=lambda _: None, invalidate_plan=lambda: None)
+        future = SimpleNamespace(
+            current=lambda config, now, report: replace(
+                basis(config, now=now), price_version=str(now)
+            )
+        )
+        live = LiveInputs(planner, repository, future, clock=lambda: clock[0])
+        live.configure(config)
+        live.receive(parse_report(report_body(), config, NOW))
+        first_start = NOW + timedelta(seconds=2)
+        clock[0] = first_start
+        await planner.wait()
+        assert starts == [first_start]
+
+        for seconds in (300, 301, 302):
+            clock[0] = NOW + timedelta(seconds=seconds)
+            live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
+            await planner.wait()
+            assert starts == ([first_start, clock[0]] if seconds == 302 else [first_start])
+
+        await planner.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(

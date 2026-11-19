@@ -36,7 +36,12 @@ def test_preparation_keeps_loop_free_and_drains_repeated_cancellation_before_unl
             assert not planner.closed
             installed.append(snapshot)
 
-        planner = SimpleNamespace(submit=submit, invalidate=invalidated.append, closed=False)
+        planner = SimpleNamespace(
+            submit=submit,
+            invalidate=invalidated.append,
+            closed=False,
+            last_calculation_started=None,
+        )
         repository = SimpleNamespace(invalidate_plan=lambda: None)
         live = LiveInputs(
             planner,
