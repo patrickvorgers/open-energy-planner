@@ -2,6 +2,54 @@
 
 OEP proposes when your installation should use, store, import or export electricity. It combines what is measured now with forecasts, your contract and the limits you confirmed. A plan describes the model's expected outcome. It is not a record of physical execution.
 
+## See how the parts work together
+
+The app calculates the plan. The Home Assistant integration makes its current
+instructions available. Your own automations connect those instructions to your
+equipment. Installing the app and integration alone does not operate your devices.
+
+```mermaid
+flowchart TB
+    SOURCES["External sources<br/>Weather, solar and prices"]
+    APP["OEP app<br/>Calculates and checks the plan"]
+    INTEGRATION["OEP integration<br/>Shares data and current commands"]
+    AUTOMATIONS["Your HA automations<br/>You create the device actions"]
+    DEVICES["Your equipment<br/>Local controls and safeguards"]
+    MEASUREMENTS["Home Assistant sensors<br/>Energy, power and status"]
+
+    SOURCES -->|"Forecasts and prices"| APP
+    APP -->|"Checked plan"| INTEGRATION
+    INTEGRATION -->|"Measurements and feedback"| APP
+    INTEGRATION -->|"Current virtual commands"| AUTOMATIONS
+    AUTOMATIONS -->|"Device-specific actions"| DEVICES
+    DEVICES -->|"Measured state"| MEASUREMENTS
+    MEASUREMENTS -->|"Configured sensor readings"| INTEGRATION
+```
+
+The arrows show information and commands, not electrical connections. Depending
+on the configured provider, external data reaches the app directly or through
+Home Assistant. The diagram groups those routes to keep the responsibilities clear.
+
+| Part | What it does |
+|---|---|
+| **OEP app** | Combines measurements, forecasts, your contract and settings. Calculates and independently checks a plan, and displays planning and savings. |
+| **OEP integration** | Sends configured Home Assistant measurements to the app, retrieves the plan and exposes the currently applicable virtual commands as entities and events. It does not run the optimizer. |
+| **Your automations** | Translate virtual commands into the actions supported by your equipment. You create and maintain these automations or your own controller. |
+| **Equipment and local controllers** | Carry out supported actions and retain their manufacturer and electrical safeguards. |
+| **External sources** | Supply the weather, solar forecasts and prices selected for your installation. Their availability affects the inputs available for planning. |
+
+For example, the app may plan battery charging during a cheaper period. The
+integration exposes the applicable charging target at that time. Your automation
+reads it and calls the supported action on your battery system. Later sensor
+readings show what the equipment actually did. Publishing or receiving a command
+alone does not prove that charging happened.
+
+Start with the [virtual-device sensor reference](virtual-device-sensors.md) to
+choose the signals for your automation. Follow [Keep control separate](home-assistant.md#keep-control-separate)
+for the control boundary and [appliance guidance](appliances.md) for supported
+readiness and execution feedback. Preserve local safety controls and handle
+unavailable or expired instructions before connecting physical equipment.
+
 ## Follow one planning round
 
 Planning opens before optional notifications and scenario comparisons finish.
