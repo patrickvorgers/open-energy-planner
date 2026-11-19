@@ -103,3 +103,36 @@ def test_shortcuts_clip_to_available_history_and_reject_nonoverlapping_periods(a
     dialog = page.get_by_role("dialog", name="Choose period")
     expect(dialog.get_by_role("button", name="This month", exact=True)).to_be_disabled()
     expect(dialog.get_by_role("button", name="This week", exact=True)).to_be_disabled()
+
+
+def test_range_endpoints_keep_keyboard_focus_after_calendar_redraw(app_page):
+    """Both range endpoints retain real button focus so Tab can continue to the next calendar day."""
+    page, url = app_page
+    host = mount(page, url)
+    host.locator(".period-trigger").click()
+    dialog = page.get_by_role("dialog", name="Choose period")
+    first = dialog.get_by_role("button", name="11/12/2026", exact=True)
+    first.focus()
+    first.press("Enter")
+    expect(dialog.get_by_role("button", name="11/12/2026", exact=True)).to_be_focused()
+    page.keyboard.press("Tab")
+    second = dialog.get_by_role("button", name="11/13/2026", exact=True)
+    expect(second).to_be_focused()
+    second.press("Enter")
+    expect(dialog.get_by_role("button", name="11/13/2026", exact=True)).to_be_focused()
+    page.keyboard.press("Tab")
+    expect(dialog.get_by_role("button", name="11/14/2026", exact=True)).to_be_focused()
+    dialog.get_by_role("button", name="Apply period", exact=True).click()
+    assert page.evaluate("window.dateControl.value") == {"start": "2026-11-12", "end": "2026-11-13"}
+
+
+def test_single_calendar_day_closes_the_dialog_and_returns_focus(app_page):
+    """Choosing a day commits exactly that day and returns keyboard focus to the compact trigger."""
+    page, url = app_page
+    host = mount(page, url, day_only=True)
+    host.locator(".period-trigger").click()
+    dialog = page.get_by_role("dialog", name="Choose day", exact=True)
+    dialog.get_by_role("button", name="11/12/2026", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert page.evaluate("window.dateControl.value") == {"start": "2026-11-12", "end": "2026-11-12"}
+    expect(host.locator(".period-trigger")).to_be_focused()

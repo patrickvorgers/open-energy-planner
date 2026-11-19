@@ -112,6 +112,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
     function moveMonth(direction) {month = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 + direction, 1)).toISOString().slice(0, 7); draw();}
     /** Build real buttons so date selection and disabled boundaries work with native keyboard focus. */
     function draw() {
+        const focusedDate = days.contains(document.activeElement) ? document.activeElement.dataset.date : null;
         const first = month + "-01", monthDate = new Date(first + "T00:00:00Z");
         monthTitle.textContent = when(first + "T00:00:00Z", {year: "numeric", month: "long"}, "UTC");
         const last = new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
@@ -128,6 +129,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
                 else {from.value = value < anchor ? value : anchor; to.value = value > anchor ? value : anchor; anchor = null; instruction.textContent = "Select Apply period to show these dates.";}
                 draw();
             });
+            element.dataset.date = day;
             element.disabled = !allowed(day, day);
             element.classList.toggle("period-edge", day === from.value || day === to.value);
             element.classList.toggle("period-inside", day > from.value && day < to.value);
@@ -136,6 +138,7 @@ export function createPeriodSelector(host, {dayOnly = false, onChange, label = "
         }
         for (const [key, element] of presets) {const range = key === "custom" ? null : presetRange(key); element.disabled = Boolean(range && !allowed(range.start, range.end)); element.setAttribute("aria-pressed", String(key === preset));}
         for (const input of [from, to]) {input.min = minimum || ""; input.max = maximum || "";}
+        if (focusedDate) (days.querySelector(`[data-date="${focusedDate}"]:not(:disabled)`) || days.querySelector("button:not(:disabled)") || from).focus({preventScroll: true});
     }
     form.onsubmit = event => {
         event.preventDefault();

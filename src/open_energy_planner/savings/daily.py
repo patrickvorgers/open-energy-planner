@@ -396,13 +396,16 @@ class DailySavings:
                                     counters[kind],
                                     common_start=frame.start == initial,
                                 )
-                                counters[kind] = advance_counters(
-                                    contract,
-                                    frame,
-                                    flows[kind][1],
-                                    counters[kind],
-                                    seeds if known else (),
-                                    site,
+                                counters[kind] = (
+                                    advance_counters(
+                                        contract,
+                                        frame,
+                                        flows[kind][1],
+                                        counters[kind],
+                                        seeds if known else (),
+                                        site,
+                                    )
+                                    or None
                                 )
                             except (ValueError, KeyError, TypeError):
                                 counters[kind] = None
