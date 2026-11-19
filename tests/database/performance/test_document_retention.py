@@ -12,6 +12,7 @@ from open_energy_planner.storage.adapters.lifecycle import document_retention
 from open_energy_planner.storage.adapters.lifecycle.document_retention import maintain_documents
 from open_energy_planner.storage.adapters.lifecycle.schema import DOCUMENT_METADATA, DOCUMENTS
 from open_energy_planner.storage.adapters.payloads import encode_payload
+from tests.database.support.backends import BACKENDS
 from tests.database.support.document_retention import finish_index
 
 NOW = datetime(2026, 5, 1, 12, tzinfo=UTC)
@@ -108,13 +109,14 @@ def test_legacy_backfill_decodes_only_128_rows_per_tick_and_resumes_after_restar
     record_testsuite_property("document_retention_backfill_rows_per_tick", len(decoded))
 
 
+@pytest.mark.parametrize(
+    "settlement", [backend for backend in BACKENDS if backend[0] == "sqlite"], indirect=True
+)
 def test_expiry_seeks_index_ranges_despite_many_old_roots_and_young_forecasts(
     settlement, record_testsuite_property
 ):
     """SQLite VM work stays bounded across cursor restart with 40,000 irrelevant metadata rows."""
     _runtime, _store, maintenance, engine, _plans = settlement
-    if engine.dialect.name != "sqlite":
-        pytest.skip("SQLite query-plan and virtual-machine instrumentation")
     solar = SqlDocuments(engine, "solar")
     old = (NOW - timedelta(days=31)).isoformat(timespec="microseconds")
     young = NOW.isoformat(timespec="microseconds")
@@ -221,13 +223,14 @@ def test_expiry_seeks_index_ranges_despite_many_old_roots_and_young_forecasts(
     record_testsuite_property("document_retention_resumed_page_vm_steps", second_steps)
 
 
+@pytest.mark.parametrize(
+    "settlement", [backend for backend in BACKENDS if backend[0] == "mysql"], indirect=True
+)
 def test_mysql_resumed_expiry_uses_full_scalar_composite_index_range(
     settlement, record_testsuite_property
 ):
     """MySQL seeks beyond twenty thousand earlier same-age keys using all four expiry index parts."""
     _runtime, _store, maintenance, engine, _plans = settlement
-    if engine.dialect.name != "mysql" or engine.dialect.is_mariadb:
-        pytest.skip("MySQL JSON EXPLAIN index-range instrumentation")
     solar = SqlDocuments(engine, "solar")
     old = (NOW - timedelta(days=31)).isoformat(timespec="microseconds")
     for index in range(128):
