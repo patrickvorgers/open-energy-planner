@@ -193,8 +193,23 @@ The graphs appear in optimizer, battery self-consumption and no-battery baseline
 order. Each graph has its own financial header. The self-consumption scenario
 aims for zero on the meter within battery and converter limits. It does not
 guarantee zero grid exchange.
-The no-battery baseline retains planned EV and thermal loads. It is not an
-entirely unplanned household.
+New plans freeze `reference_policy: unoptimized-loads-v1` before their original
+reference is calculated. Both references build their own price-independent EV,
+thermal and cycle consumption. Vehicles charge immediately in deadline and stable
+identity order. Thermostats maintain `terminal_c`, using the original exponential
+loss and draw model. Thermostat cycling is represented by mean billing-segment
+intake, never executable quarter commands. Heater on-power is reserved before
+admitting concurrent vehicle charging. Fixed running cycle starts remain fixed.
+Both references use grid plus physically usable AC solar headroom, retaining
+availability, charging limits, efficiencies, demand and temperature limits.
+A short final charge pulse stops exactly at the requested target.
+
+Reference `service_flows` retain detached EV and thermal rows for the same
+intervals used by the costs and charts. Service shortfall greater than the
+optimizer, or insufficient final thermal stock, makes reference cost and benefit
+unavailable instead of rewarding unserved demand. Earlier plans without this
+policy retain their original optimized EV and thermal timing. No archive is
+rewritten and measured historical Savings is unchanged.
 Each scenario header starts with its expected economic cost. Optimizer and
 battery self-consumption then show expected benefit versus the same without-battery
 baseline. These amounts use their original archived comparisons. The incremental
