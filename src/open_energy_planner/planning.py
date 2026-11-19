@@ -413,6 +413,7 @@ class PlanningCoordinator:
         self.events = None
         self.latest = None
         self.active = None
+        self.last_calculation_started = None
         self.published = None
         self.task = None
         self.closed = False
@@ -547,7 +548,7 @@ class PlanningCoordinator:
             self.active = snapshot
             self._set_status("calculating")
             started = monotonic()
-            calculation_started = self.clock()
+            calculation_started = self.last_calculation_started = self.clock()
             outcome = None
             calculation_reason = "planning_error"
             superseded = False
