@@ -96,6 +96,7 @@ def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settle
     assert result["cash"]["coverage_seconds"] == 1800
     assert len(result["cash"]["chart"]) == 1
     assert result["cash"]["chart"][0]["savings"] == 0
+    assert result["cash"]["chart"][0]["breakdown"] == result["cash"]["breakdown"]
     assert "checkpoint" not in result["days"][0]
 
 
@@ -458,6 +459,7 @@ def test_cash_breakdown_never_substitutes_components_from_broader_or_unknown_tim
         "sale": 0,
         "bonus": 0,
     }
+    assert cash["chart"][0]["breakdown"] == cash["breakdown"]
     assert store.day(after=start) == original
 
 
@@ -492,3 +494,43 @@ def test_cash_breakdown_aggregates_signed_income_across_a_long_range_without_leg
     assert cash["actual_cost"] == 16
     assert cash["without_battery_cost"] == 40
     assert cash["savings"] == 24
+    for chart_bin in cash["chart"]:
+        assert chart_bin["breakdown"] == {
+            "actual": {"purchase": 12, "sale": 3, "bonus": 1},
+            "without_battery": {"purchase": 18, "sale": -2, "bonus": 0},
+        }
+
+
+def test_chart_breakdown_keeps_each_day_independent_and_rejects_incomplete_month(settlement):
+    """Two days retain distinct .60 and 1.80 costs. One missing component invalidates only its side of that day or month."""
+    runtime, store, documents, _engine, _plans = settlement
+    first_day = DailySavings(runtime).calculate(
+        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+    )
+    for offset in range(2):
+        report = deepcopy(first_day)
+        date = START.date() + timedelta(days=offset)
+        start, end = day_window(date.isoformat(), "UTC")
+        report.update(day=date.isoformat(), start=start.isoformat(), end=end.isoformat())
+        if offset:
+            report["scenarios"]["actual"]["totals"].update(purchase=2, sale=0.2, grid_cash=1.8)
+            report["scenarios"]["without_battery"]["totals"].update(
+                purchase=3, sale=0.3, grid_cash=2.7
+            )
+            report["scenarios"]["actual"]["totals"].pop("bonus")
+            report["cash"].update(actual_cost=1.8, without_battery_cost=2.7, savings=0.9)
+        store.put_day(report, documents, end.date().isoformat())
+    first, _end = day_window(START.date().isoformat(), "UTC")
+    cash, _reports, _count = store.daily_overview(first, first + timedelta(days=2))
+    assert cash["chart"][0]["breakdown"]["actual"]["purchase"] == pytest.approx(0.6)
+    assert cash["chart"][1]["breakdown"] == {
+        "actual": None,
+        "without_battery": {"purchase": 3, "sale": 0.3, "bonus": 0},
+    }
+    assert cash["chart"][1]["actual_cost"] == pytest.approx(1.8)
+    monthly, _reports, _count = store.daily_overview(first, first + timedelta(days=400))
+    assert monthly["chart"][0]["breakdown"] == {
+        "actual": None,
+        "without_battery": {"purchase": pytest.approx(3.6), "sale": 0.3, "bonus": 0},
+    }
+    assert monthly["chart"][0]["savings"] == pytest.approx(0.9)

@@ -1297,7 +1297,10 @@ SQL and share a repeatable snapshot with bounded parent details. Charts use dail
 bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
 key supports inclusive-start/exclusive-end period reads without loading raw quarters.
 
-The same repeatable snapshot provides the read-only `cash.breakdown` API object.
+The same repeatable snapshot provides the read-only `cash.breakdown` API object
+and each daily or monthly `cash.chart[].breakdown`. The per-bin objects use the
+same exact-coverage rule, grouped by the cash index's HA-local `day` column in
+one bounded aggregate query. No additional stored columns or indexes are needed.
 A start-key join to `oep_savings_days` sums existing actual/without-battery
 purchase, sale and bonus columns over days with positive matching cash coverage.
 Each side is available only when every included day's scenario coverage equals

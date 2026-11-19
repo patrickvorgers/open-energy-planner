@@ -83,6 +83,12 @@ reduced when space is limited. The chart retains negative values and gaps.
 Keyboard users can focus it and inspect every amount and full date with Left,
 Right, Home and End.
 
+Hover over or tap a bar to see its **Savings breakdown**, with import cost,
+export income, bonus income and net cost for both sides, followed by the saving.
+The tooltip describes that day, or that month when the chart groups months.
+Keyboard navigation opens the same details. Press Escape to dismiss them.
+Unavailable component details stay unavailable even when the net saving is known.
+
 The shared date control uses the Home Assistant installation timezone and the
 signed-in user's date format. Forecast quality, Activity and Planning performance
 use its single-day mode. Their charts and filters retain their existing meaning.
