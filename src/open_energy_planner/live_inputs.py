@@ -44,7 +44,11 @@ class ObservationState(Protocol):
 
 
 class LiveInputs:
-    """In-memory current observations. Archived plans retain exact input evidence."""
+    """Keep current observations and one pending replan flag until the next admitted round.
+
+    Archived plans retain exact input evidence. Pending deviations do not replace
+    the active calculation or retain an obsolete intermediate snapshot.
+    """
 
     def __init__(
         self,
@@ -66,6 +70,7 @@ class LiveInputs:
         self.last_submission = None
         self.last_basis = None
         self.last_quarter = None
+        self.replan_requested = False
         self.configuration_issue = lambda: None
         self.requested_strategy = lambda: Strategy.COST
         self.strategy_issue = lambda: None
@@ -91,6 +96,7 @@ class LiveInputs:
         self.current_snapshot = None
         self.last_submission = None
         self.last_basis = self.last_quarter = None
+        self.replan_requested = False
         self.planner.invalidate("waiting_for_measurements")
         self.repository.invalidate_plan()
         _LOGGER.info(
@@ -124,8 +130,8 @@ class LiveInputs:
         """Validate every capture, but solve on quarters or throttled material changes.
 
         Explicit configuration/resume requests and readiness recovery may start
-        immediately. Ordinary source versions and deviations never bypass the
-        five-minute limit. Measurement freshness is validated, not a solve timer.
+        immediately. Quarters, source versions and deviations share the five-minute
+        limit. Measurement freshness is validated, not a solve timer.
         """
         self._install(self._prepare(self._capture()), force=force)
 
@@ -228,13 +234,19 @@ class LiveInputs:
             self.ev is not None
             and self.ev.execution_deviated(published[1] if published else {}, now)
         )
+        self.replan_requested = (
+            self.replan_requested or ev_deviation or self.deviated(snapshot, now)
+        )
         if (
             force
             or self.last_submission is None
-            or quarter != self.last_quarter
             or (
                 elapsed >= MIN_DEVIATION_REPLAN_SECONDS
-                and (versions != self.last_basis or ev_deviation or self.deviated(snapshot, now))
+                and (
+                    quarter != self.last_quarter
+                    or versions != self.last_basis
+                    or self.replan_requested
+                )
             )
         ):
             changed = (
@@ -267,7 +279,7 @@ class LiveInputs:
                 if quarter != self.last_quarter
                 else f"updated {changed}"
                 if versions != self.last_basis
-                else "measurements differ materially from the current plan"
+                else "pending measurement or publication updates"
             )
             _LOGGER.info(
                 "Planning requested: %s. %s",
@@ -283,6 +295,7 @@ class LiveInputs:
                 versions,
             )
             self.last_submission, self.last_basis, self.last_quarter = now, versions, quarter
+            self.replan_requested = False
             self.planner.submit(snapshot)
             if self.ev is not None:
                 self.ev.accept_execution_deviations(now)

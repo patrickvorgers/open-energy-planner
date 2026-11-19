@@ -1053,14 +1053,21 @@ live inputs while holding the repository lock. A changed/expired input rejects t
 candidate through `PublicationSuperseded`: the coordinator reports INFO and preserves
 any newer invalidation reason. Ordinary measurement, forecast and price updates do
 not discard a usable active result: publish it with its original evidence, then
-calculate the newest coalesced input. Continuous soft updates must not starve
+calculate the newest coalesced input at the next permitted round. Continuous soft updates must not starve
 publication. Revalidate against the newest observations even when the five-minute
 scheduling limit did not queue them. Only missing/unusable core input, changed
 configuration/strategy, expired input/first interval, or an infeasible remaining
 battery dispatch blocks publication. Check each battery's measured reserve/capacity
 using validated internal-energy changes (including losses) through command expiry.
 Do not require the entire 48-hour forecast to remain exact or invent a SoC percentage
-threshold. If no newer generation exists, hard rejection becomes not ready. Genuine
+threshold. EV capacity checks likewise integrate only remaining useful charge from
+the latest measurement through command expiry. A rising SoC must not be compared
+with the entire original charging horizon. Missing EV sessions still block publication.
+Material sensor deviations latch one pending request until submission with the latest
+snapshot. Ordinary source updates, quarter transitions and publication retries share
+the five-minute submission gap. Explicit user/configuration requests and readiness
+recovery remain immediate. The locked publication callback must not submit directly.
+If no newer generation exists, hard rejection becomes not ready. Genuine
 publication/storage failures remain ERROR with traceback and retain rollback behavior.
 
 

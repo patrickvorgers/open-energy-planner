@@ -395,7 +395,7 @@ def test_synthetic_submission_waits_for_inflight_publication(tmp_path, monkeypat
 def test_publication_checks_new_soc_even_without_a_queued_round(
     tmp_path, monkeypatch, soc, allowed
 ):
-    """During a cheap-charge solve, a 49% reading leaves room until the next quarter plus grace. 99% lacks space and must trigger a new round."""
+    """A safe stock update permits publication. Insufficient space waits for a scheduled or explicit round."""
 
     async def scenario():
         """Hold the solver while real HTTP delivers a newer measurement below the ordinary replan interval."""
@@ -433,7 +433,20 @@ def test_publication_checks_new_soc_even_without_a_queued_round(
                 )
             finally:
                 release.set()
-            await wait_ready(session, url)
+            if allowed:
+                await wait_ready(session, url)
+            else:
+                for _ in range(100):
+                    async with session.get(url + "/v1/snapshot") as response:
+                        state = await response.json()
+                    if state["planning"]["status"] == "not_ready":
+                        break
+                    await asyncio.sleep(0.01)
+                assert state["planning"]["reason"] == "battery_dispatch_unavailable"
+                assert len(mapped) == 1
+                async with session.post(url + "/v1/replan") as response:
+                    assert response.status == 200
+                await wait_ready(session, url)
             assert mapped
             assert (read_plan(tmp_path, mapped[0]["plan_id"]) is not None) is allowed
             assert len(mapped) == (1 if allowed else 2)

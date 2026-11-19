@@ -66,4 +66,12 @@ Home Assistant supplies the installation timezone. Calendar days can contain 23 
 
 OEP replans as time moves and meaningful inputs change. A new calculation can fail while an older plan remains visible in history. That visibility does not extend its command lifetime. Missing measurements remain unknown rather than becoming zero. Notifications identify the affected source and the next recovery action.
 
+Each calculation uses a fixed snapshot. Normal measurement changes do not restart a
+usable calculation. Meaningful deviations are queued for a later round with the newest
+inputs. Automatic rounds stay at least five minutes apart, including quarter transitions
+and publication retries. Explicit requests, configuration changes and recovery of missing
+required inputs can start sooner. Before publication, current measurements must still
+support the remaining battery and EV commands until their expiry. A disconnected vehicle,
+expired input or infeasible remaining command can therefore still prevent publication.
+
 **Next:** [Prepare your installation](before-you-start.md), or [read a complete plan](read-your-plan.md).
