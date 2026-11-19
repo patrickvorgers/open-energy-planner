@@ -1,11 +1,10 @@
 /* Approved Savings A layout, using Courtyard fonts, surfaces and controls. */
 .savings-toolbar { display:flex; justify-content:flex-end; margin-bottom:24px; }
-.savings-summary { display:grid; grid-template-columns:1.1fr 1fr; gap:48px; align-items:center; margin-bottom:24px; padding:28px; }
+.savings-summary { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); column-gap:48px; row-gap:16px; align-items:center; margin-bottom:24px; padding:28px; }
 .workspace .savings-summary h2 { font:400 16px/1.5 Outfit,sans-serif; letter-spacing:0; margin:0; }
 .savings-amount { font:500 clamp(32px,5vw,70px)/1.15 "Space Grotesk",sans-serif; letter-spacing:-.05em; color:#18735e; margin:12px 0; overflow-wrap:anywhere; }
 .savings-amount.savings-loss { color:#a34e30; }
 .savings-meaning { max-width:360px; color:var(--oep-muted); font-size:16px; }
-.savings-period-label { font-size:14px; color:var(--oep-muted); margin-top:20px; }
 .savings-cost-row { margin:12px 0 20px; }
 .savings-cost-label { display:flex; justify-content:space-between; gap:16px; margin-bottom:8px; font-size:16px; }
 .savings-cost-label strong { font-weight:500; white-space:nowrap; }
@@ -25,8 +24,20 @@
 #savings-selected:empty { display:none; }
 @media(max-width:700px) {
     .savings-toolbar { display:block; }
-    .savings-summary { grid-template-columns:1fr; padding:22px; gap:20px; }
+    .savings-summary { grid-template-columns:minmax(0,1fr); padding:22px; gap:20px; }
     .savings-amount { font-size:clamp(32px,10vw,60px); }
     .savings-chart-heading { display:block; }
     .savings-chart-wrap { height:220px; }
 }
+
+.workspace .savings-breakdown { grid-column:1/-1; min-width:0; border:0; border-top:1px solid var(--oep-line); border-radius:0; padding:12px 0 0; margin:0; }
+.savings-breakdown > summary { min-height:44px; align-content:center; color:var(--oep-blue); cursor:pointer; }
+.workspace .savings-breakdown table { width:100%; min-width:0; table-layout:fixed; }
+.workspace .savings-breakdown th, .workspace .savings-breakdown td { padding:12px 6px; font-size:14px; white-space:normal; overflow-wrap:anywhere; }
+.savings-breakdown thead th:first-child { width:38%; }
+.savings-breakdown th:first-child { text-align:left; }
+.savings-breakdown td, .savings-breakdown thead th:not(:first-child) { text-align:right; font-variant-numeric:tabular-nums; }
+.savings-breakdown tbody tr:last-child { border-top:1px solid var(--oep-line); font-weight:600; }
+.savings-breakdown p { max-width:820px; font-size:14px; }
+
+#savings-breakdown-status:empty { display:none; }

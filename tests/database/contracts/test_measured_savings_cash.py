@@ -89,6 +89,10 @@ def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settle
     assert result["cash"]["actual_cost"] == pytest.approx(0.60)
     assert result["cash"]["without_battery_cost"] == pytest.approx(0.60)
     assert result["cash"]["savings"] == 0
+    assert result["cash"]["breakdown"] == {
+        "actual": {"purchase": pytest.approx(0.60), "sale": 0, "bonus": 0},
+        "without_battery": {"purchase": pytest.approx(0.60), "sale": 0, "bonus": 0},
+    }
     assert result["cash"]["coverage_seconds"] == 1800
     assert len(result["cash"]["chart"]) == 1
     assert result["cash"]["chart"][0]["savings"] == 0
@@ -424,3 +428,67 @@ def test_legacy_market_lookup_respects_activation_changes_while_disabled(settlem
         assert report["cash"]["coverage_seconds"] == 900
         assert report["cash"]["actual_cost"] == pytest.approx(0.3)
         assert report["cash"]["without_battery_cost"] == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize("missing_detail", ["broader_time", "missing_component"])
+def test_cash_breakdown_never_substitutes_components_from_broader_or_unknown_time(
+    settlement, missing_detail
+):
+    """A matched .60 cost remains known while incompatible actual components stay unavailable independently."""
+    runtime, store, documents, _engine, _plans = settlement
+    day = DailySavings(runtime).calculate(
+        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+    )
+    if missing_detail == "broader_time":
+        day["scenarios"]["actual"]["coverage_seconds"] += 900
+        day["scenarios"]["actual"]["totals"]["purchase"] = 99
+    else:
+        day["scenarios"]["actual"]["totals"].pop("bonus")
+    day["finalized_at"] = (START + timedelta(days=4)).isoformat()
+    original = deepcopy(day)
+    store.put_day(day, documents, "2026-10-23")
+    start, end = day_window(START.date().isoformat(), "UTC")
+    cash, _reports, _count = store.daily_overview(start, end)
+    assert cash["actual_cost"] == pytest.approx(0.60)
+    assert cash["without_battery_cost"] == pytest.approx(0.60)
+    assert cash["savings"] == 0
+    assert cash["breakdown"]["actual"] is None
+    assert cash["breakdown"]["without_battery"] == {
+        "purchase": pytest.approx(0.60),
+        "sale": 0,
+        "bonus": 0,
+    }
+    assert store.day(after=start) == original
+
+
+def test_cash_breakdown_aggregates_signed_income_across_a_long_range_without_legacy_days(
+    settlement, monkeypatch
+):
+    """Existing daily columns explain matched net totals across years without loading retained report payloads."""
+    runtime, store, documents, _engine, _plans = settlement
+    day = DailySavings(runtime).calculate(
+        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+    )
+    for offset in (0, 400):
+        report = deepcopy(day)
+        first = START.date() + timedelta(days=offset)
+        start, end = day_window(first.isoformat(), "UTC")
+        report.update(day=first.isoformat(), start=start.isoformat(), end=end.isoformat())
+        report["scenarios"]["actual"]["totals"].update(purchase=12, sale=3, bonus=1, grid_cash=8)
+        report["scenarios"]["without_battery"]["totals"].update(
+            purchase=18, sale=-2, bonus=0, grid_cash=20
+        )
+        report["cash"].update(actual_cost=8, without_battery_cost=20, savings=12)
+        store.put_day(report, documents, end.date().isoformat())
+    monkeypatch.setattr(store, "days", lambda *_args, **_kwargs: [])
+    first, _end = day_window(START.date().isoformat(), "UTC")
+    cash, reports, count = store.daily_overview(first, first + timedelta(days=402))
+    assert reports == [] and count == 2
+    assert cash["aggregation"] == "month"
+    assert cash["breakdown"] == {
+        "actual": {"purchase": 24, "sale": 6, "bonus": 2},
+        "without_battery": {"purchase": 36, "sale": -4, "bonus": 0},
+    }
+    assert cash["actual_cost"] == 16
+    assert cash["without_battery_cost"] == 40
+    assert cash["savings"] == 24
