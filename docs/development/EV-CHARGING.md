@@ -358,11 +358,14 @@ SoC availability, target completion and control capability. Only eligible live
 `EVWork` contributes scheduled charging. There is no historical EV fallback or
 inferred future arrival. Original component forecasts and actual meter histories
 remain immutable evidence. The existing separation proof is still required.
-`LiveInputs` blocks publication with `ev_forecast_boundary_unavailable` when
-the EV service cannot establish the forecast boundary. The fixed log-safe recovery
-notice links to the authenticated EV page, which names the configured meters.
-The EV domain owns both projections. Thermal fallback may retain a boiler forecast but cannot
-silently restore an EV forecast.
+`LiveInputs` blocks publication when the EV service cannot establish the forecast
+boundary. If the discovered Home Assistant Energy catalogue lacks a configured
+charge-point meter, `ev_energy_meter_missing` points to EV settings and asks the
+user to restore the meter link. Only the authenticated settings view names the
+missing meter. Otherwise, `ev_forecast_boundary_unavailable` explains that OEP
+will retry and points to consumption forecasts if the problem persists. Both
+log messages use fixed text. Thermal fallback may retain a boiler forecast but
+cannot silently restore an EV forecast.
 
 `EVService.execution_deviated` compares fresh point power with the active
 published command, including zero when no EV command exists. A difference of at

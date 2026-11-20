@@ -52,7 +52,7 @@ def test_replacing_configuration_clears_forecast_issue_and_preserves_request_his
     """A cached issue for old point membership cannot survive configuration replacement."""
     body = {"request_id": str(uuid4()), "vehicle_id": CAR}
     ev_service.save_request(body, NOW, "Europe/Amsterdam")
-    ev_service.issue = "Charger component forecast unavailable. EV history cannot be removed safely"
+    ev_service.issue = "ev_forecast_boundary_unavailable"
     replacement = settings()
     if change == "replace_point":
         replacement["points"][0]["id"] = str(uuid4())
