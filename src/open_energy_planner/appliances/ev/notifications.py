@@ -39,7 +39,9 @@ def forecast_boundary_issue(reason, missing_meters, names):
     notice = explain_problem(reason)
     if notice is None:
         return None
-    if reason == EV_METER_MISSING and missing_meters:
+    if reason == EV_METER_MISSING:
+        if not missing_meters:
+            return None
         sources = ", ".join(
             f"{names.get(meter, 'Charge point')} ({meter})" for meter in missing_meters
         )

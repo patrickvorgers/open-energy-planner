@@ -304,6 +304,11 @@ def test_missing_charger_separation_blocks_live_planning_instead_of_using_histor
         assert str(unavailable) == "ev_energy_meter_missing"
         assert "sensor.charger_energy" in message
         assert "Refresh Home Assistant sources" in message
+        service.consumers.sync(catalogue())
+        capture_issue = InputsUnavailable("waiting_for_measurements")
+        assert live._prepare(capture_issue) is capture_issue
+        assert service.document(NOW, "Europe/Amsterdam")["issue"] is None
+        assert str(live._prepare((NOW, None, original))) == "ev_forecast_boundary_unavailable"
     else:
         assert str(unavailable) == "ev_forecast_boundary_unavailable"
         assert "retry automatically" in message
