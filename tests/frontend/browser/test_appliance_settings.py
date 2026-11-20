@@ -20,6 +20,37 @@ from tests.frontend.browser.helpers import (
 )
 
 
+def assert_appliance_toolbar(page, state):
+    """Keep status above actions and align the actions with the picker on wide screens."""
+    toolbar = page.locator(".settings-toolbar")
+    picker = toolbar.get_by_role("combobox", name="Appliance", exact=True).bounding_box()
+    status = toolbar.get_by_role("status").bounding_box()
+    actions = toolbar.locator(
+        ".settings-actions > button:visible, .save-bar > button:visible, .settings-more > summary:visible"
+    ).all()
+    assert picker and status and actions
+    width = page.viewport_size["width"]
+    previous_action = None
+    for action in actions:
+        bounds = action.bounding_box()
+        assert bounds
+        assert status["y"] + status["height"] <= bounds["y"]
+        if width > 950:
+            assert bounds["y"] + bounds["height"] == pytest.approx(
+                picker["y"] + picker["height"], abs=1
+            )
+        else:
+            assert picker["y"] + picker["height"] <= status["y"]
+            assert bounds["x"] >= picker["x"] and bounds["x"] + bounds["width"] <= width
+            if previous_action and bounds["y"] < previous_action["y"] + previous_action["height"]:
+                assert bounds["y"] == pytest.approx(previous_action["y"], abs=1)
+                assert bounds["height"] == pytest.approx(previous_action["height"], abs=1)
+            previous_action = bounds
+    directory = Path("results/ci")
+    directory.mkdir(parents=True, exist_ok=True)
+    toolbar.screenshot(path=str(directory / f"appliance-toolbar-{state}-{width}.png"))
+
+
 def wait_cycle_charts(page):
     """Wait for actual final plotted values before inspecting or capturing the cycle charts."""
     page.wait_for_function("""() => ["cycle-chart", "cycle-energy-chart"].every(id => {
@@ -483,6 +514,7 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     expect(page.locator("#ev-summary")).to_contain_text("11.001 kW")
     expect(page.locator("#ev-editor")).to_be_hidden()
     expect(page.locator("#ev-summary")).to_be_visible()
+    assert_appliance_toolbar(page, "ev-saved")
     page.screenshot(path=f"results/ci/ev-saved-{page.viewport_size['width']}.png", full_page=True)
     page.get_by_role("button", name="Edit settings", exact=True).click()
     page.locator('#vehicles > section [data-field="maximum_w"]').first.fill("7.4")
@@ -495,6 +527,7 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     ).click()
     expect(page).to_have_url(url + "/appliance-settings/ev")
     expect(page.locator("#dirty")).to_contain_text("Unsaved changes")
+    assert_appliance_toolbar(page, "ev-editing")
     page.screenshot(path=f"results/ci/ev-editing-{page.viewport_size['width']}.png", full_page=True)
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(page.locator("#ev-summary")).to_contain_text("11.001 kW")
@@ -1042,6 +1075,7 @@ def test_appliance_permissions_save_explicitly_and_retain_only_failed_changes(ap
     page.get_by_role("button", name="Connect", exact=True).click()
     permissions = page.get_by_label("Allow shifting complete cycles", exact=True)
     expect(permissions).to_have_count(2)
+    assert_appliance_toolbar(page, "ordinary-saved")
     page.get_by_role("button", name="Edit appliance settings", exact=True).click()
     permissions.nth(0).check()
     assert writes == []
@@ -1057,6 +1091,7 @@ def test_appliance_permissions_save_explicitly_and_retain_only_failed_changes(ap
     expect(page.locator("#save-state")).to_contain_text("Save could not be confirmed")
     expect(page.locator("#save-state")).not_to_contain_text("Dryer storage unavailable")
     expect(page.locator("#save-state")).to_contain_text("Unsaved changes")
+    assert_appliance_toolbar(page, "ordinary-error")
     assert writes == [
         {"entity_id": "sensor.dishwasher", "shiftable": True},
         {"entity_id": "sensor.dryer", "shiftable": True},
@@ -1837,6 +1872,7 @@ def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page
     directory = Path("results/ci")
     directory.mkdir(parents=True, exist_ok=True)
     width = page.viewport_size["width"]
+    assert_appliance_toolbar(page, "boiler-saved")
     page.screenshot(path=str(directory / f"boiler-saved-{width}.png"), full_page=True)
     page.get_by_role("button", name="Edit settings", exact=True).click()
     expect(page.locator("#thermal-editor")).to_be_visible()
@@ -1844,6 +1880,7 @@ def test_boiler_saved_summary_and_editor_retain_the_existing_navigation(app_page
     expect(page.get_by_role("button", name="Save settings", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Cancel", exact=True)).to_be_enabled()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    assert_appliance_toolbar(page, "boiler-editing")
     page.screenshot(path=str(directory / f"boiler-editing-{width}.png"), full_page=True)
     page.get_by_role("button", name="Cancel", exact=True).click()
     for accept in (False, True):
