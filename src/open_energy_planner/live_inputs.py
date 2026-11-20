@@ -129,9 +129,10 @@ class LiveInputs:
     def refresh(self, *, force=False):
         """Validate every capture, but solve on quarters or throttled material changes.
 
-        Explicit configuration/resume requests and readiness recovery may start
-        immediately. Quarters, source versions and deviations share the five-minute
-        limit, measured from the actual start of the preceding calculation.
+        Explicit configuration/resume requests, readiness recovery and first work
+        for a new EV connection may start immediately. Quarters, other source
+        versions and deviations share the five-minute limit, measured from the
+        actual start of the preceding calculation.
         Measurement freshness is validated, not a solve timer.
         """
         self._install(self._prepare(self._capture()), force=force)
@@ -241,9 +242,12 @@ class LiveInputs:
         self.replan_requested = (
             self.replan_requested or ev_deviation or self.deviated(snapshot, now)
         )
+        ev_work = getattr(snapshot.problem, "ev_work", ())
+        new_ev_session = self.ev is not None and self.ev.has_unsubmitted_session(ev_work)
         if (
             force
             or self.last_submission is None
+            or new_ev_session
             or (
                 elapsed >= MIN_DEVIATION_REPLAN_SECONDS
                 and (
@@ -279,6 +283,8 @@ class LiveInputs:
                 if force
                 else "all required inputs are ready"
                 if self.last_submission is None
+                else "a new EV session is ready to plan"
+                if new_ev_session
                 else "a new quarter-hour started"
                 if quarter != self.last_quarter
                 else f"updated {changed}"
@@ -302,6 +308,7 @@ class LiveInputs:
             self.replan_requested = False
             self.planner.submit(snapshot)
             if self.ev is not None:
+                self.ev.record_submitted_sessions(ev_work)
                 self.ev.accept_execution_deviations(now)
 
     def deviated(self, snapshot, now):

@@ -317,7 +317,12 @@ When departure is sooner, readiness is clamped to one microsecond before departu
 A late result cannot publish after its first usable segment. New ordinary valid SoC readings wait for
 the next throttled round. Settings, session, identity, departure and measurement
 availability changes block publication. New SoC also blocks a candidate exceeding
-physical capacity. The quarter/five-minute planning cadence is unchanged.
+physical capacity. The first prepared snapshot with usable charging work for
+a new physical connection can request a round immediately. Admission consumes
+this exception once per charge point and connection nonce. Further changes on
+that connection follow the ordinary quarter and five-minute cadence, including
+recovery of temporarily unavailable EV work while the installation remains ready.
+A new submission coalesces with other pending inputs if a solver is already running.
 
 Independent validation checks identity, timing, no discharge, physical power,
 AC energy, conversion, target bounds and bus conservation. Original plans retain
@@ -333,7 +338,9 @@ validation still rejects inconsistent candidates before publication.
 
 **Charging requested** and **Requested charging power** are virtual permissions.
 Local unknown identity, unplugging, reached measured target, pause or expiry
-withdraw them even during an app outage. The blueprint uses the stop action for
+withdraw them even during an app outage. Unplugging alone does not bypass
+the normal replanning cadence for redistributing the freed capacity. The
+blueprint uses the stop action for
 unavailable permission/power. Choose immediate idempotent actions, never queued
 delayed starts. Relevant capacities and limits have separate native sensors.
 The blueprint also rejects permission and power entities from different virtual

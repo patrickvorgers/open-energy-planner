@@ -260,6 +260,12 @@ Physical charging still belongs to your Home Assistant automation. Another
 controller must follow the OEP plan if its timing is to match the forecast.
 Real charging measurements continue to count in actual household consumption.
 
+Once OEP recognizes a newly plugged-in car and has the request and inputs it
+needs, it requests a new plan without waiting for the usual five-minute window.
+Further charging and battery-level changes during that connection follow the
+normal planning schedule. Unplugging withdraws Home Assistant's virtual charging
+permission immediately. OEP can use the freed capacity in the next normal plan.
+
 The household forecast excludes the configured charge-point components over
 the entire horizon, including before charging starts and after departure. If
 OEP cannot separate those components reliably, live planning pauses instead of

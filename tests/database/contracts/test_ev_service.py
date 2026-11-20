@@ -1,6 +1,7 @@
 """EV authority, native intent semantics and durable state on all supported database backends."""
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -183,6 +184,83 @@ def test_missing_power_and_small_noise_do_not_create_unplanned_charging(service,
         body["points"][0]["power_w"] = power
         service.receive(body, now)
         assert not service.execution_deviated(plan, now)
+
+
+def test_first_planable_ev_capture_bypasses_throttle_once_per_connection(ev_service):
+    """Only the first usable work for each physical connection requests an immediate round."""
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.live_inputs import LiveInputs
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+
+    timezone = "Europe/Amsterdam"
+    sources, configuration = catalogue(), settings()
+    entity = "binary_sensor.car_connected"
+    sources["entities"].append({"entity_id": entity, "unit": "", "device_class": "plug"})
+    configuration["vehicles"][0]["connected_entity"] = entity
+    ev_service.configure(configuration, sources, NOW)
+    inputs = InstallationProblem((Interval(NOW, 1, 0.3, 0, load_kwh=0),), (), (), (), 20000, 20000)
+    snapshot = InputSnapshot("snapshot", "config", NOW, "measurement", "forecast", "prices", inputs)
+    future = SimpleNamespace(
+        config_revision="config",
+        forecast_version="forecast",
+        price_version="prices",
+        valid_until=NOW + timedelta(hours=1),
+    )
+    submitted = []
+    now = NOW
+    planner = SimpleNamespace(submit=submitted.append, last_calculation_started=None)
+    live = LiveInputs(planner, None, clock=lambda: now, ev=ev_service)
+    live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
+    live.report = SimpleNamespace(readings=())
+
+    def capture(seconds, *, connected=True, identified=False, session=SESSION, soc=50):
+        """Feed a current HA capture and its typed EV work through normal planning admission."""
+        nonlocal now
+        now = NOW + timedelta(seconds=seconds)
+        body = observations(ev_service, now, connected=connected, session=session, soc=soc)
+        if identified:
+            body["vehicles"][0]["connected"] = {
+                "value": True,
+                "reported_at": now.isoformat(),
+                "observed_at": now.isoformat(),
+                "timestamp_kind": "ha_report",
+            }
+        ev_service.receive(body, now, timezone)
+        work = ev_service.work(now, timezone)
+        prepared = replace(
+            snapshot,
+            problem=replace(inputs, ev_work=work),
+            ev_revision=ev_service.hard_revision(now, timezone),
+        )
+        live._install((now, future, prepared), force=False)
+        return work
+
+    assert capture(0, connected=False) == ()
+    assert capture(30) == ()
+    assert len(submitted) == 1
+
+    work = capture(45, identified=True)
+    assert len(submitted) == 2
+    assert submitted[-1].problem.ev_work == work
+    assert work[0].session_id == SESSION
+    assert work[0].required_kwh == 18
+
+    assert capture(90, identified=True, soc=60)[0].required_kwh == 12
+    assert capture(100, connected=False) == ()
+    assert len(submitted) == 2
+
+    next_session = str(uuid4())
+    work = capture(115, identified=True, session=next_session, soc=60)
+    assert len(submitted) == 3
+    assert submitted[-1].problem.ev_work == work
+    assert work[0].session_id == next_session
+
+    future.price_version = "new-prices"
+    capture(414, identified=True, session=next_session, soc=60)
+    assert len(submitted) == 3
+    capture(415, identified=True, session=next_session, soc=60)
+    assert len(submitted) == 4
 
 
 @pytest.mark.parametrize("retained_capture", [False, True])

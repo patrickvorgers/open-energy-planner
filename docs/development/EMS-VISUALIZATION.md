@@ -256,9 +256,12 @@ is therefore not a deviation. All thresholds are named constants in LiveInputs.
 Normal cadence derives from the central fine planning interval.
 
 Initial readiness, recovery and explicit configuration/resume/replan requests
-can run immediately. Hard input invalidation and publication safety checks
-remain immediate. Quarter transitions need not wait for five minutes. Ordinary
-sensor captures and measurement freshness deadlines are never solve timers.
+can run immediately. The first usable charging work for a new physical EV
+connection can also request a round immediately, once per connection. Hard
+input invalidation and publication safety checks remain immediate. During normal
+operation, quarter transitions, new source versions and deviations share the
+five-minute limit. Ordinary sensor captures and measurement freshness deadlines
+are never solve timers.
 Log each actual submission with its reason and previous submission timestamp.
 
 Effective-price revision hashing coalesces adjacent segments with the same rates,

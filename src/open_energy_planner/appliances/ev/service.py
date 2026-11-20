@@ -81,6 +81,7 @@ class EVService:
         )
         self.issue = None
         self.power_deviations = {}
+        self._submitted_sessions = {}
 
     def commit(self, state, selected=None, telemetry=None):
         """Commit intent and current telemetry atomically without archiving every sensor refresh."""
@@ -174,6 +175,11 @@ class EVService:
             selected = None
         telemetry = configure_telemetry(self.telemetry, self.state, state)
         self.commit(state, selected, telemetry)
+        self._submitted_sessions = {
+            point["id"]: self._submitted_sessions[point["id"]]
+            for point in checked["points"]
+            if point["id"] in self._submitted_sessions
+        }
         self.report = None
         self.power_deviations.clear()
         self.issue = None
@@ -514,6 +520,16 @@ class EVService:
             if sum(other.vehicle_id == work.vehicle_id for other in selected) > 1
         }
         return tuple(work for work in selected if work.vehicle_id not in duplicates)
+
+    def has_unsubmitted_session(self, work_items):
+        """Identify the first planning submission for a physical connection."""
+        return any(
+            self._submitted_sessions.get(work.point_id) != work.session_id for work in work_items
+        )
+
+    def record_submitted_sessions(self, work_items):
+        """Remember admitted sessions even if their work temporarily becomes unavailable."""
+        self._submitted_sessions.update((work.point_id, work.session_id) for work in work_items)
 
     def hard_revision(self, now, timezone):
         """Bind availability/identity/departure, allowing ordinary valid SoC readings to finish a round."""
