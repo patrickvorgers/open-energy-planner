@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from aiohttp import ClientError, ClientSession, ClientTimeout, web
+from aiohttp import ClientConnectorError, ClientError, ClientSession, ClientTimeout, web
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -118,36 +118,42 @@ def connection_app(pairing, token, upstream, ui_url):
             raise web.HTTPForbidden()
         if request.path in ("/v1/history", "/v1/settlement/bonus-history"):
             request = request.clone(client_max_size=MAX_STATISTICS_REPORT_BYTES)
-        async with app[FORWARD].request(
-            request.method,
-            upstream + request.rel_url.path_qs,
-            data=await request.read(),
-            headers={
-                "Authorization": "Bearer " + token,
-                "Content-Type": "application/json",
-                **{
-                    name: request.headers[name]
-                    for name in (*HEADER_FIELDS.values(), "X-OEP-View")
-                    if name in request.headers
-                },
-            },
-            allow_redirects=False,
-        ) as response:
-            content = bytearray()
-            async for chunk in response.content.iter_chunked(PROXY_READ_CHUNK_BYTES):
-                content.extend(chunk)
-                if len(content) > MAX_PROXY_RESPONSE_MIB * BYTES_PER_KIB * BYTES_PER_KIB:
-                    raise web.HTTPBadGateway()
-            return web.Response(
-                body=bytes(content),
-                status=response.status,
-                content_type="application/json",
+        try:
+            async with app[FORWARD].request(
+                request.method,
+                upstream + request.rel_url.path_qs,
+                data=await request.read(),
                 headers={
-                    name: response.headers[name]
-                    for name in (*HEADER_FIELDS.values(), "X-OEP-Mismatch")
-                    if name in response.headers
+                    "Authorization": "Bearer " + token,
+                    "Content-Type": "application/json",
+                    **{
+                        name: request.headers[name]
+                        for name in (*HEADER_FIELDS.values(), "X-OEP-View")
+                        if name in request.headers
+                    },
                 },
-            )
+                allow_redirects=False,
+            ) as response:
+                content = bytearray()
+                async for chunk in response.content.iter_chunked(PROXY_READ_CHUNK_BYTES):
+                    content.extend(chunk)
+                    if len(content) > MAX_PROXY_RESPONSE_MIB * BYTES_PER_KIB * BYTES_PER_KIB:
+                        raise web.HTTPBadGateway()
+                return web.Response(
+                    body=bytes(content),
+                    status=response.status,
+                    content_type="application/json",
+                    headers={
+                        name: response.headers[name]
+                        for name in (*HEADER_FIELDS.values(), "X-OEP-Mismatch")
+                        if name in response.headers
+                    },
+                )
+        except ClientConnectorError:
+            LOG.debug("Local app listener unavailable. Peer can retry the request.")
+            raise web.HTTPServiceUnavailable(
+                text="Open Energy Planner is temporarily unavailable"
+            ) from None
 
     app.router.add_route("*", "/{tail:.*}", handle)
     return app
