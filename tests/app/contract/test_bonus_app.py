@@ -390,7 +390,10 @@ def test_history_revalidation_failure_blocks_persisted_budget_and_recovers(
     asyncio.run(scenario())
 
 
-def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_export_meter", [False, True])
+def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(
+    tmp_path, monkeypatch, with_export_meter
+):
     """Cairo's skipped 2026-04-24 midnight makes one annual period unavailable, not the entire endpoint."""
     import open_energy_planner.app as app_module
     import open_energy_planner.contracts.api as contract_api_module
@@ -406,6 +409,17 @@ def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(tmp_pat
     async def scenario():
         """Submit a valid dated rule, then exercise the actual timezone failure through HTTP."""
         async with running(tmp_path, with_export=True) as (session, url):
+            if with_export_meter:
+                body = configuration_document(configuration())
+                body["bindings"].append(
+                    {
+                        "key": "grid.export_energy",
+                        "quantity": "energy",
+                        "entity_id": "sensor.export",
+                    }
+                )
+                async with session.put(url + "/v1/sources", json=body) as response:
+                    assert response.status == 200
             monkeypatch.setattr(app_module, "datetime", FixedDateTime)
             monkeypatch.setattr(contract_api_module, "datetime", FixedDateTime)
             contract = settings()
@@ -430,7 +444,9 @@ def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(tmp_pat
                 assert not preview["bonus_history_pending"]
             async with session.get(url + "/v1/contracts/budgets") as response:
                 assert response.status == 200
-                budget = (await response.json())["budgets"][0]
+                result = await response.json()
+                assert result["history_pending"] is False
+                budget = result["budgets"][0]
                 assert budget["period_start"] is None
                 assert budget["used_kwh"] is None and budget["remaining_kwh"] is None
                 assert budget["issue"] == "Annual reset falls in a nonexistent local time"

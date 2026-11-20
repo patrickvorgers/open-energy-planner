@@ -405,6 +405,13 @@ class ContractAPI:
                         )
                     ]
                 rows.append(row)
+            try:
+                history_pending = (
+                    self.history_issue is None and self.saved_history_request(now) is not None
+                )
+            except ValueError:
+                # Invalid annual boundaries are already explained by their budget rows.
+                history_pending = False
             return web.json_response(
                 {
                     "contract_version": self.contracts.current.version
@@ -414,8 +421,7 @@ class ContractAPI:
                     if self.bonus_counters.current
                     else None,
                     "budgets": rows,
-                    "history_pending": self.saved_history_request(now) is not None
-                    and self.history_issue is None,
+                    "history_pending": history_pending,
                 }
             )
 
