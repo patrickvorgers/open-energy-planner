@@ -19,7 +19,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .catalogue_discovery import CatalogueDiscovery
-from .client import AuthenticationError, ReleaseMismatchError
+from .client import AuthenticationError, InstallationMismatchError, ReleaseMismatchError
 from .const import DOMAIN, RELEASE
 from .history import HistoryBridge
 from .market_prices import MarketPriceBridge
@@ -319,7 +319,12 @@ class PlanCoordinator:
                 return membership
             else:
                 self.catalogue_confirmed_at = now
-        except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
+        except (
+            AuthenticationError,
+            InstallationMismatchError,
+            ReleaseMismatchError,
+            ServerFingerprintMismatch,
+        ):
             raise
         except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
             if not self.closed:
@@ -576,7 +581,12 @@ class PlanCoordinator:
                                     "reason": membership["configuration_issue"],
                                 }
                         self.catalogue_failed_at = None
-                    except (AuthenticationError, ReleaseMismatchError, ServerFingerprintMismatch):
+                    except (
+                        AuthenticationError,
+                        InstallationMismatchError,
+                        ReleaseMismatchError,
+                        ServerFingerprintMismatch,
+                    ):
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                         self.catalogue_discovery.repair()
@@ -619,7 +629,7 @@ class PlanCoordinator:
                             await self.client.request("POST", "/v1/solar/ha-forecasts", predictions)
                             self.solar_forecast_sent = now
                             self.solar_forecast_generation = generation
-                    except ReleaseMismatchError:
+                    except (InstallationMismatchError, ReleaseMismatchError):
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                         _LOGGER.debug("Solar forecast refresh failed", exc_info=True)
@@ -699,7 +709,11 @@ class PlanCoordinator:
                                 "/v1/thermal/observations",
                                 capture_thermal(self, self.thermal, dt_util.utcnow()),
                             )
-                        except (AuthenticationError, ReleaseMismatchError):
+                        except (
+                            AuthenticationError,
+                            InstallationMismatchError,
+                            ReleaseMismatchError,
+                        ):
                             raise
                         except (ClientError, TimeoutError):
                             # A transport outage retains only locally fresh, guarded permissions.
@@ -712,7 +726,7 @@ class PlanCoordinator:
                             ):
                                 return
                             self.thermal = receive_thermal(thermal_reply)
-                except (AuthenticationError, ReleaseMismatchError):
+                except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
                     raise
                 except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
                     # Preserve registry membership while revoking the execution identity.
@@ -979,7 +993,7 @@ class PlanCoordinator:
                             await self.client.request("POST", endpoint, historical)
                     except AuthenticationError:
                         raise
-                    except ReleaseMismatchError:
+                    except (InstallationMismatchError, ReleaseMismatchError):
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                         _LOGGER.warning(
@@ -993,6 +1007,14 @@ class PlanCoordinator:
                         or self.ev_intent_generation != ev_intent_at_request
                     ):
                         return
+            except InstallationMismatchError:
+                self.schedule.invalidate()
+                self.pending_enabled = None
+                self.action_required(
+                    "installation_identity_changed",
+                    "This Home Assistant connection belongs to a different OEP installation. "
+                    "Use the integration for the current installation. Existing commands have been withdrawn.",
+                )
             except ReleaseMismatchError:
                 self.action_required(
                     "release_mismatch",
@@ -1076,7 +1098,12 @@ class PlanCoordinator:
             self.solar_feedback_task.cancel()
             try:
                 await self.solar_feedback_task
-            except (asyncio.CancelledError, AuthenticationError, ReleaseMismatchError):
+            except (
+                asyncio.CancelledError,
+                AuthenticationError,
+                InstallationMismatchError,
+                ReleaseMismatchError,
+            ):
                 pass
         pending_feedback_reads = tuple(self.solar_feedback_reads.values())
         for task in pending_feedback_reads:
@@ -1088,7 +1115,12 @@ class PlanCoordinator:
             self.appliance_history_task.cancel()
             try:
                 await self.appliance_history_task
-            except (asyncio.CancelledError, AuthenticationError, ReleaseMismatchError):
+            except (
+                asyncio.CancelledError,
+                AuthenticationError,
+                InstallationMismatchError,
+                ReleaseMismatchError,
+            ):
                 pass
         if self.boundary_cancel:
             self.boundary_cancel()

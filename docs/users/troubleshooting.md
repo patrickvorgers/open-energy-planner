@@ -123,6 +123,14 @@ is lost, the new complete list may already be visible. Allow the next routine
 integration refresh before checking again. Do not recreate a working HA integration to work around a
 temporarily unavailable source list.
 
+After a reset or reinstall, Home Assistant can retain a connection for the previous
+OEP installation. If it reports **This Home Assistant connection belongs to a
+different OEP installation**, use the integration for the current app. OEP withdraws
+commands from the obsolete connection and prevents it from interfering with source
+refreshes. Its devices and history are retained. The old connection is not silently
+reassigned to the new installation. Review it separately under **Settings > Devices
+& services > Open Energy Planner**.
+
 ## Cost or benefit is unavailable
 
 Check whether the relevant scenario comparison exists and covers the same original horizon. Do not substitute the self-consumption comparison for the without-battery baseline. Missing costs are not zero savings.
