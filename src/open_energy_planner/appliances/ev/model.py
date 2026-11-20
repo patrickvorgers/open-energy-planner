@@ -35,6 +35,25 @@ def number(value, lower, upper):
     return float(value)
 
 
+def validated_efficiency_stages(stages):
+    """Freeze valid AC watts and battery efficiencies, including legacy empty stages."""
+    if not isinstance(stages, (list, tuple)) or len(stages) > MAX_EFFICIENCY_STAGES:
+        raise ValueError(f"Use at most {MAX_EFFICIENCY_STAGES} charging efficiency stages")
+    previous_power = previous_delivered = 0
+    checked = []
+    for stage in stages:
+        if not isinstance(stage, (list, tuple)) or len(stage) != 2:
+            raise ValueError("Specify AC power and efficiency for every charging stage")
+        power = number(stage[0], 1, MAX_EV_POWER_W)
+        efficiency = number(stage[1], 1, FULL_SOC_PERCENT)
+        delivered = power * efficiency
+        if power != round(power) or power <= previous_power or delivered <= previous_delivered:
+            raise ValueError("Each stage must increase both AC and battery power")
+        checked.append((int(power), efficiency))
+        previous_power, previous_delivered = power, delivered
+    return tuple(checked)
+
+
 def delivery_points(stages):
     """Add the off point and extend the final efficiency to the supported power bound."""
     if not stages:
@@ -110,7 +129,9 @@ class EVWork:
             raise ValueError("Only controllable EV work enters the solver")
 
         # Archived JSON represents the stage pairs as lists.
-        object.__setattr__(self, "efficiency_stages", tuple(map(tuple, self.efficiency_stages)))
+        object.__setattr__(
+            self, "efficiency_stages", validated_efficiency_stages(self.efficiency_stages)
+        )
 
     @property
     def delivery_points(self):

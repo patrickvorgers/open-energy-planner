@@ -9,6 +9,7 @@ from open_energy_planner.appliances.ev.model import (
     MAX_EV_CAPACITY_KWH,
     MAX_EV_POWER_W,
     number,
+    validated_efficiency_stages,
 )
 from open_energy_planner.core.units import FULL_SOC_PERCENT
 
@@ -49,17 +50,20 @@ def charging_efficiency(row):
     )
     if not isinstance(stages, list) or not 1 <= len(stages) <= MAX_EFFICIENCY_STAGES:
         raise ValueError(f"Use 1 to {MAX_EFFICIENCY_STAGES} charging efficiency stages")
-    previous_power = previous_delivered = 0
-    for stage in stages:
-        if not isinstance(stage, dict) or set(stage) != {"power_w", "efficiency_percent"}:
-            raise ValueError("Specify AC power and efficiency for every charging stage")
-        power = number(stage["power_w"], 1, MAX_EV_POWER_W)
-        efficiency = number(stage["efficiency_percent"], 1, FULL_SOC_PERCENT)
-        delivered = power * efficiency
-        if power != round(power) or power <= previous_power or delivered <= previous_delivered:
-            raise ValueError("Each stage must increase both AC and battery power")
-        previous_power, previous_delivered = power, delivered
-    return {"charging_phases": phases, "efficiency_stages": stages}
+    if any(
+        not isinstance(stage, dict) or set(stage) != {"power_w", "efficiency_percent"}
+        for stage in stages
+    ):
+        raise ValueError("Specify AC power and efficiency for every charging stage")
+    checked = validated_efficiency_stages(
+        tuple((stage["power_w"], stage["efficiency_percent"]) for stage in stages)
+    )
+    return {
+        "charging_phases": phases,
+        "efficiency_stages": [
+            {"power_w": power, "efficiency_percent": efficiency} for power, efficiency in checked
+        ],
+    }
 
 
 def configuration(body, catalogue, consumers, appliances, previous_points):

@@ -354,3 +354,19 @@ def test_vehicle_curve_interpolates_delivered_watts_in_variable_band():
     plan = solve(inputs)
     assert sum(flow.grid_import for flow in plan.flows) == pytest.approx(2)
     assert sum(flow.ev[0].stored_kwh for flow in plan.flows) == pytest.approx(1.7)
+
+
+@pytest.mark.parametrize(
+    "stages",
+    [
+        [[11000, 0]],
+        [[11000, 101]],
+        [[2300, 80], [2300, 81]],
+        [[2300, 90], [2400, 80]],
+        [[power, 80] for power in range(1000, 10000, 1000)],
+    ],
+)
+def test_work_rejects_invalid_efficiency_stages(stages):
+    """Directly constructed or decoded work cannot model energy outside the validated curve."""
+    with pytest.raises(ValueError):
+        work(efficiency_stages=stages)

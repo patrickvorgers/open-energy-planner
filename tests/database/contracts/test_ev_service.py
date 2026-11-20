@@ -636,3 +636,19 @@ def test_invalid_vehicle_efficiency_preserves_configuration(service, phases, sta
     with pytest.raises(ValueError):
         service.configure(data, catalogue(), NOW)
     assert service.configuration_version == before
+
+
+def test_vehicle_efficiency_is_detached_from_submitted_configuration(service):
+    """A caller cannot mutate the committed curve through its submitted dictionaries or list."""
+    data = settings()
+    stages = [{"power_w": 3680, "efficiency_percent": 85}]
+    data["vehicles"][0].update(charging_phases=1, efficiency_stages=stages)
+    service.configure(data, catalogue(), NOW)
+    version = service.configuration_version
+
+    stages[0]["efficiency_percent"] = 101
+    stages.append({"power_w": 7000, "efficiency_percent": 80})
+    assert service.configuration_version == version
+    assert service.state["vehicles"][0]["efficiency_stages"] == [
+        {"power_w": 3680, "efficiency_percent": 85}
+    ]
