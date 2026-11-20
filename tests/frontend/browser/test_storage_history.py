@@ -340,7 +340,7 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
         "samples": [
             {
                 "day": "2026-11-17",
-                "observed_at": "2026-11-17T03:00:00Z",
+                "observed_at": "2026-11-17T22:35:00Z",
                 "backend": "mysql",
                 "database_bytes": 4 * 1024**2,
                 "database_estimated": True,
@@ -377,9 +377,18 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     page.get_by_label("Installation API token").fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#database-size")).to_have_text("5 MiB (estimated)")
+    summary = page.locator("#storage-history-summary")
+    expect(summary).to_contain_text("Increase: 1 MiB (estimated)")
+    expect(summary).to_contain_text("Daily average requires 24 hours between measurements.")
+    expect(summary).not_to_contain_text("per day")
+    page.screenshot(
+        path=f"results/ci/storage-growth-short-{page.viewport_size['width']}.png", full_page=True
+    )
     expect(page.locator("#storage-history-selected")).not_to_contain_text("Current:")
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#database-size")).to_have_text("7 MiB (estimated)")
+    expect(summary).to_contain_text("Increase: 3 MiB (estimated)")
+    expect(summary).not_to_contain_text("per day")
     expect(page.locator("#storage-history-selected")).to_have_text(
         "Current: 11/18/2026, 12:15 AM: 7 MiB (estimated): MySQL"
     )
@@ -407,6 +416,7 @@ def test_current_storage_point_uses_shared_measurement_and_installation_date(app
     usage.update(database_bytes=8 * 1024**2, observed_at="2026-11-19T11:15:00Z")
     page.get_by_role("button", name="Refresh", exact=True).click()
     expect(page.locator("#database-size")).to_have_text("8 MiB (estimated)")
+    expect(summary).to_contain_text("Average: +2.62 MiB per day (estimated)")
     expect(page.locator("#storage-history-selected")).to_have_text(
         "Current: 11/19/2026, 12:15 PM: 8 MiB (estimated): MySQL"
     )
