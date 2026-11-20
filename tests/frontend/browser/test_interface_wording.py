@@ -67,15 +67,18 @@ def test_bonus_examples_distinguish_app_accounting_from_supplier_terms(app_page)
     expect(zonneplan.locator("dd").filter(has_text="7500 kWh").locator("p")).to_have_text(
         "This app counts all grid export towards the cap, including unpaid export and battery export."
     )
-    expect(zonneplan.locator(":scope > p").last).to_have_text(
+    zonneplan.get_by_text("Worked example and supplier limits", exact=True).click()
+    zonneplan_limits = zonneplan.get_by_text(
         "This app counts all grid export towards the cap, including unpaid hours and battery export. "
         "Source exclusions are unsupported. This example cannot reproduce contract terms that "
         "exclude particular energy sources. Changing terms within the same contract does not reset "
-        "used volume."
+        "used volume.",
+        exact=True,
     )
+    expect(zonneplan_limits).to_be_visible()
     destination = Path("results/ci")
     destination.mkdir(parents=True, exist_ok=True)
-    zonneplan.locator(":scope > p").last.scroll_into_view_if_needed()
+    zonneplan_limits.scroll_into_view_if_needed()
     page.screenshot(
         path=str(destination / f"interface-wording-zonneplan-{page.viewport_size['width']}.png"),
         full_page=True,
@@ -86,13 +89,16 @@ def test_bonus_examples_distinguish_app_accounting_from_supplier_terms(app_page)
     expect(nextenergy.locator("dd").filter(has_text="6000 kWh").locator("p")).to_have_text(
         "This app counts all grid export towards the cap. Supplier source exclusions cannot be applied."
     )
-    expect(nextenergy.locator(":scope > p").last).to_have_text(
+    nextenergy.get_by_text("Worked example and supplier limits", exact=True).click()
+    nextenergy_limits = nextenergy.get_by_text(
         "NextEnergy excludes stored battery energy from the bonus. This app counts all grid export "
         "towards the cap. Source exclusions cannot be applied. This example is not an exact supplier "
         "preset when those exclusions affect settlement. A changed price rule within the same "
-        "contract retains used volume."
+        "contract retains used volume.",
+        exact=True,
     )
-    nextenergy.locator(":scope > p").last.scroll_into_view_if_needed()
+    expect(nextenergy_limits).to_be_visible()
+    nextenergy_limits.scroll_into_view_if_needed()
     page.screenshot(
         path=str(destination / f"interface-wording-nextenergy-{page.viewport_size['width']}.png"),
         full_page=True,
