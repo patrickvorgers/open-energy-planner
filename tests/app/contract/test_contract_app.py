@@ -5,6 +5,7 @@ import threading
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 from aiohttp import ClientSession, web
@@ -425,5 +426,151 @@ def test_current_price_inputs_need_no_plan_or_bonus_counter_and_follow_saved_rul
                 anonymous.get(url + "/v1/prices/inputs") as response,
             ):
                 assert response.status == 401
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("late_prices", [False, True])
+@pytest.mark.parametrize("readiness_failures", [0, 2])
+def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
+    tmp_path, monkeypatch, late_prices, readiness_failures
+):
+    """Saves and arriving prices start HiGHS. Failed readiness reads retry at the normal poll."""
+    from open_energy_planner.app import LiveInputs
+    from open_energy_planner.optimization.domain import Strategy
+    from open_energy_planner.prices.bootstrap import configured_price_factory
+    from open_energy_planner.prices.runtime import ConfiguredPrices
+
+    async def scenario():
+        """Observe real solves before any snapshot read can trigger an input refresh."""
+        monkeypatch.setattr(
+            "open_energy_planner.app.PRICE_SCHEDULE_POLL_SECONDS",
+            0.05 if readiness_failures else 0.02 if late_prices else 3600,
+        )
+        now = datetime.now(UTC)
+        initial_refresh, solved = asyncio.Event(), asyncio.Event()
+        opened_areas, solved_import_rates = [], []
+        readiness_attempts = []
+        failures_remaining = readiness_failures
+        original_readiness = LiveInputs.refresh_async
+        refresh = ConfiguredPrices.refresh
+
+        async def refresh_readiness(live, *, force=False):
+            """Fail background reads after price setup without changing saves or subsequent retries."""
+            nonlocal failures_remaining
+            if opened_areas and not force:
+                readiness_attempts.append(asyncio.get_running_loop().time())
+                if failures_remaining:
+                    failures_remaining -= 1
+                    raise OSError("Controlled readiness read failure")
+            return await original_readiness(live, force=force)
+
+        monkeypatch.setattr(LiveInputs, "refresh_async", refresh_readiness)
+
+        async def observed_refresh(runtime, instant):
+            """Expose the completed initial empty configuration read without replacing refresh logic."""
+            result = await refresh(runtime, instant)
+            initial_refresh.set()
+            return result
+
+        monkeypatch.setattr(ConfiguredPrices, "refresh", observed_refresh)
+        original = price_series()
+        shift = now - original.points[0].start
+        series = replace(
+            original,
+            received_at=now,
+            issued_at=now,
+            points=tuple(
+                replace(point, start=point.start + shift, end=point.end + shift)
+                for point in original.points
+            ),
+        )
+        if not late_prices:
+            make_store(tmp_path, PriceStore).save((series,))
+
+        def provider(area):
+            """Open a real cached price service only for the persisted contract area."""
+
+            @asynccontextmanager
+            async def opened(engine):
+                """Use the active engine and cached prices without a provider network request."""
+                from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+                opened_areas.append(area)
+                service = PriceService(area, None, None, PriceStore(SqlDocuments(engine, "prices")))
+                deliveries = 0
+
+                async def deliver_prices(instant):
+                    """Simulate prices arriving on the provider's second independent refresh."""
+                    nonlocal deliveries
+                    deliveries += 1
+                    if deliveries == 2:
+                        service.series = (series,)
+                        return True
+                    return False
+
+                if late_prices:
+                    service.refresh = deliver_prices
+                yield service
+
+            return opened
+
+        class ObservedSolver(Solver):
+            """Record execution before running the existing independent whole-watt solver fixture."""
+
+            async def solve(self, problem, *, strategy=Strategy.COST):
+                """Capture the actual import rate and signal completion of the real solve."""
+                result = await super().solve(problem, strategy=strategy)
+                solved_import_rates.append(problem.intervals[0].buy_price)
+                solved.set()
+                return result
+
+        runner = web.AppRunner(
+            create_app(
+                tmp_path,
+                TOKEN,
+                source="home_assistant",
+                basis_source=CachedFuture(now),
+                solver=ObservedSolver(),
+                price_factory=configured_price_factory(provider),
+            )
+        )
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+        try:
+            await asyncio.wait_for(initial_refresh.wait(), 5)
+            async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session:
+                async with session.put(
+                    url + "/v1/sources", json=configuration_document(configuration())
+                ) as response:
+                    state = await response.json()
+                config = replace(configuration(), revision=state["measurement_config"]["revision"])
+                async with session.post(
+                    url + "/v1/observations", json=report_body(config, now=datetime.now(UTC))
+                ) as response:
+                    assert response.status == 200
+                assert opened_areas == [] and not solved.is_set()
+                body = settings()
+                for formula, expected_rate in (("market + 0.10", 0.20), ("market + 0.20", 0.30)):
+                    solved.clear()
+                    body["periods"][0]["import_formula"] = formula
+                    async with session.put(url + "/v1/contracts", json=body) as response:
+                        assert response.status == 200
+                        saved = await response.json()
+                    # No GET snapshot, new observation or explicit replan between saving and solving.
+                    await asyncio.wait_for(solved.wait(), 5)
+                    assert solved_import_rates[-1] == pytest.approx(expected_rate)
+                    body["expected_version"] = saved["version"]
+                assert opened_areas == ["NL"]
+                assert failures_remaining == 0
+                if readiness_failures:
+                    assert all(
+                        later - earlier >= 0.04
+                        for earlier, later in pairwise(readiness_attempts[:3])
+                    )
+        finally:
+            await runner.cleanup()
 
     asyncio.run(scenario())

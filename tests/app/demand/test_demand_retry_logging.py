@@ -83,6 +83,7 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(
                 create_task=asyncio.create_task,
                 sleep=sleep,
                 Lock=asyncio.Lock,
+                Event=asyncio.Event,
                 CancelledError=asyncio.CancelledError,
             ),
         )

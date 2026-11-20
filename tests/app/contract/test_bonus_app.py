@@ -57,6 +57,10 @@ def test_bonus_settings_counter_seed_and_plan_over_http(tmp_path):
                 assert preview["bonus_preview"][0]["samples"][0]["extra_rate"] == 0.04
             async with session.put(url + "/v1/contracts", json=body) as response:
                 assert response.status == 200
+            async with session.get(url + "/v1/contracts/budgets") as response:
+                pending_budget = await response.json()
+                assert pending_budget["history_pending"] is True
+                assert pending_budget["budgets"][0]["remaining_kwh"] is None
             async with session.get(url + "/v1/snapshot") as response:
                 state = await response.json()
                 assert state["planning"]["reason"] == "bonus_counter_baseline_required"
@@ -135,6 +139,7 @@ def test_bonus_settings_counter_seed_and_plan_over_http(tmp_path):
             seed["seeds"][0].pop("statistics")
             async with session.get(url + "/v1/contracts/budgets") as response:
                 budgets = await response.json()
+                assert budgets["history_pending"] is False
                 assert budgets["budgets"][0]["used_kwh"] == 99.6
                 assert abs(budgets["budgets"][0]["remaining_kwh"] - 0.4) < 1e-10
             state = await wait_ready(session, url)
@@ -385,7 +390,10 @@ def test_history_revalidation_failure_blocks_persisted_budget_and_recovers(
     asyncio.run(scenario())
 
 
-def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_export_meter", [False, True])
+def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(
+    tmp_path, monkeypatch, with_export_meter
+):
     """Cairo's skipped 2026-04-24 midnight makes one annual period unavailable, not the entire endpoint."""
     import open_energy_planner.app as app_module
     import open_energy_planner.contracts.api as contract_api_module
@@ -401,6 +409,17 @@ def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(tmp_pat
     async def scenario():
         """Submit a valid dated rule, then exercise the actual timezone failure through HTTP."""
         async with running(tmp_path, with_export=True) as (session, url):
+            if with_export_meter:
+                body = configuration_document(configuration())
+                body["bindings"].append(
+                    {
+                        "key": "grid.export_energy",
+                        "quantity": "energy",
+                        "entity_id": "sensor.export",
+                    }
+                )
+                async with session.put(url + "/v1/sources", json=body) as response:
+                    assert response.status == 200
             monkeypatch.setattr(app_module, "datetime", FixedDateTime)
             monkeypatch.setattr(contract_api_module, "datetime", FixedDateTime)
             contract = settings()
@@ -425,7 +444,9 @@ def test_budget_reset_in_nonexistent_local_time_is_an_explicit_row_issue(tmp_pat
                 assert not preview["bonus_history_pending"]
             async with session.get(url + "/v1/contracts/budgets") as response:
                 assert response.status == 200
-                budget = (await response.json())["budgets"][0]
+                result = await response.json()
+                assert result["history_pending"] is False
+                budget = result["budgets"][0]
                 assert budget["period_start"] is None
                 assert budget["used_kwh"] is None and budget["remaining_kwh"] is None
                 assert budget["issue"] == "Annual reset falls in a nonexistent local time"

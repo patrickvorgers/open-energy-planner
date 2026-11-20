@@ -325,7 +325,11 @@ class ContractAPI:
         return row
 
     async def bonus_budgets(self, _request):
-        """Expose saved annual volume with the same continuity checks used by draft preview and planning."""
+        """Expose saved annual volume and pending history so the editor follows arriving evidence.
+
+        Keep the same continuity checks as draft preview and planning. A known
+        history failure requires recovery rather than repeated editor polling.
+        """
         async with self.lock:
             now = datetime.now(UTC)
             rows = []
@@ -401,6 +405,13 @@ class ContractAPI:
                         )
                     ]
                 rows.append(row)
+            try:
+                history_pending = (
+                    self.history_issue is None and self.saved_history_request(now) is not None
+                )
+            except ValueError:
+                # Invalid annual boundaries are already explained by their budget rows.
+                history_pending = False
             return web.json_response(
                 {
                     "contract_version": self.contracts.current.version
@@ -410,6 +421,7 @@ class ContractAPI:
                     if self.bonus_counters.current
                     else None,
                     "budgets": rows,
+                    "history_pending": history_pending,
                 }
             )
 

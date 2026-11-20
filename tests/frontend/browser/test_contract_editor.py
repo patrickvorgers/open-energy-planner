@@ -1082,8 +1082,21 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     )
     expect(zonneplan).to_be_visible()
     dialog.get_by_role("tab", name="Zonneplan", exact=True).press("ArrowLeft")
-    expect(nextenergy).to_be_focused()
-    expect(panel).to_be_visible()
+    price_budget = dialog.get_by_role("tab", name="Budget Energie", exact=True)
+    expect(price_budget).to_be_focused()
+    price_budget_panel = dialog.get_by_role("tabpanel", name="Budget Energie", exact=True)
+    expect(price_budget_panel).to_be_visible()
+    expect(price_budget_panel).to_contain_text("not a verified Budget Energie tariff")
+    expect(price_budget_panel.locator("dt")).to_have_text(
+        [
+            "Contract starts",
+            "Price rule starts",
+            "Import formula: Illustrative 2026 calculation",
+            "Export formula",
+        ]
+    )
+    check_layout(price_budget_panel)
+    page.screenshot(path=f"results/ci/contract-price-budget-{page.viewport_size['width']}.png")
     page.keyboard.press("Escape")
     expect(dialog).not_to_be_visible()
     expect(information).to_be_focused()
@@ -1107,8 +1120,28 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(
         zonneplan_bonus.get_by_text("Prevent battery export during paid window", exact=True)
     ).to_be_visible()
-    expect(zonneplan_bonus.locator(".example-value").last).to_have_text("Check signed terms")
+    expect(
+        zonneplan_bonus.locator(".example-setting")
+        .filter(has_text="Prevent battery export during paid window")
+        .locator(".example-value")
+    ).to_have_text("Check signed terms")
     expect(zonneplan_bonus).to_contain_text("does not control your equipment")
+    expect(zonneplan_bonus.locator("dt")).to_have_text(
+        [
+            "Extra export rate",
+            "Annual export cap",
+            "Prevent battery export during paid window",
+            "Enable price condition",
+            "Price expression",
+            "Comparison",
+            "Threshold",
+            "Annual reset",
+            "Paid window",
+        ]
+    )
+    expect(
+        zonneplan_bonus.get_by_role("group", name="Price condition", exact=True).locator("dt")
+    ).to_have_count(4)
     check_layout(zonneplan_bonus)
     nextenergy = dialog.get_by_role("tab", name="NextEnergy", exact=True)
     nextenergy.click()
@@ -1121,8 +1154,14 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(
         panel.get_by_text("Prevent battery export during paid window", exact=True)
     ).to_be_visible()
-    expect(panel.locator(".example-value").last).to_have_text("Enabled")
+    expect(
+        panel.locator(".example-setting")
+        .filter(has_text="Prevent battery export during paid window")
+        .locator(".example-value")
+    ).to_have_text("Enabled")
     expect(panel).to_contain_text("does not identify the source of actual export")
+    if page.viewport_size["width"] >= 1000:
+        expect(panel.locator(".example-setting").last).to_be_in_viewport(ratio=1)
     protection = panel.get_by_text("Prevent battery export during paid window", exact=True)
     protection.scroll_into_view_if_needed()
     page.screenshot(
@@ -1137,17 +1176,23 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(budget_panel).to_be_visible()
     expect(budget_panel).to_contain_text("0.30 * min(max(market, 0), 0.20)")
     expect(budget_panel).to_contain_text("Contract anniversary")
-    expect(budget_panel).to_contain_text("2027-01-01")
+    expect(budget_panel).to_contain_text("1 January 2027")
     expect(budget_panel).to_contain_text("The planner counts all grid export")
     expect(budget_panel).to_contain_text("including unpaid hours and battery export")
     expect(budget_panel).to_contain_text("Supplier source exclusions are not reproduced")
     expect(
         budget_panel.get_by_text("Prevent battery export during paid window", exact=True)
     ).to_be_visible()
-    expect(budget_panel.locator(".example-value").last).to_have_text("Enabled")
-    expect(budget_panel.get_by_role("row")).to_have_count(13)
+    expect(
+        budget_panel.locator(".example-setting")
+        .filter(has_text="Prevent battery export during paid window")
+        .locator(".example-value")
+    ).to_have_text("Enabled")
     check_layout(budget_panel)
     check_tabs(dialog, budget, "budget", keyboard=True)
+    budget_panel.get_by_text("Monthly paid hours", exact=True).click()
+    expect(budget_panel.get_by_role("row")).to_have_count(13)
+    budget_panel.get_by_text("Worked example and supplier limits", exact=True).click()
     closing_note = budget_panel.get_by_text("Budget settles the bonus", exact=False)
     closing_note.scroll_into_view_if_needed()
     expect(closing_note).to_be_in_viewport()
@@ -2169,3 +2214,44 @@ def test_bonus_battery_export_option_round_trips_without_creating_a_second_date(
         path=str(directory / f"bonus-export-protection-{page.viewport_size['width']}.png"),
         full_page=True,
     )
+
+
+def test_saved_bonus_history_refreshes_without_manual_reload(app_page):
+    """First and subsequent saves show the arriving measured budget without clicking Refresh budget."""
+    page, url = app_page
+    discover(page, url)
+    page.goto(url + "/contract")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    edit_price_rule(page)
+    page.get_by_label("Contract starts", exact=True).fill("2026-01-01")
+    page.get_by_label("Price rule starts", exact=True).fill("2026-01-01")
+    page.get_by_label("Import formula", exact=True).fill("market + 0.10")
+    page.get_by_label("Export formula", exact=True).fill("market")
+    page.get_by_role("checkbox", name="Include export bonus", exact=True).check()
+    page.get_by_label("Extra export rate", exact=True).fill("0.02")
+    page.get_by_label("Annual export cap (kWh)", exact=True).fill("7500")
+    reads = []
+
+    def arriving_budget(route):
+        """Deliver pending history once per saved contract, then its measured result."""
+        response = route.fetch()
+        result = response.json()
+        reads.append(result["contract_version"])
+        result["history_pending"] = reads.count(result["contract_version"]) == 1
+        if not result["history_pending"]:
+            for budget in result["budgets"]:
+                budget.update(issue=None, used_kwh=100, remaining_kwh=budget["cap_kwh"] - 100)
+        route.fulfill(response=response, json=result)
+
+    page.route("**/v1/contracts/budgets", arriving_budget)
+    for cap, remaining in (("7500", "7,400.00"), ("8000", "7,900.00")):
+        if cap == "8000":
+            page.get_by_role("button", name="Edit price rule", exact=True).click()
+            page.get_by_label("Annual export cap (kWh)", exact=True).fill(cap)
+        expect(page.get_by_role("button", name="Save contract", exact=True)).to_be_enabled()
+        page.get_by_role("button", name="Save contract", exact=True).click()
+        expect(page.locator("#budget-status")).to_contain_text("updates automatically")
+        expect(page.locator("#bonus-budgets")).to_contain_text(remaining, timeout=10000)
+        expect(page.locator("#budget-status")).not_to_contain_text("updates automatically")
+    assert len(set(reads)) == 2

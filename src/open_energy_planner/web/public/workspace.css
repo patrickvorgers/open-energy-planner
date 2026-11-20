@@ -404,3 +404,28 @@
 @media(max-width:640px) { .quality-tooltip { position:fixed; top:84px; left:12px; right:12px; width:auto; max-height:calc(100dvh - 108px); } }
 
 @media(max-width:640px) { .forecast-workspace .quality-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }.forecast-workspace .quality-summary div { min-width:0; }.forecast-workspace .quality-summary dd { font-size:16px; overflow-wrap:anywhere; } }
+
+/* Supplier examples follow the editor order, with price conditions kept as one group. */
+.workspace .contract-help { width:min(1080px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); }
+.contract-help .example-layout { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:24px; }
+.contract-help .example-settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 24px; margin:12px 0; }
+.contract-help .example-layout > .example-settings { margin:0; }
+.contract-help .example-setting { min-width:0; }
+.contract-help .example-setting dt { margin-top:0; }
+.contract-help .example-setting dd { margin-bottom:0; }
+.contract-help .example-protection { grid-column:1/-1; }
+.contract-help .example-setting details { margin-top:8px; }
+.contract-help .example-condition { margin:0; padding:16px; border:1px solid var(--oep-line); border-radius:8px; min-width:0; }
+.contract-help .example-condition legend { padding:0 8px; font-weight:600; }
+.contract-help .example-condition .example-settings { margin:0; }
+.contract-help .example-months,.contract-help .example-notes { margin:12px 0; }
+.workspace .contract-help[open] { display:flex; flex-direction:column; overflow:hidden; }
+.contract-help > h2,.contract-help > .example-tabs,.contract-help > form { flex-shrink:0; }
+.contract-help > [role="tabpanel"] { min-height:0; overflow-y:auto; padding-right:4px; }
+.contract-help > [role="tabpanel"] > h3 { margin:12px 0; }
+.contract-help > [role="tabpanel"] > p { margin:8px 0; }
+.contract-help .example-setting dd > p { margin:4px 0 8px; line-height:1.5; }
+.contract-help > form { margin:12px 0 0; padding:12px 0 0; border-top:1px solid var(--oep-line); }
+@media(max-width:700px) {
+    .contract-help .example-layout,.contract-help .example-settings { grid-template-columns:1fr; }
+}
