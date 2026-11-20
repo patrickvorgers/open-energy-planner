@@ -4,7 +4,7 @@ from aiohttp import ClientError
 
 from .catalogue import source_choices
 from .catalogue_transfer import prepare_catalogue
-from .client import AuthenticationError, ReleaseMismatchError
+from .client import AuthenticationError, InstallationMismatchError, ReleaseMismatchError
 
 SOURCE_CHOICE_SCOPES = ("ev", "thermal")
 
@@ -47,7 +47,7 @@ async def refresh_choices(coordinator, requests):
                 )
             if reply.get("accepted") is not True:
                 raise ValueError("Source choice result was not accepted")
-        except (AuthenticationError, ReleaseMismatchError):
+        except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
             raise
         except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
             if coordinator.closed:
@@ -56,7 +56,7 @@ async def refresh_choices(coordinator, requests):
                 await coordinator.client.request(
                     "POST", "/v1/ha/source-choices", {**request, "failed": True}
                 )
-            except (AuthenticationError, ReleaseMismatchError):
+            except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
                 raise
             except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                 # The app expires the request. A fresh explicit request can retry safely.
