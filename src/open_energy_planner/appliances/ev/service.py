@@ -526,7 +526,7 @@ class EVService:
         }
         return tuple(work for work in selected if work.vehicle_id not in duplicates)
 
-    def unsubmitted_sessions(self, problem):
+    def unsubmitted_sessions(self, problem, replaced_snapshot_id=None):
         """Identify new connections with energy demand and a window in the prepared horizon."""
         work_items = getattr(problem, "ev_work", ())
         if not work_items:
@@ -536,15 +536,28 @@ class EVService:
         return {
             work.point_id: work.session_id
             for work in work_items
-            if self._submitted_sessions.get(work.point_id) != work.session_id
-            and work.required_kwh > EV_ENERGY_TOLERANCE_KWH
+            if work.required_kwh > EV_ENERGY_TOLERANCE_KWH
             and work.ready_at < horizon_end
+            and self._session_needs_submission(work, replaced_snapshot_id)
             and work.deadline > first.start
         }
 
-    def record_submitted_sessions(self, sessions):
-        """Remember admitted sessions even if their work temporarily becomes unavailable."""
-        self._submitted_sessions.update(sessions)
+    def _session_needs_submission(self, work, replaced_snapshot_id):
+        """A replaced or rejected snapshot cannot consume the connection's admission."""
+        session_id, snapshot_id = self._submitted_sessions.get(work.point_id, (None, None))
+        return session_id != work.session_id or snapshot_id == replaced_snapshot_id
+
+    def record_submitted_sessions(self, sessions, snapshot_id, replaced_snapshot_id):
+        """Transfer admissions from discarded work and retain admissions from other rounds."""
+        if replaced_snapshot_id is not None:
+            self._submitted_sessions = {
+                point_id: admission
+                for point_id, admission in self._submitted_sessions.items()
+                if admission[1] != replaced_snapshot_id
+            }
+        self._submitted_sessions.update(
+            (point_id, (session_id, snapshot_id)) for point_id, session_id in sessions.items()
+        )
 
     def hard_revision(self, now, timezone):
         """Bind availability/identity/departure, allowing ordinary valid SoC readings to finish a round."""

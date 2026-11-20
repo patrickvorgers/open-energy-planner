@@ -323,7 +323,9 @@ energy is needed and its charging window overlaps the prepared horizon. Admissio
 this exception once per charge point and connection nonce. Further changes on
 that connection follow the ordinary quarter and five-minute cadence, including
 recovery of temporarily unavailable EV work while the installation remains ready.
-A new submission coalesces with other pending inputs if a solver is already running.
+A new submission coalesces with other pending inputs if a solver is already
+running. If the queued snapshot expires before solving, the next fresh capture
+can still use the connection's immediate admission.
 
 Independent validation checks identity, timing, no discharge, physical power,
 AC energy, conversion, target bounds and bus conservation. Original plans retain

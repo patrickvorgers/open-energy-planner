@@ -242,8 +242,11 @@ class LiveInputs:
         self.replan_requested = (
             self.replan_requested or ev_deviation or self.deviated(snapshot, now)
         )
+        active = getattr(self.planner, "active", None)
+        stale = active if getattr(self.planner, "reason", None) == "stale_input" else None
+        stale_id = stale.snapshot_id if stale is not None else None
         new_ev_sessions = (
-            self.ev.unsubmitted_sessions(snapshot.problem) if self.ev is not None else {}
+            self.ev.unsubmitted_sessions(snapshot.problem, stale_id) if self.ev is not None else {}
         )
         if (
             force
@@ -307,9 +310,17 @@ class LiveInputs:
             )
             self.last_submission, self.last_basis, self.last_quarter = now, versions, quarter
             self.replan_requested = False
+            queued = getattr(self.planner, "latest", None)
             self.planner.submit(snapshot)
             if self.ev is not None:
-                self.ev.record_submitted_sessions(new_ev_sessions)
+                replaced_id = (
+                    queued.snapshot_id if queued is not None and queued is not active else stale_id
+                )
+                if replaced_id != stale_id:
+                    new_ev_sessions = self.ev.unsubmitted_sessions(snapshot.problem, replaced_id)
+                self.ev.record_submitted_sessions(
+                    new_ev_sessions, snapshot.snapshot_id, replaced_id
+                )
                 self.ev.accept_execution_deviations(now)
 
     def deviated(self, snapshot, now):

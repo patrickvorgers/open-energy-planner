@@ -282,6 +282,97 @@ def test_first_usable_ev_work_bypasses_throttle_once_per_connection(ev_service):
     assert len(submitted) == 4
 
 
+def test_ev_connection_can_retry_a_queued_round_rejected_before_solving(service):
+    """If a queued snapshot expires before solving, admit fresh work once on the same connection."""
+    import asyncio
+
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.live_inputs import LiveInputs
+    from open_energy_planner.optimization.domain import Interval, SolveResult, Status
+    from open_energy_planner.planning import InputSnapshot, PlanningCoordinator, PlanningService
+
+    async def scenario():
+        """Let an active solve overrun the queued EV snapshot's first interval."""
+        now = NOW
+        started = asyncio.Event()
+        release = asyncio.Event()
+        solved = []
+
+        class Solver:
+            async def solve(self, problem):
+                """Hold the initial round so the next snapshot ages before reaching the solver."""
+                solved.append(problem.ev_work)
+                if not problem.ev_work:
+                    started.set()
+                    await release.wait()
+                return SolveResult(Status.INFEASIBLE, None, "infeasible", 0, 0, None)
+
+        planner = PlanningCoordinator(
+            PlanningService(Solver(), clock=lambda: now), None, clock=lambda: now
+        )
+        live = LiveInputs(planner, None, clock=lambda: now, ev=service)
+        live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
+        live.report = SimpleNamespace(readings=())
+        future = SimpleNamespace(
+            config_revision="config",
+            forecast_version="forecast",
+            price_version="prices",
+            valid_until=NOW + timedelta(hours=1),
+        )
+
+        def capture(seconds, *, connected, duration_h=1):
+            """Admit current observations with one short or long first interval."""
+            nonlocal now
+            now = NOW + timedelta(seconds=seconds)
+            service.receive(observations(service, now, connected=connected), now)
+            if connected:
+                service.assign(POINT, CAR, SESSION, now)
+            problem = InstallationProblem(
+                (
+                    Interval(now, duration_h, 0.3, 0),
+                    Interval(now + timedelta(hours=duration_h), 1, 0.3, 0),
+                ),
+                (),
+                (),
+                (),
+                20000,
+                20000,
+                ev_work=service.work(now, "Europe/Amsterdam"),
+            )
+            snapshot = InputSnapshot(
+                str(seconds),
+                "config",
+                now,
+                "measurement",
+                "forecast",
+                "prices",
+                problem,
+                source="home_assistant",
+            )
+            live._install((now, future, snapshot), force=False)
+            return snapshot
+
+        capture(0, connected=False)
+        await started.wait()
+        queued = capture(30, connected=True, duration_h=1 / 120)
+        assert planner.latest is queued
+        now = NOW + timedelta(seconds=61)
+        release.set()
+        await planner.wait()
+        assert planner.reason == "stale_input"
+        assert solved == [()]
+
+        fresh = capture(62, connected=True)
+        await planner.wait()
+        assert solved == [(), fresh.problem.ev_work]
+        capture(65, connected=True)
+        await planner.wait()
+        assert solved == [(), fresh.problem.ev_work]
+        await planner.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("retained_capture", [False, True])
 def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(
     service, retained_capture
