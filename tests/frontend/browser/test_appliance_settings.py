@@ -30,6 +30,7 @@ def assert_appliance_toolbar(page, state):
     ).all()
     assert picker and status and actions
     width = page.viewport_size["width"]
+    previous_action = None
     for action in actions:
         bounds = action.bounding_box()
         assert bounds
@@ -41,6 +42,10 @@ def assert_appliance_toolbar(page, state):
         else:
             assert picker["y"] + picker["height"] <= status["y"]
             assert bounds["x"] >= picker["x"] and bounds["x"] + bounds["width"] <= width
+            if previous_action and bounds["y"] < previous_action["y"] + previous_action["height"]:
+                assert bounds["y"] == pytest.approx(previous_action["y"], abs=1)
+                assert bounds["height"] == pytest.approx(previous_action["height"], abs=1)
+            previous_action = bounds
     directory = Path("results/ci")
     directory.mkdir(parents=True, exist_ok=True)
     toolbar.screenshot(path=str(directory / f"appliance-toolbar-{state}-{width}.png"))
