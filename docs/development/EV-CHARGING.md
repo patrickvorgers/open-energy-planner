@@ -395,16 +395,24 @@ Replacing configuration clears obsolete forecast-boundary diagnostics.
 
 ## Default charging losses
 
-No mandatory loss setting or manufacturer catalogue is introduced. Versioned
-planning defaults assume 20% AC loss at 2.3 kW, 15% at 4.1 kW and 10% at 11 kW and
-above. Delivered watts are interpolated between anchors. Below 2.3 kW the first
-segment assumes 80% efficiency. These are planning assumptions, not accuracy or
-manufacturer guarantees. Temperature and battery conditioning can change losses.
+Each car can declare the number of AC phases used at its charge point and save
+one to eight editable power/efficiency stages. The percentages are the share of
+total AC input delivered to the battery.
 
-The basis is [ADAC's measurements published on 6 August 2026](https://www.adac.de/rund-ums-fahrzeug/elektromobilitaet/laden/ladeverluste-elektroauto-studie/).
-Observed ranges across five cars were 12.7-24.2% at 2.3 kW, 8.0-12.8% at 4.1 kW
-and 5.1-7.0% at 11 kW in warm conditions. Higher-power defaults are conservatively
-rounded. Automatic efficiency learning and paid vehicle APIs are outside this step.
+| Phases | Default AC power and battery efficiency |
+| --- | --- |
+| Single-phase | 2.30 kW at 82%, 3.68 kW at 85% |
+| Three-phase | 4.10 kW at 87%, 6.90 kW at 87%, 11.00 kW at 90% |
+
+The [Bern University of Applied Sciences Kia e-Niro measurements](https://www.mdpi.com/2624-8921/3/4/43#table_body_display_vehicles-03-00043-t008) found 79.58% and 80.32% for single-phase charging at 10 A and 16 A, and 86.98% and 87.21% for three-phase charging at those currents. [ADAC's measurements across five cars](https://www.adac.de/rund-ums-fahrzeug/elektromobilitaet/laden/ladeverluste-elektroauto-studie/) found 8.0-12.8% loss at approximately 4.1 kW in the PV test and 5.1-7.0% at the 11 kW wallbox. [TNO's Green NCAP analysis](https://publications.tno.nl/publication/34642359/7dNFAH/TNO-2024-R10627.pdf#page=40) (table 6.3) reports 20.8% loss at 2.3 kW for one car and 10.9-19.0% at 3.7 kW across four cars. The single-phase defaults blend the lower efficiencies from Bern with the spread in TNO and ADAC. The three-phase defaults round down at 4.1 kW and 6.9 kW and sit near the middle of the measured efficiencies at 11 kW. Temperature, battery conditioning and individual vehicles can change losses.
+
+Between stages, OEP interpolates battery-side watts. It uses the nearest
+stage's efficiency outside the configured range. The vehicle, charge-point and
+installation limits apply in full. Home Assistant controls the hardware,
+including phase switching. An unspecified phase uses the original curve
+(80% at 2.3 kW, 85% at 4.1 kW and 90% from 11 kW). The effective curve is frozen
+with each plan for validation and savings replay. When OEP estimates SoC from
+new meter deltas, it uses the currently saved vehicle curve.
 
 ## Storage and laboratories
 

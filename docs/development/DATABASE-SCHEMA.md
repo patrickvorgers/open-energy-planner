@@ -888,7 +888,10 @@ four-backend transfer includes all of these documents. See
 ### EV document extension
 
 The existing `planning` namespace stores the `ev-state.json` current pointer
-and the bounded mutable `ev-telemetry.json` pointer. Telemetry contains `vehicles`
+and the bounded mutable `ev-telemetry.json` pointer. Configured vehicles may
+carry `charging_phases` (1 or 3) and `efficiency_stages`, ordered by ascending
+`power_w` with `efficiency_percent` at each AC power. Older vehicles may omit
+both fields and use the original efficiency curve. Telemetry contains `vehicles`
 keyed by vehicle UUID and `sessions` keyed by point UUID. Vehicle evidence stores
 `source_entity`, original `observed_at`, `reported_at`, `timestamp_kind`, optional
 `source_timestamp_attribute`, `measured_soc` in percent, estimated battery-side

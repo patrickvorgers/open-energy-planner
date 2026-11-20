@@ -1,4 +1,4 @@
-"""Solver-neutral vehicle charging, explicit on periods and default AC conversion losses."""
+"""Solver-neutral vehicle charging, explicit on periods and AC conversion losses."""
 
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -19,6 +19,10 @@ EV_ENERGY_TOLERANCE_KWH = 1e-7
 MAX_IRREGULAR_CONTROL_WINDOWS = 2
 TAIL_SECONDS_PRECISION = 6
 EV_LOSS_PROFILE_VERSION = "ac-default-2026-v1"
+VEHICLE_LOSS_PROFILE_VERSION = "ac-vehicle-2026-v1"
+MAX_EFFICIENCY_STAGES = 8
+# AC watts and battery efficiency (%). See docs/development/EV-CHARGING.md.
+AC_EFFICIENCY_DEFAULTS = {1: ((2300, 82), (3680, 85)), 3: ((4100, 87), (6900, 87), (11000, 90))}
 # Rounded planning assumptions informed by ADAC's August 2026 AC measurements.
 # These are not manufacturer guarantees. Interpolate delivered power, not percentages.
 DELIVERED_POWER_POINTS = ((0, 0), (2300, 1840), (4100, 3485), (11000, 9900), (100000, 90000))
@@ -31,10 +35,49 @@ def number(value, lower, upper):
     return float(value)
 
 
-def delivered_power(power_w):
+def validated_efficiency_stages(stages):
+    """Freeze valid AC watts and battery efficiencies, including legacy empty stages."""
+    if not isinstance(stages, (list, tuple)) or len(stages) > MAX_EFFICIENCY_STAGES:
+        raise ValueError(f"Use at most {MAX_EFFICIENCY_STAGES} charging efficiency stages")
+    previous_power = previous_delivered = 0
+    checked = []
+    for stage in stages:
+        if not isinstance(stage, (list, tuple)) or len(stage) != 2:
+            raise ValueError("Specify AC power and efficiency for every charging stage")
+        power = number(stage[0], 1, MAX_EV_POWER_W)
+        efficiency = number(stage[1], 1, FULL_SOC_PERCENT)
+        delivered = power * efficiency
+        if power != round(power) or power <= previous_power or delivered <= previous_delivered:
+            raise ValueError("Each stage must increase both AC and battery power")
+        checked.append((int(power), efficiency))
+        previous_power, previous_delivered = power, delivered
+    return tuple(checked)
+
+
+def delivery_points(stages):
+    """Add the off point and extend the final efficiency to the supported power bound."""
+    if not stages:
+        return DELIVERED_POWER_POINTS
+    points = ((0, 0),) + tuple(
+        (power, power * efficiency / FULL_SOC_PERCENT) for power, efficiency in stages
+    )
+    if points[-1][0] < MAX_EV_POWER_W:
+        points += ((MAX_EV_POWER_W, MAX_EV_POWER_W * stages[-1][1] / FULL_SOC_PERCENT),)
+    return points
+
+
+def vehicle_efficiency_stages(vehicle):
+    """Read a configured vehicle's stage list as immutable (AC watts, efficiency %) pairs."""
+    return tuple(
+        (stage["power_w"], stage["efficiency_percent"])
+        for stage in vehicle.get("efficiency_stages", ())
+    )
+
+
+def delivered_power(power_w, points=DELIVERED_POWER_POINTS):
     """Return estimated battery-side watts from AC watts using the documented piecewise curve."""
     number(power_w, 0, MAX_EV_POWER_W)
-    for (left, delivered_left), (right, delivered_right) in pairwise(DELIVERED_POWER_POINTS):
+    for (left, delivered_left), (right, delivered_right) in pairwise(points):
         if power_w <= right:
             return delivered_left + (power_w - left) * (delivered_right - delivered_left) / (
                 right - left
@@ -62,6 +105,7 @@ class EVWork:
     minimum_w: float
     maximum_w: float
     control: str
+    efficiency_stages: tuple[tuple[int, float], ...] = ()
 
     def __post_init__(self):
         """Require immutable identities, an aware time window and physically meaningful charge limits."""
@@ -83,6 +127,16 @@ class EVWork:
             raise ValueError("EV command limits require whole watts")
         if self.control not in ("on_off", "variable"):
             raise ValueError("Only controllable EV work enters the solver")
+
+        # Archived JSON represents the stage pairs as lists.
+        object.__setattr__(
+            self, "efficiency_stages", validated_efficiency_stages(self.efficiency_stages)
+        )
+
+    @property
+    def delivery_points(self):
+        """Use the curve frozen with the round for optimization and independent replay."""
+        return delivery_points(self.efficiency_stages)
 
     @property
     def required_kwh(self):
@@ -127,7 +181,7 @@ def tail_durations(work, intervals):
     finite remainder catalogue, including a short session that fits no full slot.
     Starts remain on the configured command grid. Only the final stop can be earlier.
     """
-    rate = delivered_power(work.maximum_w) / WATTS_PER_KW
+    rate = delivered_power(work.maximum_w, work.delivery_points) / WATTS_PER_KW
     quantum_h = FINE_INTERVAL_MINUTES / MINUTES_PER_HOUR
     quantum_kwh = rate * quantum_h
     irregular = [

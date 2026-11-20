@@ -7,7 +7,6 @@ from time import perf_counter
 import highspy
 
 from open_energy_planner.appliances.ev.model import (
-    DELIVERED_POWER_POINTS,
     EV_ENERGY_TOLERANCE_KWH,
     EVFlow,
     delivered_power,
@@ -31,9 +30,9 @@ def full_power(context, work):
     power = native.addVariable(lb=0, ub=work.maximum_w)
     if work.control == "on_off":
         native.addConstr(power == work.maximum_w * on)
-        return on, power, delivered_power(work.maximum_w) * on
+        return on, power, delivered_power(work.maximum_w, work.delivery_points) * on
     selected, powers, stored = [], [], []
-    for (left, delivered_left), (right, delivered_right) in pairwise(DELIVERED_POWER_POINTS):
+    for (left, delivered_left), (right, delivered_right) in pairwise(work.delivery_points):
         lower, upper = max(work.minimum_w, left), min(work.maximum_w, right)
         if lower > upper:
             continue
@@ -100,7 +99,12 @@ def declare(context, problem):
                     if active and abs(active - step.duration_h) > EV_ENERGY_TOLERANCE_KWH:
                         raise ValueError("EV stop is not exactly refined")
                     ac.append(tail_power * active / WATTS_PER_KW * choice)
-                    stored.append(delivered_power(tail_power) * active / WATTS_PER_KW * choice)
+                    stored.append(
+                        delivered_power(tail_power, work.delivery_points)
+                        * active
+                        / WATTS_PER_KW
+                        * choice
+                    )
                     if active:
                         command.append(tail_power * choice)
                         active_controls.append(choice)

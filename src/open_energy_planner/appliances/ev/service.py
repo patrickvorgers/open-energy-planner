@@ -9,12 +9,15 @@ from zoneinfo import ZoneInfo
 from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.ev.configuration import configuration, identity
 from open_energy_planner.appliances.ev.model import (
-    DELIVERED_POWER_POINTS,
+    AC_EFFICIENCY_DEFAULTS,
     EV_LOSS_PROFILE_VERSION,
+    MAX_EFFICIENCY_STAGES,
     MAX_EV_POWER_W,
+    VEHICLE_LOSS_PROFILE_VERSION,
     EVWork,
     number,
     refine,
+    vehicle_efficiency_stages,
 )
 from open_energy_planner.appliances.ev.notifications import (
     EV_FORECAST_UNAVAILABLE,
@@ -512,6 +515,7 @@ class EVService:
                     minimum,
                     maximum,
                     point["control"],
+                    vehicle_efficiency_stages(car),
                 )
             )
         duplicates = {
@@ -592,8 +596,10 @@ class EVService:
                         for field in ("soc_entity", "soc_timestamp_attribute")
                     },
                     "loss_profile": {
-                        "version": EV_LOSS_PROFILE_VERSION,
-                        "delivered_power_points": DELIVERED_POWER_POINTS,
+                        "version": VEHICLE_LOSS_PROFILE_VERSION
+                        if work.efficiency_stages
+                        else EV_LOSS_PROFILE_VERSION,
+                        "delivered_power_points": work.delivery_points,
                     },
                 }
                 for work in works
@@ -755,6 +761,14 @@ class EVService:
             "observed_at": self.report["at"] if self.report and self.live(now) else None,
             "issue": forecast_boundary_issue(self.issue, self.missing_energy_meters(), names),
             "timezone": timezone,
+            "efficiency_defaults": {
+                phases: [
+                    {"power_w": power, "efficiency_percent": efficiency}
+                    for power, efficiency in stages
+                ]
+                for phases, stages in AC_EFFICIENCY_DEFAULTS.items()
+            },
+            "max_efficiency_stages": MAX_EFFICIENCY_STAGES,
             "vehicles": [
                 {
                     **car,

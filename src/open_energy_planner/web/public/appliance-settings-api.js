@@ -2,7 +2,7 @@
 const READ_TIMEOUT_MILLISECONDS = 30000;
 
 /** Read with the current editor token; supplied deadlines and write acknowledgements stay authoritative. */
-export function applianceSettingsApi(base, token) {
+export function applianceSettingsApi(base, token, validationMessages = []) {
     return async (path, body, signal, method = body ? "POST" : "GET") => {
         signal ??= body ? undefined : AbortSignal.timeout(READ_TIMEOUT_MILLISECONDS);
         const rejectedToken = new Error("The installation token was rejected.");
@@ -11,7 +11,13 @@ export function applianceSettingsApi(base, token) {
             const response = await fetch(base + path, {method, headers: {Authorization: `Bearer ${token()}`, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined, redirect: "error", cache: "no-store", signal});
             if (response.status === 401) throw rejectedToken;
             if (!response.ok) {
-                if (body && [400, 409].includes(response.status)) throw rejectedSettings;
+                if (body && [400, 409].includes(response.status)) {
+                    if (response.status === 400 && validationMessages.length) {
+                        const message = await response.text();
+                        if (validationMessages.includes(message)) rejectedSettings.message = message + ". Your edits are retained.";
+                    }
+                    throw rejectedSettings;
+                }
                 throw new Error();
             }
             const data = await response.json(); signal?.throwIfAborted(); return data;

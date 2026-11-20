@@ -240,7 +240,14 @@ for manual departures. Repeating departures skip that occurrence. The autumn
 repeated hour has one scheduled occurrence. The planner recalculates energy from
 the latest measured or estimated SoC and reports any shortfall. V2G is not supported.
 
-See [EV charging contracts](../development/EV-CHARGING.md) for supported capability modes, losses, session identity and the automation blueprint.
+In **EV settings**, edit the vehicle and choose **Single-phase** or
+**Three-phase** under **AC charging phases**. Use the mode the car uses at your
+charge point. For each stage, enter the total AC power and the percentage that
+reaches the battery. You can add, remove or restore the default stages. The
+planner uses this curve to estimate the AC energy needed to reach your target.
+Existing cars use their original curve until you select a mode.
+
+See [EV charging contracts](../development/EV-CHARGING.md) for the measurements behind the default profiles, session identity and the automation blueprint.
 
 ### EV demand comes from the charging plan
 
