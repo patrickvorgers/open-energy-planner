@@ -497,7 +497,8 @@ find("settings").addEventListener("invalid", event => {
     const group = event.target.closest("details.ev-group");
     if (!group || openingInvalidSection) return;
     openingInvalidSection = true; group.open = true;
-    queueMicrotask(() => { openingInvalidSection = false; });
+    // Native validation can run microtasks between invalid events in the same submission.
+    setTimeout(() => { openingInvalidSection = false; }, 0);
 }, true);
 find("settings").onsubmit = async (event) => { event.preventDefault(); if (saveState.busy || !editing) return; saveState.begin(); syncEditor(); try { await api("v1/ev/configuration", {configuration: draft, expected_version: current.configuration_version}); await load(); } catch (error) { find("status").textContent = error.message; saveState.update(error.message); } finally { saveState.end(); syncEditor(); } };
 find("refresh").onclick = () => saveState.refresh(() => load(editOriginId), {discard: true}).finally(syncEditor);
