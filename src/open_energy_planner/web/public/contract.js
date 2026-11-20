@@ -384,10 +384,11 @@ function contractFact(parent, label, value) {
 }
 
 const budgetDrafts = new Map();
-let budgetReadVersion = 0, budgetConfirmationPending = false;
+let budgetReadVersion = 0, budgetConfirmationPending = false, budgetTimer = null;
 
-/** Render annual allowances and preserved drafts, reporting read success for confirmation recovery. */
+/** Follow pending saved-rule history, preserving drafts and reporting read success for confirmation recovery. */
 async function budgets(refreshed = false) {
+    clearTimeout(budgetTimer);
     if (budgetConfirmationPending) return false;
     const readVersion = ++budgetReadVersion;
     const refresh = find("refresh-budget");
@@ -497,6 +498,10 @@ async function budgets(refreshed = false) {
             }
             find("bonus-budgets").append(panel);
         }
+        if (result.history_pending) {
+            find("budget-status").textContent = "Reading Home Assistant history for the saved bonus. The budget updates automatically when it arrives.";
+            budgetTimer = setTimeout(() => budgets(), BONUS_HISTORY_REFRESH_MS);
+        }
         return true;
     } catch (error) { if (readVersion === budgetReadVersion) find("budget-status").textContent = `Budget refresh failed: ${error.message}. Your unsaved edits are retained. Try Refresh budget again.`; return false; }
     finally { if (readVersion === budgetReadVersion && !budgetConfirmationPending) refresh.disabled = false; }
@@ -577,6 +582,8 @@ find("contract-editor").onsubmit = async (event) => {
     const savedRevision = revision;
     try {
         const result = await api("v1/contracts", "PUT", payload()); version = result.version;
+        clearTimeout(previewTimer);
+        void refreshNotifications(undefined, true);
         if (revision === savedRevision) { previewed = -1; showSavedRules(result); editing = false; saveState.loaded(); selectPeriod(selectedPeriod); say("Contract saved. New planning and affected cost evaluations use this revision. Original plans are preserved."); }
         else say("Previous draft saved. Your newer edits remain unsaved. Preview them before saving.");
         await budgets();
@@ -662,3 +669,5 @@ function renderContractSummary() {
 }
 find("show-price-examples").onclick = () => find("price-rule-help").showModal();
 find("show-bonus-examples").onclick = () => find("export-bonus-help").showModal();
+
+window.addEventListener("pagehide", () => { clearTimeout(budgetTimer); clearTimeout(previewTimer); });

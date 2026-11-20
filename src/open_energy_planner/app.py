@@ -438,6 +438,7 @@ def create_app(
 
         advertise(app, pairing, directory, token, **discovery_options)
     prices = None
+    price_refresh_requested = asyncio.Event()
     daily_prices = DailyPrices(SqlDocuments(repository.engine, "prices"))
 
     def price_timezone():
@@ -471,11 +472,14 @@ def create_app(
         successful save becomes authoritative before cancellation is re-raised.
         Contract-related writes activate contract inputs. Unrelated settings must
         pass contract_input=False to retain the existing future-input adapter.
+        Explicit contract writes also wake the price owner to admit a newly configured area.
         Background evidence writes use the normal scheduling limit with force_replan=False.
         """
         cancellation = await complete_write(save, candidate)
         if install is not None:
             install(candidate)
+        if contract_input and force_replan:
+            price_refresh_requested.set()
         if live:
             if contract_input:
                 live.basis_source = contract_basis
@@ -776,8 +780,13 @@ def create_app(
                     """Check due source requests without blocking HTTP. Diagnose unexpected failures."""
                     while True:
                         try:
+                            settings_refresh = price_refresh_requested.is_set()
+                            price_refresh_requested.clear()
                             now = datetime.now(UTC)
                             await prices.refresh(now)
+                            if settings_refresh and live:
+                                async with lock:
+                                    await live.refresh_async()
                             timezone = price_timezone()
                             if (
                                 timezone
@@ -802,7 +811,12 @@ def create_app(
                                 "Previously accepted prices keep their original expiry. Check source and storage status.",
                                 retry_seconds=PRICE_SCHEDULE_POLL_SECONDS,
                             )
-                        await asyncio.sleep(PRICE_SCHEDULE_POLL_SECONDS)
+                        try:
+                            await asyncio.wait_for(
+                                price_refresh_requested.wait(), PRICE_SCHEDULE_POLL_SECONDS
+                            )
+                        except TimeoutError:
+                            pass
 
                 task = asyncio.create_task(update_prices())
                 try:

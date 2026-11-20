@@ -57,6 +57,10 @@ def test_bonus_settings_counter_seed_and_plan_over_http(tmp_path):
                 assert preview["bonus_preview"][0]["samples"][0]["extra_rate"] == 0.04
             async with session.put(url + "/v1/contracts", json=body) as response:
                 assert response.status == 200
+            async with session.get(url + "/v1/contracts/budgets") as response:
+                pending_budget = await response.json()
+                assert pending_budget["history_pending"] is True
+                assert pending_budget["budgets"][0]["remaining_kwh"] is None
             async with session.get(url + "/v1/snapshot") as response:
                 state = await response.json()
                 assert state["planning"]["reason"] == "bonus_counter_baseline_required"
@@ -135,6 +139,7 @@ def test_bonus_settings_counter_seed_and_plan_over_http(tmp_path):
             seed["seeds"][0].pop("statistics")
             async with session.get(url + "/v1/contracts/budgets") as response:
                 budgets = await response.json()
+                assert budgets["history_pending"] is False
                 assert budgets["budgets"][0]["used_kwh"] == 99.6
                 assert abs(budgets["budgets"][0]["remaining_kwh"] - 0.4) < 1e-10
             state = await wait_ready(session, url)
