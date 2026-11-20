@@ -25,13 +25,28 @@ class ReleaseMismatchError(ValueError):
     """The loaded app and integration do not identify the same release build."""
 
 
+class InstallationMismatchError(ValueError):
+    """The connected app is not the installation recorded by this HA config entry."""
+
+
 class LocalClient:
     """Exchange bounded JSON with the local app using the existing HA HTTP session."""
 
-    def __init__(self, session: ClientSession, url: str, token: str, fingerprint=None):
+    def __init__(
+        self,
+        session: ClientSession,
+        url: str,
+        token: str,
+        fingerprint=None,
+        *,
+        expected_instance_id=None,
+    ):
         """Bind an installation URL/token without creating a separate HA connection or session."""
         self.session, self.url, self.token = session, url.rstrip("/"), token
         self.fingerprint = Fingerprint(bytes.fromhex(fingerprint)) if fingerprint else True
+        self.expected_instance_id = expected_instance_id
+        self.instance_confirmed = False
+        self.instance_mismatch = False
 
     async def request(self, method, path, body=None):
         """Send authenticated HTTP without redirects and require a bounded object response.
@@ -44,7 +59,18 @@ class LocalClient:
         Raises:
             ReleaseMismatchError: If a marked 409 response rejects this build or a
                 /v1/ response reports a different or missing version/build identity.
+            InstallationMismatchError: If a snapshot identifies a different
+                installation than the config entry. Further exchanges are blocked
+                until a fresh snapshot identifies the original installation again.
         """
+        if self.instance_mismatch and (method, path) != ("GET", "/v1/snapshot"):
+            raise InstallationMismatchError("App installation identity changed")
+        if (
+            self.expected_instance_id is not None
+            and not self.instance_confirmed
+            and (method, path) != ("GET", "/v1/snapshot")
+        ):
+            await self.snapshot()
         async with self.session.request(
             method,
             self.url + path,
@@ -101,6 +127,13 @@ class LocalClient:
             result = json.loads(data)
             if not isinstance(result, dict):
                 raise ValueError("Invalid app response")  # noqa: TRY004 - Preserve the existing ValueError validation contract.
+            if self.expected_instance_id is not None and (
+                path == "/v1/snapshot" or "instance_id" in result
+            ):
+                self.instance_mismatch = result.get("instance_id") != self.expected_instance_id
+                self.instance_confirmed = not self.instance_mismatch
+                if self.instance_mismatch:
+                    raise InstallationMismatchError("App installation identity changed")
             return result
 
     async def snapshot(self):

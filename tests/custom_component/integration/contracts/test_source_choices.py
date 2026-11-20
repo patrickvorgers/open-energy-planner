@@ -267,6 +267,109 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
     asyncio.run(scenario())
 
 
+def test_obsolete_installation_connection_cannot_consume_a_current_source_request(monkeypatch):
+    """An old config entry at a reused address cannot mix pages with the current installation."""
+    from types import MappingProxyType
+
+    from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+
+    from custom_components.open_energy_planner.client import LocalClient
+
+    async def scenario():
+        """Load two genuine HA entries against one peer and retain only its matching producer."""
+        async with running_chain(live=True, recorder=True, peer_gateway=True) as (
+            hass,
+            entry,
+            url,
+            *_,
+        ):
+            current = entry.runtime_data
+            current.poll_cancel()
+            current.poll_cancel = None
+            hass.states.async_set(
+                "sensor.grid", "100", {"device_class": "power", "unit_of_measurement": "W"}
+            )
+            hass.states.async_set(
+                "sensor.import",
+                "10",
+                {
+                    "device_class": "energy",
+                    "unit_of_measurement": "kWh",
+                    "state_class": "total_increasing",
+                },
+            )
+            await configure_energy(
+                hass,
+                entry,
+                [{"type": "grid", "stat_energy_from": "sensor.import", "stat_rate": "sensor.grid"}],
+            )
+            for index in range(1000):
+                hass.states.async_set(
+                    f"sensor.car_{index:04}",
+                    "50",
+                    {"device_class": "battery", "unit_of_measurement": "%"},
+                )
+            hass.states.async_set("binary_sensor.garage_plug", "on")
+            obsolete = ConfigEntry(
+                data={
+                    "url": current.client.url,
+                    "token": current.client.token,
+                    "fingerprint": current.client.fingerprint.fingerprint.hex(),
+                },
+                options={},
+                domain="open_energy_planner",
+                entry_id="synthetic-obsolete-installation",
+                source="integration_discovery",
+                title="Obsolete synthetic installation",
+                unique_id=str(uuid4()),
+                version=1,
+                minor_version=1,
+                state=ConfigEntryState.NOT_LOADED,
+                discovery_keys=MappingProxyType({}),
+                subentries_data=[],
+            )
+            hass.config_entries._entries[obsolete.entry_id] = obsolete
+            stale_writes = []
+            original_request = LocalClient.request
+
+            async def request(client, method, path, body=None):
+                """Observe attempted writes while retaining the actual authenticated transport."""
+                if client is not current.client and method != "GET":
+                    stale_writes.append(path)
+                return await original_request(client, method, path, body)
+
+            monkeypatch.setattr(LocalClient, "request", request)
+            async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
+                async with session.post(url + "/v1/ha/source-choices/ev", json={}) as response:
+                    assert (await response.json())["pending"]
+                assert await hass.config_entries.async_setup(obsolete.entry_id)
+                old = obsolete.runtime_data
+                old.poll_cancel()
+                old.poll_cancel = None
+                assert old.issue == "installation_identity_changed"
+                assert old.schedule.plan is None
+                assert stale_writes == []
+                async with session.get(url + "/v1/ha/source-choices/ev") as response:
+                    assert (await response.json())["pending"]
+                await asyncio.gather(old.sync(), current.sync())
+                async with session.get(url + "/v1/ha/source-choices/ev") as response:
+                    result = await response.json()
+                assert not result["pending"] and not result["failed"]
+                assert {"sensor.car_0999", "binary_sensor.garage_plug"} <= {
+                    row["entity_id"] for row in result["catalogue"]["entities"]
+                }
+                assert stale_writes == []
+                from custom_components.open_energy_planner.client import InstallationMismatchError
+
+                with pytest.raises(InstallationMismatchError):
+                    await old.client.request("PUT", "/v1/enabled", {"enabled": False})
+                async with session.get(url + "/v1/snapshot") as response:
+                    assert (await response.json())["enabled"] is True
+            await hass.config_entries.async_unload(obsolete.entry_id)
+
+    asyncio.run(scenario())
+
+
 def test_failed_publication_retries_after_backoff_without_another_metadata_event(monkeypatch):
     """A failed forced publication retains repair work and resumes forecasts only after acceptance."""
     from types import SimpleNamespace

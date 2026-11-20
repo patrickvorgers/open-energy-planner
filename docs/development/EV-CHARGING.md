@@ -70,6 +70,12 @@ Explicit source requests are served from the authenticated snapshot before obser
 uploads or optional history reads. A failure in those unrelated transfers does not
 prevent vehicle or connection sources from becoming selectable. Known plan
 invalidations revoke commands before the source transfer starts.
+The HA connection checks snapshots against its configured installation identity.
+An obsolete entry at a reused app address withdraws commands and cannot publish
+source pages or other mutations to the replacement installation. This prevents
+two entries from mixing pages for one chooser request. The saved connection is
+never silently retargeted. Its HA devices and history are retained for the user
+to review. A fresh snapshot from the original installation can recover the connection.
 
 The thin HA catalogue adapter projects `integration_domain` and the loaded
 manifest's `integration_display_name` separately from `integration_id` and its

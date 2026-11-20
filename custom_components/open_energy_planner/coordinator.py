@@ -19,7 +19,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .catalogue_discovery import CatalogueDiscovery
-from .client import AuthenticationError, ReleaseMismatchError
+from .client import AuthenticationError, InstallationMismatchError, ReleaseMismatchError
 from .const import DOMAIN, RELEASE
 from .history import HistoryBridge
 from .market_prices import MarketPriceBridge
@@ -993,6 +993,14 @@ class PlanCoordinator:
                         or self.ev_intent_generation != ev_intent_at_request
                     ):
                         return
+            except InstallationMismatchError:
+                self.schedule.invalidate()
+                self.pending_enabled = None
+                self.action_required(
+                    "installation_identity_changed",
+                    "This Home Assistant connection belongs to a different OEP installation. "
+                    "Use the integration for the current installation. Existing commands have been withdrawn.",
+                )
             except ReleaseMismatchError:
                 self.action_required(
                     "release_mismatch",
