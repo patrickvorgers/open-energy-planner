@@ -9,6 +9,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 
 from .configuration_sensors import DeviceProperty, property_values
+from .const import projection_id
 from .entity import PlannerEntity, source_device_name
 from .subentries import add_grouped_entities, retire_empty_groups
 
@@ -209,7 +210,7 @@ async def register_devices(hass, entry, async_add_entities):
         for device in definitions:
             device_identity = "grid" if device["kind"] == "grid" else "unit_" + device["id"]
             registered = dr.async_get(hass).async_get_device_by_identifier(
-                ("open_energy_planner", f"{entry.entry_id}_{device_identity}"), entry.entry_id
+                ("open_energy_planner", f"{projection_id(entry)}_{device_identity}"), entry.entry_id
             )
             if registered and registered.name != device["name"]:
                 dr.async_get(hass).async_update_device(registered.id, name=device["name"])

@@ -32,7 +32,11 @@ def register(hass):
 async def supervisor_link(hass, connection, message):
     """Accept only an authenticated administrator channel, not unauthenticated discovery metadata."""
     for flow in hass.config_entries.flow.async_progress():
-        if flow["handler"] == DOMAIN and flow["context"].get("unique_id") == message["instance_id"]:
+        if (
+            flow["handler"] == DOMAIN
+            and flow["context"]["source"] != config_entries.SOURCE_INTEGRATION_DISCOVERY
+            and flow["context"].get("unique_id") == message["instance_id"]
+        ):
             hass.config_entries.flow.async_abort(flow["flow_id"])
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY}, data=message

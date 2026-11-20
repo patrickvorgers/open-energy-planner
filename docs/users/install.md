@@ -129,3 +129,17 @@ For missing versions, GitHub sign-in problems or Marketplace installation errors
 see the official [Marketplace guide](https://www.home-assistant.io/integrations/marketplace/).
 For missing app packages, confirm a stable release has finished publication and
 that you are using AMD64 Home Assistant OS.
+
+
+## Updates and fresh app installations
+
+Home Assistant keeps one Open Energy Planner integration entry. An ordinary
+update retains the same virtual device identities. The integration adds or
+removes virtual devices as you change the saved app configuration.
+
+A fresh app with a new installation identity reuses the integration entry after
+the new connection is verified. Home Assistant clears the previous app's OEP
+devices and integration settings, then creates the devices configured in the
+new app. Set up the app and check any automations that targeted the previous
+virtual devices. HA OS connects automatically. A standalone app uses the usual
+pairing approval.

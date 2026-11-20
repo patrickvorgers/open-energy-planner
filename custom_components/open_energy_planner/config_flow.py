@@ -8,12 +8,14 @@ import re
 import secrets
 from contextlib import suppress
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import voluptuous as vol
 from aiohttp import ClientError
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import UnknownFlow
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.instance_id import async_get as async_instance_id
 from homeassistant.helpers.selector import (
@@ -23,7 +25,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .client import LocalClient
-from .const import DOMAIN, RELEASE
+from .const import DOMAIN, RELEASE, projection_id
 
 PAIRING_CREDENTIAL_ENTROPY_BYTES = 32
 PAIRING_VERIFICATION_CODE_LENGTH = 16
@@ -195,13 +197,79 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Finish only after the progress step has made its required completion transition."""
         if self._pair_result is None:
             return self.async_abort(reason="pairing_failed")
-        if self.context.get("source") == "reauth":
-            return self.async_update_reload_and_abort(
-                self._get_reauth_entry(), data_updates=self._pair_result
-            )
-        # Legacy URL/token connections migrate in place, preserving entity/history identities.
-        self._abort_if_unique_id_configured(updates=self._pair_result)
-        return self.async_create_entry(title="Open Energy Planner", data=self._pair_result)
+        return await self._bind(self._pair_instance, self._pair_result)
+
+    async def _bind(self, instance, data):
+        """Apply an authenticated connection to the one OEP entry."""
+        lock = self.hass.data.setdefault(f"{DOMAIN}_binding_lock", asyncio.Lock())
+        async with lock:
+            manager = self.hass.config_entries
+            entries = manager.async_entries(DOMAIN)
+            if not entries:
+                if self._async_in_progress(
+                    include_uninitialized=True, match_context={"oep_creating_entry": True}
+                ):
+                    return self.async_abort(reason="pairing_failed")
+                self.context["oep_creating_entry"] = True
+                return self.async_create_entry(title="Open Energy Planner", data=data)
+            entry = next((item for item in entries if item.unique_id == instance), entries[0])
+            replacing = entry.unique_id != instance
+            if (
+                replacing
+                and data.get("supervisor")
+                and entry.data.get("supervisor")
+                and data["ui_url"] != entry.data.get("ui_url")
+            ):
+                return self.async_abort(reason="already_configured")
+            if not data.get("fingerprint") and entry.data.get("fingerprint"):
+                return self.async_abort(reason="already_configured")
+            if not replacing and entry.data.get("projection_id"):
+                data = {**data, "projection_id": projection_id(entry)}
+            try:
+                if replacing or len(entries) > 1:
+                    # Consent identifies the peer. Check that its app is actually serving the new
+                    # installation before withdrawing any existing Home Assistant devices.
+                    await LocalClient(
+                        async_get_clientsession(self.hass),
+                        data["url"],
+                        data["token"],
+                        data.get("fingerprint"),
+                        expected_instance_id=instance,
+                    ).snapshot()
+                for obsolete in entries:
+                    if obsolete is entry:
+                        continue
+                    if not await manager.async_unload(obsolete.entry_id):
+                        return self.async_abort(reason="pairing_failed")
+                    await manager.async_remove(obsolete.entry_id)
+                if replacing:
+                    from .connection_lifecycle import reset_projection
+
+                    async with entry.setup_lock:
+                        if not await manager.async_unload(entry.entry_id, _lock=False):
+                            return self.async_abort(reason="pairing_failed")
+                        await reset_projection(self.hass, entry)
+                        data = {**data, "projection_id": uuid4().hex}
+                        manager.async_update_entry(entry, data=data, options={}, unique_id=instance)
+                        if not entry.disabled_by and not await manager.async_setup(
+                            entry.entry_id, _lock=False
+                        ):
+                            return self.async_abort(reason="pairing_failed")
+                else:
+                    changed = manager.async_update_entry(entry, data=data)
+                    needs_reload = (
+                        changed or entry.state is not config_entries.ConfigEntryState.LOADED
+                    )
+                    if (
+                        not entry.disabled_by
+                        and needs_reload
+                        and not await manager.async_reload(entry.entry_id)
+                    ):
+                        return self.async_abort(reason="pairing_failed")
+            except (ClientError, TimeoutError, ValueError, HomeAssistantError, OSError):
+                logging.getLogger(__name__).debug("App connection update failed", exc_info=True)
+                return self.async_abort(reason="pairing_failed")
+            return self.async_abort(reason="already_configured")
 
     async def async_step_reauth(self, entry_data):
         """Recover a revoked credential through fresh app consent while retaining the pinned server identity."""
@@ -242,8 +310,7 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if data.get("release") != RELEASE:
                     raise ValueError("Release mismatch")
                 await self.async_set_unique_id(data["instance_id"])
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(title="Open Energy Planner", data=user_input)
+                return await self._bind(data["instance_id"], user_input)
             except (ClientError, TimeoutError, ValueError, KeyError):
                 logging.getLogger(__name__).debug(
                     "Local EMS connection check failed", exc_info=True

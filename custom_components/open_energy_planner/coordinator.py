@@ -20,7 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from .catalogue_discovery import CatalogueDiscovery
 from .client import AuthenticationError, InstallationMismatchError, ReleaseMismatchError
-from .const import DOMAIN, RELEASE
+from .const import DOMAIN, RELEASE, projection_id
 from .history import HistoryBridge
 from .market_prices import MarketPriceBridge
 from .observation_bridge import ObservationBridge
@@ -45,7 +45,7 @@ class PlanCoordinator:
         """Initialize entry-local state, storage, listeners and the synchronization lock."""
         self.hass, self.entry, self.client = hass, entry, client
         self.schedule = Schedule()
-        self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
+        self.store = Store(hass, 1, f"{DOMAIN}.{projection_id(entry)}")
         self.listeners = []
         self.projection = self.schedule.project(dt_util.utcnow())
         self.boundary_cancel = None
@@ -1013,7 +1013,7 @@ class PlanCoordinator:
                 self.action_required(
                     "installation_identity_changed",
                     "This Home Assistant connection belongs to a different OEP installation. "
-                    "Use the integration for the current installation. Existing commands have been withdrawn.",
+                    "Existing commands have been withdrawn. Verify the current app connection to resume.",
                 )
             except ReleaseMismatchError:
                 self.action_required(
@@ -1101,8 +1101,10 @@ class PlanCoordinator:
             except (
                 asyncio.CancelledError,
                 AuthenticationError,
+                ClientError,
                 InstallationMismatchError,
                 ReleaseMismatchError,
+                TimeoutError,
             ):
                 pass
         pending_feedback_reads = tuple(self.solar_feedback_reads.values())
@@ -1118,8 +1120,10 @@ class PlanCoordinator:
             except (
                 asyncio.CancelledError,
                 AuthenticationError,
+                ClientError,
                 InstallationMismatchError,
                 ReleaseMismatchError,
+                TimeoutError,
             ):
                 pass
         if self.boundary_cancel:

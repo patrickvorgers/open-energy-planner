@@ -1,6 +1,6 @@
 """Thin Home Assistant entry point for the synthetic chain milestone."""
 
-from .const import PLATFORMS
+from .const import PLATFORMS, projection_id
 
 
 async def async_setup(hass, config):
@@ -20,6 +20,11 @@ async def async_setup_entry(hass, entry):
     from .supervisor import register
 
     register(hass)
+
+    if "projection_id" in entry.data:
+        from .connection_lifecycle import discard_old_registry
+
+        discard_old_registry(hass, entry, keep=f"{projection_id(entry)}_")
 
     client = LocalClient(
         async_get_clientsession(hass),
@@ -74,3 +79,10 @@ async def async_unload_entry(hass, entry):
     """Stop coordinator timers/persist intent, then unload the entry's entity platforms."""
     await entry.runtime_data.close()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass, entry):
+    """Remove retained Home Assistant intent when the configuration entry is deleted."""
+    from .connection_lifecycle import remove_intent
+
+    await remove_intent(hass, entry)

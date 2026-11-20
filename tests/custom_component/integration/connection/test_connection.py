@@ -1,6 +1,7 @@
 """Verify real integration identity, authenticated pairing and packaged independence."""
 
 import asyncio
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -363,6 +364,142 @@ def test_authenticated_supervisor_bootstrap_migrates_without_user_steps(tmp_path
                     supervisor_link(hass, connection, {**body, "id": 4})
             finally:
                 await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypatch):
+    """Keep current registry identities on upgrade and rebuild them only for a trusted reset."""
+    from types import MappingProxyType
+
+    from aiohttp import ClientConnectionError
+    from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+    from homeassistant.helpers.storage import Store
+
+    from open_energy_planner.app import create_app
+    from open_energy_planner.discovery import certificate, connection_app
+    from open_energy_planner.pairing import PAIRING_KEY
+
+    async def scenario():
+        """Exercise HA pairing, registry replacement and retry against two real app identities."""
+        async with running_chain() as (hass, entry, current_url, root):
+            manager = hass.config_entries
+            registry = dr.async_get(hass)
+            entities = er.async_get(hass)
+            current_id = entry.unique_id
+            entry_id = entry.entry_id
+            current_device = registry.async_get_device_by_identifier(
+                (DOMAIN, f"{entry_id}_ems"), entry_id
+            )
+            registry.async_update_device(current_device.id, name_by_user="Previous EMS")
+            current_entities = {
+                entity.id for entity in er.async_entries_for_config_entry(entities, entry_id)
+            }
+            if duplicate:
+                obsolete = ConfigEntry(
+                    data={"url": current_url, "token": TOKEN},
+                    options={},
+                    domain=DOMAIN,
+                    entry_id="obsolete-synthetic-installation",
+                    source="integration_discovery",
+                    title="Obsolete synthetic installation",
+                    unique_id=str(uuid4()),
+                    version=1,
+                    minor_version=1,
+                    state=ConfigEntryState.NOT_LOADED,
+                    discovery_keys=MappingProxyType({}),
+                    subentries_data=[],
+                )
+                manager._entries[obsolete.entry_id] = obsolete
+                assert await manager.async_setup(obsolete.entry_id)
+                stale_device = registry.async_get_device_by_identifier(
+                    (DOMAIN, f"{obsolete.entry_id}_ems"), obsolete.entry_id
+                )
+                assert stale_device
+                flow = await manager.flow.async_init(DOMAIN, context={"source": "user"})
+                result = await manager.flow.async_configure(
+                    flow["flow_id"], {"url": current_url, "token": TOKEN}
+                )
+                assert result["reason"] == "already_configured"
+                assert manager.async_entries(DOMAIN) == [entry]
+                assert registry.async_get(stale_device.id) is None
+                assert registry.async_get(current_device.id).name_by_user == "Previous EMS"
+                return
+
+            app = create_app(root / "replacement", TOKEN, source="home_assistant")
+            replacement = web.AppRunner(app)
+            await replacement.setup()
+            await web.TCPSite(replacement, "127.0.0.1", 0).start()
+            upstream = f"http://127.0.0.1:{replacement.addresses[0][1]}"
+            pairing = app[PAIRING_KEY]
+            pairing.supervisor_secret = "synthetic-replacement-proof"
+            context, pin = certificate(root / "replacement", pairing.instance_id)
+            pairing.fingerprint = pin
+            gateway = web.AppRunner(connection_app(pairing, TOKEN, upstream, "/app/test_oep"))
+            await gateway.setup()
+            await web.TCPSite(gateway, "127.0.0.1", 0, ssl_context=context).start()
+            original_setup = manager.async_setup
+
+            async def interrupted_setup(target_entry_id, *args, **kwargs):
+                """Simulate interruption after the new identity has been stored."""
+                assert target_entry_id == entry_id
+                return False
+
+            async def discover(secret):
+                """Submit the trusted discovery flow over the real pinned TLS connection."""
+                return await manager.flow.async_init(
+                    DOMAIN,
+                    context={"source": "integration_discovery"},
+                    data={
+                        "host": "127.0.0.1",
+                        "port": gateway.addresses[0][1],
+                        "instance_id": pairing.instance_id,
+                        "fingerprint": pin,
+                        "secret": secret,
+                    },
+                )
+
+            try:
+                assert (await discover("wrong"))["reason"] == "pairing_failed"
+                assert entry.unique_id == current_id
+                assert registry.async_get(current_device.id)
+                coordinator = entry.runtime_data
+                coordinator.schedule.resume_after = datetime(2040, 1, 1, tzinfo=UTC)
+                if coordinator.appliance_history_task:
+                    coordinator.appliance_history_task.cancel()
+                    await asyncio.gather(coordinator.appliance_history_task, return_exceptions=True)
+
+                async def failed_history():
+                    """Record a connection error just before the old coordinator unloads."""
+                    raise ClientConnectionError("Synthetic app disconnection")
+
+                coordinator.appliance_history_task = asyncio.create_task(failed_history())
+                await asyncio.wait([coordinator.appliance_history_task])
+                monkeypatch.setattr(manager, "async_setup", interrupted_setup)
+                assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
+                assert entry.unique_id == pairing.instance_id
+                assert entry.state is ConfigEntryState.NOT_LOADED
+                assert registry.async_get(current_device.id) is None
+                assert await Store(hass, 1, f"{DOMAIN}.{entry_id}").async_load() is None
+                monkeypatch.setattr(manager, "async_setup", original_setup)
+                assert (await discover(pairing.supervisor_secret))["reason"] == "already_configured"
+                await hass.async_block_till_done()
+                assert manager.async_entries(DOMAIN) == [entry]
+                assert entry.state is ConfigEntryState.LOADED
+                assert entry.runtime_data.schedule.resume_after is None
+                new_devices = dr.async_entries_for_config_entry(registry, entry_id)
+                assert new_devices and all(device.name_by_user is None for device in new_devices)
+                assert not current_entities & {
+                    entity.id for entity in er.async_entries_for_config_entry(entities, entry_id)
+                }
+            finally:
+                if entry.state is ConfigEntryState.LOADED:
+                    await manager.async_unload(entry.entry_id)
+                await gateway.cleanup()
+                await replacement.cleanup()
 
     asyncio.run(scenario())
 

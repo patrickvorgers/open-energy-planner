@@ -4,7 +4,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
-from .const import DOMAIN, RELEASE
+from .const import DOMAIN, RELEASE, projection_id
 
 
 def source_device_name(hass, device, energy_sources=()):
@@ -53,7 +53,7 @@ class PlannerEntity(Entity):
     def __init__(self, coordinator, device, key, name):
         """Bind entry-scoped identity and display metadata without controlling physical equipment."""
         self.coordinator = coordinator
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{device}_{key}"
+        self._attr_unique_id = f"{projection_id(coordinator.entry)}_{device}_{key}"
         self._attr_name = name
         configuration_url = coordinator.entry.data.get(
             "ui_url", coordinator.entry.data["url"].rstrip("/") + "/setup"
@@ -62,7 +62,7 @@ class PlannerEntity(Entity):
             # HA resolves this internal URL against the active frontend origin.
             configuration_url = "homeassistant:/" + configuration_url
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_{device}")},
+            identifiers={(DOMAIN, f"{projection_id(coordinator.entry)}_{device}")},
             name={"ems": "Open Energy Planner", "grid": "Grid", "battery": "Battery"}.get(
                 device, device
             ),
