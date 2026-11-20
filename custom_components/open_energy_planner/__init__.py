@@ -26,6 +26,7 @@ async def async_setup_entry(hass, entry):
         entry.data["url"],
         entry.data["token"],
         entry.data.get("fingerprint"),
+        expected_instance_id=entry.unique_id,
     )
     coordinator = PlanCoordinator(hass, entry, client)
     entry.runtime_data = coordinator

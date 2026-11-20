@@ -203,7 +203,11 @@ async def running_chain(
                 await gateway_site.start()
                 peer_url = f"https://127.0.0.1:{gateway_runner.addresses[0][1]}"
                 entry.runtime_data.client = LocalClient(
-                    entry.runtime_data.client.session, peer_url, peer_token, pin
+                    entry.runtime_data.client.session,
+                    peer_url,
+                    peer_token,
+                    pin,
+                    expected_instance_id=entry.unique_id,
                 )
 
             if before_start:

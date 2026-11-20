@@ -87,6 +87,23 @@ def test_loaded_integration_reports_a_different_build_as_action_required(monkeyp
     asyncio.run(scenario())
 
 
+def test_foreign_installation_snapshot_withdraws_previously_usable_commands():
+    """An identity mismatch revokes existing commands instead of retaining another installation's plan."""
+
+    async def scenario():
+        """Keep real HTTP and change only the client's expected installation to represent an obsolete entry."""
+        async with running_chain() as (_hass, entry, *_):
+            coordinator = entry.runtime_data
+            assert coordinator.schedule.plan is not None
+            coordinator.client.expected_instance_id = "22222222-2222-4222-8222-222222222222"
+            await coordinator.sync()
+            assert coordinator.issue == "installation_identity_changed"
+            assert coordinator.schedule.plan is None
+            assert coordinator.projection.command is None
+
+    asyncio.run(scenario())
+
+
 def test_discovery_pairs_after_app_consent_and_migrates_existing_entry(tmp_path):
     """Actual HA discovery waits for app consent, then migrates the same entry to pinned TLS without losing entity identities."""
     from types import SimpleNamespace

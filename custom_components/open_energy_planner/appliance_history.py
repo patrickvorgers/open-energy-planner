@@ -10,7 +10,7 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
 from homeassistant.util import dt as dt_util
 
-from .client import AuthenticationError, ReleaseMismatchError
+from .client import AuthenticationError, InstallationMismatchError, ReleaseMismatchError
 
 HISTORY_DAYS = 7
 SAMPLE_MINUTES = 5
@@ -98,7 +98,7 @@ async def synchronize(coordinator, _now=None):
     if previous and not previous.cancelled():
         try:
             previous.result()
-        except (AuthenticationError, ReleaseMismatchError):
+        except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
             raise
         except (ClientError, OSError, ValueError, RuntimeError):
             _LOGGER.warning(
@@ -179,7 +179,7 @@ async def process(coordinator):
                         },
                     )
                     attempts[recent_key] = now + timedelta(seconds=REFRESH_SECONDS)
-                except (AuthenticationError, ReleaseMismatchError):
+                except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
                     raise
                 except (ClientError, OSError, ValueError, RuntimeError):
                     _LOGGER.debug(
@@ -196,7 +196,7 @@ async def process(coordinator):
                     raw = await capture_raw(coordinator, entity, power, synthetic)
                     if raw is not None and not coordinator.closed:
                         await coordinator.client.request("POST", "/v1/appliances/raw_history", raw)
-                except (AuthenticationError, ReleaseMismatchError):
+                except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
                     raise
                 except (ClientError, OSError, ValueError, RuntimeError):
                     _LOGGER.debug(
@@ -205,7 +205,7 @@ async def process(coordinator):
                     )
             pending = await historical(coordinator, device, entity, power, synthetic, now)
             attempts[key] = now + timedelta(seconds=RETRY_SECONDS if pending else REFRESH_SECONDS)
-        except (AuthenticationError, ReleaseMismatchError):
+        except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
             raise
         except (ClientError, OSError, ValueError, RuntimeError):
             _LOGGER.warning(
@@ -224,7 +224,7 @@ async def process(coordinator):
                         "end": None,
                     },
                 )
-            except (AuthenticationError, ReleaseMismatchError):
+            except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
                 raise
             except (ClientError, OSError, ValueError, RuntimeError):
                 _LOGGER.debug("Unable to report appliance history failure for %s", entity)
@@ -309,7 +309,7 @@ async def historical(coordinator, device, entity, power, synthetic, now):
                 (row for row in response["appliances"]["devices"] if row["entity_id"] == entity), {}
             )
             pending_work |= bool(current.get(request_field))
-        except (AuthenticationError, ReleaseMismatchError):
+        except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
             raise
         except (ClientError, OSError, ValueError, RuntimeError):
             await status("failed", resolution=resolution)
