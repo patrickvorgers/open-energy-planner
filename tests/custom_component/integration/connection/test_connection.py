@@ -105,6 +105,33 @@ def test_foreign_installation_snapshot_withdraws_previously_usable_commands():
     asyncio.run(scenario())
 
 
+def test_manual_connection_supersedes_ignored_discovery():
+    """An ignored discovery does not prevent explicitly connecting to the same app."""
+    from homeassistant.config_entries import ConfigEntryState
+
+    async def scenario():
+        """Replace an actual Home Assistant ignore record through the user config flow."""
+        async with running_chain() as (hass, entry, url, _root):
+            manager = hass.config_entries
+            instance = entry.unique_id
+            await manager.async_remove(entry.entry_id)
+            ignored = await manager.flow.async_init(
+                DOMAIN,
+                context={"source": "ignore"},
+                data={"unique_id": instance, "title": "Open Energy Planner"},
+            )
+            assert ignored["result"].source == "ignore"
+            flow = await manager.flow.async_init(DOMAIN, context={"source": "user"})
+            connected = await manager.flow.async_configure(
+                flow["flow_id"], {"url": url, "token": TOKEN}
+            )
+            assert connected["type"] == "create_entry"
+            assert manager.async_entries(DOMAIN) == [connected["result"]]
+            assert connected["result"].state is ConfigEntryState.LOADED
+
+    asyncio.run(scenario())
+
+
 def test_discovery_pairs_after_app_consent_and_migrates_existing_entry(tmp_path):
     """Actual HA discovery waits for app consent, then migrates the same entry to pinned TLS without losing entity identities."""
     from types import SimpleNamespace

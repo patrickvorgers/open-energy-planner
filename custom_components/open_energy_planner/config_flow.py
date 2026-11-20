@@ -222,7 +222,7 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         lock = self.hass.data.setdefault(f"{DOMAIN}_binding_lock", asyncio.Lock())
         async with lock:
             manager = self.hass.config_entries
-            entries = manager.async_entries(DOMAIN)
+            entries = manager.async_entries(DOMAIN, include_ignore=False)
             if reconnect_entry is not None and (
                 reconnect_entry not in entries
                 or reconnect_entry.disabled_by

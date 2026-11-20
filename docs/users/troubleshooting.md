@@ -124,6 +124,8 @@ integration refresh before checking again. Do not recreate a working HA integrat
 temporarily unavailable source list.
 
 Open Energy Planner uses one integration entry per Home Assistant installation.
+Before resetting the app, see [updates and fresh app installations](install.md#updates-and-fresh-app-installations)
+for backup guidance. Pairing a fresh app clears the integration's old local settings.
 After an app reset, wait for the automatic connection on HA OS. A standalone app
 requires the usual pairing approval. Once the current app is verified, Home
 Assistant rebuilds its OEP devices from that app and removes obsolete OEP entries.
