@@ -17,6 +17,8 @@ from open_energy_planner.appliances.ev.model import (
     refine,
 )
 from open_energy_planner.appliances.ev.notifications import (
+    EV_FORECAST_UNAVAILABLE,
+    EV_METER_MISSING,
     EXECUTION_DEVIATION_ADVICE,
     forecast_boundary_issue,
 )
@@ -525,6 +527,17 @@ class EVService:
             ]
         )
 
+    def missing_energy_meters(self):
+        """Identify absent meter links only after Home Assistant has supplied its Energy catalogue."""
+        if not self.consumers.catalogue_known:
+            return ()
+        available = {option["entity_id"] for option in self.consumers.options}
+        return tuple(
+            point["energy_entity"]
+            for point in self.state["points"]
+            if point["energy_entity"] not in available
+        )
+
     def prepare(self, snapshot, demand, now, timezone, *, excluded_entities=()):
         """Remove every configured charger forecast and add only explicit live SOC work."""
         works = self.work(now, timezone)
@@ -532,11 +545,12 @@ class EVService:
         entities.update(excluded_entities)
         prepared = self.appliances.prepare(snapshot, demand, now, excluded_entities=entities)
         if entities and not prepared.appliance_evidence:
-            self.issue = (
-                "Charger component forecast unavailable. EV history cannot be removed safely"
-                if self.state["points"]
-                else None
-            )
+            if self.state["points"]:
+                self.issue = (
+                    EV_METER_MISSING if self.missing_energy_meters() else EV_FORECAST_UNAVAILABLE
+                )
+            else:
+                self.issue = None
             works = ()
         else:
             self.issue = None
@@ -723,7 +737,7 @@ class EVService:
             "configuration_version": self.configuration_version,
             "revision": current_revision,
             "observed_at": self.report["at"] if self.report and self.live(now) else None,
-            "issue": forecast_boundary_issue(self.state["points"], names) if self.issue else None,
+            "issue": forecast_boundary_issue(self.issue, self.missing_energy_meters(), names),
             "timezone": timezone,
             "vehicles": [
                 {

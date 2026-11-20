@@ -124,6 +124,14 @@ consumption meter and the **device power consumption** sensor configured in
 Home Assistant Energy. No device-registry or integration choice is required.
 Meters without a registered device are included.
 
+If OEP shows **Waiting for the charge-point forecast**, leave the settings as
+saved. OEP retries automatically. If the notice persists, check **Consumption
+and cycles** for forecast or history issues. If OEP shows **Charge-point meter
+missing from Home Assistant Energy**, open **EV charging** settings to identify
+the meter, add it to Home Assistant Energy and select **Refresh Home Assistant
+sources** in OEP. Planning remains paused while OEP cannot separate the charge
+point from household consumption.
+
 The same Energy chooser is used by ordinary appliances and electric boilers.
 **Available** shows unassigned devices. **Already added** and **All sources**
 show assigned devices as disabled, regardless of their appliance category.
