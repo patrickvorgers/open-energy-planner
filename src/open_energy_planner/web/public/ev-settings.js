@@ -16,7 +16,7 @@ const POINT_FIELDS = ["id", "energy_entity", "power_entity", "connected_entity",
 const WATTS_PER_KW = 1000;
 const NO_DEVICE = "sources-without-device";
 let token = "", current, energySources, draft, editing = false, selectedId = null, editOriginId = null;
-const api = applianceSettingsApi(base, () => token);
+const api = applianceSettingsApi(base, () => token, ["Each stage must increase both AC and battery power"]);
 const integrationSelections = new Map();
 const integrationTypeSelections = new Map();
 const deviceSelections = new Map();

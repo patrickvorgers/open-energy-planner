@@ -398,8 +398,21 @@ def test_vehicle_charging_efficiency_can_be_customized_and_saved(app_page):
     page.get_by_role("button", name="Remove stage 2", exact=True).click()
     expect(page.get_by_role("button", name="Remove stage 1", exact=True)).to_be_disabled()
     page.get_by_role("button", name="Add stage", exact=True).click()
-    expect(page.get_by_label("Stage 2 AC power (kW)", exact=True)).to_be_focused()
-    page.get_by_label("Stage 2 AC power (kW)", exact=True).fill("3.68")
+    second_power = page.get_by_label("Stage 2 AC power (kW)", exact=True)
+    expect(second_power).to_be_focused()
+    second_power.fill("2")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST" and response.url.endswith("/v1/ev/configuration")
+        )
+    ) as invalid:
+        page.get_by_role("button", name="Save settings", exact=True).click()
+    message = "Each stage must increase both AC and battery power"
+    assert invalid.value.status == 400
+    assert invalid.value.text() == message
+    expect(page.locator("#dirty")).to_contain_text(message)
+    expect(second_power).to_have_value("2")
+    second_power.fill("3.68")
     page.get_by_label("Stage 2 efficiency (%)", exact=True).fill("84.5")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.evaluate("window.scrollTo(0, 0)")

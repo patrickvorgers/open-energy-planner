@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from aiohttp import web
 
+from open_energy_planner.appliances.ev.model import MAX_EFFICIENCY_STAGES
 from open_energy_planner.appliances.sources import (
     SOURCE_ALREADY_ASSIGNED,
     SOURCE_OWNERSHIP_UNAVAILABLE,
@@ -39,6 +40,11 @@ PUBLIC_VALIDATION_MESSAGES = (
     "An EV operation must be an object",
     "Charge-point identities and Energy meters must be unique",
     "Charge-point limits require whole watts",
+    "Choose one or three AC charging phases",
+    "Each stage must increase both AC and battery power",
+    "Specify AC power and efficiency for every charging stage",
+    f"Use 1 to {MAX_EFFICIENCY_STAGES} charging efficiency stages",
+    f"Use at most {MAX_EFFICIENCY_STAGES} charging efficiency stages",
     "Connection must be explicitly true, false or unknown",
     "EV command limits require whole watts",
     "EV configuration changed. Refresh before reporting",
