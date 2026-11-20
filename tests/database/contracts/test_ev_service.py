@@ -186,7 +186,7 @@ def test_missing_power_and_small_noise_do_not_create_unplanned_charging(service,
         assert not service.execution_deviated(plan, now)
 
 
-def test_first_planable_ev_capture_bypasses_throttle_once_per_connection(ev_service):
+def test_first_usable_ev_work_bypasses_throttle_once_per_connection(ev_service):
     """Only the first usable work for each physical connection requests an immediate round."""
     from open_energy_planner.installation.model import InstallationProblem
     from open_energy_planner.live_inputs import LiveInputs
@@ -214,7 +214,7 @@ def test_first_planable_ev_capture_bypasses_throttle_once_per_connection(ev_serv
     live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
     live.report = SimpleNamespace(readings=())
 
-    def capture(seconds, *, connected=True, identified=False, session=SESSION, soc=50):
+    def capture(seconds, *, connected=True, identified=False, session=SESSION, soc=50, hours=1):
         """Feed a current HA capture and its typed EV work through normal planning admission."""
         nonlocal now
         now = NOW + timedelta(seconds=seconds)
@@ -230,7 +230,9 @@ def test_first_planable_ev_capture_bypasses_throttle_once_per_connection(ev_serv
         work = ev_service.work(now, timezone)
         prepared = replace(
             snapshot,
-            problem=replace(inputs, ev_work=work),
+            problem=replace(
+                inputs, intervals=(replace(inputs.intervals[0], duration_h=hours),), ev_work=work
+            ),
             ev_revision=ev_service.hard_revision(now, timezone),
         )
         live._install((now, future, prepared), force=False)
@@ -238,6 +240,23 @@ def test_first_planable_ev_capture_bypasses_throttle_once_per_connection(ev_serv
 
     assert capture(0, connected=False) == ()
     assert capture(30) == ()
+    assert len(submitted) == 1
+
+    ev_service.save_request(
+        {
+            "request_id": str(uuid4()),
+            "vehicle_id": CAR,
+            "departure": (NOW + timedelta(minutes=12)).isoformat(),
+            "repeat_weekdays": [0, 2, 4],
+        },
+        now,
+        timezone,
+    )
+    # Completing the current occurrence leaves the next active, with no charging demand yet.
+    assert capture(40, identified=True, soc=80)[0].required_kwh == 0
+    assert len(submitted) == 1
+    # The remaining demand is 30% of 60 kWh, but this horizon ends before its ready time.
+    assert capture(44, identified=True, hours=0.1)[0].required_kwh == 18
     assert len(submitted) == 1
 
     work = capture(45, identified=True)

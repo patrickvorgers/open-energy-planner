@@ -10,6 +10,7 @@ from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.ev.configuration import configuration, identity
 from open_energy_planner.appliances.ev.model import (
     AC_EFFICIENCY_DEFAULTS,
+    EV_ENERGY_TOLERANCE_KWH,
     EV_LOSS_PROFILE_VERSION,
     MAX_EFFICIENCY_STAGES,
     MAX_EV_POWER_W,
@@ -525,15 +526,25 @@ class EVService:
         }
         return tuple(work for work in selected if work.vehicle_id not in duplicates)
 
-    def has_unsubmitted_session(self, work_items):
-        """Identify the first planning submission for a physical connection."""
-        return any(
-            self._submitted_sessions.get(work.point_id) != work.session_id for work in work_items
-        )
+    def unsubmitted_sessions(self, problem):
+        """Identify new connections with energy demand and a window in the prepared horizon."""
+        work_items = getattr(problem, "ev_work", ())
+        if not work_items:
+            return {}
+        first, last = problem.intervals[0], problem.intervals[-1]
+        horizon_end = last.start + timedelta(hours=last.duration_h)
+        return {
+            work.point_id: work.session_id
+            for work in work_items
+            if self._submitted_sessions.get(work.point_id) != work.session_id
+            and work.required_kwh > EV_ENERGY_TOLERANCE_KWH
+            and work.ready_at < horizon_end
+            and work.deadline > first.start
+        }
 
-    def record_submitted_sessions(self, work_items):
+    def record_submitted_sessions(self, sessions):
         """Remember admitted sessions even if their work temporarily becomes unavailable."""
-        self._submitted_sessions.update((work.point_id, work.session_id) for work in work_items)
+        self._submitted_sessions.update(sessions)
 
     def hard_revision(self, now, timezone):
         """Bind availability/identity/departure, allowing ordinary valid SoC readings to finish a round."""

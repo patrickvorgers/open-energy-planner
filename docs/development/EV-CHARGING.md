@@ -318,7 +318,8 @@ A late result cannot publish after its first usable segment. New ordinary valid 
 the next throttled round. Settings, session, identity, departure and measurement
 availability changes block publication. New SoC also blocks a candidate exceeding
 physical capacity. The first prepared snapshot with usable charging work for
-a new physical connection can request a round immediately. Admission consumes
+a new physical connection can request a round immediately when additional
+energy is needed and its charging window overlaps the prepared horizon. Admission consumes
 this exception once per charge point and connection nonce. Further changes on
 that connection follow the ordinary quarter and five-minute cadence, including
 recovery of temporarily unavailable EV work while the installation remains ready.

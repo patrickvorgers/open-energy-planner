@@ -242,12 +242,13 @@ class LiveInputs:
         self.replan_requested = (
             self.replan_requested or ev_deviation or self.deviated(snapshot, now)
         )
-        ev_work = getattr(snapshot.problem, "ev_work", ())
-        new_ev_session = self.ev is not None and self.ev.has_unsubmitted_session(ev_work)
+        new_ev_sessions = (
+            self.ev.unsubmitted_sessions(snapshot.problem) if self.ev is not None else {}
+        )
         if (
             force
             or self.last_submission is None
-            or new_ev_session
+            or new_ev_sessions
             or (
                 elapsed >= MIN_DEVIATION_REPLAN_SECONDS
                 and (
@@ -284,7 +285,7 @@ class LiveInputs:
                 else "all required inputs are ready"
                 if self.last_submission is None
                 else "a new EV session is ready to plan"
-                if new_ev_session
+                if new_ev_sessions
                 else "a new quarter-hour started"
                 if quarter != self.last_quarter
                 else f"updated {changed}"
@@ -308,7 +309,7 @@ class LiveInputs:
             self.replan_requested = False
             self.planner.submit(snapshot)
             if self.ev is not None:
-                self.ev.record_submitted_sessions(ev_work)
+                self.ev.record_submitted_sessions(new_ev_sessions)
                 self.ev.accept_execution_deviations(now)
 
     def deviated(self, snapshot, now):
