@@ -76,6 +76,8 @@ source pages or other mutations to the replacement installation. This prevents
 two entries from mixing pages for one chooser request. The saved connection is
 never silently retargeted. Its HA devices and history are retained for the user
 to review. A fresh snapshot from the original installation can recover the connection.
+Replies started before a detected mismatch cannot clear that failure or confirm
+an operation. Recovery requires a snapshot requested after the latest mismatch.
 
 The thin HA catalogue adapter projects `integration_domain` and the loaded
 manifest's `integration_display_name` separately from `integration_id` and its

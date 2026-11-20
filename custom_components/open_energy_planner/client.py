@@ -47,6 +47,7 @@ class LocalClient:
         self.expected_instance_id = expected_instance_id
         self.instance_confirmed = False
         self.instance_mismatch = False
+        self.instance_generation = 0
 
     async def request(self, method, path, body=None):
         """Send authenticated HTTP without redirects and require a bounded object response.
@@ -63,14 +64,16 @@ class LocalClient:
                 installation than the config entry. Further exchanges are blocked
                 until a fresh snapshot identifies the original installation again.
         """
-        if self.instance_mismatch and (method, path) != ("GET", "/v1/snapshot"):
+        identity_snapshot = (method, path) == ("GET", "/v1/snapshot")
+        if self.instance_mismatch and not identity_snapshot:
             raise InstallationMismatchError("App installation identity changed")
         if (
             self.expected_instance_id is not None
             and not self.instance_confirmed
-            and (method, path) != ("GET", "/v1/snapshot")
+            and not identity_snapshot
         ):
             await self.snapshot()
+        generation = self.instance_generation
         async with self.session.request(
             method,
             self.url + path,
@@ -127,13 +130,18 @@ class LocalClient:
             result = json.loads(data)
             if not isinstance(result, dict):
                 raise ValueError("Invalid app response")  # noqa: TRY004 - Preserve the existing ValueError validation contract.
-            if self.expected_instance_id is not None and (
-                path == "/v1/snapshot" or "instance_id" in result
-            ):
-                self.instance_mismatch = result.get("instance_id") != self.expected_instance_id
-                self.instance_confirmed = not self.instance_mismatch
-                if self.instance_mismatch:
+            if self.expected_instance_id is not None:
+                if (identity_snapshot or "instance_id" in result) and result.get(
+                    "instance_id"
+                ) != self.expected_instance_id:
+                    self.instance_generation += 1
+                    self.instance_mismatch = True
+                    self.instance_confirmed = False
+                if generation != self.instance_generation:
                     raise InstallationMismatchError("App installation identity changed")
+                if identity_snapshot:
+                    self.instance_mismatch = False
+                    self.instance_confirmed = True
             return result
 
     async def snapshot(self):

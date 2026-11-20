@@ -15,7 +15,7 @@ from homeassistant.core import State
 from homeassistant.util import dt as dt_util
 from sqlalchemy import select
 
-from .client import AuthenticationError, ReleaseMismatchError
+from .client import AuthenticationError, InstallationMismatchError, ReleaseMismatchError
 
 MAX_FEEDBACK_READINGS = 10000
 MAX_FEEDBACK_RANGE_DAYS = 367
@@ -203,7 +203,7 @@ async def synchronize(coordinator, snapshot):
                 coordinator.hass, request, pending_reads=coordinator.solar_feedback_reads
             )
             await coordinator.client.request("POST", "/v1/solar/feedback", body)
-        except (AuthenticationError, ReleaseMismatchError):
+        except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
             raise
         except (ClientError, OSError, RuntimeError, ValueError, TypeError, KeyError):
             _LOGGER.debug(

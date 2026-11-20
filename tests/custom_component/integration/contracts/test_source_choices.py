@@ -484,3 +484,47 @@ def test_forecast_refresh_and_watch_confirmation_do_not_require_metadata_capture
             assert coordinator.catalogue_discovery.healthy
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["page", "failure_report"])
+def test_source_identity_failure_immediately_withdraws_commands(monkeypatch, failure):
+    """Both source publication and failure reporting preserve a fatal installation mismatch."""
+    from custom_components.open_energy_planner.client import InstallationMismatchError
+
+    async def scenario():
+        """Retain real snapshots and an active plan while one transfer stage reports the mismatch."""
+        async with running_chain() as (_hass, entry, url, *_):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            assert coordinator.schedule.plan is not None
+            original_snapshot = coordinator.client.snapshot
+            original_request = coordinator.client.request
+            attempts = []
+
+            async def snapshot():
+                """Include the genuine pending chooser request in an otherwise unchanged snapshot."""
+                return {**await original_snapshot(), "source": "home_assistant"}
+
+            async def request(method, path, body=None):
+                """Inject an identity failure at publication or after an ordinary page failure."""
+                if path == "/v1/ha/source-choices":
+                    reporting_failure = body.get("failed") is True
+                    attempts.append(reporting_failure)
+                    if failure == "page" or reporting_failure:
+                        raise InstallationMismatchError("Synthetic source installation mismatch")
+                    raise ValueError("Synthetic interrupted source page")
+                return await original_request(method, path, body)
+
+            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
+            monkeypatch.setattr(coordinator.client, "request", request)
+            async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
+                async with session.post(url + "/v1/ha/source-choices/ev", json={}) as response:
+                    assert (await response.json())["pending"]
+                await coordinator.sync()
+            assert attempts == ([False] if failure == "page" else [False, True])
+            assert coordinator.issue == "installation_identity_changed"
+            assert coordinator.schedule.plan is None
+            assert coordinator.projection.command is None
+
+    asyncio.run(scenario())
