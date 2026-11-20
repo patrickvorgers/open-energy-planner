@@ -295,6 +295,19 @@ The EV session shows recovery advice for sustained deviations. Check the car's
 charge limit, charge-point status and Home Assistant automation. OEP cannot
 identify the physical cause from power alone and never bypasses device safety.
 
+#### Two cars sharing one charge point
+
+Suppose both cars have a request to finish charging by 07:00 tomorrow. The plan
+includes the plugged-in car once OEP recognizes it. OEP may pause and resume
+charging while that car stays plugged in. The second car's request waits for
+its own recognized connection. The planner does not schedule a switch between
+cars or reserve a time for one.
+
+When you unplug the first car and plug in the second, OEP can plan charging once
+it recognizes the second car. The new plan uses the time remaining before 07:00
+and shows a shortfall if the available time or charging power cannot reach the
+target.
+
 ## Prepare thermal storage
 
 The supported thermal model is a fixed-power resistive electric water heater.
