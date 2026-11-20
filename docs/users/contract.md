@@ -47,6 +47,8 @@ Budget Energie examples enable it for their described battery restrictions.
 
 Saving a contract immediately rechecks planning prerequisites and requests the current price setup without waiting for its periodic refresh. When the required inputs are ready, planning starts automatically. Missing inputs remain explicit blockers. The saved bonus budget refreshes immediately, including after the first save, and updates automatically while its Home Assistant history is arriving.
 
+If a background readiness check temporarily fails, it remains pending and retries on the normal price-check schedule. You do not need to save again or open Planning to trigger recovery.
+
 Home Assistant history normally establishes the opening volume. If complete history is missing, use manual confirmation only when the panel offers that recovery. Confirm the amount against the displayed **Opening as of** measurement date. Do not enter today's estimate against an older baseline.
 
 Planned export does not consume the measured annual allowance. OEP evaluates proposed scenarios with separate counters. Changing a rule does not reset actual exported energy or create a new allowance automatically.

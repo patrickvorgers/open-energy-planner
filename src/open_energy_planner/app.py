@@ -778,15 +778,20 @@ def create_app(
 
                 async def update_prices():
                     """Check due source requests without blocking HTTP. Diagnose unexpected failures."""
+                    readiness_pending = False
                     while True:
                         try:
-                            settings_refresh = price_refresh_requested.is_set()
+                            readiness_pending = (
+                                readiness_pending or price_refresh_requested.is_set()
+                            )
                             price_refresh_requested.clear()
                             now = datetime.now(UTC)
                             prices_changed = await prices.refresh(now)
-                            if live and (settings_refresh or prices_changed):
+                            readiness_pending = readiness_pending or prices_changed
+                            if live and readiness_pending:
                                 async with lock:
                                     await live.refresh_async()
+                                readiness_pending = False
                             timezone = price_timezone()
                             if (
                                 timezone

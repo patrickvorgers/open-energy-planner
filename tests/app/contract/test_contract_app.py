@@ -5,6 +5,7 @@ import threading
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 from aiohttp import ClientSession, web
@@ -430,10 +431,12 @@ def test_current_price_inputs_need_no_plan_or_bonus_counter_and_follow_saved_rul
 
 
 @pytest.mark.parametrize("late_prices", [False, True])
+@pytest.mark.parametrize("readiness_failures", [0, 2])
 def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
-    tmp_path, monkeypatch, late_prices
+    tmp_path, monkeypatch, late_prices, readiness_failures
 ):
-    """A first save wakes prices and HiGHS. Late price delivery and later saves also start planning."""
+    """Saves and arriving prices start HiGHS. Failed readiness reads retry at the normal poll."""
+    from open_energy_planner.app import LiveInputs
     from open_energy_planner.optimization.domain import Strategy
     from open_energy_planner.prices.bootstrap import configured_price_factory
     from open_energy_planner.prices.runtime import ConfiguredPrices
@@ -441,12 +444,28 @@ def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
     async def scenario():
         """Observe real solves before any snapshot read can trigger an input refresh."""
         monkeypatch.setattr(
-            "open_energy_planner.app.PRICE_SCHEDULE_POLL_SECONDS", 0.02 if late_prices else 3600
+            "open_energy_planner.app.PRICE_SCHEDULE_POLL_SECONDS",
+            0.05 if readiness_failures else 0.02 if late_prices else 3600,
         )
         now = datetime.now(UTC)
         initial_refresh, solved = asyncio.Event(), asyncio.Event()
         opened_areas, solved_import_rates = [], []
+        readiness_attempts = []
+        failures_remaining = readiness_failures
+        original_readiness = LiveInputs.refresh_async
         refresh = ConfiguredPrices.refresh
+
+        async def refresh_readiness(live, *, force=False):
+            """Fail background reads after price setup without changing saves or subsequent retries."""
+            nonlocal failures_remaining
+            if opened_areas and not force:
+                readiness_attempts.append(asyncio.get_running_loop().time())
+                if failures_remaining:
+                    failures_remaining -= 1
+                    raise OSError("Controlled readiness read failure")
+            return await original_readiness(live, force=force)
+
+        monkeypatch.setattr(LiveInputs, "refresh_async", refresh_readiness)
 
         async def observed_refresh(runtime, instant):
             """Expose the completed initial empty configuration read without replacing refresh logic."""
@@ -545,6 +564,12 @@ def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
                     assert solved_import_rates[-1] == pytest.approx(expected_rate)
                     body["expected_version"] = saved["version"]
                 assert opened_areas == ["NL"]
+                assert failures_remaining == 0
+                if readiness_failures:
+                    assert all(
+                        later - earlier >= 0.04
+                        for earlier, later in pairwise(readiness_attempts[:3])
+                    )
         finally:
             await runner.cleanup()
 
