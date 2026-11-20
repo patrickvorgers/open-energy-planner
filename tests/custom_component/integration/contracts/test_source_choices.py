@@ -12,6 +12,108 @@ from custom_components.open_energy_planner.client import AuthenticationError
 from tests.custom_component.support.chain import TOKEN, configure_energy, running_chain
 
 
+@pytest.mark.parametrize("scope", ["ev", "thermal"])
+def test_source_choices_survive_an_observation_upload_timeout(monkeypatch, scope):
+    """Vehicle and plug choices complete even when unrelated measurement upload fails."""
+
+    async def scenario():
+        """Use real HA discovery and app admission before a failing observation transport."""
+        async with running_chain(live=True, peer_gateway=True) as (hass, entry, url, *_):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            hass.states.async_set("sensor.car_soc", "60", {"unit_of_measurement": "%"})
+            hass.states.async_set("binary_sensor.car_plug", "on")
+            hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
+            hass.states.async_set(
+                "sensor.tank_temperature",
+                "50",
+                {"device_class": "temperature", "unit_of_measurement": "°C"},
+            )
+            original_snapshot = coordinator.client.snapshot
+
+            async def snapshot():
+                """Supply a valid measurement binding alongside the genuine pending chooser request."""
+                data = await original_snapshot()
+                data["measurement_config"] = {
+                    "revision": "fixture-measurements",
+                    "bindings": [
+                        {
+                            "key": "grid.power",
+                            "entity_id": "sensor.grid",
+                            "quantity": "power",
+                            "required": True,
+                            "multiplier": 1,
+                            "maximum_age_s": 300,
+                            "timestamp_attribute": None,
+                        }
+                    ],
+                }
+                return data
+
+            async def observations(_report):
+                """Fail independently of the metadata path without real-time waiting."""
+                raise TimeoutError
+
+            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
+            monkeypatch.setattr(coordinator.client, "observations", observations)
+            async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
+                async with session.post(
+                    url + "/v1/ha/source-choices/" + scope, json={}
+                ) as response:
+                    assert response.status == 200
+                    assert (await response.json())["pending"]
+                await coordinator.sync()
+                assert coordinator.issue == "synchronization_failed"
+                async with session.get(url + "/v1/ha/source-choices/" + scope) as response:
+                    result = await response.json()
+                assert not result["pending"] and not result["failed"]
+                identities = {row["entity_id"] for row in result["catalogue"]["entities"]}
+                assert (
+                    {"sensor.car_soc", "binary_sensor.car_plug"}
+                    if scope == "ev"
+                    else {"sensor.tank_temperature"}
+                ) <= identities
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("changed", [{"plan_invalidated": True}, {"config_revision": "changed"}])
+def test_source_transfer_cannot_delay_known_command_invalidation(monkeypatch, changed):
+    """Revoke a previously usable command before awaiting optional chooser publication."""
+
+    async def scenario():
+        """Observe real command state at the first authenticated source page upload."""
+        async with running_chain(peer_gateway=True) as (hass, entry, url, *_):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            assert coordinator.schedule.plan is not None
+            hass.states.async_set("sensor.car_soc", "60", {"unit_of_measurement": "%"})
+            original = coordinator.client.request
+            published = []
+
+            async def request(method, path, body=None):
+                """Apply a snapshot invalidation and inspect commands before metadata I/O."""
+                if path == "/v1/ha/source-choices":
+                    assert coordinator.schedule.plan is None
+                    assert coordinator.projection.command is None
+                    published.append(body)
+                data = await original(method, path, body)
+                if path == "/v1/snapshot":
+                    data.update(source="home_assistant", **changed)
+                return data
+
+            monkeypatch.setattr(coordinator.client, "request", request)
+            async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
+                async with session.post(url + "/v1/ha/source-choices/ev", json={}) as response:
+                    assert response.status == 200
+                await coordinator.sync()
+            assert published
+
+    asyncio.run(scenario())
+
+
 def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active(monkeypatch):
     """A car at the tail of a paged query can be saved while unrelated sources stay outside active discovery."""
 

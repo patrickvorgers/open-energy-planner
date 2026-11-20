@@ -402,6 +402,21 @@ class PlanCoordinator:
                         "Existing commands remain usable only within their normal validity.",
                     )
                     return
+                if data.get("source") == "home_assistant":
+                    from .source_choices import refresh_choices
+
+                    if (
+                        data.get("plan_invalidated") is True
+                        or data.get("config_revision") != self.schedule.config_revision
+                    ):
+                        self.schedule.invalidate()
+                        self.refresh()
+                    # Chooser requests must not expire behind unrelated observation or history failures.
+                    await refresh_choices(
+                        self, data.get("installation", {}).get("source_choices_requested", [])
+                    )
+                    if self.closed:
+                        return
                 self.market_prices.start(data.get("market_price_request"), self.client)
                 configuration = data.get("measurement_config")
                 if configuration is not None:
@@ -508,8 +523,6 @@ class PlanCoordinator:
                     self.schedule.invalidate()
                 now = dt_util.utcnow()
                 if data.get("source") == "home_assistant":
-                    from .source_choices import refresh_choices
-
                     try:
                         self.catalogue_discovery.configure(
                             data.get("installation", {}).get("setup_source_entities", [])
@@ -530,11 +543,6 @@ class PlanCoordinator:
                                 "Home Assistant source bindings accepted. Metadata refresh can resume"
                             )
                         self.catalogue_bindings_rejected = False
-                    await refresh_choices(
-                        self, data.get("installation", {}).get("source_choices_requested", [])
-                    )
-                    if self.closed:
-                        return
                 catalogue_request = data.get("installation", {}).get("setup_discovery_requested")
                 forced_catalogue = self.catalogue_sent is None or (
                     catalogue_request and catalogue_request != self.catalogue_request
