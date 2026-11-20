@@ -4,9 +4,12 @@ from datetime import time
 from uuid import UUID
 
 from open_energy_planner.appliances.ev.model import (
+    AC_EFFICIENCY_DEFAULTS,
+    MAX_EFFICIENCY_STAGES,
     MAX_EV_CAPACITY_KWH,
     MAX_EV_POWER_W,
     number,
+    validated_efficiency_stages,
 )
 from open_energy_planner.core.units import FULL_SOC_PERCENT
 
@@ -31,6 +34,38 @@ def entity(value, domain):
     return value
 
 
+def charging_efficiency(row):
+    """Validate per-car mode and bounded, increasing AC and battery power anchors."""
+    phases = row.get("charging_phases")
+    if phases is None and "efficiency_stages" not in row:
+        return {}
+    if type(phases) is not int or phases not in AC_EFFICIENCY_DEFAULTS:
+        raise ValueError("Choose one or three AC charging phases")
+    stages = row.get(
+        "efficiency_stages",
+        [
+            {"power_w": power, "efficiency_percent": efficiency}
+            for power, efficiency in AC_EFFICIENCY_DEFAULTS[phases]
+        ],
+    )
+    if not isinstance(stages, list) or not 1 <= len(stages) <= MAX_EFFICIENCY_STAGES:
+        raise ValueError(f"Use 1 to {MAX_EFFICIENCY_STAGES} charging efficiency stages")
+    if any(
+        not isinstance(stage, dict) or set(stage) != {"power_w", "efficiency_percent"}
+        for stage in stages
+    ):
+        raise ValueError("Specify AC power and efficiency for every charging stage")
+    checked = validated_efficiency_stages(
+        tuple((stage["power_w"], stage["efficiency_percent"]) for stage in stages)
+    )
+    return {
+        "charging_phases": phases,
+        "efficiency_stages": [
+            {"power_w": power, "efficiency_percent": efficiency} for power, efficiency in checked
+        ],
+    }
+
+
 def configuration(body, catalogue, consumers, appliances, previous_points):
     """Validate one complete replacement against current HA metadata and Energy ownership.
 
@@ -49,6 +84,8 @@ def configuration(body, catalogue, consumers, appliances, previous_points):
             "connected_entity",
             "charging_entity",
             "location_entity",
+            "charging_phases",
+            "efficiency_stages",
         } != {
             "id",
             "soc_entity",
@@ -89,7 +126,11 @@ def configuration(body, catalogue, consumers, appliances, previous_points):
             if source_id is not None and entity(source_id, domain) not in metadata:
                 raise ValueError("Select an available vehicle recognition source")
             optional[field] = source_id
-        vehicles.append({**row, **optional, "soc_timestamp_attribute": attribute})
+        efficiency = charging_efficiency(row)
+        normalized = {key: value for key, value in row.items() if key != "charging_phases"}
+        vehicles.append(
+            {**normalized, **optional, "soc_timestamp_attribute": attribute, **efficiency}
+        )
     vehicle_ids = {row["id"] for row in vehicles}
     if len(vehicle_ids) != len(vehicles) or len({row["soc_entity"] for row in vehicles}) != len(
         vehicles

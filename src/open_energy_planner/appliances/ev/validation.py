@@ -54,7 +54,9 @@ def validate(problem, plan, tolerance):
             require(
                 abs(
                     row.stored_kwh
-                    - delivered_power(max(0, row.power_w)) * step.duration_h / WATTS_PER_KW
+                    - delivered_power(max(0, row.power_w), work.delivery_points)
+                    * step.duration_h
+                    / WATTS_PER_KW
                 )
                 <= tolerance,
                 "EV conversion energy",

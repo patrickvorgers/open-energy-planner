@@ -3,7 +3,11 @@
 from copy import deepcopy
 
 from open_energy_planner.appliances.cycles.model import instant
-from open_energy_planner.appliances.ev.model import delivered_power
+from open_energy_planner.appliances.ev.model import (
+    delivered_power,
+    delivery_points,
+    vehicle_efficiency_stages,
+)
 from open_energy_planner.core.units import FULL_SOC_PERCENT, SECONDS_PER_HOUR, WATTS_PER_KW
 
 TELEMETRY_KEY = "ev-telemetry.json"
@@ -199,7 +203,8 @@ def update_telemetry(previous, state, report):
                     and instant(baseline_at) >= instant(checkpoint["attributed_at"])
                 ):
                     average_w = min(maximum, delta * WATTS_PER_KW / hours)
-                    useful = delta * delivered_power(average_w) / average_w
+                    points = delivery_points(vehicle_efficiency_stages(cars[vehicle_id]))
+                    useful = delta * delivered_power(average_w, points) / average_w
                     evidence["stored_kwh"] += useful
                     evidence["estimate_updated_at"] = report["at"]
                     checkpoint["credited_kwh"] += useful

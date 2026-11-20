@@ -7,3 +7,11 @@
 @media(max-width:700px) {
     #ev-editor .ev-field > span { min-height:0; }
 }
+
+#ev-editor .ev-efficiency-stages { margin:0; min-width:0; padding:16px; gap:12px 16px; }
+#ev-editor .ev-efficiency-stages[hidden] { display:none; }
+#ev-editor .ev-efficiency-stages .ev-field > span { min-height:0; }
+#ev-editor .ev-stage-heading, #ev-editor .ev-stage-actions {
+    grid-column:1/-1; display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+}
+#ev-editor .ev-stage-heading { justify-content:space-between; font-weight:600; }

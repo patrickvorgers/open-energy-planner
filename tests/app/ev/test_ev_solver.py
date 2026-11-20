@@ -321,3 +321,52 @@ def test_same_vehicle_cannot_be_connected_to_two_charge_points():
     first = work()
     with pytest.raises(ValueError, match="multiply connected"):
         problem((first, replace(first, session_id="other", point_id="other")))
+
+
+def test_vehicle_curve_controls_fixed_power_and_exact_stop():
+    """At 75%, a 0.6 kWh battery increase requires 0.8 kWh AC and a 288 s pulse at 10 kW."""
+    current = work(maximum_w=10000, efficiency_stages=((2300, 75),))
+    inputs = problem((current,))
+    plan = solve(inputs)
+    assert sum(flow.grid_import for flow in plan.flows) == pytest.approx(0.8)
+    active = [
+        step
+        for step, flow in zip(inputs.intervals, plan.flows, strict=True)
+        if flow.ev[0].power_w > 0
+    ]
+    assert len(active) == 1
+    assert active[0].duration_h * 3600 == pytest.approx(288)
+
+
+def test_vehicle_curve_interpolates_delivered_watts_in_variable_band():
+    """At 4 kW, interpolate halfway from 1.4 to 5.4 kW and deliver 1.7 kWh in half an hour."""
+    current = work(
+        deadline=START + timedelta(minutes=30),
+        capacity_kwh=100,
+        initial_soc=50,
+        target_soc=51.7,
+        minimum_w=2000,
+        maximum_w=6000,
+        control="variable",
+        efficiency_stages=((2000, 70), (6000, 90)),
+    )
+    inputs = problem((current,), prices=(0.1,), hours=0.5, limit=4000)
+    plan = solve(inputs)
+    assert sum(flow.grid_import for flow in plan.flows) == pytest.approx(2)
+    assert sum(flow.ev[0].stored_kwh for flow in plan.flows) == pytest.approx(1.7)
+
+
+@pytest.mark.parametrize(
+    "stages",
+    [
+        [[11000, 0]],
+        [[11000, 101]],
+        [[2300, 80], [2300, 81]],
+        [[2300, 90], [2400, 80]],
+        [[power, 80] for power in range(1000, 10000, 1000)],
+    ],
+)
+def test_work_rejects_invalid_efficiency_stages(stages):
+    """Directly constructed or decoded work cannot model energy outside the validated curve."""
+    with pytest.raises(ValueError):
+        work(efficiency_stages=stages)
