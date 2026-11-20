@@ -75,7 +75,7 @@ def test_publication_notice_explains_retry_and_only_clears_after_publication(
         (
             "ev_forecast_boundary_unavailable",
             "Waiting for the charge-point forecast",
-            "Wait for OEP to retry automatically",
+            "Wait for the automatic retry",
             "/appliance-settings",
         ),
         (

@@ -17,8 +17,8 @@ def explain_problem(reason):
     if reason == EV_FORECAST_UNAVAILABLE:
         return NoticeText(
             "Waiting for the charge-point forecast",
-            "Planning is paused until OEP can separate charging from household consumption. "
-            "Wait for OEP to retry automatically. If this persists, check Consumption and "
+            "Planning is paused until charging can be separated from household consumption. "
+            "Wait for the automatic retry. If this persists, check Consumption and "
             "cycles for forecast or history issues.",
             "Check consumption forecasts",
             "/appliance-settings",
@@ -27,7 +27,7 @@ def explain_problem(reason):
         return NoticeText(
             "Charge-point meter missing from Home Assistant Energy",
             "Planning is paused. Open EV charging settings to see which meter is missing. "
-            "Add it to Home Assistant Energy, then choose Refresh Home Assistant sources in OEP.",
+            "Add it to Home Assistant Energy, then choose Refresh Home Assistant sources.",
             "Open EV charging settings",
             "/appliance-settings/ev",
         )

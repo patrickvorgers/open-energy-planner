@@ -7,7 +7,7 @@ def test_forecast_wait_notice_tells_user_to_wait_and_where_to_check():
     """A forecast delay points to diagnostics only if retrying does not resolve it."""
     notice = explain_problem("ev_forecast_boundary_unavailable")
     assert notice.title == "Waiting for the charge-point forecast"
-    assert "retry automatically" in notice.message
+    assert "automatic retry" in notice.message
     assert "If this persists" in notice.message
     assert notice.action_path == "/appliance-settings"
     assert "meter links" not in notice.message

@@ -311,7 +311,7 @@ def test_missing_charger_separation_blocks_live_planning_instead_of_using_histor
         assert str(live._prepare((NOW, None, original))) == "ev_forecast_boundary_unavailable"
     else:
         assert str(unavailable) == "ev_forecast_boundary_unavailable"
-        assert "retry automatically" in message
+        assert "automatic retry" in message
         assert "Refresh Home Assistant sources" not in message
     assert original.problem.intervals[0].load_kwh == 4
 
