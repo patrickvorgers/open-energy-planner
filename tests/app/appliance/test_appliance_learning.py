@@ -230,6 +230,7 @@ def test_http_profile_and_history_writes_preserve_contract_and_skip_unchanged_re
             saved = (await response.json())["appliances"]["devices"][0]
             assert saved["profile_kind"] == "Learned" and saved["profile"]["samples"] == 2
             assert saved["profile"]["evidence"] == "synthetic"
+            assert refreshes == [{"force": True}, {"force": True}, {"force": False}]
             count = len(refreshes)
             response = await client.post("/v1/appliances/history", json=body)
             assert response.status == 200 and len(refreshes) == count

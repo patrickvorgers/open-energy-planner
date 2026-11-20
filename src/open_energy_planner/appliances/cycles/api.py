@@ -416,7 +416,16 @@ def register(app, service, repository, live, lock, ev, thermal):
                     and service.revision != previous_revision
                     and operation not in ("claim", "deadline", "deadline_field")
                 ):
-                    await live.refresh_async(force=True)
+                    await live.refresh_async(
+                        force=operation
+                        not in (
+                            "history",
+                            "raw_history",
+                            "history_scan",
+                            "hourly_history",
+                            "fine_history",
+                        ),
+                    )
                 if cancellation:
                     raise cancellation
                 response = {
