@@ -106,7 +106,7 @@ def _charge(work, step, remaining, available_w):
         or remaining <= ENERGY_TOLERANCE_KWH
     ):
         power = 0.0
-    rate = delivered_power(power) / WATTS_PER_KW
+    rate = delivered_power(power, work.delivery_points) / WATTS_PER_KW
     duration = min(hours, remaining / rate) if rate else 0.0
     energy = power * duration / WATTS_PER_KW
     return {

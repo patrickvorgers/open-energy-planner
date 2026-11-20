@@ -11,7 +11,7 @@ import {applianceSettingsApi} from "./appliance-settings-api.js";
 bindSettingsActions();
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = (id) => document.getElementById(id);
-const VEHICLE_FIELDS = ["id", "soc_entity", "soc_timestamp_attribute", "connected_entity", "charging_entity", "location_entity", "capacity_kwh", "maximum_w", "target_soc", "departure_time"];
+const VEHICLE_FIELDS = ["id", "soc_entity", "soc_timestamp_attribute", "connected_entity", "charging_entity", "location_entity", "capacity_kwh", "maximum_w", "target_soc", "departure_time", "charging_phases", "efficiency_stages"];
 const POINT_FIELDS = ["id", "energy_entity", "power_entity", "connected_entity", "minimum_w", "maximum_w", "control", "vehicle_ids"];
 const WATTS_PER_KW = 1000;
 const NO_DEVICE = "sources-without-device";
@@ -39,7 +39,7 @@ function displayName(row, vehicle) {
 /** Use the same read-only, Edit and Cancel boundary as the other Appliances editors. */
 function syncEditor() {
     const locked = saveState.busy || !saveState.ready;
-    for (const section of document.querySelectorAll("#vehicles > section, #points > section")) for (const control of section.querySelectorAll("input, select, button")) control.disabled = locked || !editing || section.hidden || control.dataset.energyOwned === "true";
+    for (const section of document.querySelectorAll("#vehicles > section, #points > section")) for (const control of section.querySelectorAll("input, select, button")) control.disabled = locked || !editing || section.hidden || control.dataset.energyOwned === "true" || control.dataset.stageLimit === "true";
     find("ev-device-select").disabled = locked || editing || !selected();
     find("edit-ev").disabled = locked || !selected(); find("add-ev").disabled = locked;
     find("ev-editor").hidden = !editing; find("ev-summary").hidden = editing;
@@ -49,13 +49,13 @@ function syncEditor() {
     if (editing && !saveState.busy) find("refresh").disabled = false;
 }
 /** Retain precise numeric drafts while target SoC shows one decimal when idle and exact values during editing. */
-function input(card, row, key, label, help, type = "number", limits = {}) {
+function input(card, row, key, label, help, type = "number", limits = {}, accessibleLabel = label) {
     const wrapper = node("label"), control = node("input"); wrapper.className = "ev-field"; wrapper.append(node("span", label)); control.type = type; control.required = true;
-    control.setAttribute("aria-label", label);
-    const watts = key === "maximum_w" || key === "minimum_w";
-    Object.assign(control, limits); if (key === "target_soc") percentageInput(control, row[key]); else control.value = row[key] === null || row[key] === undefined || row[key] === "" ? "" : watts ? row[key] / WATTS_PER_KW : row[key]; control.dataset.field = key;
+    control.setAttribute("aria-label", accessibleLabel);
+    const watts = ["maximum_w", "minimum_w", "power_w"].includes(key);
+    Object.assign(control, limits); if (["target_soc", "efficiency_percent"].includes(key)) percentageInput(control, row[key]); else control.value = row[key] === null || row[key] === undefined || row[key] === "" ? "" : watts ? row[key] / WATTS_PER_KW : row[key]; control.dataset.field = key;
     control.oninput = () => { const value = type === "number" ? inputNumber(control) : control.value; row[key] = watts && value !== null ? Math.round(value * WATTS_PER_KW) : value; changed(); };
-    wrapper.append(control, node("small", help)); card.append(wrapper); return control;
+    wrapper.append(control); if (help) wrapper.append(node("small", help)); card.append(wrapper); return control;
 }
 function select(card, row, key, label, help, options, emptyMessage = "No matching Home Assistant sources were discovered. Check that the integration exposes this sensor, then choose Refresh Home Assistant sources.") {
     const wrapper = node("label"), control = node("select"); wrapper.className = "ev-field"; wrapper.append(node("span", label)); control.required = true; control.dataset.field = key;
@@ -70,6 +70,68 @@ function select(card, row, key, label, help, options, emptyMessage = "No matchin
     wrapper.append(control, node("small", help)); card.append(wrapper);
     if (!options.length) wrapper.append(node("p", emptyMessage));
     return control;
+}
+/** Edit AC-to-battery conversion on the car, using the same form and save boundary as its limits. */
+function chargingEfficiency(card, row) {
+    card.append(node("h3", "AC charging efficiency"));
+    const phases = select(card, row, "charging_phases", "AC charging phases",
+        "Choose how this vehicle charges at your charge point. Changing phases loads the defaults for that mode.",
+        [["1", "Single-phase"], ["3", "Three-phase"]]);
+    phases.options[0].textContent = "Unspecified (original curve)";
+    phases.required = false;
+    const group = node("fieldset");
+    group.className = "settings-fields ev-efficiency-stages";
+    group.append(node("legend", "Charging efficiency stages"));
+    card.append(group);
+
+    const defaults = () => structuredClone(current.efficiency_defaults[row.charging_phases]);
+    const drawStages = () => {
+        group.hidden = !row.charging_phases;
+        while (group.children.length > 1) group.lastElementChild.remove();
+        if (group.hidden) return;
+        group.append(node("p", "Enter total AC power and the percentage that reaches the battery. Order stages from lowest to highest power."));
+        row.efficiency_stages.forEach((stage, index) => {
+            const position = index + 1;
+            const title = node("div", "Stage " + position);
+            title.className = "ev-stage-heading";
+            const remove = node("button", "Remove");
+            remove.type = "button"; remove.className = "secondary";
+            remove.setAttribute("aria-label", "Remove stage " + position);
+            remove.dataset.stageLimit = String(row.efficiency_stages.length === 1);
+            remove.onclick = () => {
+                row.efficiency_stages.splice(index, 1);
+                drawStages(); changed(); group.querySelectorAll("input")[Math.min(index, row.efficiency_stages.length - 1) * 2].focus();
+            };
+            title.append(remove); group.append(title);
+            input(group, stage, "power_w", "AC power (kW)", "", "number", {min: 0.001, max: 100, step: 0.001}, "Stage " + position + " AC power (kW)");
+            input(group, stage, "efficiency_percent", "Efficiency (%)", "", "number", {min: 1, max: 100, step: "any"}, "Stage " + position + " efficiency (%)");
+        });
+        const actions = node("div"); actions.className = "ev-stage-actions";
+        const add = node("button", "Add stage"), reset = node("button", "Restore defaults");
+        add.type = reset.type = "button"; add.className = reset.className = "secondary";
+        add.dataset.stageLimit = String(row.efficiency_stages.length >= current.max_efficiency_stages);
+        add.onclick = () => {
+            row.efficiency_stages.push({power_w: null, efficiency_percent: row.efficiency_stages.at(-1).efficiency_percent});
+            drawStages(); changed(); group.querySelectorAll("input[data-field=power_w]")[row.efficiency_stages.length - 1].focus();
+        };
+        reset.onclick = () => {
+            row.efficiency_stages = defaults();
+            drawStages(); changed(); group.querySelector("input").focus();
+        };
+        actions.append(add, reset); group.append(actions);
+        syncEditor();
+    };
+    phases.onchange = () => {
+        if (phases.value) {
+            row.charging_phases = Number(phases.value);
+            row.efficiency_stages = defaults();
+        } else {
+            delete row.charging_phases;
+            delete row.efficiency_stages;
+        }
+        drawStages(); changed();
+    };
+    drawStages();
 }
 function metadata(predicate, selection) { return (selection?.entities ?? current.catalogue.entities).filter(row => predicate(row) && (!selection?.device || row.device_id === selection.device) && (selection?.integration === undefined || (row.integration_id || "other") === selection.integration)).map((row) => { const name = sourceName(row, "Sensor"); return [row.entity_id, `${name}${row.name === name ? "" : ": " + row.name} (${row.entity_id})`]; }); }
 /** Keep integration types distinct from configured account instances and physical device identities. */
@@ -232,6 +294,7 @@ function render() {
         card.append(node("h3", "Vehicle limits"));
         input(card, row, "capacity_kwh", "Usable battery capacity (kWh)", "Usable energy, not the manufacturer's gross pack size.", "number", {min: 0.1, max: 1000, step: 0.1});
         input(card, row, "maximum_w", "Maximum vehicle AC charging power (kW)", "The car's own AC limit. The lower of this and the charge point limit applies.", "number", {min: 0.001, max: 100, step: 0.001});
+        chargingEfficiency(card, row);
         card.append(node("h3", "Charging preferences"));
         input(card, row, "target_soc", "Target state of charge (%)", "Default battery percentage for a newly planned charging request. Each request can override it.", "number", {min: 0, max: 100, step: "any"});
         input(card, row, "departure_time", "Default departure time", "Local Home Assistant time for a new automatic request when this car connects without a planned request. Existing requests retain their own departure.", "time");
@@ -277,7 +340,11 @@ function renderSummary() {
     find("ev-title").textContent = displayName(row, vehicle); find("ev-kind").textContent = vehicle ? "Vehicle" : "Charge point";
     const sourceFacts = vehicle ? [["State of charge", row.soc_entity, true], ["Vehicle plugged in", row.connected_entity, true], ["Vehicle charging", row.charging_entity, true], ["Vehicle location", row.location_entity, true]] : [["Consumption meter", row.energy_entity, true], ["Measured power", row.power_entity, true], ["Connection status", row.connected_entity, true]];
     const limits = vehicle ? [["Usable battery", Number.isFinite(row.capacity_kwh) ? row.capacity_kwh.toLocaleString(undefined, {maximumFractionDigits: 3}) + " kWh" : "Unavailable"], ["Maximum AC power", power(row.maximum_w)], ["Physical control", "Through the assigned charge point"]] : [["Control", {read_only: "Measurement only", on_off: "On/off at fixed power", variable: "Variable power"}[row.control]], ...(row.control === "variable" ? [["Minimum active power", power(row.minimum_w)]] : []), ["Maximum charging power", power(row.maximum_w)], ["Allowed vehicles", row.vehicle_ids.map(id => { const car = draft.vehicles.find(item => item.id === id); return car ? displayName(car, true) : id; }).join(", ") || "None"]];
-    settingsSummary(find("ev-summary"), [[vehicle ? "Vehicle and source" : "Home Assistant sources", sourceFacts], [vehicle ? "Vehicle limits" : "Charging capability", limits]]);
+    const efficiency = vehicle && row.charging_phases
+        ? [["AC charging efficiency", [["Phases", row.charging_phases === 1 ? "Single-phase" : "Three-phase"],
+            ...row.efficiency_stages.map(stage => [power(stage.power_w), percentage(stage.efficiency_percent)])]]]
+        : [];
+    settingsSummary(find("ev-summary"), [[vehicle ? "Vehicle and source" : "Home Assistant sources", sourceFacts], [vehicle ? "Vehicle limits" : "Charging capability", limits], ...efficiency]);
     find("ev-request-title").textContent = vehicle ? "Charging request" : "Charging sessions";
     find("ev-request-description").textContent = vehicle ? "Target state of charge and departure remain available under Energy and through the HA integration." : "Connection, automatic vehicle recognition and charging evidence remain under Energy. Recognition is checked for each physical connection.";
     const saved = (vehicle ? current.vehicles : current.points).find(item => item.id === row.id);
@@ -294,7 +361,7 @@ async function load(selection = selectedId) {
         integrationSelections.clear();
         integrationTypeSelections.clear();
         deviceSelections.clear();
-        draft = {vehicles: current.vehicles.map((row) => Object.fromEntries(VEHICLE_FIELDS.map((key) => [key, row[key]]))), points: current.points.map((row) => Object.fromEntries(POINT_FIELDS.map((key) => [key, row[key]])))};
+        draft = {vehicles: current.vehicles.map((row) => Object.fromEntries(VEHICLE_FIELDS.map((key) => [key, structuredClone(row[key])]))), points: current.points.map((row) => Object.fromEntries(POINT_FIELDS.map((key) => [key, row[key]])))};
         selectedId = selection; editing = false; find("connect").hidden = true; find("settings").hidden = false; find("status").textContent = current.issue || ""; render(); saveState.loaded(); syncEditor();
     } catch (error) { find("status").textContent = error.message; saveState.update(error.message); }
 }

@@ -381,3 +381,42 @@ def test_helper_without_device_retains_its_own_integration_and_sensor(app_page):
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
     assert saved["soc_entity"] == "sensor.synthetic_helper_soc"
+
+
+def test_vehicle_charging_efficiency_can_be_customized_and_saved(app_page):
+    """Select each phase preset, resize the stage list, and verify independent persistence."""
+    page, url = app_page
+    headers = prepare_vehicle(page, url)
+    page.get_by_label("Home Assistant integration", exact=True).select_option("zeekr_ev")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("3.68")
+    phases = page.get_by_label("AC charging phases", exact=True)
+    phases.select_option("3")
+    expect(page.get_by_label("Stage 3 efficiency (%)", exact=True)).to_have_value("90.0")
+    phases.select_option("1")
+    expect(page.get_by_label("Stage 2 AC power (kW)", exact=True)).to_have_value("3.68")
+    page.get_by_role("button", name="Remove stage 2", exact=True).click()
+    expect(page.get_by_role("button", name="Remove stage 1", exact=True)).to_be_disabled()
+    page.get_by_role("button", name="Add stage", exact=True).click()
+    expect(page.get_by_label("Stage 2 AC power (kW)", exact=True)).to_be_focused()
+    page.get_by_label("Stage 2 AC power (kW)", exact=True).fill("3.68")
+    page.get_by_label("Stage 2 efficiency (%)", exact=True).fill("84.5")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/ev-charging-efficiency-{page.viewport_size['width']}.png",
+        full_page=True,
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert saved["charging_phases"] == 1
+    assert saved["efficiency_stages"] == [
+        {"power_w": 2300, "efficiency_percent": 82},
+        {"power_w": 3680, "efficiency_percent": 84.5},
+    ]
+    expect(page.locator("#ev-summary")).to_contain_text("Single-phase")
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    expect(page.get_by_label("Stage 2 efficiency (%)", exact=True)).to_have_value("84.5")
+    page.get_by_role("button", name="Restore defaults", exact=True).click()
+    expect(page.get_by_label("Stage 2 efficiency (%)", exact=True)).to_have_value("85.0")

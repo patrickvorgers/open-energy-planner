@@ -593,3 +593,46 @@ def test_consumer_api_preserves_saved_charging_membership_without_timezone(servi
             assert body["options"] == []
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("phases, power, efficiency", [(1, 3680, 85), (3, 4100, 87)])
+def test_phase_defaults_persist_and_reach_ev_work(service, phases, power, efficiency):
+    """A saved mode materializes the preset, and the configured car supplies it to planning."""
+    data = settings()
+    data["vehicles"][0]["charging_phases"] = phases
+    service.configure(data, catalogue(), NOW)
+    restored = EVService(service.documents, service.consumers, service.appliances)
+    restored.receive(observations(restored), NOW)
+    restored.assign(POINT, CAR, SESSION, NOW)
+    (work,) = restored.work(NOW, "Europe/Amsterdam")
+    assert (power, efficiency) in work.efficiency_stages
+    assert (power, power * efficiency / 100) in work.delivery_points
+    recorded = restored.document(NOW, "Europe/Amsterdam")["vehicles"][0]
+    assert recorded["charging_phases"] == phases
+    assert {"power_w": power, "efficiency_percent": efficiency} in recorded["efficiency_stages"]
+
+
+@pytest.mark.parametrize(
+    "phases, stages",
+    [
+        (True, [{"power_w": 2300, "efficiency_percent": 80}]),
+        (None, [{"power_w": 2300, "efficiency_percent": 80}]),
+        (1, []),
+        (3, [{"power_w": 4100, "efficiency_percent": 101}]),
+        (
+            1,
+            [
+                {"power_w": 2300, "efficiency_percent": 90},
+                {"power_w": 2400, "efficiency_percent": 80},
+            ],
+        ),
+    ],
+)
+def test_invalid_vehicle_efficiency_preserves_configuration(service, phases, stages):
+    """Reject impossible or ambiguous curves before committing a replacement."""
+    before = service.configuration_version
+    data = settings()
+    data["vehicles"][0].update(charging_phases=phases, efficiency_stages=stages)
+    with pytest.raises(ValueError):
+        service.configure(data, catalogue(), NOW)
+    assert service.configuration_version == before
