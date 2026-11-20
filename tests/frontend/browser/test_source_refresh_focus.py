@@ -9,7 +9,7 @@ from tests.frontend.browser.helpers import (
     discover,
     discover_boiler_sources,
 )
-from tests.frontend.browser.test_appliance_settings import add_ev_appliance
+from tests.frontend.browser.test_appliance_settings import add_ev_appliance, open_vehicle_section
 
 
 @pytest.mark.parametrize("raw,next_key,expected", [("180", "5", "1805"), ("1e", "2", "1e2")])
@@ -64,6 +64,11 @@ def test_target_soc_keeps_incomplete_text_and_next_key_during_source_refresh(
         )
     ) as pending:
         add_ev_appliance(page, "vehicle")
+    page.get_by_label("Home Assistant integration", exact=True).select_option("other")
+    page.get_by_label("Vehicle state of charge", exact=True).select_option("sensor.soc0")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    open_vehicle_section(page, "preferences")
     target = page.get_by_label("Target state of charge (%)", exact=True)
     target.click()
     target.press("ControlOrMeta+A")

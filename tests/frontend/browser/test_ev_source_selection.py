@@ -6,7 +6,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN, discover
-from tests.frontend.browser.test_appliance_settings import add_ev_appliance
+from tests.frontend.browser.test_appliance_settings import add_ev_appliance, open_vehicle_section
 
 
 def test_vehicle_recognition_sources_are_scoped_and_saved_as_optional_fields(app_page):
@@ -39,6 +39,9 @@ def test_vehicle_recognition_sources_are_scoped_and_saved_as_optional_fields(app
     page.get_by_role("button", name="Connect", exact=True).click()
     add_ev_appliance(page, "vehicle")
     choose_integration(page, "family-account")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    open_vehicle_section(page, "recognition")
     expect(page.get_by_label("Vehicle plugged in", exact=True)).to_have_value(
         "binary_sensor.synthetic_family_plug"
     )
@@ -48,8 +51,6 @@ def test_vehicle_recognition_sources_are_scoped_and_saved_as_optional_fields(app
     expect(page.get_by_label("Vehicle location", exact=True)).to_have_value(
         "device_tracker.synthetic_family_location"
     )
-    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
-    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
     Path("results/ci").mkdir(parents=True, exist_ok=True)
     page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(
@@ -168,6 +169,7 @@ def test_integration_first_selects_unique_devices_and_keeps_template_sources(app
     assert saved["name"] == "Zeekr GT"
     assert saved["soc_entity"] == "sensor.synthetic_zeekr_soc"
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "basics")
     expect(device).to_have_value("zeekr")
     device.select_option("other-car")
     expect(integration).to_have_value("account")
@@ -229,12 +231,13 @@ def test_unowned_soc_source_does_not_adopt_unrelated_recognition_sources(app_pag
     page.get_by_label("Vehicle state of charge", exact=True).select_option(
         "sensor.synthetic_unowned_soc"
     )
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
+    open_vehicle_section(page, "recognition")
     for label in ("Vehicle plugged in", "Vehicle charging", "Vehicle location"):
         control = page.get_by_label(label, exact=True)
         expect(control).to_have_value("")
         expect(control.locator("option")).to_have_count(1)
-    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
-    page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("11")
     page.evaluate("scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(
         path=f"results/ci/ev-unowned-sources-{page.viewport_size['width']}.png", full_page=True
@@ -385,6 +388,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     assert saved["vehicles"][0]["name"] == "Family car"
     assert saved["vehicles"][0]["soc_entity"] == "sensor.car_charge"
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "basics")
     choose_integration(page, "")
     expect(page.get_by_label("Vehicle state of charge", exact=True)).to_have_value(
         "sensor.car_charge"
@@ -398,6 +402,7 @@ def test_ev_integration_selection_filters_sources_and_saves_ha_vehicle_name(app_
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     assert page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"] == saved["vehicles"]
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "basics")
     choose_integration(page, "")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("61")
     assert page.get_by_role("combobox", name="Home Assistant integration", exact=True).evaluate(

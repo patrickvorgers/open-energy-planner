@@ -438,6 +438,14 @@ def test_historical_learning_progress_preserves_drafts_and_concurrent_write_guar
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
+def open_vehicle_section(page, section):
+    """Open one section through the selected vehicle's actual accordion control."""
+    group = page.locator(f'#vehicles > section:visible > details[data-ev-section="{section}"]')
+    if group.get_attribute("open") is None:
+        group.locator(":scope > summary").click()
+    expect(group).to_have_attribute("open", "")
+
+
 def add_ev_appliance(page, kind, energy_entity=None):
     """Choose one typed EV draft through the shared Add action rather than editing every device at once."""
     page.get_by_role("button", name="Add vehicle or charge point", exact=True).click()
@@ -517,6 +525,7 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     assert_appliance_toolbar(page, "ev-saved")
     page.screenshot(path=f"results/ci/ev-saved-{page.viewport_size['width']}.png", full_page=True)
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "basics")
     page.locator('#vehicles > section [data-field="maximum_w"]').first.fill("7.4")
     expect(page.locator("#ev-device-select")).to_be_disabled()
     page.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
@@ -768,6 +777,7 @@ def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(ap
     ).ok
     page.locator("#ev-device-select").select_option(saved["vehicles"][0]["id"])
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "preferences")
     page.locator('#vehicles > section [data-field="target_soc"]').first.fill("90")
     page.get_by_role("button", name="Check saved settings", exact=True).click()
     expect(page.locator("#dirty")).to_contain_text("Save or discard your changes")
@@ -793,6 +803,7 @@ def test_ev_configuration_reuses_typed_ha_sources_and_preserves_native_intent(ap
     )
     expect(page.locator("#dirty")).to_have_text("All changes saved.")
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "preferences")
     target = page.locator('#vehicles > section [data-field="target_soc"]').first
     target.focus()
     expect(target).to_have_value("85.25")
