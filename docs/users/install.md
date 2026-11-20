@@ -137,6 +137,9 @@ Home Assistant keeps one Open Energy Planner integration entry. An ordinary
 update retains the same virtual device identities. The integration adds or
 removes virtual devices as you change the saved app configuration.
 
+If you want to be able to restore the previous installation, back up Home
+Assistant and the OEP app before starting a clean reinstall.
+
 A fresh app with a new installation identity reuses the integration entry after
 the new connection is verified. Home Assistant clears the previous app's OEP
 devices and integration settings, then creates the devices configured in the

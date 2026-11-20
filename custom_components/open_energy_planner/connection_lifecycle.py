@@ -11,7 +11,15 @@ from .const import DOMAIN, projection_id
 
 @callback
 def discard_old_registry(hass, entry, *, keep=None):
-    """Remove old OEP registrations, including any left by an interrupted replacement."""
+    """Remove only OEP devices and entities owned by the specified config entry.
+
+    Args:
+        hass: The running Home Assistant instance.
+        entry: The OEP entry whose registrations are being reconciled.
+        keep: The current projection's identifier prefix. None removes all OEP
+            registrations for the entry. A prefix retains the current projection
+            during setup, including after interrupted registry persistence.
+    """
     entities = er.async_get(hass)
     devices = dr.async_get(hass)
     for entity in er.async_entries_for_config_entry(entities, entry.entry_id):

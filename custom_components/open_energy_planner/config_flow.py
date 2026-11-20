@@ -200,7 +200,20 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return await self._bind(self._pair_instance, self._pair_result)
 
     async def _bind(self, instance, data):
-        """Apply an authenticated connection to the one OEP entry."""
+        """Apply verified peer credentials with one shared binding lock per Home Assistant.
+
+        The lock serializes pairing completions. A replacement unloads the entry,
+        clears its previous projection and reloads it before retiring duplicates.
+
+        Args:
+            instance: The verified app installation UUID.
+            data: Connection settings and credentials for the verified peer.
+
+        Returns:
+            A create result for the first entry, or an abort result for an existing
+            entry. A successful update reports already_configured. Failed verification
+            or a lifecycle operation that needs retry reports pairing_failed.
+        """
         lock = self.hass.data.setdefault(f"{DOMAIN}_binding_lock", asyncio.Lock())
         async with lock:
             manager = self.hass.config_entries
@@ -217,10 +230,9 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if (
                 replacing
                 and data.get("supervisor")
-                and entry.data.get("supervisor")
-                and data["ui_url"] != entry.data.get("ui_url")
+                and (not entry.data.get("supervisor") or data["ui_url"] != entry.data.get("ui_url"))
             ):
-                return self.async_abort(reason="already_configured")
+                return self.async_abort(reason="pairing_failed")
             if not data.get("fingerprint") and entry.data.get("fingerprint"):
                 return self.async_abort(reason="already_configured")
             if not replacing and entry.data.get("projection_id"):
@@ -236,12 +248,6 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data.get("fingerprint"),
                         expected_instance_id=instance,
                     ).snapshot()
-                for obsolete in entries:
-                    if obsolete is entry:
-                        continue
-                    if not await manager.async_unload(obsolete.entry_id):
-                        return self.async_abort(reason="pairing_failed")
-                    await manager.async_remove(obsolete.entry_id)
                 if replacing:
                     from .connection_lifecycle import reset_projection
 
@@ -266,6 +272,12 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         and not await manager.async_reload(entry.entry_id)
                     ):
                         return self.async_abort(reason="pairing_failed")
+                for obsolete in entries:
+                    if obsolete is entry:
+                        continue
+                    if not await manager.async_unload(obsolete.entry_id):
+                        return self.async_abort(reason="pairing_failed")
+                    await manager.async_remove(obsolete.entry_id)
             except (ClientError, TimeoutError, ValueError, HomeAssistantError, OSError):
                 logging.getLogger(__name__).debug("App connection update failed", exc_info=True)
                 return self.async_abort(reason="pairing_failed")

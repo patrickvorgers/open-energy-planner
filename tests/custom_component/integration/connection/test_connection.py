@@ -398,27 +398,27 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
             current_entities = {
                 entity.id for entity in er.async_entries_for_config_entry(entities, entry_id)
             }
+            obsolete = ConfigEntry(
+                data={"url": current_url, "token": TOKEN},
+                options={},
+                domain=DOMAIN,
+                entry_id="obsolete-synthetic-installation",
+                source="integration_discovery",
+                title="Obsolete synthetic installation",
+                unique_id=str(uuid4()),
+                version=1,
+                minor_version=1,
+                state=ConfigEntryState.NOT_LOADED,
+                discovery_keys=MappingProxyType({}),
+                subentries_data=[],
+            )
+            manager._entries[obsolete.entry_id] = obsolete
+            assert await manager.async_setup(obsolete.entry_id)
+            stale_device = registry.async_get_device_by_identifier(
+                (DOMAIN, f"{obsolete.entry_id}_ems"), obsolete.entry_id
+            )
+            assert stale_device
             if duplicate:
-                obsolete = ConfigEntry(
-                    data={"url": current_url, "token": TOKEN},
-                    options={},
-                    domain=DOMAIN,
-                    entry_id="obsolete-synthetic-installation",
-                    source="integration_discovery",
-                    title="Obsolete synthetic installation",
-                    unique_id=str(uuid4()),
-                    version=1,
-                    minor_version=1,
-                    state=ConfigEntryState.NOT_LOADED,
-                    discovery_keys=MappingProxyType({}),
-                    subentries_data=[],
-                )
-                manager._entries[obsolete.entry_id] = obsolete
-                assert await manager.async_setup(obsolete.entry_id)
-                stale_device = registry.async_get_device_by_identifier(
-                    (DOMAIN, f"{obsolete.entry_id}_ems"), obsolete.entry_id
-                )
-                assert stale_device
                 flow = await manager.flow.async_init(DOMAIN, context={"source": "user"})
                 result = await manager.flow.async_configure(
                     flow["flow_id"], {"url": current_url, "token": TOKEN}
@@ -466,6 +466,12 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
                 assert (await discover("wrong"))["reason"] == "pairing_failed"
                 assert entry.unique_id == current_id
                 assert registry.async_get(current_device.id)
+                assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
+                assert entry.unique_id == current_id
+                assert registry.async_get(current_device.id)
+                manager.async_update_entry(
+                    entry, data={**entry.data, "supervisor": True, "ui_url": "/app/test_oep"}
+                )
                 coordinator = entry.runtime_data
                 coordinator.schedule.resume_after = datetime(2040, 1, 1, tzinfo=UTC)
                 if coordinator.appliance_history_task:
@@ -482,6 +488,8 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
                 assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
                 assert entry.unique_id == pairing.instance_id
                 assert entry.state is ConfigEntryState.NOT_LOADED
+                assert manager.async_get_entry(obsolete.entry_id) is obsolete
+                assert registry.async_get(stale_device.id)
                 assert registry.async_get(current_device.id) is None
                 assert await Store(hass, 1, f"{DOMAIN}.{entry_id}").async_load() is None
                 monkeypatch.setattr(manager, "async_setup", original_setup)
@@ -489,6 +497,7 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
                 await hass.async_block_till_done()
                 assert manager.async_entries(DOMAIN) == [entry]
                 assert entry.state is ConfigEntryState.LOADED
+                assert registry.async_get(stale_device.id) is None
                 assert entry.runtime_data.schedule.resume_after is None
                 new_devices = dr.async_entries_for_config_entry(registry, entry_id)
                 assert new_devices and all(device.name_by_user is None for device in new_devices)
