@@ -59,10 +59,11 @@ def test_ev_forecast_blocker_logs_no_source_identity_but_keeps_authenticated_con
             ev = captured["ev"]
             ev.state = {**ev.state, **settings(), "assignments": {}}
             ev.state["points"][0]["energy_entity"] = "sensor.private_ev_meter_sentinel"
-            ev.issue = "Charger component forecast unavailable. EV history cannot be removed safely"
+            ev.consumers.sync({"entities": [], "suggestions": {"consumers": []}})
+            ev.issue = "ev_energy_meter_missing"
             with caplog.at_level(logging.INFO, logger="open_energy_planner.planning"):
-                captured["planner"].invalidate("ev_forecast_boundary_unavailable")
-            assert "Planning blocked: ev_forecast_boundary_unavailable" in caplog.text
+                captured["planner"].invalidate("ev_energy_meter_missing")
+            assert "Planning blocked: ev_energy_meter_missing" in caplog.text
             assert "private_ev_meter_sentinel" not in caplog.text
             assert "sensor.charger_power" not in caplog.text
             assert (

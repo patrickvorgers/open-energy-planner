@@ -199,7 +199,7 @@ class LiveInputs:
         try:
             prepared = self.prepare_snapshot(snapshot, now)
             if self.ev is not None and self.ev.issue:
-                raise InputsUnavailable("ev_forecast_boundary_unavailable")
+                raise InputsUnavailable(self.ev.issue)
             return now, basis, prepared
         except InputsUnavailable as error:
             return error
