@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 import json
+import logging
+import socket
 
 import pytest
 from aiohttp import ClientSession, Fingerprint, web
@@ -299,7 +301,6 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
 
 def test_optional_address_discovery_failure_keeps_app_available(tmp_path, monkeypatch):
     """An unavailable multicast route must not take down the app UI or authenticated API."""
-    import socket
 
     def unavailable(_name):
         """Simulate hostname resolution failure before optional multicast advertising."""
@@ -319,6 +320,53 @@ def test_optional_address_discovery_failure_keeps_app_available(tmp_path, monkey
                 assert response.status == 200
 
     asyncio.run(scenario())
+
+
+def test_tls_peer_request_recovers_when_local_listener_starts(tmp_path, caplog):
+    """An authenticated request receives 503 while the app starts and succeeds once it listens."""
+
+    async def version(_request):
+        """Identify the response as coming from the real loopback listener."""
+        return web.json_response({"ready": True})
+
+    async def scenario():
+        """Reserve the upstream port before listening and keep the same pinned peer session."""
+        pairing = Pairing(tmp_path, "startup-test")
+        context, pin = certificate(tmp_path, pairing.instance_id)
+        pairing.fingerprint = pin
+        claim = {"request_id": pairing.request(PEER)["request_id"], "secret": SECRET}
+        await pairing.approve(claim["request_id"])
+        token = pairing.claim(claim)["token"]
+        upstream = web.Application()
+        upstream.router.add_get("/v1/version", version)
+        runner = web.AppRunner(upstream)
+        await runner.setup()
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            address = f"http://127.0.0.1:{listener.getsockname()[1]}"
+            gateway = connection_app(pairing, TOKEN, address, "/setup")
+            try:
+                async with (
+                    server(gateway, context) as url,
+                    ClientSession(headers={"Authorization": "Bearer " + token}) as client,
+                ):
+                    fingerprint = Fingerprint(bytes.fromhex(pin))
+                    async with client.get(url + "/v1/version", ssl=fingerprint) as response:
+                        assert response.status == 503
+                        assert (
+                            await response.text()
+                            == "Open Energy Planner is temporarily unavailable"
+                        )
+                    await web.SockSite(runner, listener).start()
+                    async with client.get(url + "/v1/version", ssl=fingerprint) as response:
+                        assert response.status == 200
+                        assert await response.json() == {"ready": True}
+            finally:
+                await runner.cleanup()
+
+    with caplog.at_level(logging.ERROR, logger="aiohttp.server"):
+        asyncio.run(scenario())
+    assert not any(record.name == "aiohttp.server" for record in caplog.records)
 
 
 def test_malformed_json_secrets_are_rejected_over_pinned_tls(tmp_path):
