@@ -56,6 +56,15 @@
         ],
         "createdAt": "2026-11-19T08:26:17.640Z",
         "reason": "Agent: docs/assets/courtyard.css intentionally uses the established locally bundled Courtyard heading font. docs/development/COURTYARD-THEME.md documents Outfit and Space Grotesk; preserve the existing identity during the Planning baseline change."
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "src/open_energy_planner/web/pages/contract.html"
+        ],
+        "createdAt": "2026-11-20T15:31:02.395Z",
+        "reason": "The static detector cannot resolve the app-mounted /setup stylesheets. Contract uses a 30px desktop or 25px mobile page heading and 18px section headings above 14px body text."
       }
     ]
   }
