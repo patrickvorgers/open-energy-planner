@@ -274,8 +274,11 @@ def test_power_confirmation_never_spans_unknown_data_or_a_different_command(serv
         assert service.execution_deviated(plan, latest)
 
 
-def test_missing_charger_separation_blocks_live_planning_instead_of_using_history(service):
-    """The original household estimate stays archived but cannot publish as a plan-only forecast."""
+@pytest.mark.parametrize("catalogue_state", ["unknown", "linked", "missing"])
+def test_missing_charger_separation_blocks_live_planning_instead_of_using_history(
+    service, catalogue_state
+):
+    """Only a confirmed missing link instructs the user to change Energy settings."""
     from open_energy_planner.appliances.cycles.service import ApplianceService
     from open_energy_planner.home_assistant.observations import InputsUnavailable
     from open_energy_planner.installation.model import InstallationProblem
@@ -290,9 +293,21 @@ def test_missing_charger_separation_blocks_live_planning_instead_of_using_histor
     live.prepare_snapshot = lambda snapshot, now: service.prepare(
         snapshot, None, now, "Europe/Amsterdam"
     )
+    if catalogue_state == "unknown":
+        service.consumers.catalogue_known = False
+    elif catalogue_state == "missing":
+        service.consumers.sync({"entities": [], "suggestions": {"consumers": []}})
     unavailable = live._prepare((NOW, None, original))
     assert isinstance(unavailable, InputsUnavailable)
-    assert str(unavailable) == "ev_forecast_boundary_unavailable"
+    message = service.document(NOW, "Europe/Amsterdam")["issue"]
+    if catalogue_state == "missing":
+        assert str(unavailable) == "ev_energy_meter_missing"
+        assert "sensor.charger_energy" in message
+        assert "Refresh Home Assistant sources" in message
+    else:
+        assert str(unavailable) == "ev_forecast_boundary_unavailable"
+        assert "retry automatically" in message
+        assert "Refresh Home Assistant sources" not in message
     assert original.problem.intervals[0].load_kwh == 4
 
 

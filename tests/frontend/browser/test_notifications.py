@@ -70,6 +70,49 @@ def test_publication_notice_explains_retry_and_only_clears_after_publication(
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
 @pytest.mark.parametrize(
+    "reason,title,advice,destination",
+    [
+        (
+            "ev_forecast_boundary_unavailable",
+            "Waiting for the charge-point forecast",
+            "Wait for OEP to retry automatically",
+            "/appliance-settings",
+        ),
+        (
+            "ev_energy_meter_missing",
+            "Charge-point meter missing from Home Assistant Energy",
+            "Add it to Home Assistant Energy",
+            "/appliance-settings/ev",
+        ),
+    ],
+)
+def test_ev_notice_shows_the_right_recovery_action(app_page, reason, title, advice, destination):
+    """The shared popup presents the EV-specific next step and links to the relevant settings."""
+    from open_energy_planner.appliances.ev.notifications import explain_problem
+    from open_energy_planner.notifications.model import Notification
+
+    page, url = app_page
+    notice = Notification(
+        f"planning:{reason}", reason, explain_problem(reason), blocks=("planning",)
+    )
+    result = {"notifications": [notice.document("planning")], "unavailable_sources": []}
+    page.route("**/v1/notifications", lambda route: route.fulfill(json=result))
+    page.goto(url + "/quality")
+    page.get_by_role("button", name="Notifications: 1 active", exact=True).click()
+    popup = page.locator("#notification-center-panel")
+    action = popup.get_by_role("link", name=title, exact=True)
+    expect(action).to_be_visible()
+    expect(action).to_have_attribute(
+        "href",
+        re.compile(re.escape(url + destination) + r"(?:\?embedded=1)?#planning-notifications$"),
+    )
+    expect(popup).to_contain_text(advice)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    popup.screenshot(path=f"results/ci/planning-notice-{reason}-{page.viewport_size['width']}.png")
+
+
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+@pytest.mark.parametrize(
     ("issue", "expected"),
     [
         ("solar_weather_unavailable", "Usable weather data"),
