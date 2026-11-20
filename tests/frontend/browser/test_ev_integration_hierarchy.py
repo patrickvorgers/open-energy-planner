@@ -4,7 +4,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.helpers import TOKEN, discover
-from tests.frontend.browser.test_appliance_settings import add_ev_appliance
+from tests.frontend.browser.test_appliance_settings import add_ev_appliance, open_vehicle_section
 
 
 def vehicle_source(
@@ -174,6 +174,7 @@ def test_multiple_accounts_and_sensors_require_explicit_choices(app_page):
     saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
     assert saved["soc_entity"] == "sensor.synthetic_second_alternative"
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "basics")
     expect(soc).to_have_value("sensor.synthetic_second_alternative")
     page.get_by_role(
         "combobox", name="Home Assistant integration instance", exact=True
@@ -390,6 +391,7 @@ def test_vehicle_charging_efficiency_can_be_customized_and_saved(app_page):
     page.get_by_label("Home Assistant integration", exact=True).select_option("zeekr_ev")
     page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
     page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True).fill("3.68")
+    open_vehicle_section(page, "profile")
     phases = page.get_by_label("AC charging phases", exact=True)
     phases.select_option("3")
     expect(page.get_by_label("Stage 3 efficiency (%)", exact=True)).to_have_value("90.0")
@@ -430,6 +432,79 @@ def test_vehicle_charging_efficiency_can_be_customized_and_saved(app_page):
     ]
     expect(page.locator("#ev-summary")).to_contain_text("Single-phase")
     page.get_by_role("button", name="Edit settings", exact=True).click()
+    open_vehicle_section(page, "profile")
     expect(page.get_by_label("Stage 2 efficiency (%)", exact=True)).to_have_value("84.5")
     page.get_by_role("button", name="Restore defaults", exact=True).click()
     expect(page.get_by_label("Stage 2 efficiency (%)", exact=True)).to_have_value("85.0")
+
+
+def test_vehicle_basics_gate_and_collapsed_saved_overview(app_page):
+    """Guide a new car through required basics and show its saved groups in the requested order."""
+    page, url = app_page
+    headers = prepare_vehicle(page, url)
+    vehicle = page.locator("#vehicles > section:visible")
+    groups = vehicle.locator(":scope > details")
+    expect(groups.locator(":scope > summary strong")).to_have_text(
+        [
+            "Vehicle basics",
+            "Automatic vehicle recognition",
+            "Charging profile",
+            "Charging preferences",
+        ]
+    )
+    expect(groups.first).to_have_attribute("open", "")
+    expect(groups.nth(1)).to_be_hidden()
+    save = page.get_by_role("button", name="Save settings", exact=True)
+    expect(save).to_be_disabled()
+    expect(page.get_by_role("heading", name="Home Assistant remains in control")).to_have_count(0)
+    width = page.viewport_size["width"]
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(path=f"results/ci/ev-overview-new-{width}.png", full_page=True)
+    page.get_by_label("Home Assistant integration", exact=True).select_option("zeekr_ev")
+    page.get_by_label("Usable battery capacity (kWh)", exact=True).fill("60")
+    power = page.get_by_label("Maximum vehicle AC charging power (kW)", exact=True)
+    power.fill("0")
+    expect(groups.nth(1)).to_be_hidden()
+    expect(save).to_be_disabled()
+    power.fill("3.68")
+    expect(save).to_be_enabled()
+    expect(groups.nth(1)).to_be_visible()
+    save.click()
+    expect(page.locator("#dirty")).to_have_text("All changes saved.")
+    saved = page.request.get(url + "/v1/ev", headers=headers).json()["vehicles"][0]
+    assert (
+        saved["capacity_kwh"],
+        saved["maximum_w"],
+        saved["target_soc"],
+        saved["departure_time"],
+    ) == (60, 3680, 80, "07:00")
+    overview = page.locator("#ev-summary")
+    expect(overview.locator("details.ev-group")).to_have_count(4)
+    expect(overview.locator("details.ev-group[open]")).to_have_count(0)
+    expect(overview.locator("summary").first).to_contain_text("60 kWh")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(path=f"results/ci/ev-overview-saved-{width}.png", full_page=True)
+    for section in ("recognition", "profile"):
+        summary = overview.locator(f'details[data-ev-section="{section}"] > summary')
+        summary.focus()
+        summary.press("Enter")
+        expect(overview.locator("details.ev-group[open]")).to_have_attribute(
+            "data-ev-section", section
+        )
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    expect(vehicle.locator("details.ev-group[open]")).to_have_count(0)
+    open_vehicle_section(page, "preferences")
+    departure = page.get_by_label("Default departure time", exact=True)
+    departure.fill("")
+    open_vehicle_section(page, "basics")
+    capacity = page.get_by_label("Usable battery capacity (kWh)", exact=True)
+    capacity.fill("")
+    save.click()
+    expect(capacity).to_be_focused()
+    expect(groups.first).to_have_attribute("open", "")
+    capacity.fill("60")
+    save.click()
+    expect(departure).to_be_focused()
+    expect(groups.nth(3)).to_have_attribute("open", "")
+    expect(page.locator("#dirty")).to_contain_text("Complete the highlighted fields")
