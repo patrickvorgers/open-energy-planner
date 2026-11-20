@@ -103,6 +103,10 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if entry.data["fingerprint"] != pin:
                     return self.async_abort(reason="identity_changed")
                 if not getattr(self, "_repair", False) and automatic_secret is None:
+                    if entry.data.get("replacement_pending") and not entry.disabled_by:
+                        return await self._bind(
+                            instance, {**entry.data, "url": url}, reconnect_entry=entry
+                        )
                     self._abort_if_unique_id_configured(updates={"url": url})
         self._pair_url, self._pair_pin, self._pair_instance = url, pin, instance
         self._pair_secret = secrets.token_urlsafe(PAIRING_CREDENTIAL_ENTROPY_BYTES)
@@ -199,7 +203,7 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="pairing_failed")
         return await self._bind(self._pair_instance, self._pair_result)
 
-    async def _bind(self, instance, data):
+    async def _bind(self, instance, data, *, reconnect_entry=None):
         """Apply verified peer credentials with one shared binding lock per Home Assistant.
 
         The lock serializes pairing completions. A replacement unloads the entry,
@@ -208,6 +212,7 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         Args:
             instance: The verified app installation UUID.
             data: Connection settings and credentials for the verified peer.
+            reconnect_entry: Existing entry to authenticate with its saved TLS pin and token.
 
         Returns:
             A create result for the first entry, or an abort result for an existing
@@ -218,6 +223,15 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         async with lock:
             manager = self.hass.config_entries
             entries = manager.async_entries(DOMAIN)
+            if reconnect_entry is not None and (
+                reconnect_entry not in entries
+                or reconnect_entry.disabled_by
+                or reconnect_entry.unique_id != instance
+                or not reconnect_entry.data.get("replacement_pending")
+                or reconnect_entry.data.get("fingerprint") != data["fingerprint"]
+                or reconnect_entry.data.get("token") != data["token"]
+            ):
+                return self.async_abort(reason="pairing_failed")
             if not entries:
                 if self._async_in_progress(
                     include_uninitialized=True, match_context={"oep_creating_entry": True}
@@ -225,7 +239,9 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return self.async_abort(reason="pairing_failed")
                 self.context["oep_creating_entry"] = True
                 return self.async_create_entry(title="Open Energy Planner", data=data)
-            entry = next((item for item in entries if item.unique_id == instance), entries[0])
+            entry = reconnect_entry or next(
+                (item for item in entries if item.unique_id == instance), entries[0]
+            )
             replacing = entry.unique_id != instance
             if (
                 replacing
@@ -237,10 +253,11 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_abort(reason="already_configured")
             if not replacing and entry.data.get("projection_id"):
                 data = {**data, "projection_id": projection_id(entry)}
+                if entry.data.get("replacement_pending"):
+                    data["replacement_pending"] = True
             try:
-                if replacing or len(entries) > 1:
-                    # Consent identifies the peer. Check that its app is actually serving the new
-                    # installation before withdrawing any existing Home Assistant devices.
+                if replacing or len(entries) > 1 or reconnect_entry is not None:
+                    # Verify the live app identity before resuming setup or withdrawing devices.
                     await LocalClient(
                         async_get_clientsession(self.hass),
                         data["url"],
@@ -256,6 +273,8 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             return self.async_abort(reason="pairing_failed")
                         await reset_projection(self.hass, entry)
                         data = {**data, "projection_id": uuid4().hex}
+                        if data.get("fingerprint") and not data.get("supervisor"):
+                            data["replacement_pending"] = True
                         manager.async_update_entry(entry, data=data, options={}, unique_id=instance)
                         if not entry.disabled_by and not await manager.async_setup(
                             entry.entry_id, _lock=False
@@ -272,12 +291,18 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         and not await manager.async_reload(entry.entry_id)
                     ):
                         return self.async_abort(reason="pairing_failed")
+                if len(entries) > 1 and entry.state is not config_entries.ConfigEntryState.LOADED:
+                    return self.async_abort(reason="pairing_failed")
                 for obsolete in entries:
                     if obsolete is entry:
                         continue
                     if not await manager.async_unload(obsolete.entry_id):
                         return self.async_abort(reason="pairing_failed")
                     await manager.async_remove(obsolete.entry_id)
+                if "replacement_pending" in entry.data:
+                    completed = dict(entry.data)
+                    completed.pop("replacement_pending")
+                    manager.async_update_entry(entry, data=completed)
             except (ClientError, TimeoutError, ValueError, HomeAssistantError, OSError):
                 logging.getLogger(__name__).debug("App connection update failed", exc_info=True)
                 return self.async_abort(reason="pairing_failed")

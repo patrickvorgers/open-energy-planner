@@ -368,10 +368,10 @@ def test_authenticated_supervisor_bootstrap_migrates_without_user_steps(tmp_path
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("duplicate", [False, True])
-def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypatch):
+@pytest.mark.parametrize("mode", ["upgrade", "supervisor", "standalone"])
+def test_authenticated_app_replacement_reconciles_one_entry(mode, monkeypatch):
     """Keep current registry identities on upgrade and rebuild them only for a trusted reset."""
-    from types import MappingProxyType
+    from types import MappingProxyType, SimpleNamespace
 
     from aiohttp import ClientConnectionError
     from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -418,7 +418,7 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
                 (DOMAIN, f"{obsolete.entry_id}_ems"), obsolete.entry_id
             )
             assert stale_device
-            if duplicate:
+            if mode == "upgrade":
                 flow = await manager.flow.async_init(DOMAIN, context={"source": "user"})
                 result = await manager.flow.async_configure(
                     flow["flow_id"], {"url": current_url, "token": TOKEN}
@@ -450,6 +450,20 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
 
             async def discover(secret):
                 """Submit the trusted discovery flow over the real pinned TLS connection."""
+                if mode == "standalone" and secret is None:
+                    return await manager.flow.async_init(
+                        DOMAIN,
+                        context={"source": "zeroconf"},
+                        data=SimpleNamespace(
+                            ip_address="127.0.0.1",
+                            port=gateway.addresses[0][1],
+                            properties={
+                                "instance_id": pairing.instance_id,
+                                "fingerprint": pin,
+                                "release": "0.2.0",
+                            },
+                        ),
+                    )
                 return await manager.flow.async_init(
                     DOMAIN,
                     context={"source": "integration_discovery"},
@@ -466,12 +480,13 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
                 assert (await discover("wrong"))["reason"] == "pairing_failed"
                 assert entry.unique_id == current_id
                 assert registry.async_get(current_device.id)
-                assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
-                assert entry.unique_id == current_id
-                assert registry.async_get(current_device.id)
-                manager.async_update_entry(
-                    entry, data={**entry.data, "supervisor": True, "ui_url": "/app/test_oep"}
-                )
+                if mode == "supervisor":
+                    assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
+                    assert entry.unique_id == current_id
+                    assert registry.async_get(current_device.id)
+                    manager.async_update_entry(
+                        entry, data={**entry.data, "supervisor": True, "ui_url": "/app/test_oep"}
+                    )
                 coordinator = entry.runtime_data
                 coordinator.schedule.resume_after = datetime(2040, 1, 1, tzinfo=UTC)
                 if coordinator.appliance_history_task:
@@ -485,7 +500,20 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
                 coordinator.appliance_history_task = asyncio.create_task(failed_history())
                 await asyncio.wait([coordinator.appliance_history_task])
                 monkeypatch.setattr(manager, "async_setup", interrupted_setup)
-                assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
+                if mode == "standalone":
+                    result = await discover(None)
+                    assert result["type"] == "progress"
+                    async with asyncio.timeout(10):
+                        while not pairing.pending:
+                            await asyncio.sleep(0.01)
+                        await pairing.approve(pairing.summary()["pending"][0]["request_id"])
+                        while any(
+                            item["flow_id"] == result["flow_id"]
+                            for item in manager.flow.async_progress()
+                        ):
+                            await asyncio.sleep(0.01)
+                else:
+                    assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
                 assert entry.unique_id == pairing.instance_id
                 assert entry.state is ConfigEntryState.NOT_LOADED
                 assert manager.async_get_entry(obsolete.entry_id) is obsolete
@@ -493,10 +521,26 @@ def test_authenticated_app_replacement_reconciles_one_entry(duplicate, monkeypat
                 assert registry.async_get(current_device.id) is None
                 assert await Store(hass, 1, f"{DOMAIN}.{entry_id}").async_load() is None
                 monkeypatch.setattr(manager, "async_setup", original_setup)
-                assert (await discover(pairing.supervisor_secret))["reason"] == "already_configured"
+                retry_secret = None if mode == "standalone" else pairing.supervisor_secret
+                if mode == "standalone":
+                    original_unload = manager.async_unload
+
+                    async def blocked_retirement(target_entry_id, *args, **kwargs):
+                        """Allow setup to recover while the obsolete entry still cannot unload."""
+                        if target_entry_id == obsolete.entry_id:
+                            return False
+                        return await original_unload(target_entry_id, *args, **kwargs)
+
+                    with monkeypatch.context() as patch:
+                        patch.setattr(manager, "async_unload", blocked_retirement)
+                        assert (await discover(None))["reason"] == "pairing_failed"
+                        assert entry.state is ConfigEntryState.LOADED
+                        assert registry.async_get(stale_device.id)
+                assert (await discover(retry_secret))["reason"] == "already_configured"
                 await hass.async_block_till_done()
                 assert manager.async_entries(DOMAIN) == [entry]
                 assert entry.state is ConfigEntryState.LOADED
+                assert "replacement_pending" not in entry.data
                 assert registry.async_get(stale_device.id) is None
                 assert entry.runtime_data.schedule.resume_after is None
                 new_devices = dr.async_entries_for_config_entry(registry, entry_id)

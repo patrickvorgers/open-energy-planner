@@ -1035,8 +1035,10 @@ Assistant entry ID, which stays the same across a verified replacement.
 | Connection or setup interrupted | Withdraw unusable commands. Keep the existing installation binding until a replacement is verified. A repeated authenticated handshake resumes incomplete setup without creating another entry. |
 
 The same Supervisor app slot can replace its previous installation
-automatically. Standalone pairing needs user approval. Ordinary discovery and
-address changes do not authorize replacement. Home Assistant automations that
+automatically. Standalone pairing needs user approval. If the approved replacement
+is interrupted after saving the new connection, the app's next discovery can
+resume it with the saved TLS pin and credential. Ordinary discovery and address
+changes do not authorize replacement. Home Assistant automations that
 target a virtual device can need a new target after a clean app installation.
 Physical device configuration and Recorder history are owned by Home Assistant.
 See the [connection lifecycle and recovery guide](../docs/development/AUTOMATIC-PAIRING.md#installation-replacement).

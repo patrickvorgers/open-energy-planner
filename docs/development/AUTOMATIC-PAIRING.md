@@ -52,8 +52,10 @@ when a new app configures a device with the same role or sensor.
 
 An unauthenticated announcement or failed snapshot cannot trigger cleanup. A
 previously connected Supervisor app can be replaced automatically in the same
-app slot. Standalone discovery requires fresh consent. Repeated trusted
-handshakes resume setup if it has been interrupted. Same-identity reconnects
+app slot. A new standalone app requires fresh consent. Once its connection has
+been saved, a later announcement can resume an interrupted replacement with a
+snapshot authenticated using the saved TLS pin and credential. Repeated trusted
+Supervisor handshakes also resume interrupted setup. Same-identity reconnects
 keep the current namespace and local settings. Keep the Home Assistant and app
 backups together if the previous projection must be restored.
 
