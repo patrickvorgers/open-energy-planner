@@ -74,6 +74,7 @@ a Zonneplan home battery is excluded. Source: [Zonneplan's explanation](https://
 | Price condition | Enable: expression `market + 0.02`, comparison `greater_than`, threshold `"0"` |
 | Daylight | `window: daylight`. Sunrise/sunset calculated from HA coordinates/timezone |
 | Annual cap | `cap_kwh: 7500` |
+| Battery protection | `prevent_battery_export: true` |
 | Calendar-year reset | January 1 in `Europe/Amsterdam` |
 | Activation | Customer's actual `effective_from`. Stable `rule_id` across revisions |
 
@@ -90,6 +91,7 @@ a Zonneplan home battery is excluded. Source: [Zonneplan's explanation](https://
       "threshold": "0"
     },
     "cap_kwh": 7500,
+    "prevent_battery_export": true,
     "timezone": "Europe/Amsterdam",
     "reset_month": 1,
     "reset_day": 1,
@@ -99,6 +101,8 @@ a Zonneplan home battery is excluded. Source: [Zonneplan's explanation](https://
 ```
 
 The example uses the explicit price condition so eligibility remains separate from the rate. At a nonpositive combined price, the condition returns zero before evaluating the rate formula. Otherwise, `BonusRule.extra_rate()` validates the evaluated rate with `nonnegative()`. This validator rejects a negative rate as invalid. It does not clamp that rate to zero. Omitting the condition from the unbounded 10% formula would therefore fail validation at a combined price below zero. The separate bonus rule also applies the daylight window and annual cap. A per-kWh export formula alone cannot express those conditions, so it is not presented as an alternative to the complete bonus rule.
+
+The example enables battery protection as a conservative assumption that the described exclusion applies. The planning restriction covers all batteries. It does not identify exported energy from a particular supplier's battery or control equipment.
 
 ### Worked calculation
 

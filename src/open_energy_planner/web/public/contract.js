@@ -127,6 +127,9 @@ function information(parent, dialogId, label) {
     button.textContent = "i"; button.setAttribute("aria-label", label); button.setAttribute("aria-haspopup", "dialog"); button.setAttribute("aria-controls", dialogId);
     button.onclick = () => find(dialogId).showModal(); parent.append(button);
 }
+for (const setting of document.querySelectorAll("[data-battery-help]")) {
+    information(setting.querySelector("dt"), setting.dataset.batteryHelp, "How battery export protection works");
+}
 /** Use the ARIA tabs pattern with one tab stop, arrow keys and explicit panel ownership. */
 for (const list of document.querySelectorAll('.contract-help [role="tablist"]')) {
     const tabs = [...list.querySelectorAll('[role="tab"]')];

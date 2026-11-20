@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -1004,6 +1005,13 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
             field["separate"] and "monospace" in field["font"] and field["explanation"]
             for field in fields
         )
+        for group in panel.locator(".example-settings").all():
+            bounds = group.locator(":scope > .example-setting").evaluate_all(
+                "elements => elements.map(element => ({top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom}))"
+            )
+            assert all(
+                current["bottom"] <= following["top"] for current, following in pairwise(bounds)
+            )
 
     page, url = app_page
     discover(page, url)
@@ -1051,6 +1059,7 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(dialog).to_contain_text("must be on or after Contract starts")
     expect(dialog.get_by_role("button", name="Close", exact=True)).to_be_focused()
     zonneplan = dialog.get_by_role("tabpanel", name="Zonneplan", exact=True)
+    expect(zonneplan.get_by_role("heading")).to_have_count(0)
     base_export = zonneplan.locator("dd .example-value").last
     expect(base_export).to_have_text("market + 0.02")
     assert Formula(base_export.inner_text()).evaluate(0.06) == pytest.approx(0.08)
@@ -1062,6 +1071,7 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(nextenergy).to_have_attribute("aria-selected", "true")
     expect(zonneplan).not_to_be_visible()
     panel = dialog.get_by_role("tabpanel", name="NextEnergy", exact=True)
+    expect(panel.get_by_role("heading")).to_have_count(0)
     expect(panel).to_be_visible()
     expect(panel).to_contain_text("(market + 0.09161) * 1.21 + 0.0219")
     base_export = panel.locator("dd .example-value").last
@@ -1086,6 +1096,7 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(price_budget).to_be_focused()
     price_budget_panel = dialog.get_by_role("tabpanel", name="Budget Energie", exact=True)
     expect(price_budget_panel).to_be_visible()
+    expect(price_budget_panel.get_by_role("heading")).to_have_count(0)
     expect(price_budget_panel).to_contain_text("not a verified Budget Energie tariff")
     expect(price_budget_panel.locator("dt")).to_have_text(
         [
@@ -1113,8 +1124,7 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     expect(dialog).to_contain_text("Greater than")
     expect(dialog).not_to_contain_text("Alternative:")
     expect(dialog.get_by_role("link")).to_have_count(0)
-    expect(dialog).to_contain_text("total income €0.22")
-    expect(dialog).to_contain_text("0.50 kWh of quota")
+    expect(dialog.get_by_text("Worked example and supplier limits", exact=True)).to_have_count(0)
     expect(dialog).to_contain_text("Source exclusions are unsupported")
     zonneplan_bonus = dialog.get_by_role("tabpanel", name="Zonneplan", exact=True)
     expect(
@@ -1124,9 +1134,24 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
         zonneplan_bonus.locator(".example-setting")
         .filter(has_text="Prevent battery export during paid window")
         .locator(".example-value")
-    ).to_have_text("Check signed terms")
-    expect(zonneplan_bonus).to_contain_text("does not control your equipment")
-    expect(zonneplan_bonus.locator("dt")).to_have_text(
+    ).to_have_text("Enabled")
+    expect(zonneplan_bonus).to_contain_text("This example assumes battery export is excluded")
+    protection_help = zonneplan_bonus.get_by_role(
+        "button", name="How battery export protection works", exact=True
+    )
+    protection_help.focus()
+    protection_help.press("Enter")
+    help_dialog = page.get_by_role("dialog", name="How battery export protection works", exact=True)
+    expect(help_dialog).to_be_visible()
+    expect(help_dialog).to_contain_text("planning restriction applies to all batteries")
+    expect(help_dialog).to_contain_text("does not control your equipment")
+    page.screenshot(path=f"results/ci/contract-battery-help-{page.viewport_size['width']}.png")
+    page.keyboard.press("Escape")
+    expect(protection_help).to_be_focused()
+    expect(dialog).to_be_visible()
+    assert zonneplan_bonus.locator("dt").evaluate_all(
+        "elements => elements.map(element => element.firstChild.textContent)"
+    ) == (
         [
             "Extra export rate",
             "Annual export cap",
@@ -1159,9 +1184,9 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
         .filter(has_text="Prevent battery export during paid window")
         .locator(".example-value")
     ).to_have_text("Enabled")
-    expect(panel).to_contain_text("does not identify the source of actual export")
-    if page.viewport_size["width"] >= 1000:
-        expect(panel.locator(".example-setting").last).to_be_in_viewport(ratio=1)
+    panel.get_by_role("button", name="How battery export protection works", exact=True).click()
+    expect(help_dialog).to_contain_text("does not identify the source of actual export")
+    help_dialog.get_by_role("button", name="Close", exact=True).click()
     protection = panel.get_by_text("Prevent battery export during paid window", exact=True)
     protection.scroll_into_view_if_needed()
     page.screenshot(
@@ -1190,12 +1215,17 @@ def test_contract_information_dialogs_explain_zonneplan_without_changing_the_dra
     ).to_have_text("Enabled")
     check_layout(budget_panel)
     check_tabs(dialog, budget, "budget", keyboard=True)
-    budget_panel.get_by_text("Monthly paid hours", exact=True).click()
-    expect(budget_panel.get_by_role("row")).to_have_count(13)
-    budget_panel.get_by_text("Worked example and supplier limits", exact=True).click()
-    closing_note = budget_panel.get_by_text("Budget settles the bonus", exact=False)
-    closing_note.scroll_into_view_if_needed()
-    expect(closing_note).to_be_in_viewport()
+    month_tables = budget_panel.get_by_role("group", name="Monthly paid hours", exact=True)
+    expect(month_tables).to_be_visible()
+    expect(month_tables.get_by_role("table")).to_have_count(2)
+    expect(month_tables.get_by_role("row")).to_have_count(14)
+    expect(month_tables.get_by_role("row").first.get_by_role("columnheader")).to_have_text(
+        ["Month", "Start", "End"]
+    )
+    expect(month_tables.get_by_role("row").last.get_by_role("cell")).to_have_text(
+        ["December", "09:00", "17:00"]
+    )
+    month_tables.get_by_role("row").last.scroll_into_view_if_needed()
     page.screenshot(
         path=str(Path("results/ci") / f"budget-monthly-windows-{page.viewport_size['width']}.png")
     )
