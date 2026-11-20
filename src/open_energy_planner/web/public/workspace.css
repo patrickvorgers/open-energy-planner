@@ -408,17 +408,20 @@
 /* Supplier examples follow the editor order, with price conditions kept as one group. */
 .workspace .contract-help { width:min(1080px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); }
 .contract-help .example-layout { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:24px; }
-.contract-help .example-settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 24px; margin:12px 0; }
+.contract-help .example-settings { display:grid; grid-template-columns:1fr; gap:12px; margin:12px 0; }
 .contract-help .example-layout > .example-settings { margin:0; }
 .contract-help .example-setting { min-width:0; }
 .contract-help .example-setting dt { margin-top:0; }
 .contract-help .example-setting dd { margin-bottom:0; }
-.contract-help .example-protection { grid-column:1/-1; }
-.contract-help .example-setting details { margin-top:8px; }
+.contract-help .example-timing { min-width:0; }
 .contract-help .example-condition { margin:0; padding:16px; border:1px solid var(--oep-line); border-radius:8px; min-width:0; }
 .contract-help .example-condition legend { padding:0 8px; font-weight:600; }
 .contract-help .example-condition .example-settings { margin:0; }
-.contract-help .example-months,.contract-help .example-notes { margin:12px 0; }
+.contract-help .example-months { margin:8px 0 0; font-variant-numeric:tabular-nums; }
+.contract-help .example-months > p { font-weight:600; margin:0 0 8px; }
+.contract-help .example-month-columns { display:flex; flex-wrap:wrap; gap:12px; }
+.contract-help .example-month-columns table { flex:1 1 200px; width:auto; min-width:0; }
+.contract-help .example-months th,.contract-help .example-months td { padding:2px 4px; }
 .workspace .contract-help[open] { display:flex; flex-direction:column; overflow:hidden; }
 .contract-help > h2,.contract-help > .example-tabs,.contract-help > form { flex-shrink:0; }
 .contract-help > [role="tabpanel"] { min-height:0; overflow-y:auto; padding-right:4px; }

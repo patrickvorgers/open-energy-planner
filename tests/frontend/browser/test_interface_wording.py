@@ -65,20 +65,12 @@ def test_bonus_examples_distinguish_app_accounting_from_supplier_terms(app_page)
     zonneplan = page.get_by_role("tabpanel", name="Zonneplan", exact=True)
     expect(zonneplan).to_be_visible()
     expect(zonneplan.locator("dd").filter(has_text="7500 kWh").locator("p")).to_have_text(
-        "This app counts all grid export towards the cap, including unpaid export and battery export."
+        "This app counts all grid export towards the cap, including unpaid export and battery export. Source exclusions are unsupported."
     )
-    zonneplan.get_by_text("Worked example and supplier limits", exact=True).click()
-    zonneplan_limits = zonneplan.get_by_text(
-        "This app counts all grid export towards the cap, including unpaid hours and battery export. "
-        "Source exclusions are unsupported. This example cannot reproduce contract terms that "
-        "exclude particular energy sources. Changing terms within the same contract does not reset "
-        "used volume.",
-        exact=True,
-    )
-    expect(zonneplan_limits).to_be_visible()
+    expect(zonneplan.get_by_text("Worked example and supplier limits", exact=True)).to_have_count(0)
     destination = Path("results/ci")
     destination.mkdir(parents=True, exist_ok=True)
-    zonneplan_limits.scroll_into_view_if_needed()
+    zonneplan.locator("dd").filter(has_text="7500 kWh").scroll_into_view_if_needed()
     page.screenshot(
         path=str(destination / f"interface-wording-zonneplan-{page.viewport_size['width']}.png"),
         full_page=True,
@@ -89,16 +81,10 @@ def test_bonus_examples_distinguish_app_accounting_from_supplier_terms(app_page)
     expect(nextenergy.locator("dd").filter(has_text="6000 kWh").locator("p")).to_have_text(
         "This app counts all grid export towards the cap. Supplier source exclusions cannot be applied."
     )
-    nextenergy.get_by_text("Worked example and supplier limits", exact=True).click()
-    nextenergy_limits = nextenergy.get_by_text(
-        "NextEnergy excludes stored battery energy from the bonus. This app counts all grid export "
-        "towards the cap. Source exclusions cannot be applied. This example is not an exact supplier "
-        "preset when those exclusions affect settlement. A changed price rule within the same "
-        "contract retains used volume.",
-        exact=True,
+    expect(nextenergy.get_by_text("Worked example and supplier limits", exact=True)).to_have_count(
+        0
     )
-    expect(nextenergy_limits).to_be_visible()
-    nextenergy_limits.scroll_into_view_if_needed()
+    nextenergy.locator("dd").filter(has_text="6000 kWh").scroll_into_view_if_needed()
     page.screenshot(
         path=str(destination / f"interface-wording-nextenergy-{page.viewport_size['width']}.png"),
         full_page=True,
