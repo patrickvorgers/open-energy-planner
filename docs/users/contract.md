@@ -30,7 +30,7 @@ bonus budget at that point does not mean the selected future rule has no bonus.
 The [phone screenshot](../assets/contract-rule-mobile.png) shows the same saved
 rule and rate examples in the single-column layout.
 
-OEP's [formula reference](../development/CONTRACT-PRICES.md#supported-formula-language) defines the actual supported syntax. Use [the worked Dutch contract examples](../development/CONTRACT-EXAMPLES-NL.md) to understand building blocks, then check them against your own contract. Price rule examples and Bonus examples both include Zonneplan, NextEnergy and Budget Energie. Example settings follow the editor order. Wider screens show two columns, while phones keep one column. The price condition stays in one group. Opening an example does not change saved terms. Do not assume that annual netting, tax refunds, subscriptions or investment costs are included.
+OEP's [formula reference](../development/CONTRACT-PRICES.md#supported-formula-language) defines the actual supported syntax. Use [the worked Dutch contract examples](../development/CONTRACT-EXAMPLES-NL.md) to understand building blocks, then check them against your own contract. Price rule examples and Bonus examples both include Zonneplan, NextEnergy and Budget Energie. Example settings follow the editor order. Wider screens show two groups with vertically stacked settings, while phones keep one column. Price conditions, annual reset and paid hours stay together. Budget Energie shows its monthly hours directly below Paid window. Opening an example does not change saved terms. Do not assume that annual netting, tax refunds, subscriptions or investment costs are included.
 
 The Home Assistant timezone governs calendar dates. A future rule does not rewrite the original prices saved with an older plan.
 
@@ -41,9 +41,7 @@ Keep the base export formula and extra bonus separate. Review qualifying price c
 The **Include export bonus** switch and all bonus controls share one bordered panel.
 The price condition, battery export protection, annual reset and paid window belong
 to that bonus. Base import and export formulas remain outside the panel.
-Each supplier tab in **Bonus examples** also explains battery export protection.
-The Zonneplan example leaves this choice to your signed terms. The NextEnergy and
-Budget Energie examples enable it for their described battery restrictions.
+The information button beside **Prevent battery export during paid window** explains the planning restriction. All three supplier examples enable it. The Zonneplan example assumes the described battery-export exclusion applies. This restriction covers all batteries, so check that assumption against your own terms. Opening an example never changes your saved setting.
 
 Saving a contract immediately rechecks planning prerequisites and requests the current price setup without waiting for its periodic refresh. When the required inputs are ready, planning starts automatically. Missing inputs remain explicit blockers. The saved bonus budget refreshes immediately, including after the first save, and updates automatically while its Home Assistant history is arriving.
 
