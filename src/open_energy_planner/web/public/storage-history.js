@@ -5,6 +5,8 @@ import {dateLabel, localDate, nextDate, useHomeAssistantTimezone, when} from "./
 
 const READ_TIMEOUT_MILLISECONDS = 35000;
 const MILLISECONDS_PER_DAY = 86400000;
+const HOURS_PER_DAY = 24;
+const MINIMUM_AVERAGE_INTERVAL_DAYS = 1;
 const BYTES_PER_MIB = 1024 ** 2;
 const BACKENDS = {sqlite: "SQLite", postgresql: "PostgreSQL", mysql: "MySQL", mariadb: "MariaDB"};
 
@@ -78,9 +80,9 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
                 } else {
                     const estimated = known.some(row => row.database_estimated) ? " (estimated)" : "";
                     summary += `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}`;
-                    summary += elapsedDays >= 1
+                    summary += elapsedDays >= MINIMUM_AVERAGE_INTERVAL_DAYS
                         ? `: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${estimated}`
-                        : `${estimated}. Daily average requires 24 hours between measurements.`;
+                        : `${estimated}: Daily average requires ${MINIMUM_AVERAGE_INTERVAL_DAYS * HOURS_PER_DAY} hours between measurements.`;
                 }
             }
             find("storage-history-summary").textContent = summary;
