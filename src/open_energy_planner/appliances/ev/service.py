@@ -10,6 +10,7 @@ from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.ev.configuration import configuration, identity
 from open_energy_planner.appliances.ev.model import (
     AC_EFFICIENCY_DEFAULTS,
+    EV_ENERGY_TOLERANCE_KWH,
     EV_LOSS_PROFILE_VERSION,
     MAX_EFFICIENCY_STAGES,
     MAX_EV_POWER_W,
@@ -84,6 +85,7 @@ class EVService:
         )
         self.issue = None
         self.power_deviations = {}
+        self._submitted_sessions = {}
 
     def commit(self, state, selected=None, telemetry=None):
         """Commit intent and current telemetry atomically without archiving every sensor refresh."""
@@ -177,6 +179,11 @@ class EVService:
             selected = None
         telemetry = configure_telemetry(self.telemetry, self.state, state)
         self.commit(state, selected, telemetry)
+        self._submitted_sessions = {
+            point["id"]: self._submitted_sessions[point["id"]]
+            for point in checked["points"]
+            if point["id"] in self._submitted_sessions
+        }
         self.report = None
         self.power_deviations.clear()
         self.issue = None
@@ -518,6 +525,39 @@ class EVService:
             if sum(other.vehicle_id == work.vehicle_id for other in selected) > 1
         }
         return tuple(work for work in selected if work.vehicle_id not in duplicates)
+
+    def unsubmitted_sessions(self, problem, replaced_snapshot_id=None):
+        """Identify new connections with energy demand and a window in the prepared horizon."""
+        work_items = getattr(problem, "ev_work", ())
+        if not work_items:
+            return {}
+        first, last = problem.intervals[0], problem.intervals[-1]
+        horizon_end = last.start + timedelta(hours=last.duration_h)
+        return {
+            work.point_id: work.session_id
+            for work in work_items
+            if work.required_kwh > EV_ENERGY_TOLERANCE_KWH
+            and work.ready_at < horizon_end
+            and self._session_needs_submission(work, replaced_snapshot_id)
+            and work.deadline > first.start
+        }
+
+    def _session_needs_submission(self, work, replaced_snapshot_id):
+        """A replaced or rejected snapshot cannot consume the connection's admission."""
+        session_id, snapshot_id = self._submitted_sessions.get(work.point_id, (None, None))
+        return session_id != work.session_id or snapshot_id == replaced_snapshot_id
+
+    def record_submitted_sessions(self, sessions, snapshot_id, replaced_snapshot_id):
+        """Transfer admissions from discarded work and retain admissions from other rounds."""
+        if replaced_snapshot_id is not None:
+            self._submitted_sessions = {
+                point_id: admission
+                for point_id, admission in self._submitted_sessions.items()
+                if admission[1] != replaced_snapshot_id
+            }
+        self._submitted_sessions.update(
+            (point_id, (session_id, snapshot_id)) for point_id, session_id in sessions.items()
+        )
 
     def hard_revision(self, now, timezone):
         """Bind availability/identity/departure, allowing ordinary valid SoC readings to finish a round."""

@@ -129,9 +129,10 @@ class LiveInputs:
     def refresh(self, *, force=False):
         """Validate every capture, but solve on quarters or throttled material changes.
 
-        Explicit configuration/resume requests and readiness recovery may start
-        immediately. Quarters, source versions and deviations share the five-minute
-        limit, measured from the actual start of the preceding calculation.
+        Explicit configuration/resume requests, readiness recovery and first work
+        for a new EV connection may start immediately. Quarters, other source
+        versions and deviations share the five-minute limit, measured from the
+        actual start of the preceding calculation.
         Measurement freshness is validated, not a solve timer.
         """
         self._install(self._prepare(self._capture()), force=force)
@@ -241,9 +242,16 @@ class LiveInputs:
         self.replan_requested = (
             self.replan_requested or ev_deviation or self.deviated(snapshot, now)
         )
+        active = getattr(self.planner, "active", None)
+        stale = active if getattr(self.planner, "reason", None) == "stale_input" else None
+        stale_id = stale.snapshot_id if stale is not None else None
+        new_ev_sessions = (
+            self.ev.unsubmitted_sessions(snapshot.problem, stale_id) if self.ev is not None else {}
+        )
         if (
             force
             or self.last_submission is None
+            or new_ev_sessions
             or (
                 elapsed >= MIN_DEVIATION_REPLAN_SECONDS
                 and (
@@ -279,6 +287,8 @@ class LiveInputs:
                 if force
                 else "all required inputs are ready"
                 if self.last_submission is None
+                else "a new EV session is ready to plan"
+                if new_ev_sessions
                 else "a new quarter-hour started"
                 if quarter != self.last_quarter
                 else f"updated {changed}"
@@ -300,8 +310,17 @@ class LiveInputs:
             )
             self.last_submission, self.last_basis, self.last_quarter = now, versions, quarter
             self.replan_requested = False
+            queued = getattr(self.planner, "latest", None)
             self.planner.submit(snapshot)
             if self.ev is not None:
+                replaced_id = (
+                    queued.snapshot_id if queued is not None and queued is not active else stale_id
+                )
+                if replaced_id != stale_id:
+                    new_ev_sessions = self.ev.unsubmitted_sessions(snapshot.problem, replaced_id)
+                self.ev.record_submitted_sessions(
+                    new_ev_sessions, snapshot.snapshot_id, replaced_id
+                )
                 self.ev.accept_execution_deviations(now)
 
     def deviated(self, snapshot, now):

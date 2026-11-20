@@ -1,6 +1,7 @@
 """EV authority, native intent semantics and durable state on all supported database backends."""
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -183,6 +184,193 @@ def test_missing_power_and_small_noise_do_not_create_unplanned_charging(service,
         body["points"][0]["power_w"] = power
         service.receive(body, now)
         assert not service.execution_deviated(plan, now)
+
+
+def test_first_usable_ev_work_bypasses_throttle_once_per_connection(ev_service):
+    """Only the first usable work for each physical connection requests an immediate round."""
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.live_inputs import LiveInputs
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+
+    timezone = "Europe/Amsterdam"
+    sources, configuration = catalogue(), settings()
+    entity = "binary_sensor.car_connected"
+    sources["entities"].append({"entity_id": entity, "unit": "", "device_class": "plug"})
+    configuration["vehicles"][0]["connected_entity"] = entity
+    ev_service.configure(configuration, sources, NOW)
+    inputs = InstallationProblem((Interval(NOW, 1, 0.3, 0, load_kwh=0),), (), (), (), 20000, 20000)
+    snapshot = InputSnapshot("snapshot", "config", NOW, "measurement", "forecast", "prices", inputs)
+    future = SimpleNamespace(
+        config_revision="config",
+        forecast_version="forecast",
+        price_version="prices",
+        valid_until=NOW + timedelta(hours=1),
+    )
+    submitted = []
+    now = NOW
+    planner = SimpleNamespace(submit=submitted.append, last_calculation_started=None)
+    live = LiveInputs(planner, None, clock=lambda: now, ev=ev_service)
+    live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
+    live.report = SimpleNamespace(readings=())
+
+    def capture(seconds, *, connected=True, identified=False, session=SESSION, soc=50, hours=1):
+        """Feed a current HA capture and its typed EV work through normal planning admission."""
+        nonlocal now
+        now = NOW + timedelta(seconds=seconds)
+        body = observations(ev_service, now, connected=connected, session=session, soc=soc)
+        if identified:
+            body["vehicles"][0]["connected"] = {
+                "value": True,
+                "reported_at": now.isoformat(),
+                "observed_at": now.isoformat(),
+                "timestamp_kind": "ha_report",
+            }
+        ev_service.receive(body, now, timezone)
+        work = ev_service.work(now, timezone)
+        prepared = replace(
+            snapshot,
+            problem=replace(
+                inputs, intervals=(replace(inputs.intervals[0], duration_h=hours),), ev_work=work
+            ),
+            ev_revision=ev_service.hard_revision(now, timezone),
+        )
+        live._install((now, future, prepared), force=False)
+        return work
+
+    assert capture(0, connected=False) == ()
+    assert capture(30) == ()
+    assert len(submitted) == 1
+
+    ev_service.save_request(
+        {
+            "request_id": str(uuid4()),
+            "vehicle_id": CAR,
+            "departure": (NOW + timedelta(minutes=12)).isoformat(),
+            "repeat_weekdays": [0, 2, 4],
+        },
+        now,
+        timezone,
+    )
+    # Completing the current occurrence leaves the next active, with no charging demand yet.
+    assert capture(40, identified=True, soc=80)[0].required_kwh == 0
+    assert len(submitted) == 1
+    # The remaining demand is 30% of 60 kWh, but this horizon ends before its ready time.
+    assert capture(44, identified=True, hours=0.1)[0].required_kwh == 18
+    assert len(submitted) == 1
+
+    work = capture(45, identified=True)
+    assert len(submitted) == 2
+    assert submitted[-1].problem.ev_work == work
+    assert work[0].session_id == SESSION
+    assert work[0].required_kwh == 18
+
+    assert capture(90, identified=True, soc=60)[0].required_kwh == 12
+    assert capture(100, connected=False) == ()
+    assert len(submitted) == 2
+
+    next_session = str(uuid4())
+    work = capture(115, identified=True, session=next_session, soc=60)
+    assert len(submitted) == 3
+    assert submitted[-1].problem.ev_work == work
+    assert work[0].session_id == next_session
+
+    future.price_version = "new-prices"
+    capture(414, identified=True, session=next_session, soc=60)
+    assert len(submitted) == 3
+    capture(415, identified=True, session=next_session, soc=60)
+    assert len(submitted) == 4
+
+
+def test_ev_connection_can_retry_a_queued_round_rejected_before_solving(service):
+    """If a queued snapshot expires before solving, admit fresh work once on the same connection."""
+    import asyncio
+
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.live_inputs import LiveInputs
+    from open_energy_planner.optimization.domain import Interval, SolveResult, Status
+    from open_energy_planner.planning import InputSnapshot, PlanningCoordinator, PlanningService
+
+    async def scenario():
+        """Let an active solve overrun the queued EV snapshot's first interval."""
+        now = NOW
+        started = asyncio.Event()
+        release = asyncio.Event()
+        solved = []
+
+        class Solver:
+            async def solve(self, problem):
+                """Hold the initial round so the next snapshot ages before reaching the solver."""
+                solved.append(problem.ev_work)
+                if not problem.ev_work:
+                    started.set()
+                    await release.wait()
+                return SolveResult(Status.INFEASIBLE, None, "infeasible", 0, 0, None)
+
+        planner = PlanningCoordinator(
+            PlanningService(Solver(), clock=lambda: now), None, clock=lambda: now
+        )
+        live = LiveInputs(planner, None, clock=lambda: now, ev=service)
+        live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
+        live.report = SimpleNamespace(readings=())
+        future = SimpleNamespace(
+            config_revision="config",
+            forecast_version="forecast",
+            price_version="prices",
+            valid_until=NOW + timedelta(hours=1),
+        )
+
+        def capture(seconds, *, connected, duration_h=1):
+            """Admit current observations with one short or long first interval."""
+            nonlocal now
+            now = NOW + timedelta(seconds=seconds)
+            service.receive(observations(service, now, connected=connected), now)
+            if connected:
+                service.assign(POINT, CAR, SESSION, now)
+            problem = InstallationProblem(
+                (
+                    Interval(now, duration_h, 0.3, 0),
+                    Interval(now + timedelta(hours=duration_h), 1, 0.3, 0),
+                ),
+                (),
+                (),
+                (),
+                20000,
+                20000,
+                ev_work=service.work(now, "Europe/Amsterdam"),
+            )
+            snapshot = InputSnapshot(
+                str(seconds),
+                "config",
+                now,
+                "measurement",
+                "forecast",
+                "prices",
+                problem,
+                source="home_assistant",
+            )
+            live._install((now, future, snapshot), force=False)
+            return snapshot
+
+        capture(0, connected=False)
+        await started.wait()
+        queued = capture(30, connected=True, duration_h=1 / 120)
+        assert planner.latest is queued
+        now = NOW + timedelta(seconds=61)
+        release.set()
+        await planner.wait()
+        assert planner.reason == "stale_input"
+        assert solved == [()]
+
+        fresh = capture(62, connected=True)
+        await planner.wait()
+        assert solved == [(), fresh.problem.ev_work]
+        capture(65, connected=True)
+        await planner.wait()
+        assert solved == [(), fresh.problem.ev_work]
+        await planner.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("retained_capture", [False, True])
