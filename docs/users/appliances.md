@@ -240,8 +240,14 @@ for manual departures. Repeating departures skip that occurrence. The autumn
 repeated hour has one scheduled occurrence. The planner recalculates energy from
 the latest measured or estimated SoC and reports any shortfall. V2G is not supported.
 
-In **EV settings**, edit the vehicle and choose **Single-phase** or
-**Three-phase** under **AC charging phases**. Use the mode the car uses at your
+In **EV settings**, a new vehicle opens **Vehicle basics** first. Connect its
+Home Assistant battery sensor and enter the usable capacity and maximum AC
+power. The other sections become available once those fields are complete.
+You can then save with the default charging preferences. Saved vehicles show
+a compact summary of each section. Open one to see its settings.
+
+Under **Charging profile**, choose **Single-phase** or **Three-phase** under
+**AC charging phases**. Use the mode the car uses at your
 charge point. For each stage, enter the total AC power and the percentage that
 reaches the battery. You can add, remove or restore the default stages. The
 planner uses this curve to estimate the AC energy needed to reach your target.

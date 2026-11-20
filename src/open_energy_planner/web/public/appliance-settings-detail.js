@@ -9,6 +9,7 @@ export function settingsSummary(parent, sections) {
             term.textContent = label; text.textContent = value ?? "Unavailable";
             description.append(text); row.append(term, description); list.append(row);
         }
-        group.append(title, list); parent.append(group);
+        if (heading) group.append(title);
+        group.append(list); parent.append(group);
     }
 }
