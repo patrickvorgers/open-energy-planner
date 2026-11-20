@@ -783,8 +783,8 @@ def create_app(
                             settings_refresh = price_refresh_requested.is_set()
                             price_refresh_requested.clear()
                             now = datetime.now(UTC)
-                            await prices.refresh(now)
-                            if settings_refresh and live:
+                            prices_changed = await prices.refresh(now)
+                            if live and (settings_refresh or prices_changed):
                                 async with lock:
                                     await live.refresh_async()
                             timezone = price_timezone()

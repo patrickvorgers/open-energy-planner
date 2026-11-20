@@ -429,17 +429,20 @@ def test_current_price_inputs_need_no_plan_or_bonus_counter_and_follow_saved_rul
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("late_prices", [False, True])
 def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, late_prices
 ):
-    """A first save wakes a one-hour price poll and starts HiGHS. A later save replans immediately too."""
+    """A first save wakes prices and HiGHS. Late price delivery and later saves also start planning."""
     from open_energy_planner.optimization.domain import Strategy
     from open_energy_planner.prices.bootstrap import configured_price_factory
     from open_energy_planner.prices.runtime import ConfiguredPrices
 
     async def scenario():
         """Observe real solves before any snapshot read can trigger an input refresh."""
-        monkeypatch.setattr("open_energy_planner.app.PRICE_SCHEDULE_POLL_SECONDS", 3600)
+        monkeypatch.setattr(
+            "open_energy_planner.app.PRICE_SCHEDULE_POLL_SECONDS", 0.02 if late_prices else 3600
+        )
         now = datetime.now(UTC)
         initial_refresh, solved = asyncio.Event(), asyncio.Event()
         opened_areas, solved_import_rates = [], []
@@ -463,7 +466,8 @@ def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
                 for point in original.points
             ),
         )
-        make_store(tmp_path, PriceStore).save((series,))
+        if not late_prices:
+            make_store(tmp_path, PriceStore).save((series,))
 
         def provider(area):
             """Open a real cached price service only for the persisted contract area."""
@@ -474,7 +478,21 @@ def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
                 from open_energy_planner.storage.adapters.documents import SqlDocuments
 
                 opened_areas.append(area)
-                yield PriceService(area, None, None, PriceStore(SqlDocuments(engine, "prices")))
+                service = PriceService(area, None, None, PriceStore(SqlDocuments(engine, "prices")))
+                deliveries = 0
+
+                async def deliver_prices(instant):
+                    """Simulate prices arriving on the provider's second independent refresh."""
+                    nonlocal deliveries
+                    deliveries += 1
+                    if deliveries == 2:
+                        service.series = (series,)
+                        return True
+                    return False
+
+                if late_prices:
+                    service.refresh = deliver_prices
+                yield service
 
             return opened
 
