@@ -73,7 +73,15 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
                 const sameBackend = samples.every(row => row.backend === first.backend);
                 const elapsedDays = (Date.parse(last.observed_at) - Date.parse(first.observed_at)) / MILLISECONDS_PER_DAY;
                 summary = `${dateLabel(start)} – ${dateLabel(history.end)}: Measurements: ${known.length}: `;
-                summary += sameBackend && elapsedDays > 0 ? `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${known.some(row => row.database_estimated) ? " (estimated)" : ""}` : "Growth is not compared across different database backends.";
+                if (!sameBackend) {
+                    summary += "Growth is not compared across different database backends.";
+                } else {
+                    const estimated = known.some(row => row.database_estimated) ? " (estimated)" : "";
+                    summary += `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}`;
+                    summary += elapsedDays >= 1
+                        ? `: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${estimated}`
+                        : `${estimated}. Daily average requires 24 hours between measurements.`;
+                }
             }
             find("storage-history-summary").textContent = summary;
             if (!known.length) {

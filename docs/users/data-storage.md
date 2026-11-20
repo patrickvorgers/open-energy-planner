@@ -64,8 +64,8 @@ overwrites or adds a saved daily observation.
 
 Open **Period** and choose a standard shortcut or **Custom period**. For three months or a rolling year, enter **From** and **To**, then select **Apply period**. The graph shows the inclusive selected dates.
 The summary shows the change between the first and last available observation
-and the average change per elapsed day. A decrease can reflect database
-maintenance. It is not a prediction of when storage will run out.
+and shows the average change per elapsed day once those observations are at
+least 24 hours apart. A decrease can reflect database maintenance. It is not a prediction of when storage will run out.
 
 The app records one measurement each day after **04:00 in the Home Assistant
 installation timezone**, checked every minute. No browser page needs to be open.
