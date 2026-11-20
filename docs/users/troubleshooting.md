@@ -123,13 +123,15 @@ is lost, the new complete list may already be visible. Allow the next routine
 integration refresh before checking again. Do not recreate a working HA integration to work around a
 temporarily unavailable source list.
 
-After a reset or reinstall, Home Assistant can retain a connection for the previous
-OEP installation. If it reports **This Home Assistant connection belongs to a
-different OEP installation**, use the integration for the current app. OEP withdraws
-commands from the obsolete connection and prevents it from interfering with source
-refreshes. Its devices and history are retained. The old connection is not silently
-reassigned to the new installation. Review it separately under **Settings > Devices
-& services > Open Energy Planner**.
+Open Energy Planner uses one integration entry per Home Assistant installation.
+Before resetting the app, see [updates and fresh app installations](install.md#updates-and-fresh-app-installations)
+for backup guidance. Pairing a fresh app clears the integration's old local settings.
+After an app reset, wait for the automatic connection on HA OS. A standalone app
+requires the usual pairing approval. Once the current app is verified, Home
+Assistant rebuilds its OEP devices from that app and removes obsolete OEP entries.
+If the connection still reports a different installation, check that the app is
+running and that both components use the same build. If Home Assistant reports a
+failed unload, restart Core with the app running so pairing can resume.
 
 ## Cost or benefit is unavailable
 

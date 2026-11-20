@@ -73,9 +73,10 @@ invalidations revoke commands before the source transfer starts.
 The HA connection checks snapshots against its configured installation identity.
 An obsolete entry at a reused app address withdraws commands and cannot publish
 source pages or other mutations to the replacement installation. This prevents
-two entries from mixing pages for one chooser request. The saved connection is
-never silently retargeted. Its HA devices and history are retained for the user
-to review. A fresh snapshot from the original installation can recover the connection.
+two entries from mixing pages for one chooser request. The connection remains
+bound until the current app is verified through the
+[trusted pairing flow](AUTOMATIC-PAIRING.md#installation-replacement).
+A fresh snapshot from the original installation can recover the connection.
 Replies started before a detected mismatch cannot clear that failure or confirm
 an operation. Recovery requires a snapshot requested after the latest mismatch.
 

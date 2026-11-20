@@ -7,7 +7,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN
+from .const import DOMAIN, projection_id
 
 
 def register_services(hass):
@@ -25,7 +25,10 @@ def register_services(hass):
                 if coordinator is None or coordinator.closed:
                     continue
                 for vehicle in coordinator.ev.get("vehicles", []):
-                    if (DOMAIN, entry.entry_id + "_ev_" + vehicle["id"]) in device.identifiers:
+                    if (
+                        DOMAIN,
+                        projection_id(entry) + "_ev_" + vehicle["id"],
+                    ) in device.identifiers:
                         matches.append((coordinator, vehicle))
         if len(matches) != 1:
             raise HomeAssistantError("Choose one virtual OEP vehicle device")

@@ -10,7 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, projection_id
 from .measurement_sources import FULL_SOC_PERCENT, HomeAssistantMeasurementSource
 from .measurements import Quantity, SourceBinding
 from .protocol import timestamp
@@ -457,7 +457,7 @@ def register_entities(hass, entry, add, definitions):
         additions = []
         for key, (row, factory) in desired.items():
             device = dr.async_get(hass).async_get_device(
-                identifiers={(DOMAIN, coordinator.entry.entry_id + "_ev_" + row["id"])}
+                identifiers={(DOMAIN, projection_id(coordinator.entry) + "_ev_" + row["id"])}
             )
             if device and device.name != row["name"]:
                 dr.async_get(hass).async_update_device(device.id, name=row["name"])

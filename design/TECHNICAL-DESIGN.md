@@ -1019,6 +1019,30 @@ A contract that excludes selected export sources cannot be represented exactly b
 
 The default route uses the Supervisor-supplied token for one authenticated bootstrap command over its HA WebSocket proxy. The app sends a private process-scoped proof and persistent TLS identity. The integration replies over pinned TLS and creates/updates the same config entry without a progress dialog or approval. Only an authenticated HA administrator can invoke this command. Public discovery carries no proof. The app retry loop waits for the integration/HA and renews the same owner after credential loss. HA reads and entity publication remain in the integration. The bootstrap client performs no HA data reads.
 
+#### One installation per Home Assistant
+
+Home Assistant maintains one OEP integration entry. The app owns the saved
+installation configuration. The integration projects that configuration into
+virtual devices and planning groups. The app UUID identifies the installation
+whose commands and configuration are trusted. It is separate from the Home
+Assistant entry ID, which stays the same across a verified replacement.
+
+| Event | Home Assistant behavior |
+| --- | --- |
+| Ordinary update, reconnect or app configuration change | Keep the entry, device identities and local control intent. Reconcile additions and withdrawals against the current app catalogue. |
+| Existing duplicate entries | After trusted pairing and an authenticated snapshot, keep the entry that matches the current app and unload and remove the obsolete entries through Home Assistant. |
+| Clean app with a different UUID | Verify the new app by trusted pairing and authenticated snapshot. Stop the old coordinator, clear the previous OEP registry projection, planning groups and local intent, then bind and rebuild within the same entry. A new projection namespace prevents old registry metadata from being restored for a reused device key. |
+| Connection or setup interrupted | Withdraw unusable commands. Keep the existing installation binding until a replacement is verified. A repeated authenticated handshake resumes incomplete setup without creating another entry. |
+
+The same Supervisor app slot can replace its previous installation
+automatically. Standalone pairing needs user approval. If the approved replacement
+is interrupted after saving the new connection, the app's next discovery can
+resume it with the saved TLS pin and credential. Ordinary discovery and address
+changes do not authorize replacement. Home Assistant automations that
+target a virtual device can need a new target after a clean app installation.
+Physical device configuration and Recorder history are owned by Home Assistant.
+See the [connection lifecycle and recovery guide](../docs/development/AUTOMATIC-PAIRING.md#installation-replacement).
+
 Each app lifetime includes a fresh public `announcement_id` in Supervisor discovery metadata. Supervisor otherwise suppresses identical publications and omits stopped apps from HA startup discovery, which can leave a later app start without an HA integration handler. The announcement ID is not a credential or persisted installation identity. Retain the same app UUID, TLS certificate and HA peer. Diagnose an unknown command as integration not loaded with file installation unknown, separately from a recognized pairing failure and Supervisor transport failure. Only the authenticated pairing exchange establishes ownership. See [readiness diagnostics](../docs/development/AUTOMATIC-PAIRING.md#readiness-diagnostics-and-manual-fallback).
 
 The HA app manifest enables `homeassistant_api`, default-role `hassio_api`, discovery and ingress, exposes no administrative HTTP port and offers only the optional `database_url` and `migrate_database` settings. Ingress trusts the actual Supervisor peer address and a validated ingress prefix, never forwarded client-IP headers. HTML assets and API calls retain the prefix. Browser code receives no internal token. The startup wrapper prepares only the app-private directory, then drops root. `script/release/package_ha_app.py` assembles a self-contained source build from the same release. Publication remains separately gated. Required automated installation and lifecycle checks use actual-Supervisor Docker acceptance. Hardware and host-kernel evidence is added when relevant.

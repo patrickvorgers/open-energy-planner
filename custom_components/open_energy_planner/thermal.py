@@ -10,7 +10,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, projection_id
 from .protocol import (
     MAX_THERMAL_HOURLY_DRAW_KWH,
     THERMAL_CONFIGURATION_BOUNDS,
@@ -357,7 +357,7 @@ def register_entities(coordinator, async_add_entities, platform):
         additions = []
         for key, (row, factory) in desired.items():
             device = dr.async_get(hass).async_get_device(
-                identifiers={(DOMAIN, entry.entry_id + "_thermal_" + row["id"])}
+                identifiers={(DOMAIN, projection_id(entry) + "_thermal_" + row["id"])}
             )
             if device and device.name != row["name"]:
                 dr.async_get(hass).async_update_device(device.id, name=row["name"])

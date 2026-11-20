@@ -17,7 +17,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, projection_id
 from .consumer_sensors import CONSUMER_ID_HEX_LENGTH, ConsumerSensor
 from .protocol import timestamp
 from .subentries import add_grouped_entities, retire_empty_groups
@@ -156,7 +156,7 @@ def register_services(hass):
             for row in current.consumer_forecasts.get("options", []):
                 if (
                     DOMAIN,
-                    entry.entry_id + "_" + consumer_identity(row["entity_id"]),
+                    projection_id(entry) + "_" + consumer_identity(row["entity_id"]),
                 ) in device.identifiers:
                     coordinator, entity = current, row["entity_id"]
         if coordinator is None:
@@ -431,7 +431,7 @@ def receive(coordinator, value):
         task = row.get("task")
         identity = consumer_identity(row["entity_id"])
         device = dr.async_get(coordinator.hass).async_get_device_by_identifier(
-            (DOMAIN, coordinator.entry.entry_id + "_" + identity), coordinator.entry.entry_id
+            (DOMAIN, projection_id(coordinator.entry) + "_" + identity), coordinator.entry.entry_id
         )
         before = old.get(row["entity_id"], {})
         previous_task = before.get("task")
@@ -500,7 +500,9 @@ class ApplianceSensor(ConsumerSensor):
         from homeassistant.components.sensor import SensorDeviceClass
 
         self.key = key
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{consumer_identity(entity)}_{key}"
+        self._attr_unique_id = (
+            f"{projection_id(coordinator.entry)}_{consumer_identity(entity)}_{key}"
+        )
         self._attr_name = {
             "task_status": "Task status",
             "planned_start": "Planned start",
