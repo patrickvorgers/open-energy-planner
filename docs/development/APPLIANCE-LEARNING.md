@@ -79,7 +79,9 @@ three cycles per group across multiple days, a duration separation of at
 least 30 minutes and 25 percent, and median energy differing by at least
 20 percent. The newest cycle in each group is held out from the first fit and
 must be recognized from its first hour of power. The more frequent group
-becomes the default. Equal counts prefer the shorter group. If the evidence
+becomes the default. Equal counts prefer the shorter group. Each group keeps
+the ordinary recency weights and its original power phases for planning.
+Recognition uses five-minute means of those original phases. If the evidence
 does not distinguish two groups, the ordinary single profile remains selected.
 
 When a cycle starts without a selected program, the default and any additional

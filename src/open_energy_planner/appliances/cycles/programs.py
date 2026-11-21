@@ -1,12 +1,14 @@
 """Bound additional appliance profiles to two repeatable, distinguishable power patterns."""
 
 from bisect import bisect_right
+from enum import StrEnum
 from math import ceil
 from statistics import mean, median
 
 from open_energy_planner.core.units import SECONDS_PER_MINUTE
 
-from .model import FINE_PROFILE_SECONDS, CycleProfile, average_profiles, instant, restore_profile
+from .learning import retained_weight
+from .model import FINE_PROFILE_SECONDS, average_profiles, instant, restore_profile
 
 MIN_PROGRAM_CYCLES = 3
 MIN_PROGRAM_DURATION_GAP_SECONDS = 30 * SECONDS_PER_MINUTE
@@ -16,8 +18,13 @@ RECOGNITION_WINDOW_SECONDS = 60 * SECONDS_PER_MINUTE
 MIN_RECOGNITION_BINS = 3
 MIN_ERROR_MARGIN_W = 25
 MAX_RELATIVE_ERROR = 0.25
-DEFAULT_PROGRAM = "default"
-ADDITIONAL_PROGRAM = "additional"
+
+
+class CycleProgram(StrEnum):
+    """Name the two profile choices on the wire and in retained planning evidence."""
+
+    DEFAULT = "default"
+    ADDITIONAL = "additional"
 
 
 def bin_power(offsets, powers, duration):
@@ -69,22 +76,18 @@ def classify_prefix(first, second, measured_powers):
         if min(errors) <= scale * MAX_RELATIVE_ERROR and abs(errors[0] - errors[1]) >= max(
             MIN_ERROR_MARGIN_W, scale * MAX_RELATIVE_ERROR
         ):
-            return DEFAULT_PROGRAM if errors[0] < errors[1] else ADDITIONAL_PROGRAM
+            return CycleProgram.DEFAULT if errors[0] < errors[1] else CycleProgram.ADDITIONAL
     return None
 
 
 def average_program(samples):
-    """Average one group's complete profiles on a bounded uniform grid."""
-    result = None
-    for _, profile in samples:
-        duration = profile.duration_seconds
-        regular = CycleProfile(
-            profile_bins(profile, duration),
-            evidence=profile.evidence,
-            phase_seconds=FINE_PROFILE_SECONDS,
-            measured_duration_seconds=duration if duration % FINE_PROFILE_SECONDS else None,
-        )
-        result = average_profiles(result, regular)
+    """Average original phases with the same recency weighting as the single profile."""
+    result, weight, previous_end = None, 0.0, None
+    for completed, profile in samples:
+        if previous_end:
+            weight = retained_weight(weight, previous_end, completed)
+        result = average_profiles(result, profile, previous_weight=weight)
+        weight, previous_end = weight + 1, completed
     return result
 
 
@@ -113,7 +116,7 @@ def learn_programs(samples):
     if second_energy < first_energy * MIN_PROGRAM_ENERGY_RATIO:
         return None
     trained_first, trained_second = average_program(first[:-1]), average_program(second[:-1])
-    for group, expected in ((first, DEFAULT_PROGRAM), (second, ADDITIONAL_PROGRAM)):
+    for group, expected in ((first, CycleProgram.DEFAULT), (second, CycleProgram.ADDITIONAL)):
         held_out = group[-1][1]
         powers = profile_bins(held_out, min(held_out.duration_seconds, RECOGNITION_WINDOW_SECONDS))
         if classify_prefix(trained_first, trained_second, powers) != expected:

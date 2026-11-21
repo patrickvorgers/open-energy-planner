@@ -1,11 +1,14 @@
 """Exercise opt-in and measured program selection through the normal appliance service."""
 
-from datetime import timedelta
+import asyncio
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
-from open_energy_planner.appliances.cycles.model import restore_profile
+from open_energy_planner.appliances.cycles.model import CycleProfile, restore_profile
 from open_energy_planner.appliances.cycles.observed import work
+from open_energy_planner.appliances.cycles.programs import average_program
 from tests.app.appliance.support import ENTITY, NOW, POWER
 
 
@@ -66,6 +69,119 @@ def test_additional_profile_requires_opt_in_and_distinguishable_evidence(service
     assert "additional_profile" not in disabled
     assert restore_profile(disabled["profile"]) == restore_profile(before["profile"])
     assert restore_profile(disabled["task"]["profile"]) == restore_profile(explicit["profile"])
+
+
+def test_program_average_preserves_short_peaks_and_recency_weights():
+    """A twenty-second measured peak keeps its boundary and decays over a ninety-day half-life."""
+    old = CycleProfile((1000, 400), phase_durations_seconds=(20, 880))
+    new = CycleProfile((3600, 400), phase_durations_seconds=(20, 880))
+    result = average_program([(NOW - timedelta(days=90), old), (NOW, new)])
+    assert result.phase_boundaries == (0, 20, 900)
+    assert result.power_w == pytest.approx(((500 + 3600) / 1.5, 400))
+
+
+def test_manual_start_preserves_explicit_profile_on_accepted_readiness(service):
+    """An observed hand-start before a controller request uses the user's frozen selection."""
+    learn_synthetic_programs(service)
+    service.configure_additional_profile(ENTITY, True, service.revision)
+    service.configure(ENTITY, True)
+    accepted = service.submit(
+        ENTITY, "manual-start", NOW, NOW + timedelta(hours=5), NOW, program="additional"
+    )
+
+    measured = intervals(NOW - timedelta(minutes=75), [0] * 12 + [350] * 3)
+    service.learn_history(ENTITY, POWER, measured, False, NOW)
+    device = service.document()["devices"][0]
+    assert device["task"]["status"] == "execution_observed"
+    assert device["task"]["attempt"] is None
+    assert device["observed_run"]["program"] == "additional"
+    assert restore_profile(device["observed_run"]["profile"]) == restore_profile(
+        accepted["profile"]
+    )
+
+
+def test_hand_start_uses_only_profiles_available_at_readiness(service):
+    """An unselected hand-start keeps its acknowledged default when the learner changes before start."""
+    service.configure_additional_profile(ENTITY, True, service.revision)
+    service.set_manual_profile(ENTITY, 80, 0.6, service.revision)
+    service.configure(ENTITY, True)
+    accepted = service.submit(ENTITY, "before-training", NOW, NOW + timedelta(hours=5), NOW)
+    learn_synthetic_programs(service)
+    assert "additional_profile" in service.document()["devices"][0]
+
+    measured = intervals(NOW - timedelta(minutes=90), [0] * 12 + [350] * 3 + [900] * 3)
+    service.learn_history(ENTITY, POWER, measured, False, NOW)
+    run = service.observed(ENTITY)
+    assert "additional_profile" not in run and "program" not in run
+    assert restore_profile(run["profile"]) == restore_profile(accepted["profile"])
+
+
+def test_program_http_errors_keep_their_owned_explanations(service):
+    """Expected profile failures keep their actionable messages across the HTTP boundary."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from open_energy_planner.activities.api import EVENTS
+    from open_energy_planner.activities.events import Events
+    from open_energy_planner.appliances.cycles.api import register
+    from open_energy_planner.storage.adapters.activities import ActivityStore
+
+    async def scenario():
+        """Use the real route admission and repository while observing only its public response."""
+
+        async def refresh_async(**_):
+            """Accept the planning contract without starting a calculation in this test."""
+
+        app = web.Application()
+        events = Events(ActivityStore(service.documents.engine))
+        app[EVENTS] = events
+        service.configure(ENTITY, True)
+        service.set_manual_profile(ENTITY, 90, 0.6, service.revision)
+        register(
+            app,
+            service,
+            SimpleNamespace(state={"enabled": False, "plan": None}),
+            SimpleNamespace(refresh_async=refresh_async),
+            asyncio.Lock(),
+            SimpleNamespace(state={"points": []}),
+            SimpleNamespace(state={"stores": []}),
+        )
+        now = datetime.now(UTC)
+        ready = {
+            "entity_id": ENTITY,
+            "request_id": "program-request",
+            "ready_at": now.isoformat(),
+            "deadline": (now + timedelta(hours=5)).isoformat(),
+        }
+        async with TestClient(TestServer(app)) as client:
+            endpoint = "/v1/appliances/tasks"
+            for program, detail in (
+                ("other", "Choose the default or additional program"),
+                ("additional", "No additional program has been learned for this appliance"),
+            ):
+                response = await client.post(endpoint, json={**ready, "program": program})
+                assert response.status == 400
+                assert await response.text() == detail
+            response = await client.post(
+                "/v1/appliances/profile_options",
+                json={
+                    "entity_id": ENTITY,
+                    "learn_additional_profile": "enabled",
+                    "expected_version": service.revision,
+                },
+            )
+            assert response.status == 400
+            assert await response.text() == "Additional profile learning must be boolean"
+            response = await client.post(endpoint, json={**ready, "program": "default"})
+            assert response.status == 200
+            response = await client.post(endpoint, json=ready)
+            assert response.status == 400
+            assert (
+                await response.text() == "Readiness identity reused with different times or program"
+            )
+        await events.close()
+
+    asyncio.run(scenario())
 
 
 def test_indistinguishable_prefix_keeps_one_profile(service):

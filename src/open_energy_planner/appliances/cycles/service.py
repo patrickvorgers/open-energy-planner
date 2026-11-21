@@ -489,7 +489,7 @@ class ApplianceService:
     ):
         """Admit recent running evidence and refine its remaining curve without changing accepted work."""
         from .observed import observe
-        from .programs import ADDITIONAL_PROGRAM, recognize
+        from .programs import CycleProgram, recognize
 
         settings, task = data["devices"][entity], data["tasks"].get(entity)
         if processing_started is not None:
@@ -501,10 +501,12 @@ class ApplianceService:
         if not accepted_running:
             return
         run = settings["observed_run"]
-        attempted_task = (
-            task
-            and task["status"] in OPEN_STATUSES
-            and (task.get("attempt") and task["attempt"]["status"] != "not_started")
+        open_task = task and task["status"] in OPEN_STATUSES
+        use_frozen_task = open_task and (
+            settings.get("learn_additional_profile")
+            or task.get("program")
+            or task.get("additional_profile")
+            or (task.get("attempt") and task["attempt"]["status"] != "not_started")
         )
         same_run = previous_run and (
             run["started_at"] == previous_run["started_at"]
@@ -519,11 +521,11 @@ class ApplianceService:
             for key in ("profile", "additional_profile", "program"):
                 if key in previous_run:
                     run[key] = previous_run[key]
-            if attempted_task and not run.get("program"):
+            if use_frozen_task and not run.get("program"):
                 run["profile"] = deepcopy(task["profile"])
         else:
-            source = task if attempted_task else settings
-            if attempted_task:
+            source = task if use_frozen_task else settings
+            if use_frozen_task:
                 run["profile"] = deepcopy(task["profile"])
             if source.get("program"):
                 run["program"] = source["program"]
@@ -534,7 +536,7 @@ class ApplianceService:
             if program:
                 run["program"] = program
                 additional = run.pop("additional_profile")
-                if program == ADDITIONAL_PROGRAM:
+                if program == CycleProgram.ADDITIONAL:
                     run["profile"] = additional
 
         if (
@@ -649,14 +651,17 @@ class ApplianceService:
                         for value in (
                             device.get("profile"),
                             device.get("learned_profile"),
+                            device.get("additional_profile"),
                             device.get("observed_run", {}).get("profile"),
+                            device.get("observed_run", {}).get("additional_profile"),
                         )
                         if value and value.get("phase_durations_seconds") is not None
                     ) + sum(
-                        len(task["profile"]["power_w"])
+                        len(value["power_w"])
                         for identity, task in data["tasks"].items()
                         if identity in active
-                        and task["profile"].get("phase_durations_seconds") is not None
+                        for value in (task["profile"], task.get("additional_profile"))
+                        if value and value.get("phase_durations_seconds") is not None
                     )
                     if projected_phases > MAX_PROJECTED_IRREGULAR_PHASES:
                         raise ValueError("Cycle profile exceeds bounded phase complexity")
@@ -860,11 +865,14 @@ class ApplianceService:
 
     def submit(self, entity, request_id, ready_at, deadline, now, *, program=None):
         """Accept explicit readiness and freeze the selected or initial default profile."""
-        from .programs import ADDITIONAL_PROGRAM, DEFAULT_PROGRAM
+        from .programs import CycleProgram
 
         self.member(entity)
-        if program not in (None, DEFAULT_PROGRAM, ADDITIONAL_PROGRAM):
-            raise ValueError("Choose the default or additional program")
+        if program is not None:
+            try:
+                program = CycleProgram(program)
+            except ValueError as error:
+                raise ValueError("Choose the default or additional program") from error
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= MAX_CORRELATION_LENGTH:
             raise ValueError("A stable readiness request identity is required")
         request_key = "appliance-request-" + digest([entity, request_id]) + ".json"
@@ -899,13 +907,13 @@ class ApplianceService:
         if old and old["status"] in OPEN_STATUSES:
             raise ValueError("This appliance already has an unresolved task")
         additional = settings.get("additional_profile")
-        if program == ADDITIONAL_PROGRAM and not additional:
+        if program == CycleProgram.ADDITIONAL and not additional:
             raise ValueError("No additional program has been learned for this appliance")
         task = {
             **request,
             "id": str(uuid4()),
             "status": "pending",
-            "profile": additional if program == ADDITIONAL_PROGRAM else settings["profile"],
+            "profile": additional if program == CycleProgram.ADDITIONAL else settings["profile"],
             **({"additional_profile": additional} if additional and program is None else {}),
             "attempt": None,
             "events": [],
@@ -957,7 +965,7 @@ class ApplianceService:
         )
 
         from .observed import work as observed_work
-        from .programs import ADDITIONAL_PROGRAM
+        from .programs import CycleProgram
 
         problem = snapshot.problem
         self.issue = None
@@ -986,7 +994,9 @@ class ApplianceService:
                 if not attempt.get("started_at") and observed:
                     fixed = observed.fixed_start
             detected_additional = (
-                observed and not task.get("program") and (run.get("program") == ADDITIONAL_PROGRAM)
+                observed
+                and not task.get("program")
+                and (run.get("program") == CycleProgram.ADDITIONAL)
             )
             work = ApplianceWork(
                 task["id"],
