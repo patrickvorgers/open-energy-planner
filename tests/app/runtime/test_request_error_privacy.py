@@ -242,7 +242,15 @@ def test_history_receipt_errors_never_disclose_driver_details(
         if kind == "forecast_history":
             monkeypatch.setattr(HistoryArchive, "request", pending_request)
             monkeypatch.setattr(HistoryArchive, "receive", reject_receipt)
-            forecast_quality_api.register(app, repository, demand, solar, catalogue, lock)
+            forecast_quality_api.register(
+                app,
+                repository,
+                demand,
+                solar,
+                catalogue,
+                lock,
+                weather_documents=SqlDocuments(repository.engine, "weather"),
+            )
             path = "/v1/forecast-quality/history"
         else:
             monkeypatch.setattr(SavingsRuntime, "request", pending_request)
