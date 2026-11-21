@@ -228,6 +228,7 @@ def test_invalid_pointer_keeps_physical_runtime_forecast_available(tmp_path):
     pointer = runtime.store.documents.read(name)
     runtime.store.documents.write(name, {**pointer, "usable": []})
     later = now + timedelta(minutes=15)
+    runtime.set_weather(SITE, tuple(replace(row, ghi=0) for row in runtime.weather))
     assert runtime.install(runtime.build(runtime.job(later)), later)
     assert runtime.forecast is not None
     assert runtime.learning["pv0"].model is None
@@ -368,7 +369,9 @@ def test_worker_captured_before_withdrawal_cannot_publish_under_new_revision(tmp
     assert runtime.install(runtime.build(runtime.job(now)), now)
     original = runtime.learning["pv0"]
     later = now + timedelta(minutes=15)
+    runtime.set_weather(SITE, tuple(replace(row, ghi=0) for row in runtime.weather))
     stale_job = runtime.job(later)
+    assert stale_job is not None
     runtime.set_forecast_runs(SITE, runtime.forecast_runs[1:])
 
     def insufficient(*args, **kwargs):

@@ -334,8 +334,10 @@ def test_runtime_archives_tree_and_cleaning_without_premature_activation(tmp_pat
     assert public["audit_reference"] == result.archive_reference
     assert "model_json" not in public and "excluded_periods" not in public
     before_weights = list(runtime.store.documents.iter_prefix("ml-weights-"))
+    candidate_version = runtime.candidate.version
     later = now + timedelta(minutes=15)
-    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.job(later) is None
+    assert runtime.candidate.version == candidate_version
     assert list(runtime.store.documents.iter_prefix("ml-weights-")) == before_weights
 
 

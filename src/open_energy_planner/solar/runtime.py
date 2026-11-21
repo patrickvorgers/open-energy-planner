@@ -23,7 +23,12 @@ from open_energy_planner.solar.forecast_weather import (
 
 from ..planning_policy import FINE_INTERVAL_MINUTES, PLANNING_HORIZON_HOURS
 from .boosting import TrainingResult, TrainingStatus, TrainingSummary, fit_boosted_model
-from .calculation.projection import learned_forecast, limit_ac_production, live_forecast_grid
+from .calculation.projection import (
+    forecast_window,
+    learned_forecast,
+    limit_ac_production,
+    live_forecast_grid,
+)
 from .curtailment import (
     FEEDBACK_EPOCH,
     FEEDBACK_REFRESH_MINUTES,
@@ -61,6 +66,7 @@ class SolarRuntime:
         self.configuration, self.issue = store.current, store.issue
         self.restore_training_revisions()
         self.location, self.weather = None, ()
+        self.weather_received_at = None
         self.run_evidence_revision = None
         self.forecast_runs, self.weather_service = (), {}
         self.forecast_runs_revision, self.last_fit_at = 0, None
@@ -387,9 +393,23 @@ class SolarRuntime:
             self.forecast_runs_revision += 1
         incoming = tuple(weather)
         provenance = dict(service) if service is not None else {}
-        if (location, incoming, provenance) != (self.location, self.weather, self.weather_service):
-            self.weather_revision += 1
+        received = incoming[-1].received_at if incoming else None
+        if (
+            location == self.location
+            and len(incoming) == len(self.weather)
+            and {key: value for key, value in provenance.items() if key != "received_at"}
+            == {key: value for key, value in self.weather_service.items() if key != "received_at"}
+            and all(
+                original == replace(current, received_at=original.received_at)
+                for original, current in zip(self.weather, incoming)
+            )
+        ):
+            if received is not None:
+                self.weather_received_at = max(received, self.weather_received_at or received)
+            return
+        self.weather_revision += 1
         self.location, self.weather, self.weather_service = location, incoming, provenance
+        self.weather_received_at = received
 
     def set_forecast_runs(self, location, runs, *, authoritative=True):
         """Admit partial loaded runs, or reconcile an authoritative snapshot including explicit withdrawals."""
@@ -564,7 +584,10 @@ class SolarRuntime:
             except (TypeError, ValueError, KeyError):
                 expired = True
         else:
-            expired = bool(self.weather and now - self.weather[-1].received_at > timedelta(hours=2))
+            expired = (
+                self.weather_received_at is not None
+                and now - self.weather_received_at > timedelta(hours=2)
+            )
         if expired and not ha_only:
             self.issue = "solar_weather_expired"
             return None
@@ -1108,8 +1131,12 @@ class SolarRuntime:
 
     def document(self, now, *, series=False):
         """Expose active prediction, per-source candidates and actionable status without recomputation."""
-        forecast = forecast_document(self.forecast, series=series)
-        candidate = forecast_document(self.candidate, series=series)
+        forecast = forecast_document(self.forecast, series=False)
+        candidate = forecast_document(self.candidate, series=False)
+        if series:
+            for issue, view in ((self.forecast, forecast), (self.candidate, candidate)):
+                if issue is not None:
+                    view["energies"] = document(forecast_window(issue.energies, now))
         statuses = {}
         if self.configuration:
             fitted = {candidate_item.source_id for candidate_item in self.calibrations}

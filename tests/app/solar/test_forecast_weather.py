@@ -789,7 +789,7 @@ def test_live_49_hour_guard_covers_the_final_partial_planning_hour(tmp_path, mon
     forecast = runtime.build(queued)[4]
     assert forecast.energies[0].start == now
     last = forecast.energies[-1]
-    assert last.start + timedelta(hours=last.duration_h) == now + timedelta(hours=48)
+    assert last.start + timedelta(hours=last.duration_h) == received + timedelta(hours=49)
     assert runtime.job(received + timedelta(hours=1)) is None
     assert runtime.issue == "solar_weather_expired"
 

@@ -293,10 +293,12 @@ def test_live_solar_reuses_a_full_issue_until_weather_changes(tmp_path):
     original = runtime.forecast
     archive_name = f"forecast-{original.version}.json"
     archived = store.documents.read(archive_name)
+    assert archived["forecast"]["weather_version"] == original.weather_version
+    assert store.documents.exists(f"weather-{original.weather_version}.json")
 
     for minutes in (15, 30, 45, 60):
         now = START + timedelta(minutes=minutes)
-        runtime.set_weather(SITE, original_weather)
+        runtime.set_weather(SITE, weather(now))
         assert runtime.job(now) is None
         assert runtime.forecast.version == original.version
         assert runtime.forecast.issued_at == START
@@ -314,6 +316,8 @@ def test_live_solar_reuses_a_full_issue_until_weather_changes(tmp_path):
     runtime.set_weather(SITE, weather(now, ghi=500))
     assert runtime.install(runtime.build(runtime.job(now)), now)
     assert runtime.forecast.version != original.version
+    assert runtime.forecast.weather_version != original.weather_version
+    assert store.documents.exists(f"weather-{runtime.forecast.weather_version}.json")
     assert store.documents.read(archive_name) == archived
 
 
@@ -445,6 +449,7 @@ def test_sixteen_source_basis_indexes_forecast_rows_once_and_preserves_total_ene
         forecast=SimpleNamespace(
             configuration_version=definition.version,
             issued_at=START,
+            freshness_at=START,
             valid_until=None,
             location=forecast.location,
             energies=Rows(),

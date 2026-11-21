@@ -103,6 +103,29 @@ def integrate_intervals(rows, grid, source_ids):
     return tuple(energies)
 
 
+def forecast_window(rows, now):
+    """Project a stored issue onto the visible planning window without extending any source."""
+    sources = defaultdict(list)
+    for row in rows:
+        sources[row.source_id].append(row)
+    grid = horizon(now)
+    return tuple(
+        row
+        for source_id, values in sources.items()
+        for row in integrate_intervals(
+            values,
+            tuple(
+                (start, duration)
+                for start, duration in grid
+                if values[0].start <= start
+                and start + timedelta(hours=duration)
+                <= values[-1].start + timedelta(hours=values[-1].duration_h)
+            ),
+            (source_id,),
+        )
+    )
+
+
 def learned_forecast(
     configuration, location, weather, now, models, *, planning_origin=None, grid=None
 ):
